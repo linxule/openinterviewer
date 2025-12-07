@@ -39,7 +39,8 @@ export async function POST(request: Request) {
     }
 
     // Get the configured AI provider (Gemini or Claude)
-    const provider = getInterviewProvider();
+    // Priority: studyConfig.aiProvider > env.AI_PROVIDER > 'gemini'
+    const provider = getInterviewProvider(studyConfig);
 
     // Generate greeting using the provider
     const greeting = await provider.getInterviewGreeting(studyConfig);

@@ -52,6 +52,30 @@ export interface ParticipantProfile {
 
 export type AIBehavior = 'structured' | 'standard' | 'exploratory';
 
+export type AIProviderType = 'gemini' | 'claude';
+
+// ============================================
+// Voice Configuration
+// ============================================
+
+// Available Gemini Live API voices
+export type VoiceName = 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr';
+
+export interface VoiceConfig {
+  ttsEnabled: boolean;           // Researcher: allow AI to speak
+  ttsVoice: VoiceName;           // Voice name (Puck, Charon, Kore, etc.)
+  sttEnabled: boolean;           // Allow speech input (usually true)
+}
+
+// Track participant audio preferences (for research insights)
+export interface ParticipantAudioPreference {
+  initialChoice: 'voice' | 'text-only';  // How they started
+  wantsToHear: boolean;                   // Current TTS preference
+  changedMidInterview: boolean;           // Did they toggle?
+  toggleCount: number;                    // How many times toggled
+  totalAudioDuration?: number;            // Seconds of AI audio played
+}
+
 export interface StudyConfig {
   id: string;
   name: string;
@@ -61,8 +85,14 @@ export interface StudyConfig {
   topicAreas: string[];           // General topic areas for synthesis
   profileSchema: ProfileField[];  // Fields to collect during interview
   aiBehavior: AIBehavior;
+  aiProvider?: AIProviderType;    // Optional, defaults to env or 'gemini'
+  voiceConfig?: VoiceConfig;      // Optional voice/audio settings
   consentText: string;
   createdAt: number;
+  // Follow-up study lineage
+  parentStudyId?: string;         // ID of parent study if this is a follow-up
+  parentStudyName?: string;       // Name of parent study for display
+  generatedFrom?: 'synthesis' | 'manual';  // How this study was created
 }
 
 // ============================================
@@ -86,6 +116,7 @@ export interface BehaviorData {
   messagesPerTopic: Record<string, number>;
   topicsExplored: string[];
   contradictions: string[];
+  audioPreference?: ParticipantAudioPreference;  // Voice/audio tracking
 }
 
 export interface SynthesisResult {
@@ -159,4 +190,32 @@ export interface ParticipantToken {
   studyConfig: StudyConfig;
   createdAt: number;
   expiresAt?: number;
+}
+
+// ============================================
+// Stored Study (Vercel KV)
+// ============================================
+
+export interface StoredStudy {
+  id: string;                    // Server-assigned UUID
+  config: StudyConfig;           // Full study configuration
+  createdAt: number;
+  updatedAt: number;
+  interviewCount: number;        // Cached count for dashboard display
+  isLocked: boolean;             // True after first interview collected
+}
+
+// ============================================
+// Aggregate Synthesis (Cross-Interview)
+// ============================================
+
+export interface AggregateSynthesisResult {
+  studyId: string;
+  interviewCount: number;
+  commonThemes: { theme: string; frequency: number; representativeQuotes: string[] }[];
+  divergentViews: { topic: string; viewA: string; viewB: string }[];
+  keyFindings: string[];
+  researchImplications: string[];
+  bottomLine: string;           // One-paragraph summary of all interviews
+  generatedAt: number;
 }

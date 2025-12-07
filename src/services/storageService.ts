@@ -1,7 +1,7 @@
 // Storage Service - Client-side interface for interview storage
 // Calls API routes which interact with Vercel KV
 
-import { StoredInterview } from '@/types';
+import { StoredInterview, StoredStudy } from '@/types';
 
 // Save completed interview
 export async function saveCompletedInterview(
@@ -82,5 +82,75 @@ export async function exportAllInterviews(): Promise<Blob | null> {
   } catch (error) {
     console.error('Error exporting interviews:', error);
     return null;
+  }
+}
+
+// Get interviews for a specific study
+export async function getStudyInterviews(studyId: string): Promise<StoredInterview[]> {
+  try {
+    const response = await fetch(`/api/interviews?studyId=${encodeURIComponent(studyId)}`);
+
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.interviews || [];
+  } catch (error) {
+    console.error('Error fetching study interviews:', error);
+    return [];
+  }
+}
+
+// Get all studies (researcher only)
+export async function getAllStudies(): Promise<StoredStudy[]> {
+  try {
+    const response = await fetch('/api/studies');
+
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.studies || [];
+  } catch (error) {
+    console.error('Error fetching studies:', error);
+    return [];
+  }
+}
+
+// Get single study by ID
+export async function getStudy(id: string): Promise<StoredStudy | null> {
+  try {
+    const response = await fetch(`/api/studies/${id}`);
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json();
+    return data.study || null;
+  } catch (error) {
+    console.error('Error fetching study:', error);
+    return null;
+  }
+}
+
+// Delete study
+export async function deleteStudy(id: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const response = await fetch(`/api/studies/${id}`, {
+      method: 'DELETE'
+    });
+
+    if (!response.ok) {
+      const data = await response.json();
+      return { success: false, error: data.error };
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error('Error deleting study:', error);
+    return { success: false, error: 'Failed to delete study' };
   }
 }

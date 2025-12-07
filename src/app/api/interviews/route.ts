@@ -1,12 +1,12 @@
-// GET /api/interviews - List all interviews
+// GET /api/interviews - List all interviews (or filter by studyId)
 // Protected: Requires authenticated session
 
 import { NextResponse } from 'next/server';
-import { getAllInterviews, isKVAvailable } from '@/lib/kv';
+import { getAllInterviews, getStudyInterviews, isKVAvailable } from '@/lib/kv';
 import { cookies } from 'next/headers';
 import { verifySessionToken, SESSION_COOKIE_NAME } from '@/lib/auth';
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     // Check authentication with token validation
     const cookieStore = await cookies();
@@ -37,8 +37,14 @@ export async function GET() {
       });
     }
 
-    // Get all interviews
-    const interviews = await getAllInterviews();
+    // Check for studyId filter
+    const { searchParams } = new URL(request.url);
+    const studyId = searchParams.get('studyId');
+
+    // Get interviews (filtered by study or all)
+    const interviews = studyId
+      ? await getStudyInterviews(studyId)
+      : await getAllInterviews();
 
     return NextResponse.json({ interviews });
   } catch (error) {

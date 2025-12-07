@@ -19,7 +19,8 @@ import {
   StudyConfig,
   ParticipantProfile,
   InterviewMessage,
-  BehaviorData
+  BehaviorData,
+  SynthesisResult
 } from '@/types';
 
 /**
@@ -95,5 +96,80 @@ Expected output structure:
   "contradictions": ["Any gaps between stated and revealed preferences"],
   "keyInsights": ["Actionable insights for the researcher"],
   "bottomLine": "One-sentence summary insight"
+}
+`;
+
+/**
+ * Aggregate Synthesis Prompt
+ *
+ * Analyzes multiple interview syntheses to find cross-participant patterns.
+ *
+ * KEY VARIABLES:
+ * - studyConfig: Research question and topic areas
+ * - syntheses: Array of individual interview synthesis results
+ */
+export const buildAggregateSynthesisPrompt = (
+  studyConfig: StudyConfig,
+  syntheses: SynthesisResult[],
+  interviewCount: number
+): string => {
+  // Format individual syntheses for aggregate analysis
+  const synthesesText = syntheses.map((s, i) => `
+--- Interview ${i + 1} ---
+Key Themes: ${s.themes.map(t => t.theme).join(', ')}
+Stated Preferences: ${s.statedPreferences.join('; ')}
+Revealed Preferences: ${s.revealedPreferences.join('; ')}
+Contradictions: ${s.contradictions.join('; ') || 'None identified'}
+Key Insights: ${s.keyInsights.join('; ')}
+Bottom Line: ${s.bottomLine}
+`).join('\n');
+
+  return `Analyze ${interviewCount} research interviews to identify cross-participant patterns.
+
+STUDY:
+- Research Question: ${studyConfig.researchQuestion}
+- Topics Explored: ${studyConfig.topicAreas.join(', ')}
+
+INDIVIDUAL INTERVIEW ANALYSES:
+${synthesesText}
+
+Your task is to identify:
+1. COMMON THEMES - Patterns that appear across multiple interviews (note frequency)
+2. DIVERGENT VIEWS - Where participants had notably different perspectives
+3. KEY FINDINGS - The most important discoveries across all interviews
+4. RESEARCH IMPLICATIONS - What these findings mean for the research question
+5. BOTTOM LINE - A one-paragraph summary of insights from all ${interviewCount} interviews
+
+Look for:
+- Themes that recur across multiple participants
+- Areas of consensus vs disagreement
+- Surprising or unexpected patterns
+- Connections between different themes
+- Evidence that supports or challenges the research question`;
+};
+
+/**
+ * Aggregate Synthesis output schema description
+ */
+export const aggregateSynthesisOutputDescription = `
+Expected output structure:
+{
+  "commonThemes": [
+    {
+      "theme": "Theme name",
+      "frequency": 3,
+      "representativeQuotes": ["Example evidence from different interviews"]
+    }
+  ],
+  "divergentViews": [
+    {
+      "topic": "Area of disagreement",
+      "viewA": "One perspective",
+      "viewB": "Contrasting perspective"
+    }
+  ],
+  "keyFindings": ["Major discoveries that answer the research question"],
+  "researchImplications": ["What these findings mean for the field/practice"],
+  "bottomLine": "One paragraph summarizing the key takeaways from all interviews"
 }
 `;

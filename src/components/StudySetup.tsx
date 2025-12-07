@@ -1,11 +1,11 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { useStore } from '@/store';
 import { generateParticipantLink } from '@/services/geminiService';
-import { StudyConfig, ProfileField, AIBehavior } from '@/types';
+import { StudyConfig, ProfileField, AIBehavior, AIProviderType, VoiceConfig, VoiceName } from '@/types';
 import {
   FileText,
   Plus,
@@ -21,8 +21,22 @@ import {
   Copy,
   Check,
   Loader2,
-  LogIn
+  LogIn,
+  Save,
+  CheckCircle,
+  GitBranch,
+  Mic,
+  Volume2
 } from 'lucide-react';
+
+// Available Gemini voices
+const VOICE_OPTIONS: { id: VoiceName; label: string; desc: string }[] = [
+  { id: 'Puck', label: 'Puck', desc: 'Energetic, playful' },
+  { id: 'Charon', label: 'Charon', desc: 'Calm, measured' },
+  { id: 'Kore', label: 'Kore', desc: 'Warm, empathetic' },
+  { id: 'Fenrir', label: 'Fenrir', desc: 'Deep, authoritative' },
+  { id: 'Zephyr', label: 'Zephyr', desc: 'Light, friendly' }
+];
 
 // Common profile field presets
 const PROFILE_PRESETS: ProfileField[] = [
@@ -35,7 +49,11 @@ const PROFILE_PRESETS: ProfileField[] = [
 
 const StudySetup: React.FC = () => {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { setStudyConfig, setStep, studyConfig, loadExampleStudy, setViewMode, setParticipantToken } = useStore();
+
+  // Follow-up study state
+  const [parentStudyInfo, setParentStudyInfo] = useState<{ id: string; name: string } | null>(null);
 
   const [name, setName] = useState(studyConfig?.name || '');
   const [description, setDescription] = useState(studyConfig?.description || '');
@@ -51,6 +69,16 @@ const StudySetup: React.FC = () => {
   );
   const [aiBehavior, setAiBehavior] = useState<AIBehavior>(
     studyConfig?.aiBehavior || 'standard'
+  );
+  const [aiProvider, setAiProvider] = useState<AIProviderType>(
+    studyConfig?.aiProvider || 'gemini'
+  );
+  const [voiceConfig, setVoiceConfig] = useState<VoiceConfig>(
+    studyConfig?.voiceConfig || {
+      ttsEnabled: false,
+      ttsVoice: 'Kore',
+      sttEnabled: false
+    }
   );
   const [consentText, setConsentText] = useState(
     studyConfig?.consentText ||
@@ -69,6 +97,24 @@ const StudySetup: React.FC = () => {
   // Preview state
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
 
+  // Study save state
+  const [savedStudyId, setSavedStudyId] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
+
+  // Sync savedStudyId with persisted config
+  // Server-assigned IDs are UUIDs, client-side IDs start with "study-"
+  useEffect(() => {
+    if (studyConfig?.id && !studyConfig.id.startsWith('study-')) {
+      // Server UUID - this is a saved study
+      setSavedStudyId(studyConfig.id);
+    } else {
+      // No config or client-generated ID - clear to prevent overwriting other studies
+      setSavedStudyId(null);
+    }
+  }, [studyConfig?.id]);
+
   // Check auth status on mount
   useEffect(() => {
     const checkAuth = async () => {
@@ -82,6 +128,46 @@ const StudySetup: React.FC = () => {
     checkAuth();
   }, []);
 
+  // Check for follow-up prefill on mount
+  useEffect(() => {
+    const prefillType = searchParams.get('prefill');
+    if (prefillType === 'followup') {
+      const prefillData = sessionStorage.getItem('prefillStudyConfig');
+      if (prefillData) {
+        try {
+          const config = JSON.parse(prefillData) as Partial<StudyConfig>;
+          // Populate form fields
+          if (config.name) setName(config.name);
+          if (config.description) setDescription(config.description);
+          if (config.researchQuestion) setResearchQuestion(config.researchQuestion);
+          if (config.coreQuestions?.length) setCoreQuestions(config.coreQuestions);
+          if (config.topicAreas?.length) setTopicAreas(config.topicAreas);
+          if (config.profileSchema?.length) setProfileSchema(config.profileSchema);
+          if (config.aiBehavior) setAiBehavior(config.aiBehavior);
+          if (config.aiProvider) setAiProvider(config.aiProvider);
+          if (config.voiceConfig) setVoiceConfig(config.voiceConfig);
+          if (config.consentText) setConsentText(config.consentText);
+
+          // Store parent study info for display and saving
+          if (config.parentStudyId && config.parentStudyName) {
+            setParentStudyInfo({
+              id: config.parentStudyId,
+              name: config.parentStudyName
+            });
+          }
+
+          // Mark as dirty since we loaded prefill data that needs saving
+          setIsDirty(true);
+
+          // Clear sessionStorage after loading
+          sessionStorage.removeItem('prefillStudyConfig');
+        } catch (error) {
+          console.error('Error parsing prefill config:', error);
+        }
+      }
+    }
+  }, [searchParams]);
+
   // Sync form with studyConfig when it changes (e.g., after loading example)
   useEffect(() => {
     if (studyConfig) {
@@ -92,34 +178,40 @@ const StudySetup: React.FC = () => {
       setTopicAreas(studyConfig.topicAreas.length > 0 ? studyConfig.topicAreas : ['']);
       setProfileSchema(studyConfig.profileSchema || []);
       setAiBehavior(studyConfig.aiBehavior);
+      setAiProvider(studyConfig.aiProvider || 'gemini');
+      setVoiceConfig(studyConfig.voiceConfig || { ttsEnabled: false, ttsVoice: 'Kore', sttEnabled: false });
       setConsentText(studyConfig.consentText);
     }
   }, [studyConfig]);
 
   // Question management
-  const addQuestion = () => setCoreQuestions([...coreQuestions, '']);
+  const addQuestion = () => { setCoreQuestions([...coreQuestions, '']); setIsDirty(true); };
   const removeQuestion = (index: number) => {
     if (coreQuestions.length > 1) {
       setCoreQuestions(coreQuestions.filter((_, i) => i !== index));
+      setIsDirty(true);
     }
   };
   const updateQuestion = (index: number, value: string) => {
     const updated = [...coreQuestions];
     updated[index] = value;
     setCoreQuestions(updated);
+    setIsDirty(true);
   };
 
   // Topic management
-  const addTopic = () => setTopicAreas([...topicAreas, '']);
+  const addTopic = () => { setTopicAreas([...topicAreas, '']); setIsDirty(true); };
   const removeTopic = (index: number) => {
     if (topicAreas.length > 1) {
       setTopicAreas(topicAreas.filter((_, i) => i !== index));
+      setIsDirty(true);
     }
   };
   const updateTopic = (index: number, value: string) => {
     const updated = [...topicAreas];
     updated[index] = value;
     setTopicAreas(updated);
+    setIsDirty(true);
   };
 
   // Profile field management
@@ -127,6 +219,7 @@ const StudySetup: React.FC = () => {
     if (preset) {
       if (!profileSchema.some(f => f.id === preset.id)) {
         setProfileSchema([...profileSchema, preset]);
+        setIsDirty(true);
       }
     } else {
       const newField: ProfileField = {
@@ -136,23 +229,27 @@ const StudySetup: React.FC = () => {
         required: false
       };
       setProfileSchema([...profileSchema, newField]);
+      setIsDirty(true);
     }
   };
 
   const removeProfileField = (id: string) => {
     setProfileSchema(profileSchema.filter(f => f.id !== id));
+    setIsDirty(true);
   };
 
   const updateProfileField = (id: string, updates: Partial<ProfileField>) => {
     setProfileSchema(profileSchema.map(f =>
       f.id === id ? { ...f, ...updates } : f
     ));
+    setIsDirty(true);
   };
 
   const toggleFieldRequired = (id: string) => {
     setProfileSchema(profileSchema.map(f =>
       f.id === id ? { ...f, required: !f.required } : f
     ));
+    setIsDirty(true);
   };
 
   const buildConfig = (): StudyConfig => ({
@@ -164,8 +261,16 @@ const StudySetup: React.FC = () => {
     topicAreas: topicAreas.filter(t => t.trim()),
     profileSchema: profileSchema.filter(f => f.label.trim()),
     aiBehavior,
+    aiProvider,
+    voiceConfig: (voiceConfig.sttEnabled || voiceConfig.ttsEnabled) ? voiceConfig : undefined,
     consentText,
-    createdAt: studyConfig?.createdAt || Date.now()
+    createdAt: studyConfig?.createdAt || Date.now(),
+    // Include parent study info if this is a follow-up
+    ...(parentStudyInfo && {
+      parentStudyId: parentStudyInfo.id,
+      parentStudyName: parentStudyInfo.name,
+      generatedFrom: 'synthesis' as const
+    })
   });
 
   const handleSubmit = () => {
@@ -238,6 +343,83 @@ const StudySetup: React.FC = () => {
     }
   };
 
+  const handleSaveStudy = async () => {
+    // Fix auth race condition: check for explicit false, not falsy
+    if (isAuthenticated === false) {
+      router.push('/login');
+      return;
+    }
+    if (isAuthenticated === null) {
+      return; // Auth check in progress - button should be disabled anyway
+    }
+
+    setIsSaving(true);
+    setSaveSuccess(false);
+
+    try {
+      const config = buildConfig();
+      const isUpdate = !!savedStudyId;
+
+      // For updates, the API may return 409 if study has interviews
+      const response = await fetch(
+        isUpdate ? `/api/studies/${savedStudyId}` : '/api/studies',
+        {
+          method: isUpdate ? 'PUT' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ config })
+        }
+      );
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          setIsAuthenticated(false);
+          router.push('/login');
+          return;
+        }
+
+        // Handle confirmation required (409) - study has interviews
+        if (response.status === 409) {
+          const data = await response.json();
+          if (data.requiresConfirmation) {
+            const confirmed = window.confirm(
+              `${data.warning}\n\nDo you want to continue?`
+            );
+            if (confirmed) {
+              // Retry with confirmed: true
+              const retryResponse = await fetch(`/api/studies/${savedStudyId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ config, confirmed: true })
+              });
+              if (retryResponse.ok) {
+                const retryData = await retryResponse.json();
+                setSavedStudyId(retryData.study.id);
+                setStudyConfig(retryData.study.config);
+                setSaveSuccess(true);
+                setIsDirty(false);
+                setTimeout(() => setSaveSuccess(false), 3000);
+              }
+            }
+            return;
+          }
+        }
+        return;
+      }
+
+      const data = await response.json();
+      setSavedStudyId(data.study.id);
+      setSaveSuccess(true);
+      setStudyConfig(data.study.config);
+      setIsDirty(false);
+
+      setTimeout(() => setSaveSuccess(false), 3000);
+    } catch (error) {
+      console.error('Error saving study:', error);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const isValid = name.trim() && researchQuestion.trim();
 
   const behaviorOptions: { id: AIBehavior; label: string; desc: string }[] = [
@@ -255,6 +437,19 @@ const StudySetup: React.FC = () => {
       id: 'exploratory',
       label: 'Focus on uncovering new insights (Exploratory)',
       desc: 'Prioritize depth. Chase interesting threads, probe emotions.'
+    }
+  ];
+
+  const providerOptions: { id: AIProviderType; label: string; desc: string }[] = [
+    {
+      id: 'gemini',
+      label: 'Google Gemini',
+      desc: 'Fast, cost-effective. Best for high-volume studies.'
+    },
+    {
+      id: 'claude',
+      label: 'Anthropic Claude',
+      desc: 'Nuanced reasoning. Best for complex, exploratory interviews.'
     }
   ];
 
@@ -285,18 +480,42 @@ const StudySetup: React.FC = () => {
                 Load Example
               </button>
               {isValid && (
-                <button
-                  onClick={handlePreview}
-                  disabled={isPreviewLoading}
-                  className="px-4 py-2 text-sm bg-stone-700 hover:bg-stone-600 text-stone-300 rounded-xl transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isPreviewLoading ? (
-                    <Loader2 size={16} className="animate-spin" />
-                  ) : (
-                    <Eye size={16} />
-                  )}
-                  {isPreviewLoading ? 'Loading...' : 'Preview'}
-                </button>
+                <>
+                  <button
+                    onClick={handleSaveStudy}
+                    disabled={!isAuthenticated || isSaving || (!!savedStudyId && !isDirty)}
+                    className={`px-4 py-2 text-sm rounded-xl transition-colors flex items-center gap-2 disabled:cursor-not-allowed ${
+                      savedStudyId && !isDirty
+                        ? 'bg-green-900/50 text-green-400 border border-green-700'
+                        : saveSuccess
+                        ? 'bg-green-700 text-white'
+                        : 'bg-stone-700 hover:bg-stone-600 text-stone-300'
+                    } ${isSaving || isAuthenticated === null ? 'opacity-50' : ''}`}
+                  >
+                    {isSaving ? (
+                      <Loader2 size={16} className="animate-spin" />
+                    ) : savedStudyId && !isDirty ? (
+                      <CheckCircle size={16} />
+                    ) : saveSuccess ? (
+                      <Check size={16} />
+                    ) : (
+                      <Save size={16} />
+                    )}
+                    {isSaving ? 'Saving...' : savedStudyId && isDirty ? 'Update Study' : savedStudyId ? 'Saved' : saveSuccess ? 'Saved!' : 'Save Study'}
+                  </button>
+                  <button
+                    onClick={handlePreview}
+                    disabled={isPreviewLoading}
+                    className="px-4 py-2 text-sm bg-stone-700 hover:bg-stone-600 text-stone-300 rounded-xl transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isPreviewLoading ? (
+                      <Loader2 size={16} className="animate-spin" />
+                    ) : (
+                      <Eye size={16} />
+                    )}
+                    {isPreviewLoading ? 'Loading...' : 'Preview'}
+                  </button>
+                </>
               )}
             </div>
           </div>
@@ -311,6 +530,25 @@ const StudySetup: React.FC = () => {
           transition={{ delay: 0.1 }}
           className="bg-stone-800/50 rounded-2xl border border-stone-700 p-8 space-y-8"
         >
+          {/* Follow-up Study Banner */}
+          {parentStudyInfo && (
+            <div className="bg-blue-900/30 border border-blue-700/50 rounded-xl p-4 flex items-start gap-3">
+              <GitBranch size={20} className="text-blue-400 flex-shrink-0 mt-0.5" />
+              <div>
+                <h4 className="font-medium text-white">Follow-up Study</h4>
+                <p className="text-sm text-stone-400">
+                  Based on findings from{' '}
+                  <button
+                    onClick={() => router.push(`/studies/${parentStudyInfo.id}`)}
+                    className="text-blue-400 hover:text-blue-300 underline"
+                  >
+                    {parentStudyInfo.name}
+                  </button>
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Basic Info */}
           <div className="space-y-4">
             <h2 className="font-semibold text-lg text-stone-100 flex items-center gap-2">
@@ -325,7 +563,7 @@ const StudySetup: React.FC = () => {
               <input
                 type="text"
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e) => { setName(e.target.value); setIsDirty(true); }}
                 placeholder="e.g., AI Adoption in Healthcare"
                 className="w-full px-4 py-3 rounded-xl bg-stone-800 border border-stone-600 text-stone-100 placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-stone-500 focus:border-stone-500"
               />
@@ -337,7 +575,7 @@ const StudySetup: React.FC = () => {
               </label>
               <textarea
                 value={researchQuestion}
-                onChange={(e) => setResearchQuestion(e.target.value)}
+                onChange={(e) => { setResearchQuestion(e.target.value); setIsDirty(true); }}
                 placeholder="What are you trying to understand?"
                 rows={2}
                 className="w-full px-4 py-3 rounded-xl bg-stone-800 border border-stone-600 text-stone-100 placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-stone-500 focus:border-stone-500 resize-none"
@@ -350,7 +588,7 @@ const StudySetup: React.FC = () => {
               </label>
               <textarea
                 value={description}
-                onChange={(e) => setDescription(e.target.value)}
+                onChange={(e) => { setDescription(e.target.value); setIsDirty(true); }}
                 placeholder="Brief context about the study..."
                 rows={2}
                 className="w-full px-4 py-3 rounded-xl bg-stone-800 border border-stone-600 text-stone-100 placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-stone-500 focus:border-stone-500 resize-none"
@@ -526,6 +764,38 @@ const StudySetup: React.FC = () => {
             </div>
           </div>
 
+          {/* AI Provider */}
+          <div className="space-y-4">
+            <h2 className="font-semibold text-lg text-stone-100">AI Provider</h2>
+            <p className="text-sm text-stone-400">
+              Choose which AI model powers your interviews
+            </p>
+            <div className="space-y-2">
+              {providerOptions.map((option) => (
+                <label
+                  key={option.id}
+                  className={`flex items-start gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all ${
+                    aiProvider === option.id
+                      ? 'border-stone-500 bg-stone-700'
+                      : 'border-stone-700 hover:border-stone-600'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="aiProvider"
+                    checked={aiProvider === option.id}
+                    onChange={() => { setAiProvider(option.id); setIsDirty(true); }}
+                    className="mt-1 accent-stone-500"
+                  />
+                  <div>
+                    <div className="font-medium text-stone-100">{option.label}</div>
+                    <div className="text-xs text-stone-400">{option.desc}</div>
+                  </div>
+                </label>
+              ))}
+            </div>
+          </div>
+
           {/* AI Behavior */}
           <div className="space-y-4">
             <h2 className="font-semibold text-lg text-stone-100">AI Interview Style</h2>
@@ -543,7 +813,7 @@ const StudySetup: React.FC = () => {
                     type="radio"
                     name="aiBehavior"
                     checked={aiBehavior === option.id}
-                    onChange={() => setAiBehavior(option.id)}
+                    onChange={() => { setAiBehavior(option.id); setIsDirty(true); }}
                     className="mt-1 accent-stone-500"
                   />
                   <div>
@@ -555,12 +825,104 @@ const StudySetup: React.FC = () => {
             </div>
           </div>
 
+          {/* Voice Configuration */}
+          <div className="space-y-4">
+            <h2 className="font-semibold text-lg text-stone-100 flex items-center gap-2">
+              <Mic size={18} className="text-stone-400" />
+              Voice & Audio
+            </h2>
+            <p className="text-sm text-stone-400">
+              Enable voice features for interviews (requires Gemini API key with voice support)
+            </p>
+
+            {/* Voice toggles */}
+            <div className="space-y-3">
+              {/* STT Toggle */}
+              <label className="flex items-center justify-between p-3 bg-stone-800 rounded-xl border border-stone-700">
+                <div className="flex items-center gap-3">
+                  <Mic size={18} className="text-stone-400" />
+                  <div>
+                    <div className="font-medium text-stone-100">Speech-to-Text</div>
+                    <div className="text-xs text-stone-400">Allow participants to speak instead of type</div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setVoiceConfig(prev => ({ ...prev, sttEnabled: !prev.sttEnabled })); setIsDirty(true); }}
+                  className={`w-12 h-6 rounded-full transition-colors ${
+                    voiceConfig.sttEnabled ? 'bg-stone-500' : 'bg-stone-700'
+                  }`}
+                >
+                  <div className={`w-5 h-5 bg-white rounded-full transition-transform ${
+                    voiceConfig.sttEnabled ? 'translate-x-6' : 'translate-x-0.5'
+                  }`} />
+                </button>
+              </label>
+
+              {/* TTS Toggle */}
+              <label className="flex items-center justify-between p-3 bg-stone-800 rounded-xl border border-stone-700">
+                <div className="flex items-center gap-3">
+                  <Volume2 size={18} className="text-stone-400" />
+                  <div>
+                    <div className="font-medium text-stone-100">Text-to-Speech</div>
+                    <div className="text-xs text-stone-400">AI speaks responses (participants can mute)</div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setVoiceConfig(prev => ({ ...prev, ttsEnabled: !prev.ttsEnabled })); setIsDirty(true); }}
+                  className={`w-12 h-6 rounded-full transition-colors ${
+                    voiceConfig.ttsEnabled ? 'bg-stone-500' : 'bg-stone-700'
+                  }`}
+                >
+                  <div className={`w-5 h-5 bg-white rounded-full transition-transform ${
+                    voiceConfig.ttsEnabled ? 'translate-x-6' : 'translate-x-0.5'
+                  }`} />
+                </button>
+              </label>
+
+              {/* Voice selector - only show if TTS is enabled */}
+              {voiceConfig.ttsEnabled && (
+                <div className="p-3 bg-stone-800 rounded-xl border border-stone-700 space-y-2">
+                  <div className="text-sm font-medium text-stone-300">AI Voice</div>
+                  <div className="grid grid-cols-5 gap-2">
+                    {VOICE_OPTIONS.map((voice) => (
+                      <button
+                        key={voice.id}
+                        type="button"
+                        onClick={() => { setVoiceConfig(prev => ({ ...prev, ttsVoice: voice.id })); setIsDirty(true); }}
+                        className={`p-2 rounded-lg text-center transition-colors ${
+                          voiceConfig.ttsVoice === voice.id
+                            ? 'bg-stone-600 text-white'
+                            : 'bg-stone-700 text-stone-400 hover:bg-stone-600'
+                        }`}
+                        title={voice.desc}
+                      >
+                        <div className="text-xs font-medium">{voice.label}</div>
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-xs text-stone-500">
+                    {VOICE_OPTIONS.find(v => v.id === voiceConfig.ttsVoice)?.desc}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {(voiceConfig.sttEnabled || voiceConfig.ttsEnabled) && (
+              <div className="text-xs text-stone-500 bg-stone-800/50 p-3 rounded-lg">
+                Note: Voice features require <code className="text-stone-400">NEXT_PUBLIC_GEMINI_API_KEY</code> environment variable.
+                Participant audio preferences will be tracked in behavior data for research insights.
+              </div>
+            )}
+          </div>
+
           {/* Consent Text */}
           <div className="space-y-4">
             <h2 className="font-semibold text-lg text-stone-100">Consent Text</h2>
             <textarea
               value={consentText}
-              onChange={(e) => setConsentText(e.target.value)}
+              onChange={(e) => { setConsentText(e.target.value); setIsDirty(true); }}
               rows={4}
               className="w-full px-4 py-3 rounded-xl bg-stone-800 border border-stone-600 text-stone-100 placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-stone-500 focus:border-stone-500 resize-none text-sm"
             />

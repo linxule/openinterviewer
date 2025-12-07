@@ -30,8 +30,8 @@ const Login: React.FC = () => {
         return;
       }
 
-      // Redirect to dashboard on success
-      router.push('/dashboard');
+      // Redirect to studies on success
+      router.push('/studies');
     } catch (err) {
       setError('Connection error. Please try again.');
     } finally {

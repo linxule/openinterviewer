@@ -9,7 +9,8 @@ import {
   SynthesisResult,
   BehaviorData,
   AIInterviewResponse,
-  QuestionProgress
+  QuestionProgress,
+  AggregateSynthesisResult
 } from '@/types';
 
 // Re-export prompts from centralized location
@@ -38,6 +39,17 @@ export interface AIProvider {
     behaviorData: BehaviorData,
     participantProfile: ParticipantProfile | null
   ): Promise<SynthesisResult>;
+
+  synthesizeAggregate(
+    studyConfig: StudyConfig,
+    syntheses: SynthesisResult[],
+    interviewCount: number
+  ): Promise<Omit<AggregateSynthesisResult, 'studyId' | 'interviewCount' | 'generatedAt'>>;
+
+  generateFollowupStudy(
+    parentConfig: StudyConfig,
+    synthesis: AggregateSynthesisResult
+  ): Promise<{ name: string; researchQuestion: string; coreQuestions: string[] }>;
 }
 
 // Response schema for structured output (Gemini format)
@@ -169,4 +181,62 @@ export const defaultSynthesisResult: SynthesisResult = {
   contradictions: [],
   keyInsights: ['Analysis pending...'],
   bottomLine: 'Interview synthesis in progress.'
+};
+
+// Aggregate synthesis response schema (Gemini format)
+export const aggregateSynthesisResponseSchema = {
+  type: 'OBJECT' as const,
+  properties: {
+    commonThemes: {
+      type: 'ARRAY' as const,
+      items: {
+        type: 'OBJECT' as const,
+        properties: {
+          theme: { type: 'STRING' as const },
+          frequency: { type: 'NUMBER' as const },
+          representativeQuotes: {
+            type: 'ARRAY' as const,
+            items: { type: 'STRING' as const }
+          }
+        }
+      },
+      description: 'Patterns appearing across multiple interviews'
+    },
+    divergentViews: {
+      type: 'ARRAY' as const,
+      items: {
+        type: 'OBJECT' as const,
+        properties: {
+          topic: { type: 'STRING' as const },
+          viewA: { type: 'STRING' as const },
+          viewB: { type: 'STRING' as const }
+        }
+      },
+      description: 'Areas where participants had different perspectives'
+    },
+    keyFindings: {
+      type: 'ARRAY' as const,
+      items: { type: 'STRING' as const },
+      description: 'Major discoveries that answer the research question'
+    },
+    researchImplications: {
+      type: 'ARRAY' as const,
+      items: { type: 'STRING' as const },
+      description: 'What these findings mean for the field/practice'
+    },
+    bottomLine: {
+      type: 'STRING' as const,
+      description: 'One paragraph summarizing key takeaways from all interviews'
+    }
+  },
+  required: ['commonThemes', 'keyFindings', 'bottomLine']
+};
+
+// Default fallback for aggregate synthesis
+export const defaultAggregateSynthesisResult = {
+  commonThemes: [],
+  divergentViews: [],
+  keyFindings: ['Analysis pending...'],
+  researchImplications: [],
+  bottomLine: 'Aggregate synthesis in progress.'
 };

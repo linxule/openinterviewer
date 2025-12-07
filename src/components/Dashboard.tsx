@@ -3,8 +3,8 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useRouter } from 'next/navigation';
-import { StoredInterview } from '@/types';
-import { getAllInterviews, exportAllInterviews } from '@/services/storageService';
+import { StoredInterview, StoredStudy } from '@/types';
+import { getAllInterviews, exportAllInterviews, getStudyInterviews, getAllStudies } from '@/services/storageService';
 import {
   Loader2,
   FileText,
@@ -15,24 +15,45 @@ import {
   Lightbulb,
   ArrowLeft,
   FolderOpen,
-  LogOut
+  LogOut,
+  Filter,
+  BookOpen
 } from 'lucide-react';
 
 const Dashboard: React.FC = () => {
   const router = useRouter();
   const [interviews, setInterviews] = useState<StoredInterview[]>([]);
+  const [studies, setStudies] = useState<StoredStudy[]>([]);
+  const [selectedStudyId, setSelectedStudyId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [warning, setWarning] = useState<string | null>(null);
 
+  // Load studies on mount
   useEffect(() => {
-    loadInterviews();
+    loadStudies();
   }, []);
 
-  const loadInterviews = async () => {
+  // Load interviews when study filter changes
+  useEffect(() => {
+    loadInterviews(selectedStudyId);
+  }, [selectedStudyId]);
+
+  const loadStudies = async () => {
+    try {
+      const data = await getAllStudies();
+      setStudies(data);
+    } catch (error) {
+      console.error('Error loading studies:', error);
+    }
+  };
+
+  const loadInterviews = async (studyId: string | null) => {
     setLoading(true);
     try {
-      const data = await getAllInterviews();
+      const data = studyId
+        ? await getStudyInterviews(studyId)
+        : await getAllInterviews();
       setInterviews(data);
     } catch (error) {
       console.error('Error loading interviews:', error);
@@ -112,6 +133,13 @@ const Dashboard: React.FC = () => {
 
             <div className="flex gap-3">
               <button
+                onClick={() => router.push('/studies')}
+                className="px-4 py-2 text-sm bg-stone-700 hover:bg-stone-600 text-stone-300 rounded-xl transition-colors flex items-center gap-2"
+              >
+                <BookOpen size={16} />
+                My Studies
+              </button>
+              <button
                 onClick={() => router.push('/setup')}
                 className="px-4 py-2 text-sm bg-stone-700 hover:bg-stone-600 text-stone-300 rounded-xl transition-colors flex items-center gap-2"
               >
@@ -151,6 +179,37 @@ const Dashboard: React.FC = () => {
             className="mb-6 p-4 bg-stone-800 border border-stone-600 rounded-xl text-stone-300 text-sm"
           >
             {warning}
+          </motion.div>
+        )}
+
+        {/* Study Filter */}
+        {studies.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="mb-6 flex items-center gap-3"
+          >
+            <Filter size={16} className="text-stone-500" />
+            <select
+              value={selectedStudyId || ''}
+              onChange={(e) => setSelectedStudyId(e.target.value || null)}
+              className="px-4 py-2 bg-stone-800 border border-stone-700 rounded-xl text-stone-300 focus:outline-none focus:ring-2 focus:ring-stone-500"
+            >
+              <option value="">All Studies</option>
+              {studies.map((study) => (
+                <option key={study.id} value={study.id}>
+                  {study.config.name} ({study.interviewCount} interviews)
+                </option>
+              ))}
+            </select>
+            {selectedStudyId && (
+              <button
+                onClick={() => setSelectedStudyId(null)}
+                className="text-sm text-stone-500 hover:text-stone-400"
+              >
+                Clear filter
+              </button>
+            )}
           </motion.div>
         )}
 

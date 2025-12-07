@@ -3,7 +3,7 @@
 // Server-side validation ensures data integrity
 
 import { NextResponse } from 'next/server';
-import { saveInterview, isKVAvailable } from '@/lib/kv';
+import { saveInterview, isKVAvailable, incrementStudyInterviewCount, lockStudy } from '@/lib/kv';
 import { verifyParticipantToken } from '@/lib/auth';
 import { StoredInterview } from '@/types';
 
@@ -110,6 +110,16 @@ export async function POST(request: Request) {
         { error: 'Failed to save interview' },
         { status: 500 }
       );
+    }
+
+    // Update study metadata (increment count and lock if first interview)
+    // These operations are non-critical - don't fail the request if they fail
+    try {
+      await incrementStudyInterviewCount(interview.studyId);
+      await lockStudy(interview.studyId);
+    } catch (studyUpdateError) {
+      // Log but don't fail - study may not exist in KV (legacy/token-only studies)
+      console.warn('Failed to update study metadata:', studyUpdateError);
     }
 
     return NextResponse.json({ success: true, id: interview.id });

@@ -7,12 +7,14 @@ import {
   buildInterviewSystemPrompt,
   cleanJSON,
   defaultInterviewResponse,
-  defaultSynthesisResult
+  defaultSynthesisResult,
+  defaultAggregateSynthesisResult
 } from '../ai';
 import {
   buildGreetingPrompt,
   getDefaultGreeting,
-  buildSynthesisPrompt
+  buildSynthesisPrompt,
+  buildAggregateSynthesisPrompt
 } from '../prompts';
 import {
   StudyConfig,
@@ -21,7 +23,8 @@ import {
   SynthesisResult,
   BehaviorData,
   AIInterviewResponse,
-  QuestionProgress
+  QuestionProgress,
+  AggregateSynthesisResult
 } from '@/types';
 
 export class GeminiProvider implements AIProvider {
@@ -34,7 +37,7 @@ export class GeminiProvider implements AIProvider {
       throw new Error('GEMINI_API_KEY environment variable is required');
     }
     this.ai = new GoogleGenAI({ apiKey });
-    this.model = process.env.AI_MODEL || 'gemini-2.5-flash';
+    this.model = process.env.AI_MODEL || 'gemini-3-pro-preview';
   }
 
   async generateInterviewResponse(
@@ -199,6 +202,138 @@ export class GeminiProvider implements AIProvider {
     } catch (error) {
       console.error('Gemini synthesis error:', error);
       return defaultSynthesisResult;
+    }
+  }
+
+  async synthesizeAggregate(
+    studyConfig: StudyConfig,
+    syntheses: SynthesisResult[],
+    interviewCount: number
+  ) {
+    const prompt = buildAggregateSynthesisPrompt(studyConfig, syntheses, interviewCount);
+
+    try {
+      const response = await this.ai.models.generateContent({
+        model: this.model,
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              commonThemes: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    theme: { type: Type.STRING },
+                    frequency: { type: Type.NUMBER },
+                    representativeQuotes: {
+                      type: Type.ARRAY,
+                      items: { type: Type.STRING }
+                    }
+                  }
+                }
+              },
+              divergentViews: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    topic: { type: Type.STRING },
+                    viewA: { type: Type.STRING },
+                    viewB: { type: Type.STRING }
+                  }
+                }
+              },
+              keyFindings: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING }
+              },
+              researchImplications: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING }
+              },
+              bottomLine: {
+                type: Type.STRING,
+                description: 'One paragraph summarizing key takeaways'
+              }
+            },
+            required: ['commonThemes', 'keyFindings', 'bottomLine']
+          }
+        }
+      });
+
+      return JSON.parse(cleanJSON(response.text || '{}'));
+    } catch (error) {
+      console.error('Gemini aggregate synthesis error:', error);
+      return defaultAggregateSynthesisResult;
+    }
+  }
+
+  async generateFollowupStudy(
+    parentConfig: StudyConfig,
+    synthesis: AggregateSynthesisResult
+  ): Promise<{ name: string; researchQuestion: string; coreQuestions: string[] }> {
+    const prompt = `You are helping design a follow-up research study.
+
+PARENT STUDY: "${parentConfig.name}"
+PARENT SUMMARY: ${synthesis.bottomLine}
+
+KEY FINDINGS:
+${synthesis.keyFindings.map((f, i) => `${i + 1}. ${f}`).join('\n')}
+
+RESEARCH IMPLICATIONS:
+${(synthesis.researchImplications || []).map((r, i) => `${i + 1}. ${r}`).join('\n') || 'None specified'}
+
+DIVERGENT VIEWS:
+${(synthesis.divergentViews || []).map(d => `- ${d.topic}: "${d.viewA}" vs "${d.viewB}"`).join('\n') || 'None identified'}
+
+Generate a follow-up study that digs deeper into gaps or tensions found.
+The follow-up should explore unanswered questions or interesting patterns from the original study.
+
+Return a JSON object with:
+- name: A concise study name (start with "Follow-up: ")
+- researchQuestion: A specific, researchable question building on the findings
+- coreQuestions: 3-5 interview questions to explore this further`;
+
+    try {
+      const response = await this.ai.models.generateContent({
+        model: this.model,
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              name: { type: Type.STRING },
+              researchQuestion: { type: Type.STRING },
+              coreQuestions: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING }
+              }
+            },
+            required: ['name', 'researchQuestion', 'coreQuestions']
+          }
+        }
+      });
+
+      const result = JSON.parse(cleanJSON(response.text || '{}'));
+      return {
+        name: result.name || `Follow-up: ${parentConfig.name}`,
+        researchQuestion: result.researchQuestion || synthesis.keyFindings[0] || '',
+        coreQuestions: result.coreQuestions || []
+      };
+    } catch (error) {
+      console.error('Gemini follow-up generation error:', error);
+      // Fallback to deterministic generation
+      return {
+        name: `Follow-up: ${parentConfig.name}`,
+        researchQuestion: `What deeper insights emerge from exploring: ${synthesis.keyFindings[0] || 'the findings'}?`,
+        coreQuestions: synthesis.keyFindings.slice(0, 3).map(f =>
+          `Can you tell me more about your experience with: ${f}?`
+        )
+      };
     }
   }
 }

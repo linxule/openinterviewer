@@ -28,5 +28,7 @@ export {
 // Interview synthesis/analysis
 export {
   buildSynthesisPrompt,
-  synthesisOutputDescription
+  synthesisOutputDescription,
+  buildAggregateSynthesisPrompt,
+  aggregateSynthesisOutputDescription
 } from './synthesis';

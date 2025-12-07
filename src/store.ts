@@ -143,6 +143,9 @@ interface ResearchState {
   // Actions - Synthesis
   setSynthesis: (result: SynthesisResult) => void;
 
+  // Actions - Behavior Data
+  setBehaviorData: (data: BehaviorData) => void;
+
   // Actions - Token
   setParticipantToken: (token: string | null) => void;
 
@@ -294,6 +297,8 @@ export const useStore = create<ResearchState>()(
       setAiThinking: (thinking) => set({ isAiThinking: thinking }),
 
       setSynthesis: (result) => set({ synthesis: result }),
+
+      setBehaviorData: (data) => set({ behaviorData: data }),
 
       setParticipantToken: (token) => set({ participantToken: token }),
 

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useStore } from '@/store';
@@ -8,7 +8,8 @@ import {
   generateInterviewResponse,
   getInterviewGreeting
 } from '@/services/geminiService';
-import { InterviewMessage, InterviewPhase } from '@/types';
+import { InterviewMessage, InterviewPhase, VoiceConfig } from '@/types';
+import { useVoiceInterview } from '@/hooks/useVoiceInterview';
 import ReactMarkdown from 'react-markdown';
 import {
   Send,
@@ -19,7 +20,9 @@ import {
   ArrowRight,
   MessageSquare,
   CheckCircle,
-  User
+  User,
+  Volume2,
+  VolumeX
 } from 'lucide-react';
 
 // Phase display labels
@@ -29,6 +32,13 @@ const phaseLabels: Record<InterviewPhase, string> = {
   'exploration': 'Exploring further',
   'feedback': 'Your feedback',
   'wrap-up': 'Wrapping up'
+};
+
+// Default voice config (disabled)
+const defaultVoiceConfig: VoiceConfig = {
+  ttsEnabled: false,
+  ttsVoice: 'Puck',
+  sttEnabled: false
 };
 
 const InterviewChat: React.FC = () => {
@@ -51,14 +61,41 @@ const InterviewChat: React.FC = () => {
     completeInterview,
     updateProfileField,
     setProfileRawContext,
-    participantToken
+    participantToken,
+    setBehaviorData,
+    behaviorData
   } = useStore();
 
   const [input, setInput] = useState('');
   const [initialized, setInitialized] = useState(false);
   const [showFinishOption, setShowFinishOption] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const voiceRef = useRef<ReturnType<typeof useVoiceInterview> | null>(null);
+
+  // Get voice config from study (or use default)
+  const voiceConfig = studyConfig?.voiceConfig || defaultVoiceConfig;
+  const isVoiceEnabled = voiceConfig.sttEnabled || voiceConfig.ttsEnabled;
+
+  // Voice transcript handler
+  const handleVoiceTranscript = useCallback((text: string) => {
+    if (text.trim()) {
+      appendContext(text, 'voice');
+      // Auto-send the transcribed text
+      setInput(text);
+    }
+  }, [appendContext]);
+
+  // Initialize voice hook (only if voice is enabled)
+  const voice = useVoiceInterview({
+    voiceConfig,
+    onTranscript: handleVoiceTranscript,
+    onError: setVoiceError
+  });
+
+  // Keep voiceRef updated for unmount cleanup (avoid stale reference)
+  voiceRef.current = voice;
 
   // Scroll to bottom on new messages
   useEffect(() => {
@@ -193,16 +230,47 @@ const InterviewChat: React.FC = () => {
     router.push('/synthesis');
   };
 
-  const toggleRecording = () => {
-    setRecording(!isRecording);
-    // TODO: Implement actual voice recording
-    if (!isRecording) {
-      setTimeout(() => {
-        appendContext('(Voice transcription would appear here)', 'voice');
-        setRecording(false);
-      }, 2000);
+  const toggleRecording = async () => {
+    if (!voiceConfig.sttEnabled) {
+      setVoiceError('Voice input is not enabled for this study');
+      return;
+    }
+
+    if (isRecording || voice.isRecording) {
+      voice.stopRecording();
+      setRecording(false);
+    } else {
+      setVoiceError(null);
+      await voice.startRecording();
+      setRecording(true);
     }
   };
+
+  // Sync recording state with voice hook
+  useEffect(() => {
+    setRecording(voice.isRecording);
+  }, [voice.isRecording, setRecording]);
+
+  // Track audio preferences in behavior data
+  useEffect(() => {
+    if (isVoiceEnabled && voice.audioPreference) {
+      // Get current behaviorData directly from store to avoid infinite loop
+      // (behaviorData in deps + spread would cause re-trigger on every update)
+      const currentBehaviorData = useStore.getState().behaviorData;
+      setBehaviorData({
+        ...currentBehaviorData,
+        audioPreference: voice.audioPreference
+      });
+    }
+  }, [voice.audioPreference, isVoiceEnabled, setBehaviorData]);
+
+  // Cleanup voice on unmount only (not every render)
+  // Using ref because voice object is new reference each render
+  useEffect(() => {
+    return () => {
+      voiceRef.current?.disconnect();
+    };
+  }, []);
 
   if (!studyConfig) {
     return (
@@ -352,29 +420,74 @@ const InterviewChat: React.FC = () => {
         </motion.div>
       ) : (
         <div className="p-4 bg-stone-800 border-t border-stone-700">
-          <div className="max-w-3xl mx-auto">
+          <div className="max-w-3xl mx-auto space-y-2">
+            {/* Voice error message */}
+            {voiceError && (
+              <div className="text-xs text-red-400 text-center">
+                {voiceError}
+              </div>
+            )}
+
+            {/* Audio level indicator */}
+            {voice.isRecording && (
+              <div className="flex items-center justify-center gap-2">
+                <div className="text-xs text-stone-500">Listening</div>
+                <div className="flex gap-0.5">
+                  {[...Array(5)].map((_, i) => (
+                    <div
+                      key={i}
+                      className={`w-1 rounded-full transition-all ${
+                        voice.audioLevel > (i / 5)
+                          ? 'bg-stone-400 h-4'
+                          : 'bg-stone-700 h-2'
+                      }`}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Input */}
             <div className="flex gap-3">
-              <button
-                onClick={toggleRecording}
-                className={`p-3 rounded-xl transition-colors ${
-                  isRecording
-                    ? 'bg-red-500/20 text-red-400 border-2 border-red-500'
-                    : 'bg-stone-700 text-stone-400 hover:bg-stone-600'
-                }`}
-              >
-                {isRecording ? <MicOff size={20} /> : <Mic size={20} />}
-              </button>
+              {/* Mic button - only show if STT is enabled */}
+              {voiceConfig.sttEnabled && (
+                <button
+                  onClick={toggleRecording}
+                  disabled={isAiThinking}
+                  className={`p-3 rounded-xl transition-colors ${
+                    voice.isRecording
+                      ? 'bg-red-500/20 text-red-400 border-2 border-red-500 animate-pulse'
+                      : 'bg-stone-700 text-stone-400 hover:bg-stone-600'
+                  } disabled:opacity-50`}
+                >
+                  {voice.isRecording ? <MicOff size={20} /> : <Mic size={20} />}
+                </button>
+              )}
 
               <input
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && !isAiThinking && handleSend()}
-                placeholder={isRecording ? "Listening..." : "Type your response..."}
+                placeholder={voice.isRecording ? "Listening..." : "Type your response..."}
                 disabled={isAiThinking}
                 className="flex-1 px-4 py-3 bg-stone-900 border border-stone-600 text-stone-100 placeholder-stone-500 rounded-xl focus:outline-none focus:ring-2 focus:ring-stone-500 focus:border-stone-500 disabled:opacity-50"
               />
+
+              {/* TTS mute button - only show if TTS is enabled */}
+              {voiceConfig.ttsEnabled && (
+                <button
+                  onClick={voice.toggleTTS}
+                  className={`p-3 rounded-xl transition-colors ${
+                    voice.audioPreference.wantsToHear
+                      ? 'bg-stone-700 text-stone-400 hover:bg-stone-600'
+                      : 'bg-stone-700 text-stone-600'
+                  }`}
+                  title={voice.audioPreference.wantsToHear ? 'Mute AI voice' : 'Unmute AI voice'}
+                >
+                  {voice.audioPreference.wantsToHear ? <Volume2 size={20} /> : <VolumeX size={20} />}
+                </button>
+              )}
 
               <button
                 onClick={() => handleSend()}
@@ -384,6 +497,14 @@ const InterviewChat: React.FC = () => {
                 <Send size={20} />
               </button>
             </div>
+
+            {/* Speaking indicator */}
+            {voice.isSpeaking && voiceConfig.ttsEnabled && (
+              <div className="text-xs text-stone-500 text-center flex items-center justify-center gap-2">
+                <Volume2 size={14} className="animate-pulse" />
+                AI is speaking...
+              </div>
+            )}
           </div>
         </div>
       )}
