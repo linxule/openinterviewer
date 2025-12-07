@@ -5,9 +5,13 @@ Open-source AI-powered qualitative research interview platform. Conduct deep, nu
 ## Features
 
 - **AI-Powered Interviews**: Configurable AI interviewer with structured, standard, or exploratory modes
+- **Voice Interviews** (Preview): Optional speech-to-text input and text-to-speech output using Gemini Live API
 - **Profile Extraction**: Automatically gather participant demographic information during natural conversation
 - **Multi-Question Support**: Define core research questions that the AI weaves into conversation naturally
+- **Study Management**: Save, edit, and manage multiple studies from the dashboard
 - **Real-time Analysis**: Automatic synthesis of stated vs revealed preferences, themes, and contradictions
+- **Aggregate Synthesis**: Cross-interview analysis to identify patterns across all participants
+- **Follow-up Studies**: Generate new studies based on synthesis findings
 - **Secure Deployment**: API keys stay server-side, never exposed to participants
 - **One-Click Deploy**: Deploy your own instance to Vercel in minutes
 
@@ -32,18 +36,22 @@ Open-source AI-powered qualitative research interview platform. Conduct deep, nu
 |----------|----------|-------------|
 | `GEMINI_API_KEY` | Yes | Google Gemini API key for AI interviews |
 | `ADMIN_PASSWORD` | Yes | Password to protect researcher dashboard |
+| `NEXT_PUBLIC_GEMINI_API_KEY` | No | Enable voice features (client-side Gemini Live API) |
 | `ANTHROPIC_API_KEY` | No | Optional: Use Claude instead of Gemini for interviews |
 | `AI_PROVIDER` | No | `gemini` (default) or `claude` |
-| `AI_MODEL` | No | Override default model (e.g., `claude-sonnet-4-20250514`) |
+| `AI_MODEL` | No | Override default model (see Model Selection below) |
 
 ## How It Works
 
 ### For Researchers
 
-1. **Setup Study** (`/setup`): Configure your research questions, profile fields, and AI interview style
-2. **Generate Link**: Create a shareable participant link with your study configuration embedded
-3. **Share**: Distribute the link to participants via email, survey tools, or social media
-4. **View Results** (`/dashboard`): Access transcripts, analysis, and export data
+1. **Setup Study** (`/setup`): Configure your research questions, profile fields, AI behavior, and voice settings
+2. **Save Study**: Studies are saved to your dashboard for reuse and editing
+3. **Generate Link**: Create a shareable participant link with your study configuration embedded
+4. **Share**: Distribute the link to participants via email, survey tools, or social media
+5. **View Results** (`/dashboard`): Access individual transcripts and per-interview synthesis
+6. **Aggregate Analysis**: View cross-interview patterns, themes, and divergent views
+7. **Generate Follow-ups**: Create new studies based on synthesis findings to dig deeper
 
 ### For Participants
 
@@ -54,14 +62,24 @@ Open-source AI-powered qualitative research interview platform. Conduct deep, nu
 
 ### Data Flow
 
-```
-Participant → Consent → Interview → Analysis → Export
-                 ↓
-           AI Interviewer (Gemini/Claude)
-                 ↓
-           Vercel KV (Storage)
-                 ↓
-        Researcher Dashboard
+```text
+Researcher                          Participant
+    │                                    │
+    ├── Setup Study                      │
+    ├── Save to Dashboard                │
+    ├── Generate Link ──────────────────►│
+    │                                    ├── Consent
+    │                                    ├── Interview (text or voice)
+    │                                    │       ↓
+    │                                    │   AI Interviewer (Gemini/Claude)
+    │                                    │       ↓
+    │                                    └── Complete
+    │                                           ↓
+    │◄───────────────────────────── Vercel KV (Storage)
+    │
+    ├── View Individual Synthesis
+    ├── Run Aggregate Analysis
+    └── Generate Follow-up Studies
 ```
 
 ## Local Development
@@ -97,52 +115,95 @@ vercel env pull .env.local
 
 ## Project Structure
 
-```
+```text
 /src
 ├── app/                      # Next.js App Router pages
 │   ├── api/                  # API routes (server-side)
 │   │   ├── interview/        # AI interview generation
 │   │   ├── greeting/         # Interview greeting
-│   │   ├── synthesis/        # Interview analysis
+│   │   ├── synthesis/        # Individual + aggregate analysis
+│   │   ├── studies/          # Study CRUD operations
 │   │   ├── generate-link/    # Participant URL generation
-│   │   ├── interviews/       # CRUD for stored interviews
-│   │   └── auth/            # Authentication
-│   ├── setup/               # Study configuration
-│   ├── consent/             # Participant consent
-│   ├── interview/           # Interview chat
-│   ├── synthesis/           # Analysis view
-│   ├── export/              # Data export
-│   ├── dashboard/           # Researcher dashboard
-│   ├── login/               # Researcher login
-│   └── p/[token]/           # Participant entry point
-├── components/              # React components
-├── lib/                     # Server-side utilities
-│   ├── ai.ts               # AI provider abstraction
-│   ├── providers/          # Gemini & Claude implementations
-│   └── kv.ts               # Vercel KV client
-├── services/               # Client-side services
-├── store.ts                # Zustand state management
-├── types.ts                # TypeScript types
-└── middleware.ts           # Auth protection
+│   │   ├── interviews/       # Interview CRUD + export
+│   │   └── auth/             # Authentication
+│   ├── setup/                # Study configuration
+│   ├── consent/              # Participant consent
+│   ├── interview/            # Interview chat
+│   ├── synthesis/            # Analysis view
+│   ├── export/               # Data export
+│   ├── dashboard/            # Researcher dashboard
+│   ├── studies/              # Study list + detail views
+│   ├── login/                # Researcher login
+│   └── p/[token]/            # Participant entry point
+├── components/               # React components
+├── hooks/                    # Custom React hooks
+│   └── useVoiceInterview.ts  # Voice interview (Gemini Live API)
+├── lib/                      # Server-side utilities
+│   ├── ai.ts                 # AI provider abstraction
+│   ├── providers/            # Gemini & Claude implementations
+│   └── kv.ts                 # Vercel KV client
+├── utils/                    # Client-side utilities
+│   └── audioUtils.ts         # Audio encoding/decoding for voice
+├── services/                 # Client-side services
+├── store.ts                  # Zustand state management
+├── types.ts                  # TypeScript types
+└── middleware.ts             # Auth protection
 ```
 
 ## AI Provider Configuration
 
 ### Default: Gemini
+
 The app uses Gemini by default for all AI operations:
 - Interview responses
 - Greeting generation
 - Interview synthesis
 
+### Model Selection
+
+The default model is `gemini-3-pro-preview`. To use a different model:
+
+```env
+AI_MODEL=gemini-2.5-flash
+```
+
+**Available Gemini models:**
+- `gemini-2.5-flash` - Fast, cost-effective
+- `gemini-2.5-pro` - Higher quality
+- `gemini-3-pro-preview` - Latest preview (default, may require allowlisting)
+
+**Note:** Gemini 1.x and 2.0 models are deprecated. Preview models may require API access approval from Google.
+
 ### Optional: Claude for Interviews
-To use Claude for interviews while keeping Gemini for speech:
+
+To use Claude for interviews while keeping Gemini for voice:
 
 ```env
 AI_PROVIDER=claude
 ANTHROPIC_API_KEY=your-claude-api-key
+AI_MODEL=claude-sonnet-4-5
 ```
 
-Note: Speech-to-text and text-to-speech (future feature) will always use Gemini for cost efficiency.
+## Voice Features (Preview)
+
+Enable voice interviews for participants who prefer speaking:
+
+1. **Setup**: In Study Setup, configure Voice settings under the Voice tab:
+   - **Text-to-Speech**: AI interviewer speaks responses aloud
+   - **Speech-to-Text**: Participants can speak instead of type
+
+2. **Configuration**: Add the client-side API key to your environment:
+
+```env
+NEXT_PUBLIC_GEMINI_API_KEY=your-gemini-key
+```
+
+3. **How it works**:
+   - Voice uses Gemini Live API for real-time speech processing
+   - Participants can toggle between voice and text during the interview
+   - Audio preferences are tracked for research insights
+
+**Note:** Voice features require the Gemini Live API, which may have usage limits. The app degrades gracefully to text-only if unavailable.
 
 ## Security
 
