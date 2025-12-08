@@ -102,9 +102,8 @@ interface ResearchState {
   // Synthesis
   synthesis: SynthesisResult | null;
 
-  // Context & Voice
+  // Context
   contextEntries: ContextEntry[];
-  isRecording: boolean;
   streamingMessage: string | null;
   isAiThinking: boolean;
 
@@ -132,11 +131,10 @@ interface ResearchState {
   addMessage: (message: InterviewMessage) => void;
 
   // Actions - Context
-  appendContext: (text: string, source: 'voice' | 'text' | 'system') => void;
+  appendContext: (text: string, source: 'text' | 'system') => void;
   clearContext: () => void;
 
   // Actions - AI State
-  setRecording: (recording: boolean) => void;
   setStreamingMessage: (msg: string | null) => void;
   setAiThinking: (thinking: boolean) => void;
 
@@ -169,7 +167,6 @@ export const useStore = create<ResearchState>()(
       behaviorData: initialBehaviorData,
       synthesis: null,
       contextEntries: [],
-      isRecording: false,
       streamingMessage: null,
       isAiThinking: false,
       participantToken: null,
@@ -292,7 +289,6 @@ export const useStore = create<ResearchState>()(
 
       clearContext: () => set({ contextEntries: [] }),
 
-      setRecording: (recording) => set({ isRecording: recording }),
       setStreamingMessage: (msg) => set({ streamingMessage: msg }),
       setAiThinking: (thinking) => set({ isAiThinking: thinking }),
 
@@ -315,7 +311,6 @@ export const useStore = create<ResearchState>()(
         behaviorData: initialBehaviorData,
         synthesis: null,
         contextEntries: [],
-        isRecording: false,
         streamingMessage: null,
         isAiThinking: false,
         participantToken: null

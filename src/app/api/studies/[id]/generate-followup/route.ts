@@ -96,6 +96,10 @@ export async function POST(
       profileSchema: parentStudy.config.profileSchema,
       aiBehavior: parentStudy.config.aiBehavior,
       consentText: parentStudy.config.consentText,
+      // Inherit AI settings
+      aiProvider: parentStudy.config.aiProvider,
+      aiModel: parentStudy.config.aiModel,
+      enableReasoning: parentStudy.config.enableReasoning,
       // Link to parent
       parentStudyId: parentStudy.id,
       parentStudyName: parentStudy.config.name,

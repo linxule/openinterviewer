@@ -21,7 +21,10 @@ import {
   Lightbulb,
   Sparkles,
   AlertCircle,
-  GitBranch
+  GitBranch,
+  Link as LinkIcon,
+  ToggleLeft,
+  ToggleRight
 } from 'lucide-react';
 
 interface StudyDetailProps {
@@ -39,6 +42,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
   const [aggregateSynthesis, setAggregateSynthesis] = useState<AggregateSynthesisResult | null>(null);
   const [isGeneratingAggregate, setIsGeneratingAggregate] = useState(false);
   const [isGeneratingFollowup, setIsGeneratingFollowup] = useState(false);
+  const [isTogglingLinks, setIsTogglingLinks] = useState(false);
 
   useEffect(() => {
     loadStudyData();
@@ -57,6 +61,44 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
       console.error('Error loading study:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleToggleLinksEnabled = async () => {
+    if (!study) return;
+
+    const newLinksEnabled = !(study.config.linksEnabled ?? true);
+    setIsTogglingLinks(true);
+
+    try {
+      const response = await fetch(`/api/studies/${studyId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          config: {
+            ...study.config,
+            linksEnabled: newLinksEnabled
+          }
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to update study');
+      }
+
+      // Update local state
+      setStudy({
+        ...study,
+        config: {
+          ...study.config,
+          linksEnabled: newLinksEnabled
+        }
+      });
+    } catch (error) {
+      console.error('Error toggling links:', error);
+      alert('Failed to update link settings');
+    } finally {
+      setIsTogglingLinks(false);
     }
   };
 
@@ -476,6 +518,51 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                   <label className="block text-sm font-medium text-stone-400 mb-1">AI Interview Style</label>
                   <p className="text-stone-200 capitalize">{study.config.aiBehavior}</p>
                 </div>
+              </div>
+
+              {/* Link Management */}
+              <div className="bg-stone-800/50 rounded-xl border border-stone-700 p-6 space-y-4">
+                <h3 className="font-semibold text-stone-100 flex items-center gap-2">
+                  <LinkIcon size={18} className="text-stone-400" />
+                  Link Management
+                </h3>
+
+                <div className="flex items-center justify-between p-4 bg-stone-900/50 rounded-xl">
+                  <div>
+                    <div className="font-medium text-stone-200">Participant Links</div>
+                    <p className="text-sm text-stone-400">
+                      {(study.config.linksEnabled ?? true)
+                        ? 'Links are active - participants can access the study'
+                        : 'Links are revoked - participants will see an error'}
+                    </p>
+                  </div>
+                  <button
+                    onClick={handleToggleLinksEnabled}
+                    disabled={isTogglingLinks}
+                    className={`w-14 h-7 rounded-full transition-colors flex items-center px-1 ${
+                      (study.config.linksEnabled ?? true)
+                        ? 'bg-green-600'
+                        : 'bg-stone-600'
+                    } ${isTogglingLinks ? 'opacity-50' : ''}`}
+                  >
+                    <div className={`w-5 h-5 bg-white rounded-full transition-transform ${
+                      (study.config.linksEnabled ?? true) ? 'translate-x-7' : 'translate-x-0'
+                    }`} />
+                  </button>
+                </div>
+
+                {study.config.linkExpiration && study.config.linkExpiration !== 'never' && (
+                  <div className="flex items-center gap-2 text-sm text-stone-400">
+                    <Clock size={14} />
+                    <span>Links expire: {study.config.linkExpiration === '7days' ? '7 days' : study.config.linkExpiration === '30days' ? '30 days' : '90 days'} after generation</span>
+                  </div>
+                )}
+
+                {!(study.config.linksEnabled ?? true) && (
+                  <div className="text-xs text-amber-400 bg-amber-900/30 p-3 rounded-lg">
+                    Warning: All participant links are currently disabled. Participants trying to access the study will see an error message.
+                  </div>
+                )}
               </div>
             </div>
           )}

@@ -1,7 +1,7 @@
 // Gemini AI Provider Implementation
 // Server-side only - uses API key from environment
 
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
 import {
   AIProvider,
   buildInterviewSystemPrompt,
@@ -24,20 +24,50 @@ import {
   BehaviorData,
   AIInterviewResponse,
   QuestionProgress,
-  AggregateSynthesisResult
+  AggregateSynthesisResult,
+  DEFAULT_GEMINI_MODEL,
+  GEMINI_SYNTHESIS_MODEL
 } from '@/types';
+
+// Thinking budget for 2.5 models (16K tokens)
+const THINKING_BUDGET_25 = 16384;
 
 export class GeminiProvider implements AIProvider {
   private ai: GoogleGenAI;
   private model: string;
 
-  constructor() {
+  constructor(model?: string) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       throw new Error('GEMINI_API_KEY environment variable is required');
     }
     this.ai = new GoogleGenAI({ apiKey });
-    this.model = process.env.AI_MODEL || 'gemini-3-pro-preview';
+    // Priority: constructor param > GEMINI_MODEL env > AI_MODEL env (legacy) > default
+    this.model = model ||
+      process.env.GEMINI_MODEL ||
+      process.env.AI_MODEL ||
+      DEFAULT_GEMINI_MODEL;
+  }
+
+  // For interview responses (2.5 models) - disable thinking for speed (unless explicitly enabled)
+  private getInterviewThinkingConfig(enableReasoning?: boolean) {
+    const useReasoning = enableReasoning === true;
+    return {
+      thinkingConfig: {
+        thinkingBudget: useReasoning ? THINKING_BUDGET_25 : 0
+      }
+    };
+  }
+
+  // For synthesis operations (Gemini 3 Pro) - use thinkingLevel instead of thinkingBudget
+  private getSynthesisThinkingConfig(enableReasoning?: boolean) {
+    const useReasoning = enableReasoning !== false;
+    return {
+      thinkingConfig: {
+        // Gemini 3 Pro uses ThinkingLevel enum instead of thinkingBudget
+        thinkingLevel: useReasoning ? ThinkingLevel.HIGH : ThinkingLevel.LOW
+      }
+    };
   }
 
   async generateInterviewResponse(
@@ -59,6 +89,7 @@ export class GeminiProvider implements AIProvider {
         model: this.model,
         config: {
           systemInstruction,
+          ...this.getInterviewThinkingConfig(studyConfig.enableReasoning),
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
@@ -152,9 +183,10 @@ export class GeminiProvider implements AIProvider {
 
     try {
       const response = await this.ai.models.generateContent({
-        model: this.model,
+        model: GEMINI_SYNTHESIS_MODEL,  // Auto-upgrade to best model for reasoning
         contents: prompt,
         config: {
+          ...this.getSynthesisThinkingConfig(studyConfig.enableReasoning),
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
@@ -214,9 +246,10 @@ export class GeminiProvider implements AIProvider {
 
     try {
       const response = await this.ai.models.generateContent({
-        model: this.model,
+        model: GEMINI_SYNTHESIS_MODEL,  // Auto-upgrade to best model for reasoning
         contents: prompt,
         config: {
+          ...this.getSynthesisThinkingConfig(studyConfig.enableReasoning),
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
@@ -299,9 +332,10 @@ Return a JSON object with:
 
     try {
       const response = await this.ai.models.generateContent({
-        model: this.model,
+        model: GEMINI_SYNTHESIS_MODEL,  // Auto-upgrade to best model for reasoning
         contents: prompt,
         config: {
+          ...this.getSynthesisThinkingConfig(parentConfig.enableReasoning),
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,

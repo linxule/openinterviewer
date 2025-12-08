@@ -5,12 +5,13 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { useStore } from '@/store';
 import { generateParticipantLink } from '@/services/geminiService';
-import { StudyConfig, ProfileField, AIBehavior, AIProviderType, VoiceConfig, VoiceName } from '@/types';
+import { StudyConfig, ProfileField, AIBehavior, AIProviderType, LinkExpirationOption, GEMINI_MODELS, CLAUDE_MODELS, DEFAULT_GEMINI_MODEL, DEFAULT_CLAUDE_MODEL } from '@/types';
 import {
   FileText,
   Plus,
   X,
   ArrowRight,
+  ArrowLeft,
   Sparkles,
   Eye,
   Lightbulb,
@@ -25,18 +26,10 @@ import {
   Save,
   CheckCircle,
   GitBranch,
-  Mic,
-  Volume2
+  Clock,
+  AlertTriangle,
+  ExternalLink
 } from 'lucide-react';
-
-// Available Gemini voices
-const VOICE_OPTIONS: { id: VoiceName; label: string; desc: string }[] = [
-  { id: 'Puck', label: 'Puck', desc: 'Energetic, playful' },
-  { id: 'Charon', label: 'Charon', desc: 'Calm, measured' },
-  { id: 'Kore', label: 'Kore', desc: 'Warm, empathetic' },
-  { id: 'Fenrir', label: 'Fenrir', desc: 'Deep, authoritative' },
-  { id: 'Zephyr', label: 'Zephyr', desc: 'Light, friendly' }
-];
 
 // Common profile field presets
 const PROFILE_PRESETS: ProfileField[] = [
@@ -73,12 +66,14 @@ const StudySetup: React.FC = () => {
   const [aiProvider, setAiProvider] = useState<AIProviderType>(
     studyConfig?.aiProvider || 'gemini'
   );
-  const [voiceConfig, setVoiceConfig] = useState<VoiceConfig>(
-    studyConfig?.voiceConfig || {
-      ttsEnabled: false,
-      ttsVoice: 'Kore',
-      sttEnabled: false
-    }
+  const [aiModel, setAiModel] = useState<string>(
+    studyConfig?.aiModel || (studyConfig?.aiProvider === 'claude' ? DEFAULT_CLAUDE_MODEL : DEFAULT_GEMINI_MODEL)
+  );
+  const [enableReasoning, setEnableReasoning] = useState<boolean | undefined>(
+    studyConfig?.enableReasoning
+  );
+  const [linkExpiration, setLinkExpiration] = useState<LinkExpirationOption>(
+    studyConfig?.linkExpiration || 'never'
   );
   const [consentText, setConsentText] = useState(
     studyConfig?.consentText ||
@@ -102,6 +97,12 @@ const StudySetup: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
+
+  // Config status (API keys)
+  const [configStatus, setConfigStatus] = useState<{
+    hasAnthropicKey: boolean;
+    hasGeminiKey: boolean;
+  } | null>(null);
 
   // Sync savedStudyId with persisted config
   // Server-assigned IDs are UUIDs, client-side IDs start with "study-"
@@ -128,10 +129,28 @@ const StudySetup: React.FC = () => {
     checkAuth();
   }, []);
 
-  // Check for follow-up prefill on mount
+  // Fetch config status when authenticated
+  useEffect(() => {
+    if (isAuthenticated) {
+      const fetchConfigStatus = async () => {
+        try {
+          const res = await fetch('/api/config/status');
+          if (res.ok) {
+            const data = await res.json();
+            setConfigStatus(data);
+          }
+        } catch {
+          // Silently fail - warnings just won't show
+        }
+      };
+      fetchConfigStatus();
+    }
+  }, [isAuthenticated]);
+
+  // Check for follow-up or edit prefill on mount
   useEffect(() => {
     const prefillType = searchParams.get('prefill');
-    if (prefillType === 'followup') {
+    if (prefillType === 'followup' || prefillType === 'edit') {
       const prefillData = sessionStorage.getItem('prefillStudyConfig');
       if (prefillData) {
         try {
@@ -145,19 +164,30 @@ const StudySetup: React.FC = () => {
           if (config.profileSchema?.length) setProfileSchema(config.profileSchema);
           if (config.aiBehavior) setAiBehavior(config.aiBehavior);
           if (config.aiProvider) setAiProvider(config.aiProvider);
-          if (config.voiceConfig) setVoiceConfig(config.voiceConfig);
+          if (config.aiModel) setAiModel(config.aiModel);
+          if (config.enableReasoning !== undefined) setEnableReasoning(config.enableReasoning);
+          if (config.linkExpiration) setLinkExpiration(config.linkExpiration);
           if (config.consentText) setConsentText(config.consentText);
 
-          // Store parent study info for display and saving
-          if (config.parentStudyId && config.parentStudyName) {
+          // Store parent study info for display and saving (followup only)
+          if (prefillType === 'followup' && config.parentStudyId && config.parentStudyName) {
             setParentStudyInfo({
               id: config.parentStudyId,
               name: config.parentStudyName
             });
           }
 
-          // Mark as dirty since we loaded prefill data that needs saving
-          setIsDirty(true);
+          // For edit mode, set the study ID so saves become updates
+          if (prefillType === 'edit') {
+            const studyId = searchParams.get('studyId');
+            if (studyId) {
+              setSavedStudyId(studyId);
+              setIsDirty(false); // Not dirty initially - matches saved state
+            }
+          } else {
+            // Mark as dirty since we loaded prefill data that needs saving
+            setIsDirty(true);
+          }
 
           // Clear sessionStorage after loading
           sessionStorage.removeItem('prefillStudyConfig');
@@ -179,7 +209,9 @@ const StudySetup: React.FC = () => {
       setProfileSchema(studyConfig.profileSchema || []);
       setAiBehavior(studyConfig.aiBehavior);
       setAiProvider(studyConfig.aiProvider || 'gemini');
-      setVoiceConfig(studyConfig.voiceConfig || { ttsEnabled: false, ttsVoice: 'Kore', sttEnabled: false });
+      setAiModel(studyConfig.aiModel || (studyConfig.aiProvider === 'claude' ? DEFAULT_CLAUDE_MODEL : DEFAULT_GEMINI_MODEL));
+      setEnableReasoning(studyConfig.enableReasoning);
+      setLinkExpiration(studyConfig.linkExpiration || 'never');
       setConsentText(studyConfig.consentText);
     }
   }, [studyConfig]);
@@ -262,7 +294,10 @@ const StudySetup: React.FC = () => {
     profileSchema: profileSchema.filter(f => f.label.trim()),
     aiBehavior,
     aiProvider,
-    voiceConfig: (voiceConfig.sttEnabled || voiceConfig.ttsEnabled) ? voiceConfig : undefined,
+    aiModel,
+    enableReasoning,
+    linkExpiration,
+    linksEnabled: true, // Always true when creating/editing (revocation is in StudyDetail)
     consentText,
     createdAt: studyConfig?.createdAt || Date.now(),
     // Include parent study info if this is a follow-up
@@ -397,7 +432,8 @@ const StudySetup: React.FC = () => {
                 setStudyConfig(retryData.study.config);
                 setSaveSuccess(true);
                 setIsDirty(false);
-                setTimeout(() => setSaveSuccess(false), 3000);
+                // Navigate to study detail page after confirmed save
+                router.push(`/studies/${retryData.study.id}`);
               }
             }
             return;
@@ -412,7 +448,8 @@ const StudySetup: React.FC = () => {
       setStudyConfig(data.study.config);
       setIsDirty(false);
 
-      setTimeout(() => setSaveSuccess(false), 3000);
+      // Navigate to study detail page after successful save
+      router.push(`/studies/${data.study.id}`);
     } catch (error) {
       console.error('Error saving study:', error);
     } finally {
@@ -466,6 +503,13 @@ const StudySetup: React.FC = () => {
           className="mb-8"
         >
           <div className="flex items-center gap-3 mb-2">
+            <button
+              onClick={() => router.push('/studies')}
+              className="p-2 text-stone-400 hover:text-stone-300 rounded-lg hover:bg-stone-800 transition-colors"
+              title="Back to All Studies"
+            >
+              <ArrowLeft size={20} />
+            </button>
             <div className="w-10 h-10 rounded-xl bg-stone-700 flex items-center justify-center">
               <FileText className="text-stone-300" size={20} />
             </div>
@@ -784,7 +828,12 @@ const StudySetup: React.FC = () => {
                     type="radio"
                     name="aiProvider"
                     checked={aiProvider === option.id}
-                    onChange={() => { setAiProvider(option.id); setIsDirty(true); }}
+                    onChange={() => {
+                      setAiProvider(option.id);
+                      // Reset model to provider's default when switching providers
+                      setAiModel(option.id === 'claude' ? DEFAULT_CLAUDE_MODEL : DEFAULT_GEMINI_MODEL);
+                      setIsDirty(true);
+                    }}
                     className="mt-1 accent-stone-500"
                   />
                   <div>
@@ -794,6 +843,72 @@ const StudySetup: React.FC = () => {
                 </label>
               ))}
             </div>
+
+            {/* Model Selection */}
+            <div className="mt-4 space-y-2">
+              <label className="block text-sm font-medium text-stone-300">
+                Model
+              </label>
+              <select
+                value={aiModel}
+                onChange={(e) => { setAiModel(e.target.value); setIsDirty(true); }}
+                className="w-full px-4 py-3 rounded-xl bg-stone-800 border border-stone-600 text-stone-100 focus:outline-none focus:ring-2 focus:ring-stone-500 focus:border-stone-500"
+              >
+                {(aiProvider === 'gemini' ? GEMINI_MODELS : CLAUDE_MODELS).map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.label}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-stone-500">
+                {(aiProvider === 'gemini' ? GEMINI_MODELS : CLAUDE_MODELS).find(m => m.id === aiModel)?.desc || ''}
+              </p>
+            </div>
+
+            {/* AI Reasoning Mode */}
+            <div className="mt-4 space-y-2">
+              <label className="block text-sm font-medium text-stone-300">
+                AI Reasoning Mode
+              </label>
+              <select
+                value={enableReasoning === undefined ? 'auto' : enableReasoning ? 'on' : 'off'}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setEnableReasoning(v === 'auto' ? undefined : v === 'on');
+                  setIsDirty(true);
+                }}
+                className="w-full px-4 py-3 rounded-xl bg-stone-800 border border-stone-600 text-stone-100 focus:outline-none focus:ring-2 focus:ring-stone-500 focus:border-stone-500"
+              >
+                <option value="auto">Automatic (recommended)</option>
+                <option value="on">Always enabled</option>
+                <option value="off">Always disabled</option>
+              </select>
+              <p className="text-xs text-stone-500">
+                Automatic: OFF for interviews (faster responses), ON for synthesis (deeper analysis using premium models - may increase API costs)
+              </p>
+            </div>
+
+            {/* Warning: Claude selected but no API key */}
+            {aiProvider === 'claude' && configStatus && !configStatus.hasAnthropicKey && (
+              <div className="bg-amber-900/30 border border-amber-700/50 rounded-xl p-4 flex items-start gap-3">
+                <AlertTriangle size={18} className="text-amber-400 flex-shrink-0 mt-0.5" />
+                <div>
+                  <h4 className="font-medium text-amber-200 text-sm">Anthropic API Key Missing</h4>
+                  <p className="text-xs text-stone-400 mt-1">
+                    Claude interviews require the <code className="text-stone-300">ANTHROPIC_API_KEY</code> environment variable.
+                    Set this in your Vercel dashboard under Project Settings → Environment Variables.
+                  </p>
+                  <a
+                    href="https://github.com/your-repo/research-tool-v2#configuring-api-keys"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-xs text-amber-400 hover:text-amber-300 mt-2"
+                  >
+                    View setup guide <ExternalLink size={12} />
+                  </a>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* AI Behavior */}
@@ -825,96 +940,34 @@ const StudySetup: React.FC = () => {
             </div>
           </div>
 
-          {/* Voice Configuration */}
+          {/* Link Settings */}
           <div className="space-y-4">
             <h2 className="font-semibold text-lg text-stone-100 flex items-center gap-2">
-              <Mic size={18} className="text-stone-400" />
-              Voice & Audio
+              <Clock size={18} className="text-stone-400" />
+              Link Settings
             </h2>
             <p className="text-sm text-stone-400">
-              Enable voice features for interviews (requires Gemini API key with voice support)
+              Configure when participant links expire. You can also revoke links from the study detail page.
             </p>
 
-            {/* Voice toggles */}
             <div className="space-y-3">
-              {/* STT Toggle */}
-              <label className="flex items-center justify-between p-3 bg-stone-800 rounded-xl border border-stone-700">
-                <div className="flex items-center gap-3">
-                  <Mic size={18} className="text-stone-400" />
-                  <div>
-                    <div className="font-medium text-stone-100">Speech-to-Text</div>
-                    <div className="text-xs text-stone-400">Allow participants to speak instead of type</div>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => { setVoiceConfig(prev => ({ ...prev, sttEnabled: !prev.sttEnabled })); setIsDirty(true); }}
-                  className={`w-12 h-6 rounded-full transition-colors ${
-                    voiceConfig.sttEnabled ? 'bg-stone-500' : 'bg-stone-700'
-                  }`}
+              <label className="block">
+                <span className="text-sm font-medium text-stone-300">Link Expiration</span>
+                <select
+                  value={linkExpiration}
+                  onChange={(e) => { setLinkExpiration(e.target.value as LinkExpirationOption); setIsDirty(true); }}
+                  className="mt-1 w-full px-4 py-3 rounded-xl bg-stone-800 border border-stone-600 text-stone-100 focus:outline-none focus:ring-2 focus:ring-stone-500 focus:border-stone-500"
                 >
-                  <div className={`w-5 h-5 bg-white rounded-full transition-transform ${
-                    voiceConfig.sttEnabled ? 'translate-x-6' : 'translate-x-0.5'
-                  }`} />
-                </button>
+                  <option value="never">Never expire</option>
+                  <option value="7days">Expire after 7 days</option>
+                  <option value="30days">Expire after 30 days</option>
+                  <option value="90days">Expire after 90 days</option>
+                </select>
               </label>
-
-              {/* TTS Toggle */}
-              <label className="flex items-center justify-between p-3 bg-stone-800 rounded-xl border border-stone-700">
-                <div className="flex items-center gap-3">
-                  <Volume2 size={18} className="text-stone-400" />
-                  <div>
-                    <div className="font-medium text-stone-100">Text-to-Speech</div>
-                    <div className="text-xs text-stone-400">AI speaks responses (participants can mute)</div>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => { setVoiceConfig(prev => ({ ...prev, ttsEnabled: !prev.ttsEnabled })); setIsDirty(true); }}
-                  className={`w-12 h-6 rounded-full transition-colors ${
-                    voiceConfig.ttsEnabled ? 'bg-stone-500' : 'bg-stone-700'
-                  }`}
-                >
-                  <div className={`w-5 h-5 bg-white rounded-full transition-transform ${
-                    voiceConfig.ttsEnabled ? 'translate-x-6' : 'translate-x-0.5'
-                  }`} />
-                </button>
-              </label>
-
-              {/* Voice selector - only show if TTS is enabled */}
-              {voiceConfig.ttsEnabled && (
-                <div className="p-3 bg-stone-800 rounded-xl border border-stone-700 space-y-2">
-                  <div className="text-sm font-medium text-stone-300">AI Voice</div>
-                  <div className="grid grid-cols-5 gap-2">
-                    {VOICE_OPTIONS.map((voice) => (
-                      <button
-                        key={voice.id}
-                        type="button"
-                        onClick={() => { setVoiceConfig(prev => ({ ...prev, ttsVoice: voice.id })); setIsDirty(true); }}
-                        className={`p-2 rounded-lg text-center transition-colors ${
-                          voiceConfig.ttsVoice === voice.id
-                            ? 'bg-stone-600 text-white'
-                            : 'bg-stone-700 text-stone-400 hover:bg-stone-600'
-                        }`}
-                        title={voice.desc}
-                      >
-                        <div className="text-xs font-medium">{voice.label}</div>
-                      </button>
-                    ))}
-                  </div>
-                  <p className="text-xs text-stone-500">
-                    {VOICE_OPTIONS.find(v => v.id === voiceConfig.ttsVoice)?.desc}
-                  </p>
-                </div>
-              )}
+              <p className="text-xs text-stone-500">
+                Expired links will show an error message when participants try to access them.
+              </p>
             </div>
-
-            {(voiceConfig.sttEnabled || voiceConfig.ttsEnabled) && (
-              <div className="text-xs text-stone-500 bg-stone-800/50 p-3 rounded-lg">
-                Note: Voice features require <code className="text-stone-400">NEXT_PUBLIC_GEMINI_API_KEY</code> environment variable.
-                Participant audio preferences will be tracked in behavior data for research insights.
-              </div>
-            )}
           </div>
 
           {/* Consent Text */}

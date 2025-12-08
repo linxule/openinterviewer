@@ -5,11 +5,20 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import * as jose from 'jose';
-import { StudyConfig, ParticipantToken } from '@/types';
+import { StudyConfig, ParticipantToken, LinkExpirationOption } from '@/types';
 import { verifySessionToken, SESSION_COOKIE_NAME } from '@/lib/auth';
 
-// Token expiration: 30 days
-const TOKEN_EXPIRATION = '30d';
+// Convert link expiration option to jose expiration string
+const getExpirationTime = (option?: LinkExpirationOption): string | null => {
+  switch (option) {
+    case '7days': return '7d';
+    case '30days': return '30d';
+    case '90days': return '90d';
+    case 'never':
+    default:
+      return null; // No expiration
+  }
+};
 
 // Get signing secret from environment
 // Uses dedicated PARTICIPANT_TOKEN_SECRET if available, falls back to ADMIN_PASSWORD
@@ -56,19 +65,29 @@ export async function POST(request: Request) {
       );
     }
 
+    // Get expiration time from study config
+    const expirationTime = getExpirationTime(studyConfig.linkExpiration);
+
     // Create token payload
     const tokenData: ParticipantToken = {
       studyId: studyConfig.id,
       studyConfig,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      // Store expiration info for display purposes
+      ...(expirationTime && { expiresAt: Date.now() + (expirationTime === '7d' ? 7 : expirationTime === '30d' ? 30 : 90) * 24 * 60 * 60 * 1000 })
     };
 
-    // Sign the token with expiration
-    const token = await new jose.SignJWT(tokenData as unknown as jose.JWTPayload)
+    // Sign the token (with or without expiration)
+    let jwtBuilder = new jose.SignJWT(tokenData as unknown as jose.JWTPayload)
       .setProtectedHeader({ alg: 'HS256' })
-      .setIssuedAt()
-      .setExpirationTime(TOKEN_EXPIRATION)
-      .sign(secret);
+      .setIssuedAt();
+
+    // Only set expiration if configured
+    if (expirationTime) {
+      jwtBuilder = jwtBuilder.setExpirationTime(expirationTime);
+    }
+
+    const token = await jwtBuilder.sign(secret);
 
     // Build the full URL
     const baseUrl = process.env.VERCEL_URL

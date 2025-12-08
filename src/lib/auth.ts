@@ -19,6 +19,15 @@ function getSecret(): Uint8Array {
   if (!secret) {
     throw new Error('SESSION_SECRET or ADMIN_PASSWORD environment variable is required');
   }
+
+  // Warn if using ADMIN_PASSWORD as session secret (less secure)
+  if (!process.env.SESSION_SECRET && process.env.NODE_ENV === 'production') {
+    console.warn(
+      '[Security] SESSION_SECRET not set - falling back to ADMIN_PASSWORD. ' +
+      'For better security, set a dedicated SESSION_SECRET environment variable.'
+    );
+  }
+
   return new TextEncoder().encode(secret);
 }
 
@@ -104,7 +113,8 @@ async function hasValidAdminSession(request: Request): Promise<boolean> {
 // Verify participant token from Authorization header
 // Also accepts valid admin session cookies (for researcher preview)
 // Returns studyId if from participant token, undefined if from admin session
-export async function verifyParticipantToken(request: Request): Promise<{ valid: boolean; studyId?: string; isAdmin?: boolean }> {
+// Checks if links are enabled for the study (unless admin)
+export async function verifyParticipantToken(request: Request): Promise<{ valid: boolean; studyId?: string; isAdmin?: boolean; error?: string }> {
   // First, check for participant token in Authorization header
   const authHeader = request.headers.get('Authorization');
   const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
@@ -114,8 +124,23 @@ export async function verifyParticipantToken(request: Request): Promise<{ valid:
     if (secret) {
       try {
         const { payload } = await jose.jwtVerify(token, secret);
-        return { valid: true, studyId: payload.studyId as string };
-      } catch {
+        const studyId = payload.studyId as string;
+
+        // Check if links are enabled for this study
+        // Import dynamically to avoid circular dependencies
+        const { getStudy } = await import('@/services/storageService');
+        const study = await getStudy(studyId);
+
+        if (study && study.config.linksEnabled === false) {
+          return { valid: false, error: 'Participant links have been disabled for this study.' };
+        }
+
+        return { valid: true, studyId };
+      } catch (error) {
+        // Check if it's an expiration error
+        if (error instanceof jose.errors.JWTExpired) {
+          return { valid: false, error: 'This link has expired. Please request a new participant link from the researcher.' };
+        }
         // Token invalid, fall through to check admin session
       }
     }

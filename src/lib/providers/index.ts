@@ -9,7 +9,8 @@ import { StudyConfig } from '@/types';
 export type ProviderType = 'gemini' | 'claude';
 
 // Get the interview AI provider based on configuration
-// Priority: studyConfig.aiProvider > env.AI_PROVIDER > 'gemini'
+// Provider priority: studyConfig.aiProvider > env.AI_PROVIDER > 'gemini'
+// Model priority: studyConfig.aiModel > env.GEMINI_MODEL/CLAUDE_MODEL > env.AI_MODEL > default
 export function getInterviewProvider(studyConfig?: StudyConfig): AIProvider {
   const providerType = (
     studyConfig?.aiProvider ||          // Study-level preference
@@ -17,26 +18,16 @@ export function getInterviewProvider(studyConfig?: StudyConfig): AIProvider {
     'gemini'                            // Ultimate default
   ) as ProviderType;
 
+  // Pass model from studyConfig (if set) to provider constructor
+  const model = studyConfig?.aiModel;
+
   switch (providerType) {
     case 'claude':
-      return new ClaudeProvider();
+      return new ClaudeProvider(model);
     case 'gemini':
     default:
-      return new GeminiProvider();
+      return new GeminiProvider(model);
   }
-}
-
-// Speech (STT/TTS) always uses Gemini for best cost/capability
-// This returns a Gemini-specific client for speech operations
-export function getSpeechProvider() {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error('GEMINI_API_KEY is required for speech services');
-  }
-
-  // Import dynamically to avoid issues when Gemini isn't needed
-  const { GoogleGenAI } = require('@google/genai');
-  return new GoogleGenAI({ apiKey });
 }
 
 export { GeminiProvider } from './gemini';

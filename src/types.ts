@@ -55,26 +55,39 @@ export type AIBehavior = 'structured' | 'standard' | 'exploratory';
 export type AIProviderType = 'gemini' | 'claude';
 
 // ============================================
-// Voice Configuration
+// AI Model Configuration
 // ============================================
 
-// Available Gemini Live API voices
-export type VoiceName = 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr';
-
-export interface VoiceConfig {
-  ttsEnabled: boolean;           // Researcher: allow AI to speak
-  ttsVoice: VoiceName;           // Voice name (Puck, Charon, Kore, etc.)
-  sttEnabled: boolean;           // Allow speech input (usually true)
+export interface AIModelOption {
+  id: string;
+  label: string;
+  desc: string;
 }
 
-// Track participant audio preferences (for research insights)
-export interface ParticipantAudioPreference {
-  initialChoice: 'voice' | 'text-only';  // How they started
-  wantsToHear: boolean;                   // Current TTS preference
-  changedMidInterview: boolean;           // Did they toggle?
-  toggleCount: number;                    // How many times toggled
-  totalAudioDuration?: number;            // Seconds of AI audio played
-}
+// Available Gemini models (verified from official docs)
+export const GEMINI_MODELS: AIModelOption[] = [
+  { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', desc: 'Fast, cost-effective' },
+  { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', desc: 'Higher quality' },
+  { id: 'gemini-3-pro-preview', label: 'Gemini 3 Pro Preview', desc: 'Most intelligent (preview)' },
+];
+
+// Available Claude models (verified from official docs)
+export const CLAUDE_MODELS: AIModelOption[] = [
+  { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5', desc: 'Fastest ($1/$5 per MTok)' },
+  { id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5', desc: 'Balanced ($3/$15 per MTok)' },
+  { id: 'claude-opus-4-5', label: 'Claude Opus 4.5', desc: 'Most capable ($15/$75 per MTok)' },
+];
+
+// Default models for each provider
+export const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
+export const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-5';
+
+// Synthesis models (auto-upgrade to best available for reasoning tasks)
+export const GEMINI_SYNTHESIS_MODEL = 'gemini-3-pro-preview';
+export const CLAUDE_SYNTHESIS_MODEL = 'claude-opus-4-5';
+
+// Link expiration options
+export type LinkExpirationOption = 'never' | '7days' | '30days' | '90days';
 
 export interface StudyConfig {
   id: string;
@@ -86,13 +99,18 @@ export interface StudyConfig {
   profileSchema: ProfileField[];  // Fields to collect during interview
   aiBehavior: AIBehavior;
   aiProvider?: AIProviderType;    // Optional, defaults to env or 'gemini'
-  voiceConfig?: VoiceConfig;      // Optional voice/audio settings
+  aiModel?: string;               // Optional, defaults to provider-specific env or default
   consentText: string;
   createdAt: number;
   // Follow-up study lineage
   parentStudyId?: string;         // ID of parent study if this is a follow-up
   parentStudyName?: string;       // Name of parent study for display
   generatedFrom?: 'synthesis' | 'manual';  // How this study was created
+  // Link management
+  linksEnabled?: boolean;         // Whether participant links are active (default: true)
+  linkExpiration?: LinkExpirationOption;  // When links expire (default: 'never')
+  // AI Reasoning
+  enableReasoning?: boolean;      // undefined=auto, true=force on, false=force off
 }
 
 // ============================================
@@ -104,7 +122,6 @@ export interface InterviewMessage {
   role: 'user' | 'ai' | 'system';
   content: string;
   timestamp: number;
-  isVoice?: boolean;
 }
 
 // ============================================
@@ -116,7 +133,6 @@ export interface BehaviorData {
   messagesPerTopic: Record<string, number>;
   topicsExplored: string[];
   contradictions: string[];
-  audioPreference?: ParticipantAudioPreference;  // Voice/audio tracking
 }
 
 export interface SynthesisResult {
@@ -144,7 +160,7 @@ export type ViewMode = 'researcher' | 'participant';
 export interface ContextEntry {
   id: string;
   text: string;
-  source: 'voice' | 'text' | 'system';
+  source: 'text' | 'system';
   timestamp: number;
 }
 

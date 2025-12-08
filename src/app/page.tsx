@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation'
 
 export default function Home() {
-  // Redirect to researcher setup by default
-  redirect('/setup')
+  // Redirect to all studies list by default
+  redirect('/studies')
 }

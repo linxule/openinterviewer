@@ -1,6 +1,5 @@
 // AI Provider Abstraction Layer
 // Supports Gemini (default) and Claude for interview AI
-// Speech (STT/TTS) always uses Gemini for best cost/capability
 
 import {
   StudyConfig,

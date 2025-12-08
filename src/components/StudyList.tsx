@@ -205,14 +205,16 @@ const StudyList: React.FC = () => {
                       </button>
                       <button
                         onClick={() => {
-                          // TODO: Navigate to setup with study loaded
+                          // Store study config in sessionStorage for setup page
+                          sessionStorage.setItem('prefillStudyConfig', JSON.stringify(study.config));
+                          router.push(`/setup?prefill=edit&studyId=${study.id}`);
                           setMenuOpenId(null);
                         }}
                         disabled={study.isLocked}
                         className="w-full px-4 py-2 text-left text-sm text-stone-300 hover:bg-stone-700 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <LinkIcon size={14} />
-                        Generate Link
+                        Edit & Generate Link
                       </button>
                       <button
                         onClick={() => handleDelete(study.id)}

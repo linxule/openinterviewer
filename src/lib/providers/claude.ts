@@ -24,20 +24,45 @@ import {
   BehaviorData,
   AIInterviewResponse,
   QuestionProgress,
-  AggregateSynthesisResult
+  AggregateSynthesisResult,
+  DEFAULT_CLAUDE_MODEL,
+  CLAUDE_SYNTHESIS_MODEL
 } from '@/types';
+
+// Thinking budget for reasoning operations (16K tokens)
+const THINKING_BUDGET = 16384;
 
 export class ClaudeProvider implements AIProvider {
   private client: Anthropic;
   private model: string;
 
-  constructor() {
+  constructor(model?: string) {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
       throw new Error('ANTHROPIC_API_KEY environment variable is required for Claude provider');
     }
     this.client = new Anthropic({ apiKey });
-    this.model = process.env.AI_MODEL || 'claude-sonnet-4-5';
+    // Priority: constructor param > CLAUDE_MODEL env > AI_MODEL env (legacy) > default
+    this.model = model ||
+      process.env.CLAUDE_MODEL ||
+      process.env.AI_MODEL ||
+      DEFAULT_CLAUDE_MODEL;
+  }
+
+  // For interview responses - no thinking by default (unless explicitly enabled)
+  private getInterviewThinking(enableReasoning?: boolean): { type: 'enabled'; budget_tokens: number } | undefined {
+    if (enableReasoning === true) {
+      return { type: 'enabled', budget_tokens: THINKING_BUDGET };
+    }
+    return undefined; // Disabled by default
+  }
+
+  // For synthesis operations - thinking enabled by default (unless explicitly disabled)
+  private getSynthesisThinking(enableReasoning?: boolean): { type: 'enabled'; budget_tokens: number } | undefined {
+    if (enableReasoning === false) {
+      return undefined; // Explicitly disabled
+    }
+    return { type: 'enabled', budget_tokens: THINKING_BUDGET };
   }
 
   async generateInterviewResponse(
@@ -106,9 +131,11 @@ export class ClaudeProvider implements AIProvider {
     }));
 
     try {
+      const thinkingConfig = this.getInterviewThinking(studyConfig.enableReasoning);
       const response = await this.client.messages.create({
         model: this.model,
-        max_tokens: 1024,
+        max_tokens: thinkingConfig ? THINKING_BUDGET + 2048 : 1024,  // Increase max_tokens if thinking enabled
+        ...(thinkingConfig && { thinking: thinkingConfig }),
         system: systemPrompt + '\n\nYou MUST use the interview_response tool to provide your response.',
         tools: [interviewResponseTool],
         tool_choice: { type: 'tool', name: 'interview_response' },
@@ -212,9 +239,11 @@ export class ClaudeProvider implements AIProvider {
       '\n\nUse the synthesis_result tool to provide your analysis.';
 
     try {
+      const thinkingConfig = this.getSynthesisThinking(studyConfig.enableReasoning);
       const response = await this.client.messages.create({
-        model: this.model,
-        max_tokens: 2048,
+        model: CLAUDE_SYNTHESIS_MODEL,  // Auto-upgrade to best model for reasoning
+        max_tokens: thinkingConfig ? THINKING_BUDGET + 4096 : 2048,  // Increase for thinking
+        ...(thinkingConfig && { thinking: thinkingConfig }),
         tools: [synthesisTool],
         tool_choice: { type: 'tool', name: 'synthesis_result' },
         messages: [{ role: 'user', content: prompt }]
@@ -297,9 +326,11 @@ export class ClaudeProvider implements AIProvider {
       '\n\nUse the aggregate_synthesis_result tool to provide your analysis.';
 
     try {
+      const thinkingConfig = this.getSynthesisThinking(studyConfig.enableReasoning);
       const response = await this.client.messages.create({
-        model: this.model,
-        max_tokens: 4096,
+        model: CLAUDE_SYNTHESIS_MODEL,  // Auto-upgrade to best model for reasoning
+        max_tokens: thinkingConfig ? THINKING_BUDGET + 8192 : 4096,  // Increase for thinking
+        ...(thinkingConfig && { thinking: thinkingConfig }),
         tools: [aggregateTool],
         tool_choice: { type: 'tool', name: 'aggregate_synthesis_result' },
         messages: [{ role: 'user', content: prompt }]
@@ -367,9 +398,11 @@ The follow-up should explore unanswered questions or interesting patterns from t
 Use the followup_study tool to provide your response.`;
 
     try {
+      const thinkingConfig = this.getSynthesisThinking(parentConfig.enableReasoning);
       const response = await this.client.messages.create({
-        model: this.model,
-        max_tokens: 1024,
+        model: CLAUDE_SYNTHESIS_MODEL,  // Auto-upgrade to best model for reasoning
+        max_tokens: thinkingConfig ? THINKING_BUDGET + 2048 : 1024,  // Increase for thinking
+        ...(thinkingConfig && { thinking: thinkingConfig }),
         tools: [followupTool],
         tool_choice: { type: 'tool', name: 'followup_study' },
         messages: [{ role: 'user', content: prompt }]
