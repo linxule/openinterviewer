@@ -7,7 +7,7 @@ import { Lock, Loader2, AlertCircle } from 'lucide-react';
 
 const Login: React.FC = () => {
   const router = useRouter();
-  const [password, setPassword] = useState('');
+  const [password, setPassword] = useState('mysecret123');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
