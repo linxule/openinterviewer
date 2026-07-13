@@ -68,7 +68,7 @@ export interface AIModelOption {
 export const GEMINI_MODELS: AIModelOption[] = [
   { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', desc: 'Fast, cost-effective' },
   { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', desc: 'Higher quality' },
-  { id: 'gemini-3-pro-preview', label: 'Gemini 3 Pro Preview', desc: 'Most intelligent (preview)' },
+  { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro Preview', desc: 'Most intelligent (preview)' },
 ];
 
 // Available Claude models (verified from official docs)
@@ -83,7 +83,7 @@ export const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
 export const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-5';
 
 // Synthesis models (auto-upgrade to best available for reasoning tasks)
-export const GEMINI_SYNTHESIS_MODEL = 'gemini-3-pro-preview';
+export const GEMINI_SYNTHESIS_MODEL = 'gemini-3.1-pro-preview';
 export const CLAUDE_SYNTHESIS_MODEL = 'claude-opus-4-5';
 
 // Link expiration options

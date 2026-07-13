@@ -61,12 +61,12 @@ export class GeminiProvider implements AIProvider {
     };
   }
 
-  // For synthesis operations (Gemini 3 Pro) - use thinkingLevel instead of thinkingBudget
+  // For synthesis operations (Gemini 3.1 Pro) - use thinkingLevel instead of thinkingBudget
   private getSynthesisThinkingConfig(enableReasoning?: boolean) {
     const useReasoning = enableReasoning !== false;
     return {
       thinkingConfig: {
-        // Gemini 3 Pro uses ThinkingLevel enum instead of thinkingBudget
+        // Gemini 3.1 Pro uses ThinkingLevel enum instead of thinkingBudget
         thinkingLevel: useReasoning ? ThinkingLevel.HIGH : ThinkingLevel.LOW
       }
     };

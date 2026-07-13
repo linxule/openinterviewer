@@ -281,7 +281,7 @@ AI_MODEL=gemini-2.5-flash
 |-------|-------------|
 | `gemini-2.5-flash` | Fast, cost-effective (default) |
 | `gemini-2.5-pro` | Higher quality |
-| `gemini-3-pro-preview` | Most intelligent (preview, may require allowlisting) |
+| `gemini-3.1-pro-preview` | Most intelligent (preview) |
 
 **Claude:**
 
@@ -313,7 +313,7 @@ The app automatically uses enhanced reasoning (thinking mode) for analytical ope
 |-----------|-----------|------------|
 | Interview responses | OFF | User-selected model |
 | Greeting generation | OFF | User-selected model |
-| Per-interview synthesis | ON (high) | Auto-upgraded (Gemini 3 Pro / Claude Opus) |
+| Per-interview synthesis | ON (high) | Auto-upgraded (Gemini 3.1 Pro / Claude Opus) |
 | Aggregate synthesis | ON (high) | Auto-upgraded |
 | Follow-up study generation | ON (high) | Auto-upgraded |
 
@@ -326,13 +326,13 @@ In Study Setup, you can override the default behavior:
 
 **Cost Implications:**
 - Synthesis operations automatically use premium models for best quality
-- Gemini: Uses `gemini-3-pro-preview` for synthesis
+- Gemini: Uses `gemini-3.1-pro-preview` for synthesis
 - Claude: Uses `claude-opus-4-5` ($15/$75 per MTok) for synthesis
 - Reasoning tokens count toward billing
 
 **Troubleshooting:**
 - If synthesis fails silently, check API quotas for premium models
-- `gemini-3-pro-preview` may require allowlisting in Google AI Studio
+- Preview model IDs are retired on short notice - Google shut down `gemini-3-pro-preview` on 2026-03-09. If synthesis 404s with "no longer available", the ID is dead: check [Google's model docs](https://ai.google.dev/gemini-api/docs/models) for the successor. Note that `GET /v1beta/models` is *not* a reliable check here - it kept listing `gemini-3-pro-preview` after the shutdown; only an actual `generateContent` call returns the 404
 - Claude Opus ($15/$75/MTok) is used for synthesis - monitor costs
 - Set reasoning to "Always disabled" if you want to use your selected model without upgrades
 
