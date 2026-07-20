@@ -927,7 +927,7 @@ const StudySetup: React.FC = () => {
                 <option value="off">Always disabled</option>
               </select>
               <p className="text-xs text-stone-500">
-                Automatic: OFF for interviews (faster responses), ON for synthesis (deeper analysis using premium models - may increase API costs)
+                Automatic: OFF for interviews (faster responses), ON for synthesis (deeper analysis using the configured synthesis model - may increase API costs)
               </p>
             </div>
 

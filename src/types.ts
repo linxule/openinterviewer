@@ -68,21 +68,21 @@ export interface AIModelOption {
 export const GEMINI_MODELS: AIModelOption[] = [
   { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', desc: 'Fast, cost-effective' },
   { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', desc: 'Higher quality' },
-  { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro Preview', desc: 'Most intelligent (preview)' },
+  { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro Preview', desc: 'Higher capability (preview)' },
 ];
 
 // Available Claude models (verified from official docs)
 export const CLAUDE_MODELS: AIModelOption[] = [
   { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5', desc: 'Fastest ($1/$5 per MTok)' },
   { id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5', desc: 'Balanced ($3/$15 per MTok)' },
-  { id: 'claude-opus-4-5', label: 'Claude Opus 4.5', desc: 'Most capable ($15/$75 per MTok)' },
+  { id: 'claude-opus-4-5', label: 'Claude Opus 4.5', desc: 'Higher capability ($5/$25 per MTok)' },
 ];
 
 // Default models for each provider
 export const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
 export const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-5';
 
-// Synthesis models (auto-upgrade to best available for reasoning tasks)
+// Synthesis models (switch to the app's configured higher-capability model)
 export const GEMINI_SYNTHESIS_MODEL = 'gemini-3.1-pro-preview';
 export const CLAUDE_SYNTHESIS_MODEL = 'claude-opus-4-5';
 

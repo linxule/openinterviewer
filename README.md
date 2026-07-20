@@ -281,7 +281,7 @@ AI_MODEL=gemini-2.5-flash
 |-------|-------------|
 | `gemini-2.5-flash` | Fast, cost-effective (default) |
 | `gemini-2.5-pro` | Higher quality |
-| `gemini-3.1-pro-preview` | Most intelligent (preview) |
+| `gemini-3.1-pro-preview` | Higher capability (preview) |
 
 **Claude:**
 
@@ -289,9 +289,9 @@ AI_MODEL=gemini-2.5-flash
 |-------|-------------|---------|
 | `claude-haiku-4-5` | Fastest | $1/$5 per MTok |
 | `claude-sonnet-4-5` | Balanced (default) | $3/$15 per MTok |
-| `claude-opus-4-5` | Most capable | $15/$75 per MTok |
+| `claude-opus-4-5` | Higher capability | $5/$25 per MTok |
 
-**Note:** Preview models may require API access approval. Check [Google AI docs](https://ai.google.dev/gemini-api/docs/models) and [Anthropic docs](https://docs.anthropic.com/en/docs/about-claude/models) for the latest model availability.
+**Note:** Preview models may require API access approval. Check [Google AI docs](https://ai.google.dev/gemini-api/docs/models) and [Anthropic docs](https://platform.claude.com/docs/en/about-claude/models/overview) for the latest model availability.
 
 ### Optional: Claude for Interviews
 
@@ -313,9 +313,9 @@ The app automatically uses enhanced reasoning (thinking mode) for analytical ope
 |-----------|-----------|------------|
 | Interview responses | OFF | User-selected model |
 | Greeting generation | OFF | User-selected model |
-| Per-interview synthesis | ON (high) | Auto-upgraded (Gemini 3.1 Pro / Claude Opus) |
-| Aggregate synthesis | ON (high) | Auto-upgraded |
-| Follow-up study generation | ON (high) | Auto-upgraded |
+| Per-interview synthesis | ON (high) | Uses the configured synthesis model (Gemini 3.1 Pro / Claude Opus 4.5) |
+| Aggregate synthesis | ON (high) | Uses the configured synthesis model |
+| Follow-up study generation | ON (high) | Uses the configured synthesis model |
 
 **Per-Study Override:**
 
@@ -325,16 +325,16 @@ In Study Setup, you can override the default behavior:
 - **Always disabled**: Force reasoning OFF for all operations (faster but less thorough synthesis)
 
 **Cost Implications:**
-- Synthesis operations automatically use premium models for best quality
+- Synthesis operations use the app's configured higher-capability models
 - Gemini: Uses `gemini-3.1-pro-preview` for synthesis
-- Claude: Uses `claude-opus-4-5` ($15/$75 per MTok) for synthesis
+- Claude: Uses `claude-opus-4-5` ($5/$25 per MTok) for synthesis
 - Reasoning tokens count toward billing
 
 **Troubleshooting:**
-- If synthesis fails silently, check API quotas for premium models
+- If synthesis fails silently, check API quotas for the configured synthesis models
 - Preview model IDs are retired on short notice - Google shut down `gemini-3-pro-preview` on 2026-03-09. If synthesis 404s with "no longer available", the ID is dead: check [Google's model docs](https://ai.google.dev/gemini-api/docs/models) for the successor. Note that `GET /v1beta/models` is *not* a reliable check here - it kept listing `gemini-3-pro-preview` after the shutdown; only an actual `generateContent` call returns the 404
-- Claude Opus ($15/$75/MTok) is used for synthesis - monitor costs
-- Set reasoning to "Always disabled" if you want to use your selected model without upgrades
+- Claude Opus 4.5 ($5/$25/MTok) is used for synthesis - monitor costs
+- Setting reasoning to "Always disabled" reduces thinking-token use but does not change the configured synthesis model
 
 ## Configuring API Keys
 

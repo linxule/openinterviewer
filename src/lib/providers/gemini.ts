@@ -185,7 +185,7 @@ export class GeminiProvider implements AIProvider {
 
     try {
       const response = await this.ai.models.generateContent({
-        model: GEMINI_SYNTHESIS_MODEL,  // Auto-upgrade to best model for reasoning
+        model: GEMINI_SYNTHESIS_MODEL,  // Use the configured higher-capability synthesis model
         contents: prompt,
         config: {
           ...this.getSynthesisThinkingConfig(studyConfig.enableReasoning),
@@ -248,7 +248,7 @@ export class GeminiProvider implements AIProvider {
 
     try {
       const response = await this.ai.models.generateContent({
-        model: GEMINI_SYNTHESIS_MODEL,  // Auto-upgrade to best model for reasoning
+        model: GEMINI_SYNTHESIS_MODEL,  // Use the configured higher-capability synthesis model
         contents: prompt,
         config: {
           ...this.getSynthesisThinkingConfig(studyConfig.enableReasoning),
@@ -334,7 +334,7 @@ Return a JSON object with:
 
     try {
       const response = await this.ai.models.generateContent({
-        model: GEMINI_SYNTHESIS_MODEL,  // Auto-upgrade to best model for reasoning
+        model: GEMINI_SYNTHESIS_MODEL,  // Use the configured higher-capability synthesis model
         contents: prompt,
         config: {
           ...this.getSynthesisThinkingConfig(parentConfig.enableReasoning),

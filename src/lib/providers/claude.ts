@@ -243,7 +243,7 @@ export class ClaudeProvider implements AIProvider {
     try {
       const thinkingConfig = this.getSynthesisThinking(studyConfig.enableReasoning);
       const response = await this.client.messages.create({
-        model: CLAUDE_SYNTHESIS_MODEL,  // Auto-upgrade to best model for reasoning
+        model: CLAUDE_SYNTHESIS_MODEL,  // Use the configured higher-capability synthesis model
         max_tokens: thinkingConfig ? THINKING_BUDGET + 4096 : 2048,  // Increase for thinking
         ...(thinkingConfig && { thinking: thinkingConfig }),
         tools: [synthesisTool],
@@ -330,7 +330,7 @@ export class ClaudeProvider implements AIProvider {
     try {
       const thinkingConfig = this.getSynthesisThinking(studyConfig.enableReasoning);
       const response = await this.client.messages.create({
-        model: CLAUDE_SYNTHESIS_MODEL,  // Auto-upgrade to best model for reasoning
+        model: CLAUDE_SYNTHESIS_MODEL,  // Use the configured higher-capability synthesis model
         max_tokens: thinkingConfig ? THINKING_BUDGET + 8192 : 4096,  // Increase for thinking
         ...(thinkingConfig && { thinking: thinkingConfig }),
         tools: [aggregateTool],
@@ -402,7 +402,7 @@ Use the followup_study tool to provide your response.`;
     try {
       const thinkingConfig = this.getSynthesisThinking(parentConfig.enableReasoning);
       const response = await this.client.messages.create({
-        model: CLAUDE_SYNTHESIS_MODEL,  // Auto-upgrade to best model for reasoning
+        model: CLAUDE_SYNTHESIS_MODEL,  // Use the configured higher-capability synthesis model
         max_tokens: thinkingConfig ? THINKING_BUDGET + 2048 : 1024,  // Increase for thinking
         ...(thinkingConfig && { thinking: thinkingConfig }),
         tools: [followupTool],
