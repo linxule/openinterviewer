@@ -5,17 +5,35 @@
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
-import { getAllStudies, saveStudy, isKVAvailable } from '@/lib/kv';
+import {
+  createStudyAtomic,
+  getAllStudies,
+  isKVAvailable,
+  studyOperationMarkerId,
+} from '@/lib/kv';
 import { getRequestContext } from '@/lib/researcherContext';
-import { registerStudyOwnership } from '@/lib/platformDb';
+import { configurationRequiredResponse } from '@/lib/researcherAccess';
+import {
+  beginCreateStudyOperation,
+  consumePlatformRateLimit,
+  PendingStudyOperation,
+  resolveStudyOperation,
+} from '@/lib/platformDb';
 import { isHostedMode } from '@/lib/mode';
-import { StudyConfig, StoredStudy } from '@/types';
+import {
+  readStudyMutationBody,
+  validateStudyConfigForCreate,
+} from '@/lib/studyConfigValidation';
+import { StoredStudy } from '@/types';
 import { randomUUID } from 'crypto';
 
 // GET /api/studies - List all saved studies
 export async function GET() {
   try {
-    const { authorized, context, error } = await getRequestContext();
+    const access = await getRequestContext();
+    const setupResponse = configurationRequiredResponse(access);
+    if (setupResponse) return setupResponse;
+    const { authorized, context, error } = access;
     if (!authorized || !context) {
       return NextResponse.json({ error: error || 'Unauthorized' }, { status: 401 });
     }
@@ -42,9 +60,17 @@ export async function GET() {
 // POST /api/studies - Create new study
 export async function POST(request: Request) {
   try {
-    const { authorized, context, researcherId, error } = await getRequestContext();
+    const access = await getRequestContext();
+    const setupResponse = configurationRequiredResponse(access);
+    if (setupResponse) return setupResponse;
+    const { authorized, context, researcherId, error } = access;
     if (!authorized || !context) {
       return NextResponse.json({ error: error || 'Unauthorized' }, { status: 401 });
+    }
+
+    const parsedBody = await readStudyMutationBody(request, 'create');
+    if (!parsedBody.ok) {
+      return NextResponse.json({ error: parsedBody.error }, { status: parsedBody.status });
     }
 
     const kvAvailable = await isKVAvailable(context.kvClient);
@@ -55,34 +81,17 @@ export async function POST(request: Request) {
       );
     }
 
-    const body = await request.json();
-    const { config } = body as { config: StudyConfig };
-
-    if (!config) {
-      return NextResponse.json(
-        { error: 'Missing required field: config' },
-        { status: 400 }
-      );
-    }
-
-    // Validate required fields
-    if (!config.name || !config.researchQuestion || !config.coreQuestions?.length) {
-      return NextResponse.json(
-        { error: 'Study must have name, researchQuestion, and at least one core question' },
-        { status: 400 }
-      );
-    }
-
     // Create server-assigned ID
     const now = Date.now();
     const studyId = randomUUID();
-
-    // Update config with server-assigned ID
-    const serverConfig: StudyConfig = {
-      ...config,
+    const validatedConfig = validateStudyConfigForCreate(parsedBody.body.config, {
       id: studyId,
-      createdAt: now
-    };
+      createdAt: now,
+    });
+    if (!validatedConfig.ok) {
+      return NextResponse.json({ error: validatedConfig.error }, { status: 400 });
+    }
+    const serverConfig = validatedConfig.config;
 
     const storedStudy: StoredStudy = {
       id: studyId,
@@ -90,24 +99,128 @@ export async function POST(request: Request) {
       createdAt: now,
       updatedAt: now,
       interviewCount: 0,
-      isLocked: false
+      isLocked: false,
+      revision: 1
     };
 
-    const success = await saveStudy(storedStudy, context.kvClient);
-    if (!success) {
+    // Hosted ownership and researcher storage are separate Redis databases.
+    // Persist routing authority and a durable operation first; an ambiguous
+    // BYOS response then remains repairable instead of triggering an unsafe
+    // best-effort compensation.
+    let operation: PendingStudyOperation | null = null;
+    if (isHostedMode()) {
+      if (!researcherId) {
+        return NextResponse.json({ error: 'Researcher identity is required' }, { status: 401 });
+      }
+      const rateLimit = await consumePlatformRateLimit(
+        'study-create',
+        researcherId,
+        100,
+        3_600
+      );
+      if (rateLimit.status === 'unavailable') {
+        return NextResponse.json(
+          { error: 'Unable to verify study creation limits. Try again later.', retryable: true },
+          { status: 503 }
+        );
+      }
+      if (rateLimit.status === 'limited') {
+        return NextResponse.json(
+          { error: 'Too many studies created. Try again later.' },
+          { status: 429, headers: { 'Retry-After': String(rateLimit.retryAfterSeconds) } }
+        );
+      }
+      const begun = await beginCreateStudyOperation(studyId, researcherId);
+      if (begun.status === 'study-quota-exceeded') {
+        return NextResponse.json(
+          { error: 'Study quota reached. Delete an existing study before creating another.' },
+          { status: 409 }
+        );
+      }
+      if (begun.status === 'pending-quota-exceeded') {
+        return NextResponse.json(
+          { error: 'Too many study changes are awaiting reconciliation.', retryable: true },
+          { status: 503 }
+        );
+      }
+      if (begun.status === 'account-not-found') {
+        return NextResponse.json(
+          { error: 'Researcher account is no longer available' },
+          { status: 401 }
+        );
+      }
+      if (begun.status !== 'started' && begun.status !== 'already-pending') {
+        return NextResponse.json(
+          {
+            error: begun.status === 'owner-conflict'
+              ? 'Study ownership conflicts with another account.'
+              : begun.status === 'operation-conflict'
+                ? 'Another study operation is still pending.'
+                : begun.status === 'invalid'
+                  ? 'Invalid study operation.'
+                  : 'Unable to begin study creation. Study was not created.',
+            retryable: begun.status === 'unavailable',
+          },
+          { status: begun.status === 'owner-conflict' || begun.status === 'operation-conflict' ? 409 : 503 }
+        );
+      }
+      if (begun.status === 'already-pending') {
+        return NextResponse.json({
+          message: 'Study creation is already awaiting reconciliation.',
+          reconciliationPending: true,
+          operationId: begun.operation.id,
+        }, { status: 202 });
+      }
+      operation = begun.operation;
+    }
+
+    const operationMarker = operation
+      ? studyOperationMarkerId(operation.id, operation.createdAt)
+      : undefined;
+    if (operation && !operationMarker) {
+      return NextResponse.json({ error: 'Invalid study operation.' }, { status: 503 });
+    }
+    const creation = await createStudyAtomic(
+      storedStudy,
+      context.kvClient,
+      operationMarker || undefined
+    );
+    if (creation === 'unavailable') {
       return NextResponse.json(
-        { error: 'Failed to save study' },
-        { status: 500 }
+        {
+          error: operation
+            ? 'Study creation is awaiting reconciliation.'
+            : 'Failed to save study',
+          retryable: true,
+          operationId: operation?.id,
+        },
+        { status: 503 }
+      );
+    }
+    if (creation === 'cancelled' && operation) {
+      await resolveStudyOperation(operation, 'create-rollback');
+      return NextResponse.json(
+        { error: 'Study creation was cancelled during reconciliation.' },
+        { status: 409 }
       );
     }
 
-    // In hosted mode, register study ownership for cross-tenant lookup
-    if (isHostedMode() && researcherId) {
-      try {
-        await registerStudyOwnership(studyId, researcherId);
-      } catch (err) {
-        console.warn('Failed to register study ownership:', err);
+    if (operation) {
+      const finalized = await resolveStudyOperation(operation, 'create-complete');
+      if (finalized !== 'resolved' && finalized !== 'already-resolved') {
+        // BYOS existence is known and authority remains registered. Leave the
+        // durable operation for the reconciler instead of detaching authority.
+        return NextResponse.json({
+          study: storedStudy,
+          message: 'Study saved; platform reconciliation is pending.',
+          reconciliationPending: true,
+          operationId: operation.id,
+        }, { status: 202 });
       }
+    }
+
+    if (creation === 'conflict') {
+      return NextResponse.json({ error: 'Study already exists' }, { status: 409 });
     }
 
     return NextResponse.json({

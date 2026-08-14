@@ -4,15 +4,19 @@
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
-import { getInterview } from '@/lib/kv';
+import { getInterviewChecked } from '@/lib/kv';
 import { getRequestContext } from '@/lib/researcherContext';
+import { configurationRequiredResponse } from '@/lib/researcherAccess';
 
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { authorized, context, error } = await getRequestContext();
+    const access = await getRequestContext();
+    const setupResponse = configurationRequiredResponse(access);
+    if (setupResponse) return setupResponse;
+    const { authorized, context, error } = access;
     if (!authorized || !context) {
       return NextResponse.json({ error: error || 'Unauthorized' }, { status: 401 });
     }
@@ -26,21 +30,27 @@ export async function GET(
       );
     }
 
-    const interview = await getInterview(id, context.kvClient);
+    const loaded = await getInterviewChecked(id, context.kvClient);
 
-    if (!interview) {
+    if (loaded.status === 'unavailable') {
+      return NextResponse.json(
+        { error: 'Interview storage is temporarily unavailable.', retryable: true },
+        { status: 503 }
+      );
+    }
+    if (loaded.status === 'not-found') {
       return NextResponse.json(
         { error: 'Interview not found' },
         { status: 404 }
       );
     }
 
-    return NextResponse.json({ interview });
+    return NextResponse.json({ interview: loaded.interview });
   } catch (error) {
     console.error('Get interview API error:', error);
     return NextResponse.json(
       { error: 'Failed to fetch interview' },
-      { status: 500 }
+      { status: 503 }
     );
   }
 }

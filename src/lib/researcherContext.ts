@@ -6,10 +6,12 @@ import { Redis } from '@upstash/redis';
 import { cookies } from 'next/headers';
 import { isStandaloneMode, isHostedMode } from './mode';
 import { getKVClient, getResearcherClient } from './kvClient';
-import { getResearcherById, getStudyOwner } from './platformDb';
+import { getResearcherByIdChecked, getStudyOwnerChecked } from './platformDb';
 import { decrypt } from './crypto';
 import { verifySessionToken, verifyParticipantToken, SESSION_COOKIE_NAME } from './auth';
 import { getStudy } from './kv';
+import { getParticipantLinkById } from './participantLinks';
+import { StoredStudy } from '@/types';
 
 export interface ResearcherContext {
   // Identity (null in standalone mode)
@@ -28,36 +30,44 @@ export interface ResearcherContext {
 
 // Resolve context for a researcher by ID (shared logic)
 async function resolveById(researcherId: string): Promise<ResearcherContext> {
-  const researcher = await getResearcherById(researcherId);
-  if (!researcher) {
-    throw new Error(`Researcher not found: ${researcherId}`);
+  const loaded = await getResearcherByIdChecked(researcherId);
+  if (loaded.status === 'unavailable') {
+    throw new Error('Researcher account storage is unavailable');
   }
+  if (loaded.status === 'not-found') {
+    throw new Error('Researcher account was not found');
+  }
+  const researcher = loaded.researcher;
 
   // Decrypt credentials
   const redisUrl = researcher.encryptedRedisUrl
-    ? decrypt(researcher.encryptedRedisUrl)
+    ? decrypt(researcher.encryptedRedisUrl, { researcherId, purpose: 'redis-url' })
     : null;
   const redisToken = researcher.encryptedRedisToken
-    ? decrypt(researcher.encryptedRedisToken)
+    ? decrypt(researcher.encryptedRedisToken, { researcherId, purpose: 'redis-token' })
     : null;
 
-  // Build KV client if credentials exist
-  let kvClient: Redis;
-  if (redisUrl && redisToken) {
-    kvClient = getResearcherClient(redisUrl, redisToken);
-  } else {
-    // Researcher hasn't configured storage — callers must check onboardingComplete
-    kvClient = null as unknown as Redis;
+  const missing: ResearcherSetupRequirement[] = [];
+  if (!researcher.onboardingComplete) missing.push('onboarding');
+  if (!redisUrl) missing.push('redis_url');
+  if (!redisToken) missing.push('redis_token');
+  if (missing.length > 0) {
+    throw new ResearcherSetupRequiredError(missing);
   }
+  // The missing-field guard above establishes both values at runtime; keep the
+  // narrowed aliases local so credential strings never escape this resolver.
+  const configuredRedisUrl = redisUrl as string;
+  const configuredRedisToken = redisToken as string;
+  const kvClient = getResearcherClient(configuredRedisUrl, configuredRedisToken);
 
   return {
     researcherId,
     kvClient,
     geminiApiKey: researcher.encryptedGeminiApiKey
-      ? decrypt(researcher.encryptedGeminiApiKey)
+      ? decrypt(researcher.encryptedGeminiApiKey, { researcherId, purpose: 'gemini-api-key' })
       : null,
     anthropicApiKey: researcher.encryptedAnthropicApiKey
-      ? decrypt(researcher.encryptedAnthropicApiKey)
+      ? decrypt(researcher.encryptedAnthropicApiKey, { researcherId, purpose: 'anthropic-api-key' })
       : null,
     onboardingComplete: researcher.onboardingComplete,
   };
@@ -83,6 +93,63 @@ export interface RequestContextResult {
   context: ResearcherContext | null;
   researcherId?: string;
   error?: string;
+  setupRequired?: boolean;
+  missing?: ResearcherSetupRequirement[];
+  statusCode?: number;
+  retryable?: boolean;
+}
+
+export type ResearcherSetupRequirement = 'onboarding' | 'redis_url' | 'redis_token';
+
+export interface HostedResearcherIdentityResult {
+  authorized: boolean;
+  researcherId?: string;
+  issuedAt?: number;
+  error?: string;
+}
+
+export function hasRecentResearcherSession(
+  identity: HostedResearcherIdentityResult,
+  maximumAgeSeconds: number
+): boolean {
+  if (!identity.authorized || typeof identity.issuedAt !== 'number') return false;
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  return identity.issuedAt >= nowSeconds - maximumAgeSeconds
+    && identity.issuedAt <= nowSeconds + 60;
+}
+
+export class ResearcherSetupRequiredError extends Error {
+  constructor(readonly missing: ResearcherSetupRequirement[]) {
+    super('Researcher onboarding is incomplete');
+    this.name = 'ResearcherSetupRequiredError';
+  }
+}
+
+// Identity-only authentication for hosted onboarding/account lifecycle routes.
+// It deliberately does not resolve or decrypt BYOS credentials, so a new user
+// can configure storage without the unsafe null-Redis placeholder used before.
+export async function getHostedResearcherIdentity(): Promise<HostedResearcherIdentityResult> {
+  if (!isHostedMode()) {
+    return { authorized: false, error: 'Only available in hosted mode' };
+  }
+
+  const cookieStore = await cookies();
+  const authCookie = cookieStore.get(SESSION_COOKIE_NAME);
+  if (!authCookie?.value) return { authorized: false, error: 'Unauthorized' };
+
+  const session = await verifySessionToken(authCookie.value);
+  if (!session.valid) {
+    return { authorized: false, error: 'Session expired or invalid' };
+  }
+  if (!session.researcherId) {
+    return { authorized: false, error: 'No researcher identity in session' };
+  }
+
+  return {
+    authorized: true,
+    researcherId: session.researcherId,
+    issuedAt: session.issuedAt,
+  };
 }
 
 export async function getRequestContext(): Promise<RequestContextResult> {
@@ -118,8 +185,25 @@ export async function getRequestContext(): Promise<RequestContextResult> {
       researcherId: session.researcherId,
     };
   } catch (err) {
+    if (err instanceof ResearcherSetupRequiredError) {
+      return {
+        authorized: true,
+        context: null,
+        researcherId: session.researcherId,
+        error: 'Researcher onboarding is incomplete',
+        setupRequired: true,
+        missing: err.missing,
+      };
+    }
     console.error('Failed to resolve researcher context:', err);
-    return { authorized: false, context: null, error: 'Failed to resolve researcher context' };
+    return {
+      authorized: true,
+      context: null,
+      researcherId: session.researcherId,
+      error: 'Researcher account storage is temporarily unavailable',
+      statusCode: 503,
+      retryable: true,
+    };
   }
 }
 
@@ -133,6 +217,13 @@ export interface ParticipantContextResult {
   studyId?: string;
   isAdmin?: boolean;
   error?: string;
+  // Suggested HTTP status for the denial when !valid (503 = retryable, 403 = denied, 401 = auth)
+  statusCode?: number;
+  retryable?: boolean;
+  study?: StoredStudy;
+  linkId?: string;
+  participantSessionId?: string;
+  studyRevision?: number;
 }
 
 export async function getParticipantRequestContext(
@@ -146,59 +237,159 @@ export async function getParticipantRequestContext(
 
   // Admin preview: use their own session context
   if (auth.isAdmin) {
-    const { context } = await getRequestContext();
-    return { valid: true, context, isAdmin: true };
+    const admin = await getRequestContext();
+    if (!admin.authorized || !admin.context) {
+      return { valid: false, context: null, error: admin.error || 'Invalid researcher session', statusCode: 401 };
+    }
+    return { valid: true, context: admin.context, isAdmin: true };
+  }
+
+  if (!auth.studyId) {
+    return { valid: false, context: null, error: 'Participant link is missing its study.', statusCode: 401 };
+  }
+
+  if (!auth.linkId || !auth.sessionId) {
+    return { valid: false, context: null, error: 'Participant session is missing link authority.', statusCode: 401 };
   }
 
   // Standalone mode: use env vars
   if (isStandaloneMode()) {
-    // Check if links are disabled for this study
-    if (auth.studyId) {
-      const study = await getStudy(auth.studyId);
-      if (study && study.config.linksEnabled === false) {
-        return { valid: false, context: null, error: 'Participant links have been disabled for this study.' };
-      }
+    const standaloneContext = getStandaloneContext();
+    const link = await getParticipantLinkById(auth.linkId, standaloneContext.kvClient);
+    if (link.status === 'unavailable') {
+      return { valid: false, context: null, error: 'Unable to verify participant link.', statusCode: 503, retryable: true };
+    }
+    if (
+      link.status !== 'found'
+      || link.link.studyId !== auth.studyId
+      || link.link.studyRevision !== auth.studyRevision
+    ) {
+      return { valid: false, context: null, error: 'Participant link is no longer active.', statusCode: 403 };
     }
 
-    return {
-      valid: true,
-      context: getStandaloneContext(),
-      studyId: auth.studyId,
-    };
+    // Check if links are enabled for this study (fail closed on any doubt)
+    try {
+      const study = await getStudy(auth.studyId, standaloneContext.kvClient);
+      if (!study) {
+        return {
+          valid: false,
+          context: null,
+          error: 'This study is no longer active.',
+          statusCode: 403,
+        };
+      }
+      if (study.config.linksEnabled === false) {
+        return {
+          valid: false,
+          context: null,
+          error: 'Participant links have been disabled for this study.',
+          statusCode: 403,
+        };
+      }
+      if ((study.revision ?? 1) !== auth.studyRevision) {
+        return { valid: false, context: null, error: 'This study link was replaced after the study changed.', statusCode: 409 };
+      }
+      return {
+        valid: true,
+        context: standaloneContext,
+        studyId: auth.studyId,
+        study,
+        linkId: auth.linkId,
+        participantSessionId: auth.sessionId,
+        studyRevision: auth.studyRevision,
+      };
+    } catch (kvError) {
+      console.error('Failed to check link status for study:', auth.studyId, kvError);
+      return {
+        valid: false,
+        context: null,
+        error: 'Unable to verify study status. Please try again later.',
+        statusCode: 503,
+        retryable: true,
+      };
+    }
   }
 
   // Hosted mode: resolve researcher from token or study ownership
   try {
-    let researcherId = auth.researcherId;
-
-    if (!researcherId && auth.studyId) {
-      // Fallback: look up study owner from platform DB
-      researcherId = await getStudyOwner(auth.studyId) ?? undefined;
+    const link = await getParticipantLinkById(auth.linkId);
+    if (link.status === 'unavailable') {
+      return { valid: false, context: null, error: 'Unable to verify participant link.', statusCode: 503, retryable: true };
+    }
+    if (
+      link.status !== 'found'
+      || link.link.studyId !== auth.studyId
+      || link.link.studyRevision !== auth.studyRevision
+      || link.link.researcherId !== auth.researcherId
+    ) {
+      return { valid: false, context: null, error: 'Participant link is no longer active.', statusCode: 403 };
     }
 
+    // Platform ownership is authoritative. A token claim is only a routing hint
+    // and must match the current owner record.
+    const ownership = await getStudyOwnerChecked(auth.studyId);
+    if (ownership.status === 'unavailable') {
+      return { valid: false, context: null, error: 'Unable to verify study ownership.', statusCode: 503, retryable: true };
+    }
+    const researcherId = ownership.status === 'found' ? ownership.researcherId : undefined;
+
     if (!researcherId) {
-      return { valid: false, context: null, error: 'Study owner not found' };
+      return { valid: false, context: null, error: 'Study owner not found', statusCode: 403 };
+    }
+    if (auth.researcherId && auth.researcherId !== researcherId) {
+      return { valid: false, context: null, error: 'Participant link does not match the study owner', statusCode: 403 };
     }
 
     const context = await resolveById(researcherId);
 
-    // Check if links are disabled for this study (using researcher's own KV)
-    if (auth.studyId && context.kvClient) {
+    // Check if links are enabled for this study (using researcher's own KV)
+    if (auth.studyId) {
       try {
         const study = await getStudy(auth.studyId, context.kvClient);
-        if (study && study.config.linksEnabled === false) {
-          return { valid: false, context: null, error: 'Participant links have been disabled for this study.' };
+        if (!study) {
+          return {
+            valid: false,
+            context: null,
+            error: 'This study is no longer active.',
+            statusCode: 403,
+          };
         }
+        if (study.config.linksEnabled === false) {
+          return {
+            valid: false,
+            context: null,
+            error: 'Participant links have been disabled for this study.',
+            statusCode: 403,
+          };
+        }
+        if ((study.revision ?? 1) !== auth.studyRevision) {
+          return { valid: false, context: null, error: 'This study link was replaced after the study changed.', statusCode: 409 };
+        }
+        return {
+          valid: true,
+          context,
+          studyId: auth.studyId,
+          study,
+          linkId: auth.linkId,
+          participantSessionId: auth.sessionId,
+          studyRevision: auth.studyRevision,
+        };
       } catch (kvError) {
         // Fail closed: if we can't verify link status, deny access
         console.error('Failed to check link status for study:', auth.studyId, kvError);
-        return { valid: false, context: null, error: 'Unable to verify study status. Please try again later.' };
+        return {
+          valid: false,
+          context: null,
+          error: 'Unable to verify study status. Please try again later.',
+          statusCode: 503,
+          retryable: true,
+        };
       }
     }
 
-    return { valid: true, context, studyId: auth.studyId };
+    return { valid: false, context: null, error: 'Study context is missing.', statusCode: 403 };
   } catch (err) {
     console.error('Failed to resolve participant context:', err);
-    return { valid: false, context: null, error: 'Failed to resolve study context' };
+    return { valid: false, context: null, error: 'Failed to resolve study context', statusCode: 503, retryable: true };
   }
 }

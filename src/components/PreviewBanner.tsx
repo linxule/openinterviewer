@@ -13,7 +13,7 @@ export default function PreviewBanner() {
   const participantPages = ['/consent', '/interview', '/synthesis', '/export'];
   const isOnParticipantPage = participantPages.some(p => pathname?.startsWith(p));
 
-  if (viewMode !== 'participant' || !isOnParticipantPage) {
+  if (viewMode !== 'preview' || !isOnParticipantPage) {
     return null;
   }
 

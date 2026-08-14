@@ -112,13 +112,17 @@ const Onboarding: React.FC = () => {
 
       // Mark onboarding complete
       const completeRes = await fetch('/api/onboarding/complete', { method: 'POST' });
+      const completeData = await completeRes.json().catch(() => ({})) as {
+        error?: string;
+        redirectPath?: string;
+      };
       if (!completeRes.ok) {
-        setSaveError('Failed to complete onboarding. Please try again.');
+        setSaveError(completeData.error || 'Failed to complete onboarding. Please try again.');
         setSaving(false);
         return;
       }
 
-      router.push('/studies');
+      router.push(completeData.redirectPath || '/studies');
     } catch {
       setSaveError('Connection error. Please try again.');
       setSaving(false);
@@ -187,6 +191,14 @@ const Onboarding: React.FC = () => {
                     </div>
                   </div>
                 </div>
+                <div className="p-3 rounded-lg border border-blue-400/20 bg-blue-500/5 text-xs text-stone-400 leading-relaxed">
+                  The hosted server receives these credentials over its encrypted connection, stores them
+                  encrypted, and decrypts them in memory when it connects on your behalf. The app operator
+                  controls the encryption keys and can technically decrypt the stored values. The service can
+                  read and write the supplied Redis database, and participant interview content is sent to the
+                  AI provider you select. You can clear the connection here later; rotate the keys or tokens at
+                  their providers to revoke access completely.
+                </div>
               </motion.div>
             )}
 
@@ -201,11 +213,12 @@ const Onboarding: React.FC = () => {
                   {/* Gemini */}
                   <div>
                     <div className="flex items-center justify-between mb-1">
-                      <label className="text-sm font-medium text-stone-300">Google Gemini API Key</label>
+                      <label htmlFor="onboarding-gemini-key" className="text-sm font-medium text-stone-300">Google Gemini API Key</label>
                       <ValidationBadge state={geminiValidation} />
                     </div>
                     <div className="flex gap-2">
                       <input
+                        id="onboarding-gemini-key"
                         type="password"
                         value={geminiKey}
                         onChange={(e) => { setGeminiKey(e.target.value); setGeminiValidation({ loading: false, valid: null, error: null }); }}
@@ -237,7 +250,7 @@ const Onboarding: React.FC = () => {
                           <ol className="list-decimal list-inside space-y-1 text-stone-300">
                             <li>Go to <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="text-stone-400 hover:text-stone-300 underline">aistudio.google.com/apikey</a></li>
                             <li>Sign in with any Google account</li>
-                            <li>Click "Create API key" (auto-creates a Google Cloud project)</li>
+                            <li>Click &quot;Create API key&quot; (auto-creates a Google Cloud project)</li>
                             <li>Copy the key (starts with AIza)</li>
                           </ol>
                           <div className="flex items-start gap-1.5 text-stone-400 mt-2">
@@ -256,11 +269,12 @@ const Onboarding: React.FC = () => {
                   {/* Claude */}
                   <div>
                     <div className="flex items-center justify-between mb-1">
-                      <label className="text-sm font-medium text-stone-300">Anthropic Claude API Key</label>
+                      <label htmlFor="onboarding-claude-key" className="text-sm font-medium text-stone-300">Anthropic Claude API Key</label>
                       <ValidationBadge state={anthropicValidation} />
                     </div>
                     <div className="flex gap-2">
                       <input
+                        id="onboarding-claude-key"
                         type="password"
                         value={anthropicKey}
                         onChange={(e) => { setAnthropicKey(e.target.value); setAnthropicValidation({ loading: false, valid: null, error: null }); }}
@@ -322,9 +336,10 @@ const Onboarding: React.FC = () => {
                 <div className="space-y-4">
                   <div>
                     <div className="flex items-center justify-between mb-1">
-                      <label className="text-sm font-medium text-stone-300">REST API URL</label>
+                      <label htmlFor="onboarding-redis-url" className="text-sm font-medium text-stone-300">REST API URL</label>
                     </div>
                     <input
+                      id="onboarding-redis-url"
                       type="text"
                       value={redisUrl}
                       onChange={(e) => { setRedisUrl(e.target.value); setRedisValidation({ loading: false, valid: null, error: null }); }}
@@ -334,8 +349,9 @@ const Onboarding: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="text-sm font-medium text-stone-300 mb-1 block">REST API Token</label>
+                    <label htmlFor="onboarding-redis-token" className="text-sm font-medium text-stone-300 mb-1 block">REST API Token</label>
                     <input
+                      id="onboarding-redis-token"
                       type="password"
                       value={redisToken}
                       onChange={(e) => { setRedisToken(e.target.value); setRedisValidation({ loading: false, valid: null, error: null }); }}
@@ -373,7 +389,7 @@ const Onboarding: React.FC = () => {
                       <div className="mt-2 p-3 bg-stone-800/30 border border-stone-600 rounded-lg text-xs space-y-2">
                         <ol className="list-decimal list-inside space-y-1 text-stone-300">
                           <li>Go to <a href="https://console.upstash.com" target="_blank" rel="noopener noreferrer" className="text-stone-400 hover:text-stone-300 underline">console.upstash.com</a> and sign up with Google/GitHub</li>
-                          <li>Click "+ Create Database"</li>
+                          <li>Click &quot;+ Create Database&quot;</li>
                           <li>Choose Regional (recommended), select nearest region</li>
                           <li>Select Free plan (256 MB, 500K commands/month)</li>
                           <li>After creation, go to database details → REST API section</li>
@@ -402,7 +418,7 @@ const Onboarding: React.FC = () => {
                   </div>
                   <h2 className="text-xl font-bold text-white mb-2">You&apos;re all set!</h2>
                   <p className="text-stone-400 text-sm mb-6">
-                    Your credentials have been securely encrypted and stored.
+                    Your credentials have been encrypted and stored by the hosted platform.
                     You&apos;re ready to create your first study.
                   </p>
 

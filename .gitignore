@@ -10,6 +10,8 @@ dist
 
 # Testing
 coverage
+playwright-report
+test-results
 
 # Env files
 .env
@@ -39,3 +41,4 @@ Thumbs.db
 # TypeScript
 *.tsbuildinfo
 next-env.d.ts
+.env*

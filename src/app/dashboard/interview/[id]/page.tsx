@@ -1,11 +1,13 @@
-'use client';
-
-import { useParams } from 'next/navigation';
 import InterviewDetail from '@/components/InterviewDetail';
+import { enforceResearcherPageSetup } from '@/lib/researcherAccess';
 
-export default function InterviewDetailPage() {
-  const params = useParams();
-  const id = params.id as string;
+interface InterviewDetailPageProps {
+  params: Promise<{ id: string }>;
+}
+
+export default async function InterviewDetailPage({ params }: InterviewDetailPageProps) {
+  await enforceResearcherPageSetup();
+  const { id } = await params;
 
   return <InterviewDetail interviewId={id} />;
 }

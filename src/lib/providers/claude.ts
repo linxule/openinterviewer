@@ -5,14 +5,10 @@ import Anthropic from '@anthropic-ai/sdk';
 import {
   AIProvider,
   buildInterviewSystemPrompt,
-  cleanJSON,
-  defaultInterviewResponse,
-  defaultSynthesisResult,
-  defaultAggregateSynthesisResult
+  cleanJSON
 } from '../ai';
 import {
   buildGreetingPrompt,
-  getDefaultGreeting,
   buildSynthesisPrompt,
   buildAggregateSynthesisPrompt
 } from '../prompts';
@@ -28,9 +24,24 @@ import {
   DEFAULT_CLAUDE_MODEL,
   CLAUDE_SYNTHESIS_MODEL
 } from '@/types';
+import {
+  ProviderFailure,
+  ProviderTimeoutError,
+  logProviderFailure,
+  providerCallError,
+  withProviderDeadline
+} from '../providerErrors';
+import {
+  validateAggregateSynthesisPayload,
+  validateFollowupStudy,
+  validateInterviewResponse,
+  validateSynthesisResult
+} from '../providerValidation';
 
-// Thinking budget for reasoning operations (16K tokens)
-const THINKING_BUDGET = 16384;
+// Deadlines for provider calls (ms)
+const GREETING_DEADLINE_MS = 30_000;
+const INTERVIEW_DEADLINE_MS = 60_000;
+const SYNTHESIS_DEADLINE_MS = 120_000;
 
 export class ClaudeProvider implements AIProvider {
   private client: Anthropic;
@@ -49,22 +60,6 @@ export class ClaudeProvider implements AIProvider {
       process.env.CLAUDE_MODEL ||
       process.env.AI_MODEL ||
       DEFAULT_CLAUDE_MODEL;
-  }
-
-  // For interview responses - no thinking by default (unless explicitly enabled)
-  private getInterviewThinking(enableReasoning?: boolean): { type: 'enabled'; budget_tokens: number } | undefined {
-    if (enableReasoning === true) {
-      return { type: 'enabled', budget_tokens: THINKING_BUDGET };
-    }
-    return undefined; // Disabled by default
-  }
-
-  // For synthesis operations - thinking enabled by default (unless explicitly disabled)
-  private getSynthesisThinking(enableReasoning?: boolean): { type: 'enabled'; budget_tokens: number } | undefined {
-    if (enableReasoning === false) {
-      return undefined; // Explicitly disabled
-    }
-    return { type: 'enabled', budget_tokens: THINKING_BUDGET };
   }
 
   async generateInterviewResponse(
@@ -132,57 +127,70 @@ export class ClaudeProvider implements AIProvider {
       content: h.content
     }));
 
+    let response;
     try {
-      const thinkingConfig = this.getInterviewThinking(studyConfig.enableReasoning);
-      const response = await this.client.messages.create({
-        model: this.model,
-        max_tokens: thinkingConfig ? THINKING_BUDGET + 2048 : 1024,  // Increase max_tokens if thinking enabled
-        ...(thinkingConfig && { thinking: thinkingConfig }),
-        system: systemPrompt + '\n\nYou MUST use the interview_response tool to provide your response.',
-        tools: [interviewResponseTool],
-        tool_choice: { type: 'tool', name: 'interview_response' },
-        messages
-      });
-
-      // Extract tool use result
-      const toolUse = response.content.find(block => block.type === 'tool_use');
-      if (toolUse && toolUse.type === 'tool_use') {
-        const input = toolUse.input as Record<string, unknown>;
-        return {
-          message: (input.message as string) || "That's interesting. Could you tell me more?",
-          questionAddressed: (input.questionAddressed as number | null) ?? null,
-          phaseTransition: (input.phaseTransition as AIInterviewResponse['phaseTransition']) ?? null,
-          profileUpdates: (input.profileUpdates as AIInterviewResponse['profileUpdates']) || [],
-          shouldConclude: (input.shouldConclude as boolean) || false
-        };
-      }
-
-      return defaultInterviewResponse;
+      response = await withProviderDeadline(INTERVIEW_DEADLINE_MS, (signal) =>
+        this.client.messages.create({
+          model: this.model,
+          // Forced tool output is incompatible with manual extended thinking.
+          max_tokens: 1024,
+          system: systemPrompt + '\n\nYou MUST use the interview_response tool to provide your response.',
+          tools: [interviewResponseTool],
+          tool_choice: { type: 'tool', name: 'interview_response' },
+          messages
+        }, {
+          signal,
+          timeout: INTERVIEW_DEADLINE_MS
+        })
+      );
     } catch (error) {
-      console.error('Claude interview response error:', error);
-      return defaultInterviewResponse;
+      if (error instanceof ProviderTimeoutError || error instanceof ProviderFailure) {
+        throw error;
+      }
+      throw providerCallError('claude', 'interview', error);
     }
+
+    // Extract tool use result
+    const toolUse = response.content.find(block => block.type === 'tool_use');
+    if (toolUse && toolUse.type === 'tool_use') {
+      try {
+        return validateInterviewResponse(toolUse.input);
+      } catch (error) {
+        logProviderFailure('claude', 'interview-validate', error);
+        throw new ProviderFailure('invalid-response', 'Claude interview returned malformed tool output', error);
+      }
+    }
+
+    throw new ProviderFailure('invalid-response', 'Claude interview returned no tool result');
   }
 
   async getInterviewGreeting(studyConfig: StudyConfig): Promise<string> {
     const prompt = buildGreetingPrompt(studyConfig);
 
+    let response;
     try {
-      const response = await this.client.messages.create({
-        model: this.model,
-        max_tokens: 300,
-        messages: [{ role: 'user', content: prompt }]
-      });
-
-      const textBlock = response.content.find(block => block.type === 'text');
-      if (textBlock && textBlock.type === 'text') {
-        return textBlock.text;
-      }
-      return getDefaultGreeting(studyConfig);
+      response = await withProviderDeadline(GREETING_DEADLINE_MS, (signal) =>
+        this.client.messages.create({
+          model: this.model,
+          max_tokens: 300,
+          messages: [{ role: 'user', content: prompt }]
+        }, {
+          signal,
+          timeout: GREETING_DEADLINE_MS
+        })
+      );
     } catch (error) {
-      console.error('Claude greeting error:', error);
-      return getDefaultGreeting(studyConfig);
+      if (error instanceof ProviderTimeoutError || error instanceof ProviderFailure) {
+        throw error;
+      }
+      throw providerCallError('claude', 'greeting', error);
     }
+
+    const textBlock = response.content.find(block => block.type === 'text');
+    if (textBlock && textBlock.type === 'text' && textBlock.text) {
+      return textBlock.text;
+    }
+    throw new ProviderFailure('invalid-response', 'Claude greeting returned no text');
   }
 
   async synthesizeInterview(
@@ -240,28 +248,39 @@ export class ClaudeProvider implements AIProvider {
     const prompt = buildSynthesisPrompt(history, studyConfig, behaviorData, participantProfile) +
       '\n\nUse the synthesis_result tool to provide your analysis.';
 
+    let response;
     try {
-      const thinkingConfig = this.getSynthesisThinking(studyConfig.enableReasoning);
-      const response = await this.client.messages.create({
-        model: CLAUDE_SYNTHESIS_MODEL,  // Use the configured higher-capability synthesis model
-        max_tokens: thinkingConfig ? THINKING_BUDGET + 4096 : 2048,  // Increase for thinking
-        ...(thinkingConfig && { thinking: thinkingConfig }),
-        tools: [synthesisTool],
-        tool_choice: { type: 'tool', name: 'synthesis_result' },
-        messages: [{ role: 'user', content: prompt }]
-      });
-
-      // Extract tool use result
-      const toolUse = response.content.find(block => block.type === 'tool_use');
-      if (toolUse && toolUse.type === 'tool_use') {
-        return toolUse.input as SynthesisResult;
-      }
-
-      return defaultSynthesisResult;
+      response = await withProviderDeadline(SYNTHESIS_DEADLINE_MS, (signal) =>
+        this.client.messages.create({
+          model: CLAUDE_SYNTHESIS_MODEL,  // Use the configured higher-capability synthesis model
+          max_tokens: 4096,
+          tools: [synthesisTool],
+          tool_choice: { type: 'tool', name: 'synthesis_result' },
+          messages: [{ role: 'user', content: prompt }]
+        }, {
+          signal,
+          timeout: SYNTHESIS_DEADLINE_MS
+        })
+      );
     } catch (error) {
-      console.error('Claude synthesis error:', error);
-      return defaultSynthesisResult;
+      if (error instanceof ProviderTimeoutError || error instanceof ProviderFailure) {
+        throw error;
+      }
+      throw providerCallError('claude', 'synthesis', error);
     }
+
+    // Extract tool use result
+    const toolUse = response.content.find(block => block.type === 'tool_use');
+    if (toolUse && toolUse.type === 'tool_use') {
+      try {
+        return validateSynthesisResult(toolUse.input);
+      } catch (error) {
+        logProviderFailure('claude', 'synthesis-validate', error);
+        throw new ProviderFailure('invalid-response', 'Claude synthesis returned malformed tool output', error);
+      }
+    }
+
+    throw new ProviderFailure('invalid-response', 'Claude synthesis returned no tool result');
   }
 
   async synthesizeAggregate(
@@ -327,28 +346,39 @@ export class ClaudeProvider implements AIProvider {
     const prompt = buildAggregateSynthesisPrompt(studyConfig, syntheses, interviewCount) +
       '\n\nUse the aggregate_synthesis_result tool to provide your analysis.';
 
+    let response;
     try {
-      const thinkingConfig = this.getSynthesisThinking(studyConfig.enableReasoning);
-      const response = await this.client.messages.create({
-        model: CLAUDE_SYNTHESIS_MODEL,  // Use the configured higher-capability synthesis model
-        max_tokens: thinkingConfig ? THINKING_BUDGET + 8192 : 4096,  // Increase for thinking
-        ...(thinkingConfig && { thinking: thinkingConfig }),
-        tools: [aggregateTool],
-        tool_choice: { type: 'tool', name: 'aggregate_synthesis_result' },
-        messages: [{ role: 'user', content: prompt }]
-      });
-
-      // Extract tool use result
-      const toolUse = response.content.find(block => block.type === 'tool_use');
-      if (toolUse && toolUse.type === 'tool_use') {
-        return toolUse.input as typeof defaultAggregateSynthesisResult;
-      }
-
-      return defaultAggregateSynthesisResult;
+      response = await withProviderDeadline(SYNTHESIS_DEADLINE_MS, (signal) =>
+        this.client.messages.create({
+          model: CLAUDE_SYNTHESIS_MODEL,  // Use the configured higher-capability synthesis model
+          max_tokens: 8192,
+          tools: [aggregateTool],
+          tool_choice: { type: 'tool', name: 'aggregate_synthesis_result' },
+          messages: [{ role: 'user', content: prompt }]
+        }, {
+          signal,
+          timeout: SYNTHESIS_DEADLINE_MS
+        })
+      );
     } catch (error) {
-      console.error('Claude aggregate synthesis error:', error);
-      return defaultAggregateSynthesisResult;
+      if (error instanceof ProviderTimeoutError || error instanceof ProviderFailure) {
+        throw error;
+      }
+      throw providerCallError('claude', 'aggregate-synthesis', error);
     }
+
+    // Extract tool use result
+    const toolUse = response.content.find(block => block.type === 'tool_use');
+    if (toolUse && toolUse.type === 'tool_use') {
+      try {
+        return validateAggregateSynthesisPayload(toolUse.input);
+      } catch (error) {
+        logProviderFailure('claude', 'aggregate-synthesis-validate', error);
+        throw new ProviderFailure('invalid-response', 'Claude aggregate synthesis returned malformed tool output', error);
+      }
+    }
+
+    throw new ProviderFailure('invalid-response', 'Claude aggregate synthesis returned no tool result');
   }
 
   async generateFollowupStudy(
@@ -399,46 +429,38 @@ The follow-up should explore unanswered questions or interesting patterns from t
 
 Use the followup_study tool to provide your response.`;
 
+    let response;
     try {
-      const thinkingConfig = this.getSynthesisThinking(parentConfig.enableReasoning);
-      const response = await this.client.messages.create({
-        model: CLAUDE_SYNTHESIS_MODEL,  // Use the configured higher-capability synthesis model
-        max_tokens: thinkingConfig ? THINKING_BUDGET + 2048 : 1024,  // Increase for thinking
-        ...(thinkingConfig && { thinking: thinkingConfig }),
-        tools: [followupTool],
-        tool_choice: { type: 'tool', name: 'followup_study' },
-        messages: [{ role: 'user', content: prompt }]
-      });
-
-      // Extract tool use result
-      const toolUse = response.content.find(block => block.type === 'tool_use');
-      if (toolUse && toolUse.type === 'tool_use') {
-        const input = toolUse.input as { name: string; researchQuestion: string; coreQuestions: string[] };
-        return {
-          name: input.name || `Follow-up: ${parentConfig.name}`,
-          researchQuestion: input.researchQuestion || synthesis.keyFindings[0] || '',
-          coreQuestions: input.coreQuestions || []
-        };
-      }
-
-      // Fallback to deterministic generation
-      return {
-        name: `Follow-up: ${parentConfig.name}`,
-        researchQuestion: `What deeper insights emerge from exploring: ${synthesis.keyFindings[0] || 'the findings'}?`,
-        coreQuestions: synthesis.keyFindings.slice(0, 3).map(f =>
-          `Can you tell me more about your experience with: ${f}?`
-        )
-      };
+      response = await withProviderDeadline(SYNTHESIS_DEADLINE_MS, (signal) =>
+        this.client.messages.create({
+          model: CLAUDE_SYNTHESIS_MODEL,  // Use the configured higher-capability synthesis model
+          max_tokens: 2048,
+          tools: [followupTool],
+          tool_choice: { type: 'tool', name: 'followup_study' },
+          messages: [{ role: 'user', content: prompt }]
+        }, {
+          signal,
+          timeout: SYNTHESIS_DEADLINE_MS
+        })
+      );
     } catch (error) {
-      console.error('Claude follow-up generation error:', error);
-      // Fallback to deterministic generation
-      return {
-        name: `Follow-up: ${parentConfig.name}`,
-        researchQuestion: `What deeper insights emerge from exploring: ${synthesis.keyFindings[0] || 'the findings'}?`,
-        coreQuestions: synthesis.keyFindings.slice(0, 3).map(f =>
-          `Can you tell me more about your experience with: ${f}?`
-        )
-      };
+      if (error instanceof ProviderTimeoutError || error instanceof ProviderFailure) {
+        throw error;
+      }
+      throw providerCallError('claude', 'follow-up', error);
     }
+
+    // Extract tool use result
+    const toolUse = response.content.find(block => block.type === 'tool_use');
+    if (toolUse && toolUse.type === 'tool_use') {
+      try {
+        return validateFollowupStudy(toolUse.input);
+      } catch (error) {
+        logProviderFailure('claude', 'follow-up-validate', error);
+        throw new ProviderFailure('invalid-response', 'Claude follow-up study returned malformed tool output', error);
+      }
+    }
+
+    throw new ProviderFailure('invalid-response', 'Claude follow-up study returned no tool result');
   }
 }

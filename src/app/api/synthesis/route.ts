@@ -1,10 +1,20 @@
 // POST /api/synthesis - Synthesize interview patterns
 // Server-side only - API keys never sent to client
 // Requires valid participant token to prevent quota abuse
+// Provider/model/prompts always come from the canonical saved study loaded
+// server-side; request bodies are never authoritative.
 
 import { NextResponse } from 'next/server';
 import { getInterviewProvider } from '@/lib/providers';
 import { getParticipantRequestContext } from '@/lib/researcherContext';
+import { loadCanonicalStudy } from '@/lib/canonicalStudy';
+import { providerErrorResponse } from '@/lib/providerErrors';
+import { participantRateLimitResponse } from '@/lib/rateLimit';
+import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
+import { validateBehavior, validateProfile, validateTranscript } from '@/lib/interviewSubmission';
+import { createSynthesisReceipt } from '@/lib/synthesisReceipt';
+import { verifyParticipantConsent } from '@/lib/participantConsent';
+import { readBoundedJsonObject } from '@/lib/requestBody';
 import {
   StudyConfig,
   ParticipantProfile,
@@ -12,79 +22,143 @@ import {
   BehaviorData
 } from '@/types';
 
-// Payload size limits to prevent abuse
-const MAX_HISTORY_MESSAGES = 200; // Higher for synthesis - needs full interview
-const MAX_CONTEXT_LENGTH = 10000;
-const MAX_MESSAGE_LENGTH = 5000;
-
 export async function POST(request: Request) {
   try {
     // Verify participant token and resolve researcher context
-    const { valid, context, studyId, isAdmin, error } = await getParticipantRequestContext(request);
+    const { valid, context, studyId, isAdmin, error, statusCode, linkId, participantSessionId } = await getParticipantRequestContext(request);
     if (!valid || !context) {
       return NextResponse.json(
         { error: error || 'Valid participant token required' },
-        { status: 401 }
+        { status: statusCode ?? 401 }
       );
     }
 
-    const body = await request.json();
+    const parsedBody = await readBoundedJsonObject(request, 600_000);
+    if (!parsedBody.ok) {
+      return NextResponse.json(
+        { error: parsedBody.status === 413 ? 'Synthesis request is too large.' : 'Synthesis request is malformed.' },
+        { status: parsedBody.status }
+      );
+    }
+    const body = parsedBody.value;
     let {
       history,
-      studyConfig,
       behaviorData,
       participantProfile
     } = body as {
       history: InterviewMessage[];
-      studyConfig: StudyConfig;
+      studyConfig?: StudyConfig; // Legacy display payload — never authoritative
       behaviorData: BehaviorData;
       participantProfile: ParticipantProfile | null;
     };
 
     // Validate required fields
-    if (!history || !studyConfig || !behaviorData) {
+    if (!history || !behaviorData) {
       return NextResponse.json(
-        { error: 'Missing required fields: history, studyConfig, behaviorData' },
+        { error: 'Missing required fields: history, behaviorData' },
         { status: 400 }
       );
     }
 
-    // Apply payload size limits
-    history = history.slice(-MAX_HISTORY_MESSAGES).map(msg => ({
-      ...msg,
-      content: msg.content?.slice(0, MAX_MESSAGE_LENGTH) || ''
-    }));
-    if (participantProfile?.rawContext) {
-      participantProfile = {
-        ...participantProfile,
-        rawContext: participantProfile.rawContext.slice(0, MAX_CONTEXT_LENGTH)
-      };
+    try {
+      history = validateTranscript(history);
+      behaviorData = validateBehavior(behaviorData);
+      participantProfile = validateProfile(participantProfile);
+    } catch {
+      return NextResponse.json({ error: 'Interview data is malformed or exceeds allowed limits.' }, { status: 400 });
     }
 
-    // Verify token's studyId matches the requested study (prevents token reuse across studies)
-    // Skip for admin users (researchers previewing their studies)
-    if (!isAdmin && studyId && studyConfig.id && studyId !== studyConfig.id) {
+    // Canonical study authority: the token's studyId wins; the body may carry
+    // only a study id for authenticated admin previews.
+    const canonical = await loadCanonicalStudy({
+      kvClient: context.kvClient,
+      tokenStudyId: studyId,
+      legacyBodyStudyId: (body as { studyConfig?: StudyConfig }).studyConfig?.id,
+      isAdmin,
+    });
+    if (!canonical.ok) {
+      return canonical.response;
+    }
+
+    if (!isAdmin) {
+      if (!participantSessionId) {
+        return NextResponse.json({ error: 'Participant session authority is incomplete.' }, { status: 401 });
+      }
+      const consent = await verifyParticipantConsent(
+        {
+          participantSessionId,
+          studyId: canonical.study.id,
+          studyRevision: canonical.study.revision ?? 1,
+          consentText: canonical.study.config.consentText || '',
+        },
+        context.kvClient
+      );
+      if (consent.status === 'unavailable') {
+        return NextResponse.json(
+          { error: 'Unable to verify participant consent. Please try again.', retryable: true },
+          { status: 503 }
+        );
+      }
+      if (consent.status !== 'accepted') {
+        return NextResponse.json(
+          { error: 'Participant consent is required before interview analysis.', code: 'CONSENT_REQUIRED' },
+          { status: 428 }
+        );
+      }
+
+      const limited = await participantRateLimitResponse(
+        request,
+        canonical.study.id,
+        'synthesis',
+        context.kvClient,
+        { sessionId: participantSessionId, linkId, researcherId: context.researcherId }
+      );
+      if (limited) return limited;
+    }
+
+    const platformLimited = await hostedAiRateLimitResponse(
+      request,
+      'synthesis',
+      {
+        researcherId: context.researcherId,
+        participantSessionId: isAdmin ? undefined : participantSessionId,
+      }
+    );
+    if (platformLimited) return platformLimited;
+
+    let provider;
+    try {
+      provider = getInterviewProvider(canonical.study.config, {
+        geminiApiKey: context.geminiApiKey,
+        anthropicApiKey: context.anthropicApiKey,
+      });
+    } catch {
       return NextResponse.json(
-        { error: 'Token not valid for this study' },
-        { status: 403 }
+        { error: 'AI provider is not configured on the server.' },
+        { status: 502 }
       );
     }
 
-    // Get the configured AI provider with researcher's API keys
-    const provider = getInterviewProvider(studyConfig, {
-      geminiApiKey: context.geminiApiKey,
-      anthropicApiKey: context.anthropicApiKey,
-    });
-
-    // Generate synthesis using the provider
-    const result = await provider.synthesizeInterview(
-      history,
-      studyConfig,
-      behaviorData,
-      participantProfile
-    );
-
-    return NextResponse.json(result);
+    try {
+      const result = await provider.synthesizeInterview(
+        history,
+        canonical.study.config,
+        behaviorData,
+        participantProfile
+      );
+      const receipt = await createSynthesisReceipt({
+        studyId: canonical.study.id,
+        studyRevision: canonical.study.revision ?? 1,
+        participantSessionId: isAdmin ? 'admin-preview' : participantSessionId!,
+        transcript: history,
+        participantProfile,
+        behaviorData,
+        synthesis: result,
+      });
+      return NextResponse.json({ ...result, _receipt: receipt });
+    } catch (providerError) {
+      return providerErrorResponse(providerError);
+    }
   } catch (error) {
     console.error('Synthesis API error:', error);
     return NextResponse.json(

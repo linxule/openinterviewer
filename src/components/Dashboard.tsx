@@ -17,7 +17,8 @@ import {
   FolderOpen,
   LogOut,
   Filter,
-  BookOpen
+  BookOpen,
+  Settings
 } from 'lucide-react';
 
 const Dashboard: React.FC = () => {
@@ -41,8 +42,9 @@ const Dashboard: React.FC = () => {
 
   const loadStudies = async () => {
     try {
-      const { studies: data } = await getAllStudies();
+      const { studies: data, warning: storageWarning } = await getAllStudies();
       setStudies(data);
+      setWarning(storageWarning ?? null);
     } catch (error) {
       console.error('Error loading studies:', error);
     }
@@ -110,7 +112,7 @@ const Dashboard: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-stone-900 p-8">
+    <div className="min-h-screen bg-stone-900 p-4 sm:p-8">
       <div className="max-w-5xl mx-auto">
         {/* Header */}
         <motion.div
@@ -118,7 +120,7 @@ const Dashboard: React.FC = () => {
           animate={{ opacity: 1, y: 0 }}
           className="mb-8"
         >
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-stone-700 flex items-center justify-center">
                 <FolderOpen className="text-stone-300" size={20} />
@@ -131,7 +133,7 @@ const Dashboard: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex gap-3">
+            <div className="flex flex-wrap gap-3">
               <button
                 onClick={() => router.push('/studies')}
                 className="px-4 py-2 text-sm bg-stone-700 hover:bg-stone-600 text-stone-300 rounded-xl transition-colors flex items-center gap-2"
@@ -145,6 +147,13 @@ const Dashboard: React.FC = () => {
               >
                 <ArrowLeft size={16} />
                 Back to Setup
+              </button>
+              <button
+                onClick={() => router.push('/settings')}
+                className="px-4 py-2 text-sm bg-stone-700 hover:bg-stone-600 text-stone-300 rounded-xl transition-colors flex items-center gap-2"
+              >
+                <Settings size={16} />
+                Account & connections
               </button>
               {interviews.length > 0 && (
                 <button

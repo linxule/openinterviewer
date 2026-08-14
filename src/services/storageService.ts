@@ -3,20 +3,38 @@
 
 import { StoredInterview, StoredStudy } from '@/types';
 
+export type StudyDeleteResult = {
+  success: boolean;
+  pending?: boolean;
+  operationId?: string;
+  error?: string;
+};
+
+export type StudyReconciliationResult = {
+  success: boolean;
+  completed: number;
+  rolledBack: number;
+  stillPending: number;
+  error?: string;
+};
+
 // Save completed interview
 export async function saveCompletedInterview(
   interview: Omit<StoredInterview, 'completedAt' | 'status'>,
-  participantToken?: string | null
-): Promise<{ success: boolean; id: string }> {
+  participantToken?: string | null,
+  researcherPreview = false,
+  participantSessionHandle?: string | null
+): Promise<{ success: boolean; id: string; preview?: boolean }> {
   try {
-    const headers: HeadersInit = { 'Content-Type': 'application/json' };
-    if (participantToken) {
-      headers['Authorization'] = `Bearer ${participantToken}`;
-    }
-
     const response = await fetch('/api/interviews/save', {
       method: 'POST',
-      headers,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(researcherPreview ? { 'X-OpenInterviewer-Preview': '1' } : {}),
+        ...(!researcherPreview && participantSessionHandle
+          ? { 'X-OpenInterviewer-Participant-Session': participantSessionHandle }
+          : {}),
+      },
       body: JSON.stringify({
         ...interview,
         completedAt: Date.now(),
@@ -140,14 +158,28 @@ export async function getStudy(id: string): Promise<StoredStudy | null> {
 }
 
 // Delete study
-export async function deleteStudy(id: string): Promise<{ success: boolean; error?: string }> {
+export async function deleteStudy(id: string): Promise<StudyDeleteResult> {
   try {
     const response = await fetch(`/api/studies/${id}`, {
       method: 'DELETE'
     });
+    const data = await response.json().catch(() => ({})) as {
+      error?: string;
+      message?: string;
+      reconciliationPending?: boolean;
+      operationId?: string;
+    };
+
+    if (response.status === 202 || data.reconciliationPending || data.operationId) {
+      return {
+        success: false,
+        pending: true,
+        operationId: data.operationId,
+        error: data.message || data.error || 'Study deletion is awaiting reconciliation.',
+      };
+    }
 
     if (!response.ok) {
-      const data = await response.json();
       return { success: false, error: data.error };
     }
 
@@ -155,5 +187,44 @@ export async function deleteStudy(id: string): Promise<{ success: boolean; error
   } catch (error) {
     console.error('Error deleting study:', error);
     return { success: false, error: 'Failed to delete study' };
+  }
+}
+
+// Repair a bounded batch of hosted study create/delete operations. The API is
+// authenticated and rate-limited; callers use this on workspace entry and for
+// explicit retries after a surfaced 202/pending response.
+export async function reconcileStudyOperations(): Promise<StudyReconciliationResult> {
+  try {
+    const response = await fetch('/api/studies/reconcile', { method: 'POST' });
+    const data = await response.json().catch(() => ({})) as {
+      completed?: number;
+      rolledBack?: number;
+      stillPending?: number;
+      error?: string;
+    };
+    if (!response.ok) {
+      return {
+        success: false,
+        completed: 0,
+        rolledBack: 0,
+        stillPending: 0,
+        error: data.error || 'Study reconciliation is temporarily unavailable.',
+      };
+    }
+    return {
+      success: true,
+      completed: Number.isSafeInteger(data.completed) ? data.completed! : 0,
+      rolledBack: Number.isSafeInteger(data.rolledBack) ? data.rolledBack! : 0,
+      stillPending: Number.isSafeInteger(data.stillPending) ? data.stillPending! : 0,
+    };
+  } catch (error) {
+    console.error('Error reconciling study operations:', error);
+    return {
+      success: false,
+      completed: 0,
+      rolledBack: 0,
+      stillPending: 0,
+      error: 'Study reconciliation is temporarily unavailable.',
+    };
   }
 }

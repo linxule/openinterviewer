@@ -1,405 +1,274 @@
 # OpenInterviewer
 
-Open-source AI-powered qualitative research interview platform. Conduct deep, nuanced interviews at scale with AI interviewers that adapt their style based on participant responses.
+OpenInterviewer is an open-source platform for adaptive, AI-assisted qualitative interviews. Researchers configure a study, share an opaque participant link, and review transcripts and synthesis in a dashboard.
 
-## Features
+There are three deliberately different ways to use it:
 
-- **AI-Powered Interviews**: Configurable AI interviewer with structured, standard, or exploratory modes
-- **Profile Extraction**: Automatically gather participant demographic information during natural conversation
-- **Multi-Question Support**: Define core research questions that the AI weaves into conversation naturally
-- **Study Management**: Save, edit, and manage multiple studies from the dashboard
-- **Real-time Analysis**: Automatic synthesis of stated vs revealed preferences, themes, and contradictions
-- **Aggregate Synthesis**: Cross-interview analysis to identify patterns across all participants
-- **Follow-up Studies**: Generate new studies based on synthesis findings
-- **Secure Deployment**: API keys stay server-side, never exposed to participants
-- **One-Click Deploy**: Deploy your own instance to Vercel in minutes
+| Journey | Credentials | Persistence | Intended use |
+| --- | --- | --- | --- |
+| **Keyless public demo** (`/demo`) | None | None | See the participant and analysis experience with scripted sample data |
+| **Hosted researcher account** | Sign in, then add your own AI and Upstash credentials in the UI | Your Upstash database | Run research without administering a Vercel project |
+| **Self-hosted standalone** | Configure server-only environment variables | Your deployment's Upstash database | Operate the full application and infrastructure yourself |
 
-## Deploy Your Own Instance
+The demo is not a disguised live interview: it is deterministic, does not call an AI provider, and does not save data. Real interviews require a researcher-owned provider account and storage.
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/linxule/openinterviewer&env=GEMINI_API_KEY,ADMIN_PASSWORD&envDescription=API%20key%20for%20Gemini%20and%20admin%20password%20for%20researcher%20access&envLink=https://aistudio.google.com/apikey&project-name=openinterviewer&repository-name=openinterviewer&stores=%5B%7B%22type%22:%22kv%22%7D%5D)
+## 1. Try the keyless demo
 
-### Quick Start
+Open `/demo` on a running instance. No login, provider key, or database is required.
 
-1. Click the "Deploy with Vercel" button above
-2. Connect your GitHub account (if not already)
-3. Enter the required environment variables:
-   - `GEMINI_API_KEY`: Your Google Gemini API key ([Get one here](https://aistudio.google.com/apikey))
-   - `ADMIN_PASSWORD`: Password to access the researcher dashboard
-4. Click "Deploy"
-5. Wait for deployment to complete (~2 minutes)
-6. Visit your app and configure your study!
+The demo:
 
-### Environment Variables
+- uses scripted sample responses and analysis;
+- makes no AI-provider or persistence request;
+- keeps typed sample input in browser memory only and does not transmit or persist it; and
+- is safe to run while the real provider and storage configuration is absent.
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `GEMINI_API_KEY` | Yes | Google Gemini API key for AI interviews |
-| `ADMIN_PASSWORD` | Yes | Password to protect researcher dashboard |
-| `ANTHROPIC_API_KEY` | No | Optional: Use Claude instead of Gemini for interviews |
-| `AI_PROVIDER` | No | `gemini` (default) or `claude` |
-| `AI_MODEL` | No | Override default model (see Model Selection below) |
+It is useful for evaluating the interaction, not model quality, latency, or provider availability.
 
-## How It Works
+## 2. Use a hosted researcher account
 
-### For Researchers
+In hosted mode, the platform operator configures the application once. Researchers should not need the Vercel dashboard or deployment environment variables.
 
-1. **Setup Study** (`/setup`): Configure your research questions, profile fields, and AI behavior
-2. **Save Study**: Studies are saved to your dashboard for reuse and editing
-3. **Generate Link**: Create a shareable participant link with your study configuration embedded
-4. **Share**: Distribute the link to participants via email, survey tools, or social media
-5. **View Results** (`/dashboard`): Access individual transcripts and per-interview synthesis
-6. **Aggregate Analysis**: View cross-interview patterns, themes, and divergent views
-7. **Generate Follow-ups**: Create new studies based on synthesis findings to dig deeper
+The researcher journey is:
 
-### For Participants
+1. Sign in with an OAuth provider offered on the login page.
+2. Complete the in-app onboarding.
+3. Add at least one researcher-owned AI key: Google Gemini or Anthropic Claude.
+4. Add a researcher-owned Upstash Redis REST URL and REST token.
+5. Validate and save the credentials.
+6. Create and save a study, generate a participant link, and share it.
 
-1. **Click Link**: Participants visit the shared URL
-2. **Consent**: Read study information and consent to participate
-3. **Interview**: Chat naturally with the AI interviewer
-4. **Complete**: View summary and thank you message
+The setup UI uses password inputs and never returns stored credential values to the browser. Credentials are encrypted before being stored in the platform database. They must be decrypted by the application's server functions when making a request on the researcher's behalf; encryption at rest is not end-to-end encryption. AI providers receive the prompts and interview content required to generate a response, under the researcher's provider account and terms. Upstash stores the study and interview records under the researcher's account.
 
-### Data Flow
+Credential validation in the onboarding UI contacts the selected service and may count against its quota. The repository-local setup checker described below never contacts those services.
 
-```text
-Researcher                          Participant
-    │                                    │
-    ├── Setup Study                      │
-    ├── Save to Dashboard                │
-    ├── Generate Link ──────────────────►│
-    │                                    ├── Consent
-    │                                    ├── Interview
-    │                                    │       ↓
-    │                                    │   AI Interviewer (Gemini/Claude)
-    │                                    │       ↓
-    │                                    └── Complete
-    │                                           ↓
-    │◄───────────────────────────── Vercel KV (Storage)
-    │
-    ├── View Individual Synthesis
-    ├── Run Aggregate Analysis
-    └── Generate Follow-up Studies
+### Hosted platform operator requirements
+
+Hosted mode is multi-tenant infrastructure. The operator, not each researcher, must configure:
+
+| Variable | Requirement |
+| --- | --- |
+| `DEPLOYMENT_MODE` | `hosted` |
+| `APP_BASE_URL` | Stable HTTPS origin used for OAuth callbacks and participant links |
+| `SESSION_SECRET` | Independent random value, at least 32 characters |
+| `PARTICIPANT_TOKEN_SECRET` | Different independent random value, at least 32 characters |
+| `RATE_LIMIT_SALT` | A third independent random value, at least 32 characters |
+| `PLATFORM_KV_REST_API_URL` | Platform-owned Upstash REST URL for accounts, encrypted credentials, ownership, and link records |
+| `PLATFORM_KV_REST_API_TOKEN` | Write-capable token for that platform database |
+| `PLATFORM_KEY_PREFIX` | Environment-specific namespace such as `staging` or `production` |
+| `CREDENTIAL_ENCRYPTION_KEYS` | JSON object mapping key IDs to base64-encoded 32-byte AES keys |
+| `CREDENTIAL_ENCRYPTION_ACTIVE_KEY_ID` | Key ID used for new credential writes |
+| `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` | Optional OAuth pair; configure at least one complete OAuth provider |
+| `GITHUB_CLIENT_ID` + `GITHUB_CLIENT_SECRET` | Optional OAuth pair; configure at least one complete OAuth provider |
+
+Example keyring shape, with the real key omitted:
+
+```env
+CREDENTIAL_ENCRYPTION_KEYS={"2026-08":"BASE64_32_BYTE_KEY"}
+CREDENTIAL_ENCRYPTION_ACTIVE_KEY_ID=2026-08
 ```
 
-## Local Development
+Generate a credential-encryption key with `openssl rand -base64 32`. Keep every old key in the keyring until all credentials written with it have been rotated. `CREDENTIAL_ENCRYPTION_KEY` is the legacy, unversioned migration variable; retain it only while old records still need to be read, then remove it.
+
+Create separate OAuth applications for staging and production. Their callback URLs are:
+
+```text
+https://YOUR_ORIGIN/api/auth/oauth/google/callback
+https://YOUR_ORIGIN/api/auth/oauth/github/callback
+```
+
+Do not use `NEXT_PUBLIC_` for credentials or signing keys. `APP_BASE_URL` is intentionally server-only.
+
+## 3. Run a self-hosted standalone instance
+
+### Requirements
+
+- Node.js 24.15 or newer (`.nvmrc` and `.node-version` are included)
+- one Gemini or Anthropic API key
+- one Upstash Redis database with its REST URL and write-capable REST token
+- a stable HTTPS origin for production
+
+Storage is required for real studies and interviews. The app does not auto-create, auto-connect, or silently substitute a database. Create Upstash Redis yourself, whether directly in Upstash or through the Vercel Marketplace, then configure the exact REST variables below.
+
+### Local setup
 
 ```bash
-# Install dependencies
-npm install
-
-# Set environment variables
+git clone https://github.com/linxule/openinterviewer.git
+cd openinterviewer
+npm ci
 cp .env.example .env.local
-# Edit .env.local with your API keys
-
-# Run development server
-npm run dev
-
-# Build for production
-npm run build
 ```
 
-### Development without Vercel KV
-
-The app works without Vercel KV during development:
-- Interview data is not persisted (warning shown)
-- Dashboard shows empty state
-- All other features work normally
-
-To test with KV locally, install the [Vercel CLI](https://vercel.com/docs/cli) and run:
+Edit `.env.local` and configure the standalone section. Generate each secret independently; do not reuse the admin password or any signing/rate-limit secret:
 
 ```bash
-vercel link
-vercel env pull .env.local
+openssl rand -base64 24   # ADMIN_PASSWORD
+openssl rand -hex 32      # SESSION_SECRET
+openssl rand -hex 32      # PARTICIPANT_TOKEN_SECRET
+openssl rand -hex 32      # RATE_LIMIT_SALT
 ```
 
-## Storage Setup (Vercel KV via Upstash)
+Then validate names and value shapes without revealing values or calling a provider:
 
-OpenInterviewer uses Vercel KV (powered by Upstash Redis) to persist studies and interview data. Without storage configured, studies won't be saved and interviews won't persist.
+```bash
+npm run setup:check -- --mode standalone
+npm run dev
+```
 
-### Setting Up Vercel KV
+Open `http://localhost:3000`. The researcher dashboard uses `ADMIN_PASSWORD`; participant access uses opaque links exchanged for short-lived, HttpOnly session cookies.
 
-**Step 1: Create Upstash Redis Database**
+### Standalone production variables
 
-1. Go to your [Vercel Dashboard](https://vercel.com)
-2. Select your **openinterviewer** project
-3. Click the **"Storage"** tab
-4. Click **"Upstash"**
-5. Click **"Create Database"**
-6. Select **"Redis"** (not Kafka)
-7. Fill in:
-   - **Name**: `openinterviewer` (or any name)
-   - **Primary Region**: Choose closest to your users (e.g., `us-east-1`)
-   - Leave other settings as default
-8. Click **"Create"**
+| Variable | Requirement |
+| --- | --- |
+| `DEPLOYMENT_MODE` | `standalone` |
+| `APP_BASE_URL` | Canonical HTTPS origin, for example `https://interviews.example.org` |
+| `ADMIN_PASSWORD` | Independent researcher login password; 16+ characters recommended |
+| `SESSION_SECRET` | Independent random value, at least 32 characters |
+| `PARTICIPANT_TOKEN_SECRET` | Different independent random value, at least 32 characters |
+| `RATE_LIMIT_SALT` | A third independent random value, at least 32 characters |
+| `KV_REST_API_URL` | Your Upstash REST URL (`https://…upstash.io`) |
+| `KV_REST_API_TOKEN` | Write-capable REST token |
+| `GEMINI_API_KEY` | Required when using Gemini |
+| `ANTHROPIC_API_KEY` | Required when using Claude |
+| `AI_PROVIDER` | Optional default: `gemini` or `claude` |
+| `GEMINI_MODEL` / `CLAUDE_MODEL` | Optional provider-specific model override |
 
-**Step 2: Connect Database to Project**
+Configure at least one AI provider. A per-study selection can override the environment default, but the matching key must exist. Model availability changes; use a model ID currently enabled on your provider account rather than relying on an old README list.
 
-1. After creation, click **"Connect Project"** button
-2. Select your **openinterviewer** project from the dropdown
-3. Choose environments to connect (select all: Production, Preview, Development)
-4. Click **"Connect"**
+For a production readiness check:
 
-**Step 3: Redeploy**
+```bash
+npm run setup:check -- --mode standalone --production
+```
 
-1. Go to the **"Deployments"** tab
-2. Find your latest deployment
-3. Click **"..."** menu → **"Redeploy"**
-4. Wait for deployment to complete (~1-2 minutes)
+### Deploy standalone on Vercel
 
-**Step 4: Verify**
+1. Import the repository into a new Vercel project.
+2. Create an Upstash Redis database separately and obtain its REST URL and write token.
+3. Add every required standalone variable to the intended Vercel environment. Use the interactive `vercel env add NAME` command or the project's environment-variable settings; avoid putting secret values in shell history.
+4. Keep Preview and Production storage and secrets separate.
+5. Deploy a preview first and run the production-mode setup checker against an environment file pulled for that project, if desired.
+6. Verify login, study save, participant consent, one interview, export, expiry, and revocation before assigning the production domain.
 
-1. Visit your app and log in
-2. Create and save a study
-3. Navigate to "My Studies" - the study should now appear!
+`vercel env pull .env.local` overwrites that file. Keep manual local-only overrides in `.env.development.local`, or back them up before pulling. Never commit any `.env*.local` file.
 
-### Free Tier Limits (Vercel Hobby Plan)
+## Setup diagnostics
 
-- 10,000 commands/day
-- 256MB storage
-- Sufficient for testing and small-scale research
+The checker is designed for people and coding agents:
 
-### Environment Variables (Auto-configured)
+```bash
+# Keyless demo prerequisites
+npm run setup:check -- --mode demo
 
-When you connect the database, these are automatically added:
+# Local standalone .env files
+npm run setup:check -- --mode standalone
 
-- `KV_REST_API_URL`
-- `KV_REST_API_TOKEN`
-- `KV_REST_API_READ_ONLY_TOKEN`
-- `KV_URL`
+# A specific production file
+npm run setup:check -- --mode standalone --production --env-file .env.production.local
 
-## Demo Data
+# Hosted operator configuration, redacted JSON output
+npm run setup:check -- --mode hosted --production --json
+```
 
-To explore the full platform workflow without running actual interviews, you can load demo data:
+It validates the Node version, required variable names, URL/key shapes, OAuth pairs, and secret independence. It reads the same local env-file family used for development, but it never prints values, writes secrets, makes network requests, provisions resources, or calls a paid model. A nonzero exit status means setup is incomplete.
 
-### Loading Demo Data
+## Research workflow
 
-1. Log in to your researcher dashboard
-2. Navigate to **My Studies** (`/studies`)
-3. Click **"Load Demo"** button (purple button in header)
-4. Or, if no studies exist, click **"Load Demo Data"** in the empty state
+For researchers:
 
-### What's Included
+1. Create and save a study.
+2. Configure questions, profile fields, provider/model, consent text, and link expiry.
+3. Generate an opaque participant link from the saved revision.
+4. Share the link and collect interviews.
+5. Review individual transcripts and synthesis.
+6. Run aggregate analysis and export research records.
+7. Disable links when collection pauses or ends.
 
-The demo includes:
+For participants:
 
-- **1 Demo Study**: "The Adaptive Self: Professional Identity in the Age of AI"
-  - 5 core research questions about AI impact on professional identity
-  - Profile schema: role, AI usage frequency, comfort level, industry
-  - AI reasoning enabled for synthesis
+1. Open the study link.
+2. Review the study information and give consent.
+3. Complete the adaptive interview.
+4. Submit the completed interview.
 
-- **3 Complete Interviews**:
-  - **Sarah** (Product Manager) - Enthusiastic AI adopter, found new strategic role
-  - **Marcus** (UX Designer) - Initial skeptic turned converted user
-  - **Priya** (Content Manager) - Efficiency vs authenticity tension
+Editing a study advances its revision and invalidates links and participant sessions issued for the previous revision. Generate and distribute a new link after a consequential edit.
 
-- **Full Analysis**: Each interview includes synthesis with themes, contradictions, and insights
+## Security and data boundaries
 
-### Exploring Features
+- Provider and storage credentials stay server-side; no secret belongs in a `NEXT_PUBLIC_` variable.
+- Hosted credentials are encrypted at rest with a versioned AES-256-GCM keyring.
+- Researcher and participant sessions use separate signing secrets and token types.
+- Participant URLs contain high-entropy opaque codes, not study configuration or reusable API bearer JWTs.
+- The opaque code is exchanged for a short-lived HttpOnly, `SameSite=Strict` cookie and removed from the address bar.
+- Participant APIs resolve the live, server-owned study revision and recheck link status.
+- AI failures are errors, not fabricated research responses.
+- Researchers remain responsible for consent language, retention, deletion, provider terms, and applicable research/privacy governance.
 
-With demo data loaded, you can:
+Do not place real credentials in issues, logs, screenshots, chat transcripts, or diagnostic output.
 
-1. **View Individual Interviews**: Click any interview to see full transcript
-2. **Per-Interview Synthesis**: See stated vs revealed preferences, themes
-3. **Aggregate Analysis**: Run cross-interview analysis to see patterns
-4. **Follow-up Studies**: Generate new studies based on findings
+## Hosted cutover and legacy links
 
-### Clearing Demo Data
+The hosted architecture intentionally retires links minted by the legacy standalone deployment. Old signed-JWT links cannot be converted into the new opaque, revision-bound link records, including old links configured to never expire.
 
-Click **"Clear Demo"** (amber button in header) to remove all demo data and start fresh.
+Before cutover:
 
-## Project Structure
+1. Inventory active legacy studies and notify researchers that new participant URLs are required.
+2. Stop or explicitly close legacy collection and export the studies/interviews needed for retention.
+3. Preserve the legacy deployment and its Redis configuration unchanged for a bounded rollback/export window.
+4. Generate and distribute new opaque links only after the hosted study is active.
+
+Do not point legacy and hosted releases at the same writable keyspace. A rollback restores the old deployment and its original storage; it does not merge interviews collected by both generations. Export any hosted data needed before rolling back.
+
+## Vercel blue/green release checklist
+
+No deploy command in this repository performs the cutover automatically. For a hosted release:
+
+1. Create a separate staging Vercel project with a stable staging domain.
+2. Use a separate platform Redis database, or at minimum a unique `PLATFORM_KEY_PREFIX`; never share a production write namespace.
+3. Create staging-only OAuth clients with exact staging callback URLs.
+4. Scope all staging environment variables to the staging project and run `npm run setup:check -- --mode hosted --production` without exposing values.
+5. Deploy without attaching the production domain.
+6. Verify `/demo`, OAuth failure and success paths, onboarding, credential replacement/clear, and two researcher accounts with isolated storage.
+7. For each test account, verify study create/edit, opaque-link exchange, consent, interview completion, export, expiry, revocation, and account logout.
+8. Create the production candidate without changing the production alias. Use production-only OAuth clients, secrets, key prefix/database, and `APP_BASE_URL`.
+9. Record the current production deployment and environment snapshot as the exact rollback target.
+10. Promote the verified candidate, then run a small post-cutover smoke test. Do not reuse real participant content.
+11. If rollback is necessary, restore the previous deployment/domain and its matching environment/storage together. Keep hosted data isolated and export it separately.
+12. After the rollback window, remove legacy access deliberately, rotate superseded signing/encryption keys, and document the retirement.
+
+## Development and verification
+
+```bash
+npm ci
+npm run lint
+npm run typecheck
+npm test
+npm run test:setup
+npm run build
+npm run test:e2e
+```
+
+The browser regression proves that the keyless demo does not contact application AI APIs or external services.
+
+## Project structure
 
 ```text
-/src
-├── app/                      # Next.js App Router pages
-│   ├── api/                  # API routes (server-side)
-│   │   ├── interview/        # AI interview generation
-│   │   ├── greeting/         # Interview greeting
-│   │   ├── synthesis/        # Individual + aggregate analysis
-│   │   ├── studies/          # Study CRUD operations
-│   │   ├── generate-link/    # Participant URL generation
-│   │   ├── interviews/       # Interview CRUD + export
-│   │   ├── auth/             # Authentication
-│   │   └── config/           # API key status check
-│   ├── setup/                # Study configuration
-│   ├── consent/              # Participant consent
-│   ├── interview/            # Interview chat
-│   ├── synthesis/            # Analysis view
-│   ├── export/               # Data export
-│   ├── dashboard/            # Researcher dashboard
-│   ├── studies/              # Study list + detail views
-│   ├── login/                # Researcher login
-│   └── p/[token]/            # Participant entry point
-├── components/               # React components
-├── hooks/                    # Custom React hooks
-├── lib/                      # Server-side utilities
-│   ├── ai.ts                 # AI provider abstraction
-│   ├── providers/            # Gemini & Claude implementations
-│   └── kv.ts                 # Vercel KV client
-├── utils/                    # Client-side utilities
-├── services/                 # Client-side services
-├── store.ts                  # Zustand state management
-├── types.ts                  # TypeScript types
-└── middleware.ts             # Auth protection
+src/
+├── app/                 Next.js pages and API routes
+│   ├── api/             Auth, onboarding, studies, links, interviews, and synthesis
+│   ├── demo/            Keyless scripted demo
+│   └── p/[token]/       Opaque participant-link entry
+├── components/          Researcher and participant UI
+├── lib/                 Auth, storage, provider, validation, and tenancy logic
+├── services/            Browser-side API clients
+├── store.ts             Participant/researcher client state
+└── types.ts             Shared domain types
+
+scripts/check-setup.mjs  Redacted local setup diagnostics
+tests/                   Unit and browser regressions
 ```
-
-## AI Provider Configuration
-
-### Default: Gemini
-
-The app uses Gemini by default for all AI operations:
-- Interview responses
-- Greeting generation
-- Interview synthesis
-
-### Model Selection
-
-Models can be selected at two levels:
-
-1. **Per-study (UI)**: Choose a model in the Study Setup page for each study
-2. **Environment default**: Set default models via environment variables
-
-**Priority:** Study UI selection > Provider-specific env var > Legacy `AI_MODEL` > Default
-
-#### Environment Variables
-
-```env
-# Gemini default model
-GEMINI_MODEL=gemini-2.5-flash
-
-# Claude default model
-CLAUDE_MODEL=claude-sonnet-4-5
-
-# Legacy (deprecated - use provider-specific vars above)
-AI_MODEL=gemini-2.5-flash
-```
-
-#### Available Models
-
-**Gemini:**
-
-| Model | Description |
-|-------|-------------|
-| `gemini-2.5-flash` | Fast, cost-effective (default) |
-| `gemini-2.5-pro` | Higher quality |
-| `gemini-3.1-pro-preview` | Higher capability (preview) |
-
-**Claude:**
-
-| Model | Description | Pricing |
-|-------|-------------|---------|
-| `claude-haiku-4-5` | Fastest | $1/$5 per MTok |
-| `claude-sonnet-4-5` | Balanced (default) | $3/$15 per MTok |
-| `claude-opus-4-5` | Higher capability | $5/$25 per MTok |
-
-**Note:** Preview models may require API access approval. Check [Google AI docs](https://ai.google.dev/gemini-api/docs/models) and [Anthropic docs](https://platform.claude.com/docs/en/about-claude/models/overview) for the latest model availability.
-
-### Optional: Claude for Interviews
-
-To use Claude instead of Gemini:
-
-```env
-AI_PROVIDER=claude
-ANTHROPIC_API_KEY=your-claude-api-key
-CLAUDE_MODEL=claude-sonnet-4-5
-```
-
-### AI Reasoning Mode
-
-The app automatically uses enhanced reasoning (thinking mode) for analytical operations like synthesis, while keeping interviews fast and conversational.
-
-**Default Behavior:**
-
-| Operation | Reasoning | Model Used |
-|-----------|-----------|------------|
-| Interview responses | OFF | User-selected model |
-| Greeting generation | OFF | User-selected model |
-| Per-interview synthesis | ON (high) | Uses the configured synthesis model (Gemini 3.1 Pro / Claude Opus 4.5) |
-| Aggregate synthesis | ON (high) | Uses the configured synthesis model |
-| Follow-up study generation | ON (high) | Uses the configured synthesis model |
-
-**Per-Study Override:**
-
-In Study Setup, you can override the default behavior:
-- **Automatic (recommended)**: Use defaults above
-- **Always enabled**: Force reasoning ON for all operations (slower interviews)
-- **Always disabled**: Force reasoning OFF for all operations (faster but less thorough synthesis)
-
-**Cost Implications:**
-- Synthesis operations use the app's configured higher-capability models
-- Gemini: Uses `gemini-3.1-pro-preview` for synthesis
-- Claude: Uses `claude-opus-4-5` ($5/$25 per MTok) for synthesis
-- Reasoning tokens count toward billing
-
-**Troubleshooting:**
-- If synthesis fails silently, check API quotas for the configured synthesis models
-- Preview model IDs are retired on short notice - Google shut down `gemini-3-pro-preview` on 2026-03-09. If synthesis 404s with "no longer available", the ID is dead: check [Google's model docs](https://ai.google.dev/gemini-api/docs/models) for the successor. Note that `GET /v1beta/models` is *not* a reliable check here - it kept listing `gemini-3-pro-preview` after the shutdown; only an actual `generateContent` call returns the 404
-- Claude Opus 4.5 ($5/$25/MTok) is used for synthesis - monitor costs
-- Setting reasoning to "Always disabled" reduces thinking-token use but does not change the configured synthesis model
-
-## Configuring API Keys
-
-API keys are managed through environment variables in your Vercel dashboard:
-
-1. Go to your Vercel project → **Settings** → **Environment Variables**
-2. Add or update the required variables
-3. **Redeploy** for changes to take effect (Production deployments pick up new values automatically)
-
-### Required Keys
-
-| Variable | Purpose |
-|----------|---------|
-| `GEMINI_API_KEY` | Powers AI interviews (server-side) |
-| `ADMIN_PASSWORD` | Protects researcher dashboard |
-
-### Optional Keys
-
-| Variable | Purpose | When Needed |
-|----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | Use Claude for interviews | When AI Provider is set to "Claude" |
-| `GEMINI_MODEL` | Override default Gemini model | To change from `gemini-2.5-flash` |
-| `CLAUDE_MODEL` | Override default Claude model | To change from `claude-sonnet-4-5` |
-| `SESSION_SECRET` | Separate session signing key | Advanced: separate from ADMIN_PASSWORD |
-| `PARTICIPANT_TOKEN_SECRET` | Separate token signing key | Advanced: separate from ADMIN_PASSWORD |
-
-### Getting API Keys
-
-- **Gemini**: [Google AI Studio](https://aistudio.google.com/apikey) - Free tier available
-- **Claude**: [Anthropic Console](https://console.anthropic.com/) - Requires account with credits
-
-## Link Management
-
-### Link Expiration
-
-When creating a study, you can set participant links to expire after:
-
-- 7 days
-- 30 days
-- 90 days
-- Never (default)
-
-Expired links show an error message directing participants to request a new link.
-
-### Link Revocation
-
-From the Study Detail page, you can instantly revoke all participant links by toggling "Links Enabled" off. This is useful if:
-
-- You've finished data collection
-- You suspect the link has been shared inappropriately
-- You need to pause the study temporarily
-
-## Security
-
-### API Key Protection
-
-- **Server-side keys** (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`): Stored as environment variables, never exposed to browser
-- **Participant URLs**: Signed JWT tokens that cannot be tampered with
-- **Dashboard**: Password-protected with HTTP-only cookie authentication
-- **Data**: Stored in Vercel KV (Redis) with encrypted connections
 
 ## License
 
 MIT
-
-## Contributing
-
-Contributions welcome! Please read the contributing guidelines before submitting PRs.

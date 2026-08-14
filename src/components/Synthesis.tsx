@@ -30,12 +30,14 @@ const Synthesis: React.FC = () => {
     synthesis,
     setSynthesis,
     setStep,
-    participantToken
+    participantToken,
+    participantSessionHandle,
+    viewMode
   } = useStore();
 
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<'pending' | 'saved' | 'failed' | null>(null);
+  const [saveStatus, setSaveStatus] = useState<'pending' | 'saved' | 'preview' | 'failed' | null>(null);
   const [analysisError, setAnalysisError] = useState(false);
 
   // Track if analysis has been attempted to prevent re-running
@@ -66,9 +68,9 @@ const Synthesis: React.FC = () => {
         synthesis: synthesisToSave,
         behaviorData: behaviorData,
         createdAt: participantProfile?.timestamp || Date.now()
-      }, participantToken);
+      }, participantToken, viewMode === 'preview', participantSessionHandle);
 
-      setSaveStatus(saveResult.success ? 'saved' : 'failed');
+      setSaveStatus(saveResult.preview ? 'preview' : saveResult.success ? 'saved' : 'failed');
     } catch (error) {
       console.error('Error saving interview:', error);
       setSaveStatus('failed');
@@ -116,7 +118,9 @@ const Synthesis: React.FC = () => {
           studyConfig,
           behaviorData,
           participantProfile,
-          participantToken
+          participantToken,
+          viewMode === 'preview',
+          participantSessionHandle
         );
         setSynthesis(result);
 
@@ -156,8 +160,99 @@ const Synthesis: React.FC = () => {
     );
   }
 
+  if (viewMode === 'participant') {
+    const participantState = analysisError
+      ? 'analysis-failed'
+      : saveStatus === 'failed' || saveStatus === 'preview'
+        ? 'save-failed'
+        : saveStatus === 'saved'
+          ? 'saved'
+          : 'finalizing';
+
+    return (
+      <div className="min-h-screen bg-stone-900 p-4 sm:p-8 flex items-center justify-center">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="w-full max-w-xl rounded-xl border border-stone-700 bg-stone-800/50 p-6 text-center sm:p-10"
+        >
+          {participantState === 'saved' ? (
+            <>
+              <div className="w-16 h-16 rounded-full bg-green-900/30 flex items-center justify-center mx-auto mb-4">
+                <CheckCircle size={32} className="text-green-400" />
+              </div>
+              <h1 className="text-2xl font-bold text-white mb-3">Interview submitted</h1>
+              <p className="text-stone-300" role="status" aria-live="polite">
+                Your responses have been saved. It is now safe to close this tab.
+              </p>
+            </>
+          ) : participantState === 'analysis-failed' ? (
+            <>
+              <div className="w-16 h-16 rounded-full bg-red-900/30 flex items-center justify-center mx-auto mb-4">
+                <AlertTriangle size={32} className="text-red-400" />
+              </div>
+              <h1 className="text-2xl font-bold text-white mb-3">We couldn&apos;t finalize your interview</h1>
+              <p className="text-stone-300 mb-6" role="alert">
+                Your responses are still in this tab, but they have not been saved. Keep this tab open and try again.
+              </p>
+              <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
+                <button
+                  onClick={handleBack}
+                  className="px-6 py-3 border border-stone-600 text-stone-300 rounded-xl hover:bg-stone-700 transition-colors"
+                >
+                  Back to interview
+                </button>
+                <button
+                  onClick={handleRetryAnalysis}
+                  className="px-6 py-3 bg-stone-600 hover:bg-stone-500 text-white font-medium rounded-xl transition-colors flex items-center justify-center gap-2"
+                >
+                  <RefreshCw size={18} />
+                  Retry finalization
+                </button>
+              </div>
+            </>
+          ) : participantState === 'save-failed' ? (
+            <>
+              <div className="w-16 h-16 rounded-full bg-yellow-900/30 flex items-center justify-center mx-auto mb-4">
+                <XCircle size={32} className="text-yellow-400" />
+              </div>
+              <h1 className="text-2xl font-bold text-white mb-3">We couldn&apos;t save your interview</h1>
+              <p className="text-stone-300 mb-6" role="alert">
+                Your responses are still in this tab. Keep it open and retry the save before closing.
+              </p>
+              <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
+                <button
+                  onClick={handleBack}
+                  className="px-6 py-3 border border-stone-600 text-stone-300 rounded-xl hover:bg-stone-700 transition-colors"
+                >
+                  Back to interview
+                </button>
+                <button
+                  onClick={handleRetrySave}
+                  disabled={isSaving}
+                  className="px-6 py-3 bg-stone-600 hover:bg-stone-500 disabled:opacity-50 text-white font-medium rounded-xl transition-colors flex items-center justify-center gap-2"
+                >
+                  {isSaving ? <Loader2 size={18} className="animate-spin" /> : <RefreshCw size={18} />}
+                  Retry save
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <Loader2 size={48} className="animate-spin text-stone-400 mx-auto mb-4" />
+              <h1 className="text-2xl font-bold text-white mb-3">Finalizing your interview</h1>
+              <p className="text-stone-300" role="status" aria-live="polite">
+                We are preparing and saving your responses. Keep this tab open until you see confirmation that it is safe to close.
+              </p>
+            </>
+          )}
+        </motion.div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-stone-900 p-8">
+    <div className="min-h-screen bg-stone-900 p-4 sm:p-8">
       <div className="max-w-4xl mx-auto">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -168,7 +263,9 @@ const Synthesis: React.FC = () => {
             <div className="w-10 h-10 rounded-xl bg-stone-700 flex items-center justify-center">
               <BarChart3 className="text-stone-300" size={20} />
             </div>
-            <h1 className="text-3xl font-bold text-white">Interview Analysis</h1>
+            <h1 className="text-3xl font-bold text-white">
+              {viewMode === 'preview' ? 'Researcher preview analysis' : 'Interview Analysis'}
+            </h1>
           </div>
           <p className="text-stone-400 ml-13">
             Patterns and insights from the conversation
@@ -200,6 +297,12 @@ const Synthesis: React.FC = () => {
               <div className="bg-green-900/30 border border-green-700 text-green-300 rounded-xl p-4 flex items-center gap-3">
                 <CheckCircle size={20} />
                 <span>Interview saved successfully. View it in the researcher dashboard.</span>
+              </div>
+            )}
+            {saveStatus === 'preview' && (
+              <div className="bg-stone-800/50 border border-stone-600 text-stone-300 rounded-xl p-4 flex items-center gap-3">
+                <CheckCircle size={20} />
+                <span>Preview complete. This interview was not added to the study data.</span>
               </div>
             )}
             {saveStatus === 'failed' && (
@@ -342,13 +445,13 @@ const Synthesis: React.FC = () => {
                 onClick={handleBack}
                 className="px-6 py-3 border border-stone-600 text-stone-400 rounded-xl hover:bg-stone-700 transition-colors flex items-center gap-2"
               >
-                <ArrowLeft size={18} /> Continue Interview
+                <ArrowLeft size={18} /> {viewMode === 'preview' ? 'Continue preview' : 'Continue Interview'}
               </button>
               <button
                 onClick={handleExport}
                 className="flex-1 py-3 bg-stone-600 hover:bg-stone-500 text-white font-semibold rounded-xl transition-all flex items-center justify-center gap-2"
               >
-                Export Data <ArrowRight size={18} />
+                {viewMode === 'preview' ? 'Export preview data' : 'Export Data'} <ArrowRight size={18} />
               </button>
             </div>
           </motion.div>

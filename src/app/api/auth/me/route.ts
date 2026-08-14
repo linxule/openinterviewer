@@ -4,39 +4,42 @@
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
-import { getRequestContext } from '@/lib/researcherContext';
-import { getResearcherById, toResearcherProfile } from '@/lib/platformDb';
+import { getHostedResearcherIdentity, getRequestContext } from '@/lib/researcherContext';
+import { getResearcherByIdChecked, toResearcherProfile } from '@/lib/platformDb';
 import { isHostedMode } from '@/lib/mode';
 
 export async function GET() {
   try {
-    const { authorized, context, researcherId, error } = await getRequestContext();
-    if (!authorized || !context) {
-      return NextResponse.json({ error: error || 'Unauthorized' }, { status: 401 });
-    }
-
     // In standalone mode, return basic info
     if (!isHostedMode()) {
+      const { authorized, context, error } = await getRequestContext();
+      if (!authorized || !context) {
+        return NextResponse.json({ error: error || 'Unauthorized' }, { status: 401 });
+      }
       return NextResponse.json({
         mode: 'standalone',
         authenticated: true,
       });
     }
 
-    // In hosted mode, return researcher profile
-    if (!researcherId) {
-      return NextResponse.json({ error: 'No researcher identity' }, { status: 401 });
+    // Hosted onboarding and account repair need identity without configured BYOS.
+    const identity = await getHostedResearcherIdentity();
+    if (!identity.authorized || !identity.researcherId) {
+      return NextResponse.json({ error: identity.error || 'Unauthorized' }, { status: 401 });
     }
 
-    const researcher = await getResearcherById(researcherId);
-    if (!researcher) {
+    const loaded = await getResearcherByIdChecked(identity.researcherId);
+    if (loaded.status === 'unavailable') {
+      return NextResponse.json({ error: 'Account storage is temporarily unavailable' }, { status: 503 });
+    }
+    if (loaded.status === 'not-found') {
       return NextResponse.json({ error: 'Researcher not found' }, { status: 404 });
     }
 
     return NextResponse.json({
       mode: 'hosted',
       authenticated: true,
-      profile: toResearcherProfile(researcher),
+      profile: toResearcherProfile(loaded.researcher),
     });
   } catch (error) {
     console.error('Auth me error:', error);

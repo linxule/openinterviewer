@@ -24,6 +24,25 @@ const clientCache = new Map<string, { client: Redis; lastUsed: number }>();
 const CLIENT_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 const CLIENT_CACHE_MAX = 50;
 
+function evictStaleResearcherClients(now = Date.now()): void {
+  clientCache.forEach((entry, key) => {
+    if (now - entry.lastUsed > CLIENT_CACHE_TTL) clientCache.delete(key);
+  });
+}
+
+// Credential lifecycle routes call this immediately on rotate/clear/delete so
+// old tokens are not retained in a live client until normal TTL expiry.
+export function evictResearcherClients(redisUrl?: string): void {
+  if (!redisUrl) {
+    clientCache.clear();
+    return;
+  }
+  const prefix = `${redisUrl}:`;
+  clientCache.forEach((_, key) => {
+    if (key.startsWith(prefix)) clientCache.delete(key);
+  });
+}
+
 // Standalone: lazily-initialized singleton using env vars
 let standaloneClient: Redis | null = null;
 
@@ -61,6 +80,9 @@ export function getResearcherClient(redisUrl: string, redisToken: string): Redis
     throw new Error('Invalid Redis URL: only Upstash Redis URLs (https://*.upstash.io) are supported');
   }
 
+  // Expiry is enforced on every lookup, independently of cache size.
+  evictStaleResearcherClients();
+
   const tokenHash = createHash('sha256').update(redisToken).digest('hex').slice(0, 16);
   const cacheKey = `${redisUrl}:${tokenHash}`;
   const cached = clientCache.get(cacheKey);
@@ -75,17 +97,7 @@ export function getResearcherClient(redisUrl: string, redisToken: string): Redis
 
   // Cleanup when cache exceeds max size
   if (clientCache.size > CLIENT_CACHE_MAX) {
-    const now = Date.now();
-    // First pass: evict stale entries
-    const staleKeys: string[] = [];
-    clientCache.forEach((entry, key) => {
-      if (now - entry.lastUsed > CLIENT_CACHE_TTL) {
-        staleKeys.push(key);
-      }
-    });
-    staleKeys.forEach(key => clientCache.delete(key));
-
-    // Second pass: if still over limit, evict least recently used
+    // If still over limit, evict least recently used.
     if (clientCache.size > CLIENT_CACHE_MAX) {
       const entries: Array<[string, number]> = [];
       clientCache.forEach((entry, key) => {

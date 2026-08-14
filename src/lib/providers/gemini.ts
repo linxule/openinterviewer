@@ -5,14 +5,10 @@ import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
 import {
   AIProvider,
   buildInterviewSystemPrompt,
-  cleanJSON,
-  defaultInterviewResponse,
-  defaultSynthesisResult,
-  defaultAggregateSynthesisResult
+  cleanJSON
 } from '../ai';
 import {
   buildGreetingPrompt,
-  getDefaultGreeting,
   buildSynthesisPrompt,
   buildAggregateSynthesisPrompt
 } from '../prompts';
@@ -28,9 +24,51 @@ import {
   DEFAULT_GEMINI_MODEL,
   GEMINI_SYNTHESIS_MODEL
 } from '@/types';
+import {
+  ProviderFailure,
+  ProviderTimeoutError,
+  logProviderFailure,
+  providerCallError,
+  withProviderDeadline
+} from '../providerErrors';
+import {
+  validateAggregateSynthesisPayload,
+  validateFollowupStudy,
+  validateInterviewResponse,
+  validateSynthesisResult
+} from '../providerValidation';
 
 // Thinking budget for 2.5 models (16K tokens)
 const THINKING_BUDGET_25 = 16384;
+
+// Deadlines for provider calls (ms). SDK-native timeouts are set alongside the
+// AbortSignal so a request cannot hang even if the signal is ignored.
+const GREETING_DEADLINE_MS = 30_000;
+const INTERVIEW_DEADLINE_MS = 60_000;
+const SYNTHESIS_DEADLINE_MS = 120_000;
+
+export function getGeminiInterviewThinkingConfig(
+  model: string,
+  enableReasoning?: boolean
+) {
+  if (model.startsWith('gemini-3')) {
+    return {
+      thinkingConfig: {
+        thinkingLevel: enableReasoning === true ? ThinkingLevel.HIGH : ThinkingLevel.LOW,
+      },
+    };
+  }
+
+  // Let Gemini choose its supported dynamic budget in Automatic mode. Gemini
+  // 2.5 Pro cannot disable thinking, so Minimize uses its documented minimum.
+  if (enableReasoning === undefined) return {};
+  const minimumBudget = model.startsWith('gemini-2.5-pro') ? 128 : 0;
+  return {
+    thinkingConfig: {
+      thinkingBudget: enableReasoning ? THINKING_BUDGET_25 : minimumBudget,
+    },
+  };
+}
 
 export class GeminiProvider implements AIProvider {
   private ai: GoogleGenAI;
@@ -49,16 +87,6 @@ export class GeminiProvider implements AIProvider {
       process.env.GEMINI_MODEL ||
       process.env.AI_MODEL ||
       DEFAULT_GEMINI_MODEL;
-  }
-
-  // For interview responses (2.5 models) - disable thinking for speed (unless explicitly enabled)
-  private getInterviewThinkingConfig(enableReasoning?: boolean) {
-    const useReasoning = enableReasoning === true;
-    return {
-      thinkingConfig: {
-        thinkingBudget: useReasoning ? THINKING_BUDGET_25 : 0
-      }
-    };
   }
 
   // For synthesis operations (Gemini 3.1 Pro) - use thinkingLevel instead of thinkingBudget
@@ -86,93 +114,128 @@ export class GeminiProvider implements AIProvider {
       currentContext
     );
 
-    try {
-      const chat = this.ai.chats.create({
-        model: this.model,
-        config: {
-          systemInstruction,
-          ...this.getInterviewThinkingConfig(studyConfig.enableReasoning),
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              message: {
-                type: Type.STRING,
-                description: 'Your response to the participant'
+    // Chat-level config. The per-request config below repeats these fields
+    // because the SDK's per-request config does not inherit from chat config.
+    const requestConfig = {
+      systemInstruction,
+      ...getGeminiInterviewThinkingConfig(this.model, studyConfig.enableReasoning),
+      responseMimeType: 'application/json' as const,
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          message: {
+            type: Type.STRING,
+            description: 'Your response to the participant'
+          },
+          questionAddressed: {
+            type: Type.NUMBER,
+            nullable: true,
+            description: '0-based index of core question substantially addressed in this exchange, or null'
+          },
+          phaseTransition: {
+            type: Type.STRING,
+            nullable: true,
+            enum: ['background', 'core-questions', 'exploration', 'feedback', 'wrap-up'],
+            description: 'If interview should move to a new phase, specify it'
+          },
+          profileUpdates: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                fieldId: { type: Type.STRING },
+                value: { type: Type.STRING, nullable: true },
+                status: {
+                  type: Type.STRING,
+                  enum: ['extracted', 'vague', 'refused']
+                }
               },
-              questionAddressed: {
-                type: Type.NUMBER,
-                nullable: true,
-                description: '0-based index of core question substantially addressed in this exchange, or null'
-              },
-              phaseTransition: {
-                type: Type.STRING,
-                nullable: true,
-                enum: ['background', 'core-questions', 'exploration', 'feedback', 'wrap-up'],
-                description: 'If interview should move to a new phase, specify it'
-              },
-              profileUpdates: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    fieldId: { type: Type.STRING },
-                    value: { type: Type.STRING, nullable: true },
-                    status: {
-                      type: Type.STRING,
-                      enum: ['extracted', 'vague', 'refused']
-                    }
-                  },
-                  required: ['fieldId', 'status']
-                },
-                description: 'Profile fields extracted or updated from user response'
-              },
-              shouldConclude: {
-                type: Type.BOOLEAN,
-                description: 'True if interview should end (after wrap-up message)'
-              }
+              required: ['fieldId', 'status']
             },
-            required: ['message', 'profileUpdates', 'shouldConclude']
+            description: 'Profile fields extracted or updated from user response'
+          },
+          shouldConclude: {
+            type: Type.BOOLEAN,
+            description: 'True if interview should end (after wrap-up message)'
           }
         },
-        history: history.slice(-10).map(h => ({
-          role: h.role === 'ai' ? 'model' : 'user',
-          parts: [{ text: h.content }]
-        }))
-      });
+        required: ['message', 'profileUpdates', 'shouldConclude']
+      }
+    };
 
-      const lastUserMessage = history.filter(m => m.role === 'user').pop();
-      const result = await chat.sendMessage({
-        message: lastUserMessage?.content || 'Please continue the interview.'
-      });
+    const lastUserMessageIndex = history.findLastIndex(message => message.role === 'user');
+    const priorHistory = lastUserMessageIndex >= 0
+      ? history.slice(Math.max(0, lastUserMessageIndex - 10), lastUserMessageIndex)
+      : history.slice(-10);
+    const historyContents = priorHistory.map(h => ({
+      role: h.role === 'ai' ? 'model' as const : 'user' as const,
+      parts: [{ text: h.content }]
+    }));
 
-      const parsed = JSON.parse(cleanJSON(result.text || '{}'));
-      return {
-        message: parsed.message || "That's interesting. Could you tell me more?",
-        questionAddressed: parsed.questionAddressed ?? null,
-        phaseTransition: parsed.phaseTransition ?? null,
-        profileUpdates: parsed.profileUpdates || [],
-        shouldConclude: parsed.shouldConclude || false
-      };
+    let result;
+    try {
+      result = await withProviderDeadline(INTERVIEW_DEADLINE_MS, (signal) => {
+        const chat = this.ai.chats.create({
+          model: this.model,
+          config: requestConfig,
+          history: historyContents
+        });
+
+        const lastUserMessage = lastUserMessageIndex >= 0 ? history[lastUserMessageIndex] : undefined;
+        return chat.sendMessage({
+          message: lastUserMessage?.content || 'Please continue the interview.',
+          config: {
+            ...requestConfig,
+            httpOptions: { timeout: INTERVIEW_DEADLINE_MS },
+            abortSignal: signal
+          }
+        });
+      });
     } catch (error) {
-      console.error('Gemini interview response error:', error);
-      return defaultInterviewResponse;
+      if (error instanceof ProviderTimeoutError || error instanceof ProviderFailure) {
+        throw error;
+      }
+      throw providerCallError('gemini', 'interview', error);
+    }
+
+    if (!result.text) {
+      throw new ProviderFailure('invalid-response', 'Gemini interview returned no text');
+    }
+
+    try {
+      return validateInterviewResponse(JSON.parse(cleanJSON(result.text)));
+    } catch (error) {
+      logProviderFailure('gemini', 'interview-parse', error);
+      throw new ProviderFailure('invalid-response', 'Gemini interview returned unparseable or malformed JSON', error);
     }
   }
 
   async getInterviewGreeting(studyConfig: StudyConfig): Promise<string> {
     const prompt = buildGreetingPrompt(studyConfig);
 
+    let response;
     try {
-      const response = await this.ai.models.generateContent({
-        model: this.model,
-        contents: prompt
-      });
-      return response.text || getDefaultGreeting(studyConfig);
+      response = await withProviderDeadline(GREETING_DEADLINE_MS, (signal) =>
+        this.ai.models.generateContent({
+          model: this.model,
+          contents: prompt,
+          config: {
+            httpOptions: { timeout: GREETING_DEADLINE_MS },
+            abortSignal: signal
+          }
+        })
+      );
     } catch (error) {
-      console.error('Gemini greeting error:', error);
-      return getDefaultGreeting(studyConfig);
+      if (error instanceof ProviderTimeoutError || error instanceof ProviderFailure) {
+        throw error;
+      }
+      throw providerCallError('gemini', 'greeting', error);
     }
+
+    if (!response.text) {
+      throw new ProviderFailure('invalid-response', 'Gemini greeting returned no text');
+    }
+    return response.text;
   }
 
   async synthesizeInterview(
@@ -183,59 +246,75 @@ export class GeminiProvider implements AIProvider {
   ): Promise<SynthesisResult> {
     const prompt = buildSynthesisPrompt(history, studyConfig, behaviorData, participantProfile);
 
+    let response;
     try {
-      const response = await this.ai.models.generateContent({
-        model: GEMINI_SYNTHESIS_MODEL,  // Use the configured higher-capability synthesis model
-        contents: prompt,
-        config: {
-          ...this.getSynthesisThinkingConfig(studyConfig.enableReasoning),
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              statedPreferences: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-                description: 'What participant explicitly said they value/want'
-              },
-              revealedPreferences: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-                description: 'What their behavior/emphasis revealed'
-              },
-              themes: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    theme: { type: Type.STRING },
-                    evidence: { type: Type.STRING },
-                    frequency: { type: Type.NUMBER }
+      response = await withProviderDeadline(SYNTHESIS_DEADLINE_MS, (signal) =>
+        this.ai.models.generateContent({
+          model: GEMINI_SYNTHESIS_MODEL,  // Use the configured higher-capability synthesis model
+          contents: prompt,
+          config: {
+            ...this.getSynthesisThinkingConfig(studyConfig.enableReasoning),
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                statedPreferences: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING },
+                  description: 'What participant explicitly said they value/want'
+                },
+                revealedPreferences: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING },
+                  description: 'What their behavior/emphasis revealed'
+                },
+                themes: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      theme: { type: Type.STRING },
+                      evidence: { type: Type.STRING },
+                      frequency: { type: Type.NUMBER }
+                    }
                   }
+                },
+                contradictions: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING }
+                },
+                keyInsights: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING }
+                },
+                bottomLine: {
+                  type: Type.STRING,
+                  description: 'One-sentence summary insight for the researcher'
                 }
               },
-              contradictions: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING }
-              },
-              keyInsights: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING }
-              },
-              bottomLine: {
-                type: Type.STRING,
-                description: 'One-sentence summary insight for the researcher'
-              }
+              required: ['statedPreferences', 'revealedPreferences', 'themes', 'keyInsights', 'bottomLine']
             },
-            required: ['statedPreferences', 'revealedPreferences', 'themes', 'keyInsights', 'bottomLine']
+            httpOptions: { timeout: SYNTHESIS_DEADLINE_MS },
+            abortSignal: signal
           }
-        }
-      });
-
-      return JSON.parse(cleanJSON(response.text || '{}')) as SynthesisResult;
+        })
+      );
     } catch (error) {
-      console.error('Gemini synthesis error:', error);
-      return defaultSynthesisResult;
+      if (error instanceof ProviderTimeoutError || error instanceof ProviderFailure) {
+        throw error;
+      }
+      throw providerCallError('gemini', 'synthesis', error);
+    }
+
+    if (!response.text) {
+      throw new ProviderFailure('invalid-response', 'Gemini synthesis returned no text');
+    }
+
+    try {
+      return validateSynthesisResult(JSON.parse(cleanJSON(response.text)));
+    } catch (error) {
+      logProviderFailure('gemini', 'synthesis-parse', error);
+      throw new ProviderFailure('invalid-response', 'Gemini synthesis returned unparseable or malformed JSON', error);
     }
   }
 
@@ -246,63 +325,79 @@ export class GeminiProvider implements AIProvider {
   ) {
     const prompt = buildAggregateSynthesisPrompt(studyConfig, syntheses, interviewCount);
 
+    let response;
     try {
-      const response = await this.ai.models.generateContent({
-        model: GEMINI_SYNTHESIS_MODEL,  // Use the configured higher-capability synthesis model
-        contents: prompt,
-        config: {
-          ...this.getSynthesisThinkingConfig(studyConfig.enableReasoning),
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              commonThemes: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    theme: { type: Type.STRING },
-                    frequency: { type: Type.NUMBER },
-                    representativeQuotes: {
-                      type: Type.ARRAY,
-                      items: { type: Type.STRING }
+      response = await withProviderDeadline(SYNTHESIS_DEADLINE_MS, (signal) =>
+        this.ai.models.generateContent({
+          model: GEMINI_SYNTHESIS_MODEL,  // Use the configured higher-capability synthesis model
+          contents: prompt,
+          config: {
+            ...this.getSynthesisThinkingConfig(studyConfig.enableReasoning),
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                commonThemes: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      theme: { type: Type.STRING },
+                      frequency: { type: Type.NUMBER },
+                      representativeQuotes: {
+                        type: Type.ARRAY,
+                        items: { type: Type.STRING }
+                      }
                     }
                   }
-                }
-              },
-              divergentViews: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    topic: { type: Type.STRING },
-                    viewA: { type: Type.STRING },
-                    viewB: { type: Type.STRING }
+                },
+                divergentViews: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      topic: { type: Type.STRING },
+                      viewA: { type: Type.STRING },
+                      viewB: { type: Type.STRING }
+                    }
                   }
+                },
+                keyFindings: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING }
+                },
+                researchImplications: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING }
+                },
+                bottomLine: {
+                  type: Type.STRING,
+                  description: 'One paragraph summarizing key takeaways'
                 }
               },
-              keyFindings: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING }
-              },
-              researchImplications: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING }
-              },
-              bottomLine: {
-                type: Type.STRING,
-                description: 'One paragraph summarizing key takeaways'
-              }
+              required: ['commonThemes', 'keyFindings', 'bottomLine']
             },
-            required: ['commonThemes', 'keyFindings', 'bottomLine']
+            httpOptions: { timeout: SYNTHESIS_DEADLINE_MS },
+            abortSignal: signal
           }
-        }
-      });
-
-      return JSON.parse(cleanJSON(response.text || '{}'));
+        })
+      );
     } catch (error) {
-      console.error('Gemini aggregate synthesis error:', error);
-      return defaultAggregateSynthesisResult;
+      if (error instanceof ProviderTimeoutError || error instanceof ProviderFailure) {
+        throw error;
+      }
+      throw providerCallError('gemini', 'aggregate-synthesis', error);
+    }
+
+    if (!response.text) {
+      throw new ProviderFailure('invalid-response', 'Gemini aggregate synthesis returned no text');
+    }
+
+    try {
+      return validateAggregateSynthesisPayload(JSON.parse(cleanJSON(response.text)));
+    } catch (error) {
+      logProviderFailure('gemini', 'aggregate-synthesis-parse', error);
+      throw new ProviderFailure('invalid-response', 'Gemini aggregate synthesis returned unparseable or malformed JSON', error);
     }
   }
 
@@ -332,44 +427,48 @@ Return a JSON object with:
 - researchQuestion: A specific, researchable question building on the findings
 - coreQuestions: 3-5 interview questions to explore this further`;
 
+    let response;
     try {
-      const response = await this.ai.models.generateContent({
-        model: GEMINI_SYNTHESIS_MODEL,  // Use the configured higher-capability synthesis model
-        contents: prompt,
-        config: {
-          ...this.getSynthesisThinkingConfig(parentConfig.enableReasoning),
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              name: { type: Type.STRING },
-              researchQuestion: { type: Type.STRING },
-              coreQuestions: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING }
-              }
+      response = await withProviderDeadline(SYNTHESIS_DEADLINE_MS, (signal) =>
+        this.ai.models.generateContent({
+          model: GEMINI_SYNTHESIS_MODEL,  // Use the configured higher-capability synthesis model
+          contents: prompt,
+          config: {
+            ...this.getSynthesisThinkingConfig(parentConfig.enableReasoning),
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                name: { type: Type.STRING },
+                researchQuestion: { type: Type.STRING },
+                coreQuestions: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING }
+                }
+              },
+              required: ['name', 'researchQuestion', 'coreQuestions']
             },
-            required: ['name', 'researchQuestion', 'coreQuestions']
+            httpOptions: { timeout: SYNTHESIS_DEADLINE_MS },
+            abortSignal: signal
           }
-        }
-      });
-
-      const result = JSON.parse(cleanJSON(response.text || '{}'));
-      return {
-        name: result.name || `Follow-up: ${parentConfig.name}`,
-        researchQuestion: result.researchQuestion || synthesis.keyFindings[0] || '',
-        coreQuestions: result.coreQuestions || []
-      };
+        })
+      );
     } catch (error) {
-      console.error('Gemini follow-up generation error:', error);
-      // Fallback to deterministic generation
-      return {
-        name: `Follow-up: ${parentConfig.name}`,
-        researchQuestion: `What deeper insights emerge from exploring: ${synthesis.keyFindings[0] || 'the findings'}?`,
-        coreQuestions: synthesis.keyFindings.slice(0, 3).map(f =>
-          `Can you tell me more about your experience with: ${f}?`
-        )
-      };
+      if (error instanceof ProviderTimeoutError || error instanceof ProviderFailure) {
+        throw error;
+      }
+      throw providerCallError('gemini', 'follow-up', error);
+    }
+
+    if (!response.text) {
+      throw new ProviderFailure('invalid-response', 'Gemini follow-up study returned no text');
+    }
+
+    try {
+      return validateFollowupStudy(JSON.parse(cleanJSON(response.text)));
+    } catch (error) {
+      logProviderFailure('gemini', 'follow-up-parse', error);
+      throw new ProviderFailure('invalid-response', 'Gemini follow-up study returned unparseable or malformed JSON', error);
     }
   }
 }

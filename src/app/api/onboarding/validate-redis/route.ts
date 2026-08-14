@@ -4,57 +4,53 @@
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
-import { getRequestContext } from '@/lib/researcherContext';
+import { getHostedResearcherIdentity } from '@/lib/researcherContext';
 import { isHostedMode } from '@/lib/mode';
-
-// Only allow Upstash Redis URLs to prevent SSRF against internal services
-function isValidUpstashUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return (
-      parsed.protocol === 'https:' &&
-      parsed.hostname.endsWith('.upstash.io')
-    );
-  } catch {
-    return false;
-  }
-}
+import { normalizeCredential, validateRedisCredentials } from '@/lib/credentialValidation';
+import { consumePlatformRateLimit } from '@/lib/platformDb';
+import { readBoundedJsonObject } from '@/lib/requestBody';
 
 export async function POST(request: Request) {
   if (!isHostedMode()) {
     return NextResponse.json({ error: 'Only available in hosted mode' }, { status: 404 });
   }
 
-  const { authorized, error } = await getRequestContext();
-  if (!authorized) {
+  const { authorized, researcherId, error } = await getHostedResearcherIdentity();
+  if (!authorized || !researcherId) {
     return NextResponse.json({ error: error || 'Unauthorized' }, { status: 401 });
+  }
+  const rateLimit = await consumePlatformRateLimit('redis-validation', researcherId, 30, 3_600);
+  if (rateLimit.status === 'unavailable') {
+    return NextResponse.json({ error: 'Validation is temporarily unavailable' }, { status: 503 });
+  }
+  if (rateLimit.status === 'limited') {
+    return NextResponse.json(
+      { error: 'Too many validation attempts. Try again later.' },
+      { status: 429, headers: { 'Retry-After': String(rateLimit.retryAfterSeconds) } }
+    );
   }
 
   try {
-    const body = await request.json();
-    const { redisUrl, redisToken } = body as { redisUrl: string; redisToken: string };
+    const parsedBody = await readBoundedJsonObject(request, 12_000);
+    if (!parsedBody.ok) {
+      return NextResponse.json(
+        { error: parsedBody.status === 413 ? 'Request body is too large' : 'Invalid request body' },
+        { status: parsedBody.status }
+      );
+    }
+    const redisUrl = normalizeCredential(parsedBody.value.redisUrl);
+    const redisToken = normalizeCredential(parsedBody.value.redisToken);
 
     if (!redisUrl || !redisToken) {
       return NextResponse.json({ error: 'Missing redisUrl or redisToken' }, { status: 400 });
     }
 
-    if (!isValidUpstashUrl(redisUrl)) {
-      return NextResponse.json({
-        valid: false,
-        error: 'Only Upstash Redis URLs (https://*.upstash.io) are supported.',
-      }, { status: 400 });
-    }
-
-    // Try to connect and ping
-    const testClient = new Redis({ url: redisUrl, token: redisToken });
-    const result = await testClient.ping();
-
-    if (result === 'PONG') {
-      return NextResponse.json({ valid: true });
-    }
-
-    return NextResponse.json({ valid: false, error: 'Unexpected ping response' });
+    const result = await validateRedisCredentials(redisUrl, redisToken);
+    if (result.valid) return NextResponse.json({ valid: true });
+    return NextResponse.json(
+      { valid: false, error: result.reason === 'invalid' ? 'Invalid Upstash Redis credentials.' : 'Could not reach Redis. Try again.' },
+      { status: result.reason === 'invalid' ? 400 : 503 }
+    );
   } catch (error) {
     console.error('Redis validation error:', error);
     return NextResponse.json({

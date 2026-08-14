@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useRouter } from 'next/navigation';
 import { StoredStudy, StoredInterview, AggregateSynthesisResult } from '@/types';
+import type { ParticipantLinkMetadata } from '@/lib/participantLinks';
 import { getStudy, getStudyInterviews } from '@/services/storageService';
 import {
   Loader2,
@@ -26,7 +27,9 @@ import {
   ToggleLeft,
   ToggleRight,
   Copy,
-  Check
+  Check,
+  RefreshCw,
+  Trash2
 } from 'lucide-react';
 
 interface StudyDetailProps {
@@ -48,12 +51,37 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
   const [participantLink, setParticipantLink] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [generatingLink, setGeneratingLink] = useState(false);
+  const [participantLinks, setParticipantLinks] = useState<ParticipantLinkMetadata[]>([]);
+  const [linksLoadedAt, setLinksLoadedAt] = useState(0);
+  const [linksLoading, setLinksLoading] = useState(true);
+  const [linksError, setLinksError] = useState<string | null>(null);
+  const [revokingLinkId, setRevokingLinkId] = useState<string | null>(null);
 
-  useEffect(() => {
-    loadStudyData();
+  const loadParticipantLinks = useCallback(async () => {
+    setLinksLoading(true);
+    setLinksError(null);
+    try {
+      const response = await fetch(`/api/studies/${encodeURIComponent(studyId)}/participant-links`, {
+        cache: 'no-store',
+      });
+      const data = await response.json() as {
+        links?: ParticipantLinkMetadata[];
+        error?: string;
+      };
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to load participant links');
+      }
+      setParticipantLinks(Array.isArray(data.links) ? data.links : []);
+      setLinksLoadedAt(Date.now());
+    } catch (error) {
+      console.error('Error loading participant links:', error);
+      setLinksError(error instanceof Error ? error.message : 'Failed to load participant links');
+    } finally {
+      setLinksLoading(false);
+    }
   }, [studyId]);
 
-  const loadStudyData = async () => {
+  const loadStudyData = useCallback(async () => {
     setLoading(true);
     try {
       const [studyData, interviewData] = await Promise.all([
@@ -67,7 +95,15 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [studyId]);
+
+  useEffect(() => {
+    void loadStudyData();
+  }, [loadStudyData]);
+
+  useEffect(() => {
+    void loadParticipantLinks();
+  }, [loadParticipantLinks]);
 
   const handleToggleLinksEnabled = async () => {
     if (!study) return;
@@ -79,12 +115,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
       const response = await fetch(`/api/studies/${studyId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          config: {
-            ...study.config,
-            linksEnabled: newLinksEnabled
-          }
-        })
+        body: JSON.stringify({ linksEnabled: newLinksEnabled })
       });
 
       if (!response.ok) {
@@ -126,6 +157,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
       const data = await response.json();
       if (data.url) {
         setParticipantLink(data.url);
+        await loadParticipantLinks();
       }
     } catch (error) {
       console.error('Error generating link:', error);
@@ -140,6 +172,32 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
       navigator.clipboard.writeText(participantLink);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const handleRevokeLink = async (link: ParticipantLinkMetadata) => {
+    if (link.revokedAt !== null) return;
+    if (!window.confirm('Revoke this participant link? Anyone using it will lose access immediately.')) {
+      return;
+    }
+
+    setRevokingLinkId(link.id);
+    try {
+      const response = await fetch(`/api/studies/${encodeURIComponent(studyId)}/participant-links`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ linkId: link.id }),
+      });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to revoke participant link');
+      }
+      await loadParticipantLinks();
+    } catch (error) {
+      console.error('Error revoking participant link:', error);
+      alert(error instanceof Error ? error.message : 'Failed to revoke participant link');
+    } finally {
+      setRevokingLinkId(null);
     }
   };
 
@@ -233,7 +291,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
         <div className="text-center">
           <AlertCircle size={48} className="text-stone-500 mx-auto mb-4" />
           <h2 className="text-xl font-semibold text-white mb-2">Study Not Found</h2>
-          <p className="text-stone-400 mb-4">The study you're looking for doesn't exist.</p>
+          <p className="text-stone-400 mb-4">The study you&apos;re looking for doesn&apos;t exist.</p>
           <button
             onClick={() => router.push('/studies')}
             className="px-4 py-2 bg-stone-700 hover:bg-stone-600 text-white rounded-xl"
@@ -248,11 +306,11 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
   const tabs: { id: TabType; label: string; icon: React.ReactNode }[] = [
     { id: 'overview', label: 'Overview', icon: <BarChart3 size={16} /> },
     { id: 'interviews', label: 'Interviews', icon: <Users size={16} /> },
-    { id: 'settings', label: 'Settings', icon: <Settings size={16} /> }
+    { id: 'settings', label: 'Study settings', icon: <Settings size={16} /> }
   ];
 
   return (
-    <div className="min-h-screen bg-stone-900 p-8">
+    <div className="min-h-screen bg-stone-900 p-4 sm:p-8">
       <div className="max-w-5xl mx-auto">
         {/* Header */}
         <motion.div
@@ -269,13 +327,13 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
           </button>
 
           <div className="flex items-start justify-between">
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 rounded-xl bg-stone-700 flex items-center justify-center">
+            <div className="flex min-w-0 items-start gap-3 sm:items-center sm:gap-4">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-stone-700">
                 <BookOpen className="text-stone-300" size={24} />
               </div>
-              <div>
-                <h1 className="text-3xl font-bold text-white">{study.config.name}</h1>
-                <div className="flex items-center gap-3 mt-1 text-sm text-stone-400">
+              <div className="min-w-0">
+                <h1 className="break-words text-2xl font-bold text-white sm:text-3xl">{study.config.name}</h1>
+                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-stone-400 sm:mt-1">
                   <span className="flex items-center gap-1">
                     <Users size={14} />
                     {study.interviewCount} interviews
@@ -299,12 +357,15 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
         </motion.div>
 
         {/* Tabs */}
-        <div className="flex gap-2 mb-6 border-b border-stone-700">
+        <div className="mb-6 grid grid-cols-3 border-b border-stone-700" role="tablist" aria-label="Study sections">
           {tabs.map((tab) => (
             <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === tab.id}
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`px-4 py-3 flex items-center gap-2 text-sm font-medium border-b-2 transition-colors ${
+              className={`flex min-w-0 flex-col items-center gap-1 border-b-2 px-2 py-3 text-center text-xs font-medium transition-colors sm:flex-row sm:justify-center sm:gap-2 sm:px-4 sm:text-sm ${
                 activeTab === tab.id
                   ? 'border-stone-400 text-white'
                   : 'border-transparent text-stone-500 hover:text-stone-400'
@@ -335,7 +396,11 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
               </div>
 
               {/* Stats Summary */}
-              <div className="grid grid-cols-3 gap-4">
+              <div
+                role="group"
+                aria-label="Study summary"
+                className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4"
+              >
                 <div className="bg-stone-800/50 rounded-xl border border-stone-700 p-4 text-center">
                   <div className="text-3xl font-bold text-white">{study.interviewCount}</div>
                   <div className="text-sm text-stone-400">Interviews</div>
@@ -352,7 +417,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
 
               {/* Aggregate Synthesis */}
               <div className="bg-stone-800/50 rounded-xl border border-stone-700 p-6">
-                <div className="flex items-center justify-between mb-4">
+                <div className="mb-4 flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <h3 className="font-semibold text-white flex items-center gap-2">
                     <BarChart3 size={16} className="text-stone-400" />
                     Aggregate Analysis
@@ -360,7 +425,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                   <button
                     onClick={handleGenerateAggregateSynthesis}
                     disabled={isGeneratingAggregate || interviews.length < 2}
-                    className="px-4 py-2 text-sm bg-stone-700 hover:bg-stone-600 text-stone-300 rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex w-full items-center justify-center gap-2 rounded-lg bg-stone-700 px-4 py-2 text-sm text-stone-300 transition-colors hover:bg-stone-600 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
                   >
                     {isGeneratingAggregate ? (
                       <Loader2 size={14} className="animate-spin" />
@@ -416,7 +481,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                   </div>
                 ) : (
                   <p className="text-stone-500 text-sm">
-                    Click "Analyze All Interviews" to generate cross-interview insights.
+                    Click &quot;Analyze All Interviews&quot; to generate cross-interview insights.
                   </p>
                 )}
               </div>
@@ -440,11 +505,11 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: index * 0.05 }}
-                    className="bg-stone-800/50 rounded-xl border border-stone-700 p-6 hover:border-stone-600 transition-colors cursor-pointer"
+                    className="cursor-pointer rounded-xl border border-stone-700 bg-stone-800/50 p-4 transition-colors hover:border-stone-600 sm:p-6"
                     onClick={() => router.push(`/dashboard/interview/${interview.id}`)}
                   >
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
                         {/* Participant info */}
                         {interview.participantProfile && interview.participantProfile.fields.length > 0 && (
                           <div className="text-sm text-stone-300 mb-3">
@@ -465,7 +530,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                         )}
 
                         {/* Stats */}
-                        <div className="flex items-center gap-4 text-xs text-stone-500">
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-stone-500">
                           <div className="flex items-center gap-1">
                             <Clock size={12} />
                             {formatDuration(interview.createdAt, interview.completedAt)}
@@ -481,6 +546,8 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                       </div>
 
                       <button
+                        type="button"
+                        aria-label={`View interview ${index + 1}`}
                         className="p-2 text-stone-400 hover:text-stone-300 transition-colors"
                         onClick={(e) => {
                           e.stopPropagation();
@@ -568,19 +635,24 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                   Link Management
                 </h3>
 
-                <div className="flex items-center justify-between p-4 bg-stone-900/50 rounded-xl">
+                <div className="flex flex-col items-start gap-3 rounded-xl bg-stone-900/50 p-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <div className="font-medium text-stone-200">Participant Access</div>
-                    <p className="text-sm text-stone-400">
+                    <p id="participant-access-status" className="text-sm text-stone-400">
                       {(study.config.linksEnabled ?? true)
                         ? 'Access enabled - participants can use the link below'
                         : 'Access disabled - the same link will show an error until re-enabled'}
                     </p>
                   </div>
                   <button
+                    type="button"
+                    role="switch"
+                    aria-label="Participant access"
+                    aria-checked={study.config.linksEnabled ?? true}
+                    aria-describedby="participant-access-status"
                     onClick={handleToggleLinksEnabled}
                     disabled={isTogglingLinks}
-                    className={`w-14 h-7 rounded-full transition-colors flex items-center px-1 ${
+                    className={`flex h-7 w-14 shrink-0 items-center rounded-full px-1 transition-colors ${
                       (study.config.linksEnabled ?? true)
                         ? 'bg-green-600'
                         : 'bg-stone-600'
@@ -604,6 +676,101 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                     Warning: All participant links are currently disabled. Participants trying to access the study will see an error message.
                   </div>
                 )}
+
+                <div className="border-t border-stone-700 pt-4 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h4 className="font-medium text-stone-200">Generated links</h4>
+                      <p className="text-xs text-stone-500">
+                        Only dates and status are retained here. Link URLs cannot be viewed again after creation.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void loadParticipantLinks()}
+                      disabled={linksLoading}
+                      className="p-2 text-stone-400 hover:text-stone-200 disabled:opacity-50"
+                      aria-label="Refresh participant links"
+                    >
+                      <RefreshCw size={16} className={linksLoading ? 'animate-spin' : ''} />
+                    </button>
+                  </div>
+
+                  {linksError ? (
+                    <div className="flex items-center justify-between gap-3 rounded-lg bg-red-950/30 border border-red-900/50 p-3">
+                      <p className="text-sm text-red-300">{linksError}</p>
+                      <button
+                        type="button"
+                        onClick={() => void loadParticipantLinks()}
+                        className="text-sm text-red-200 hover:text-white"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  ) : linksLoading ? (
+                    <div className="flex items-center gap-2 text-sm text-stone-400 py-2">
+                      <Loader2 size={16} className="animate-spin" />
+                      Loading generated links…
+                    </div>
+                  ) : participantLinks.length === 0 ? (
+                    <p className="text-sm text-stone-500 py-2">No generated links for this study yet.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {participantLinks.map((link) => {
+                        const expired = link.expiresAt !== null && link.expiresAt <= linksLoadedAt;
+                        const replaced = link.studyRevision !== study.revision;
+                        const status = link.revokedAt !== null
+                          ? 'Revoked'
+                          : expired
+                            ? 'Expired'
+                            : replaced
+                              ? 'Replaced by study edit'
+                              : (study.config.linksEnabled ?? true)
+                                ? 'Active'
+                                : 'Globally disabled';
+                        const canRevoke = link.revokedAt === null && !expired;
+
+                        return (
+                          <div
+                            key={link.id}
+                            className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-lg bg-stone-900/50 p-3"
+                          >
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2 text-sm">
+                                <span className="text-stone-300">Created {formatDate(link.createdAt)}</span>
+                                <span className={`rounded-full px-2 py-0.5 text-xs ${
+                                  status === 'Active'
+                                    ? 'bg-green-900/50 text-green-300'
+                                    : 'bg-stone-700 text-stone-300'
+                                }`}>
+                                  {status}
+                                </span>
+                              </div>
+                              <p className="mt-1 text-xs text-stone-500">
+                                {link.expiresAt === null
+                                  ? 'No scheduled expiry'
+                                  : `Expires ${formatDate(link.expiresAt)}`}
+                                {' · '}Study revision {link.studyRevision}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => void handleRevokeLink(link)}
+                              disabled={!canRevoke || revokingLinkId === link.id}
+                              className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-900/60 px-3 py-2 text-sm text-red-300 hover:bg-red-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+                              aria-label={`Revoke participant link created ${formatDate(link.createdAt)}`}
+                            >
+                              {revokingLinkId === link.id
+                                ? <Loader2 size={14} className="animate-spin" />
+                                : <Trash2 size={14} />}
+                              Revoke
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Participant Link Generator */}
@@ -626,20 +793,25 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
 
                   {/* Link Display (when generated) */}
                   {participantLink && (
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={participantLink}
-                        readOnly
-                        className="flex-1 bg-stone-900 border border-stone-600 rounded-lg px-3 py-2 text-stone-300 text-sm font-mono"
-                      />
-                      <button
-                        onClick={handleCopyLink}
-                        className="px-3 py-2 bg-stone-700 hover:bg-stone-600 text-stone-300 rounded-lg flex items-center gap-1"
-                      >
-                        {copied ? <Check size={16} className="text-green-400" /> : <Copy size={16} />}
-                        {copied ? 'Copied!' : 'Copy'}
-                      </button>
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={participantLink}
+                          readOnly
+                          className="flex-1 bg-stone-900 border border-stone-600 rounded-lg px-3 py-2 text-stone-300 text-sm font-mono"
+                        />
+                        <button
+                          onClick={handleCopyLink}
+                          className="px-3 py-2 bg-stone-700 hover:bg-stone-600 text-stone-300 rounded-lg flex items-center gap-1"
+                        >
+                          {copied ? <Check size={16} className="text-green-400" /> : <Copy size={16} />}
+                          {copied ? 'Copied!' : 'Copy'}
+                        </button>
+                      </div>
+                      <p className="text-xs text-amber-300">
+                        Copy this link now. For security, its URL cannot be recovered from the generated-links list.
+                      </p>
                     </div>
                   )}
 

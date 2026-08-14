@@ -4,7 +4,11 @@ import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useRouter } from 'next/navigation';
 import { StoredStudy } from '@/types';
-import { getAllStudies, deleteStudy } from '@/services/storageService';
+import {
+  deleteStudy,
+  getAllStudies,
+  reconcileStudyOperations,
+} from '@/services/storageService';
 import {
   Loader2,
   Plus,
@@ -20,7 +24,9 @@ import {
   LogOut,
   AlertTriangle,
   Database,
-  Sparkles
+  Sparkles,
+  RefreshCw,
+  Settings as SettingsIcon
 } from 'lucide-react';
 
 const StudyList: React.FC = () => {
@@ -32,10 +38,9 @@ const StudyList: React.FC = () => {
   const [kvWarning, setKvWarning] = useState<string | null>(null);
   const [loadingDemo, setLoadingDemo] = useState(false);
   const [demoMessage, setDemoMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-
-  useEffect(() => {
-    loadStudies();
-  }, []);
+  const [hostedMode, setHostedMode] = useState(false);
+  const [operationNotice, setOperationNotice] = useState<string | null>(null);
+  const [isReconciling, setIsReconciling] = useState(false);
 
   const loadStudies = async () => {
     setLoading(true);
@@ -50,6 +55,46 @@ const StudyList: React.FC = () => {
     }
   };
 
+  const runReconciliation = async () => {
+    setIsReconciling(true);
+    const result = await reconcileStudyOperations();
+    if (!result.success) {
+      setOperationNotice(result.error || 'Study reconciliation is temporarily unavailable.');
+    } else if (result.stillPending > 0) {
+      setOperationNotice(
+        `${result.stillPending} study operation(s) are still inside the safety window. Retry shortly.`
+      );
+    } else if (result.completed > 0 || result.rolledBack > 0) {
+      setOperationNotice('Pending study changes were reconciled successfully.');
+    } else {
+      setOperationNotice(null);
+    }
+    setIsReconciling(false);
+    await loadStudies();
+  };
+
+  useEffect(() => {
+    const initializeWorkspace = async () => {
+      let hosted = false;
+      try {
+        const response = await fetch('/api/config/mode');
+        const data = await response.json();
+        hosted = data.mode === 'hosted';
+      } catch {
+        hosted = false;
+      }
+      setHostedMode(hosted);
+      if (hosted) {
+        await runReconciliation();
+      } else {
+        await loadStudies();
+      }
+    };
+    void initializeWorkspace();
+    // Workspace initialization is intentionally a once-per-mount recovery gate.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to delete this study? This cannot be undone.')) {
       return;
@@ -60,6 +105,8 @@ const StudyList: React.FC = () => {
       const result = await deleteStudy(id);
       if (result.success) {
         setStudies(studies.filter(s => s.id !== id));
+      } else if (result.pending) {
+        setOperationNotice(result.error || 'Study deletion is awaiting reconciliation.');
       } else {
         alert(result.error || 'Failed to delete study');
       }
@@ -140,7 +187,7 @@ const StudyList: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-stone-900 p-8">
+    <div className="min-h-screen bg-stone-900 p-4 sm:p-8">
       <div className="max-w-5xl mx-auto">
         {/* Header */}
         <motion.div
@@ -148,7 +195,7 @@ const StudyList: React.FC = () => {
           animate={{ opacity: 1, y: 0 }}
           className="mb-8"
         >
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-stone-700 flex items-center justify-center">
                 <BookOpen className="text-stone-300" size={20} />
@@ -161,26 +208,35 @@ const StudyList: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex gap-3">
+            <div className="flex w-full flex-wrap gap-2 sm:w-auto sm:justify-end sm:gap-3">
               <button
                 onClick={() => router.push('/setup')}
-                className="px-4 py-2 text-sm bg-stone-600 hover:bg-stone-500 text-white rounded-xl transition-colors flex items-center gap-2"
+                className="px-4 py-2 text-sm bg-stone-600 hover:bg-stone-500 text-white rounded-xl transition-colors flex items-center gap-2 whitespace-nowrap"
               >
                 <Plus size={16} />
                 Create Study
               </button>
               <button
                 onClick={() => router.push('/dashboard')}
-                className="px-4 py-2 text-sm bg-stone-700 hover:bg-stone-600 text-stone-300 rounded-xl transition-colors flex items-center gap-2"
+                className="px-4 py-2 text-sm bg-stone-700 hover:bg-stone-600 text-stone-300 rounded-xl transition-colors flex items-center gap-2 whitespace-nowrap"
               >
                 <Users size={16} />
                 All Interviews
               </button>
+              {hostedMode && (
+                <button
+                  onClick={() => router.push('/settings')}
+                  className="px-4 py-2 text-sm bg-stone-700 hover:bg-stone-600 text-stone-300 rounded-xl transition-colors flex items-center gap-2 whitespace-nowrap"
+                >
+                  <SettingsIcon size={16} />
+                  Account &amp; connections
+                </button>
+              )}
               {hasDemoData ? (
                 <button
                   onClick={handleClearDemo}
                   disabled={loadingDemo}
-                  className="px-4 py-2 text-sm border border-amber-700/50 text-amber-400 hover:bg-amber-900/30 rounded-xl transition-colors flex items-center gap-2 disabled:opacity-50"
+                  className="px-4 py-2 text-sm border border-amber-700/50 text-amber-400 hover:bg-amber-900/30 rounded-xl transition-colors flex items-center gap-2 whitespace-nowrap disabled:opacity-50"
                 >
                   {loadingDemo ? <Loader2 size={16} className="animate-spin" /> : <Database size={16} />}
                   Clear Demo
@@ -189,7 +245,7 @@ const StudyList: React.FC = () => {
                 <button
                   onClick={handleLoadDemo}
                   disabled={loadingDemo || !!kvWarning}
-                  className="px-4 py-2 text-sm border border-purple-700/50 text-purple-400 hover:bg-purple-900/30 rounded-xl transition-colors flex items-center gap-2 disabled:opacity-50"
+                  className="px-4 py-2 text-sm border border-purple-700/50 text-purple-400 hover:bg-purple-900/30 rounded-xl transition-colors flex items-center gap-2 whitespace-nowrap disabled:opacity-50"
                 >
                   {loadingDemo ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
                   Load Demo
@@ -197,7 +253,7 @@ const StudyList: React.FC = () => {
               )}
               <button
                 onClick={handleLogout}
-                className="px-4 py-2 text-sm border border-stone-600 text-stone-400 hover:bg-stone-700 rounded-xl transition-colors flex items-center gap-2"
+                className="px-4 py-2 text-sm border border-stone-600 text-stone-400 hover:bg-stone-700 rounded-xl transition-colors flex items-center gap-2 whitespace-nowrap"
               >
                 <LogOut size={16} />
                 Logout
@@ -221,6 +277,28 @@ const StudyList: React.FC = () => {
                 See the README for setup instructions using Vercel KV (Upstash Redis).
               </p>
             </div>
+          </motion.div>
+        )}
+
+        {operationNotice && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mb-6 bg-amber-900/30 border border-amber-700/50 rounded-xl p-4 flex items-center gap-3"
+          >
+            <AlertTriangle size={20} className="text-amber-400 flex-shrink-0" />
+            <p className="text-sm text-amber-300">{operationNotice}</p>
+            {hostedMode && (
+              <button
+                type="button"
+                onClick={() => void runReconciliation()}
+                disabled={isReconciling}
+                className="ml-auto inline-flex items-center gap-2 rounded-lg border border-amber-700 px-3 py-2 text-sm text-amber-200 hover:bg-amber-900/40 disabled:opacity-50"
+              >
+                <RefreshCw size={14} className={isReconciling ? 'animate-spin' : ''} />
+                Retry repair
+              </button>
+            )}
           </motion.div>
         )}
 
@@ -314,6 +392,7 @@ const StudyList: React.FC = () => {
                   <button
                     onClick={() => setMenuOpenId(menuOpenId === study.id ? null : study.id)}
                     className="p-2 text-stone-500 hover:text-stone-400 rounded-lg hover:bg-stone-700"
+                    aria-label={`Open actions for ${study.config.name}`}
                   >
                     <MoreVertical size={16} />
                   </button>
@@ -336,8 +415,7 @@ const StudyList: React.FC = () => {
                           router.push(`/setup?prefill=edit&studyId=${study.id}`);
                           setMenuOpenId(null);
                         }}
-                        disabled={study.isLocked}
-                        className="w-full px-4 py-2 text-left text-sm text-stone-300 hover:bg-stone-700 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="w-full px-4 py-2 text-left text-sm text-stone-300 hover:bg-stone-700 flex items-center gap-2"
                       >
                         <LinkIcon size={14} />
                         Edit & Generate Link

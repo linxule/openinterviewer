@@ -1,24 +1,60 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { useStore } from '@/store';
-import { Shield, ArrowRight, ArrowLeft, MessageSquare, Clock, HelpCircle } from 'lucide-react';
+import { Shield, ArrowRight, ArrowLeft, MessageSquare, Clock, HelpCircle, Loader2 } from 'lucide-react';
 
 const Consent: React.FC = () => {
   const router = useRouter();
-  const { studyConfig, giveConsent, setStep, viewMode, initializeProfile } = useStore();
+  const {
+    studyConfig,
+    giveConsent,
+    setStep,
+    viewMode,
+    initializeProfile,
+    participantSessionHandle,
+  } = useStore();
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [consentError, setConsentError] = useState<string | null>(null);
 
-  const handleConsent = () => {
-    giveConsent();
-    // Initialize profile structure from study schema
-    if (studyConfig?.profileSchema) {
+  const handleConsent = async () => {
+    if (!studyConfig || isSubmitting) return;
+
+    setIsSubmitting(true);
+    setConsentError(null);
+    try {
+      const response = await fetch('/api/consent', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(viewMode === 'preview' ? { 'X-OpenInterviewer-Preview': '1' } : {}),
+          ...(viewMode === 'participant' && participantSessionHandle
+            ? { 'X-OpenInterviewer-Participant-Session': participantSessionHandle }
+            : {}),
+        },
+        body: JSON.stringify({ studyId: studyConfig.id }),
+      });
+      const data = await response.json().catch(() => ({})) as {
+        acceptedAt?: number;
+        error?: string;
+      };
+      if (!response.ok || !Number.isSafeInteger(data.acceptedAt) || (data.acceptedAt ?? 0) <= 0) {
+        throw new Error(data.error || 'Consent could not be recorded. Please try again.');
+      }
+
+      // This timestamp is issued by the server. It is display/resume state only;
+      // participant API routes independently verify the server-side record.
+      giveConsent(data.acceptedAt!);
       initializeProfile(studyConfig.profileSchema);
+      setStep('interview');
+      router.push('/interview');
+    } catch (error) {
+      setConsentError(error instanceof Error ? error.message : 'Consent could not be recorded. Please try again.');
+    } finally {
+      setIsSubmitting(false);
     }
-    // Skip directly to interview (merged intake/profile into conversation)
-    setStep('interview');
-    router.push('/interview');
   };
 
   const handleBack = () => {
@@ -109,16 +145,22 @@ const Consent: React.FC = () => {
             </div>
 
             <div className="bg-stone-800 border border-stone-600 rounded-xl p-4 text-sm text-stone-300">
-              <strong className="text-stone-100">Privacy:</strong> Your responses will be used for research purposes only.
-              No personally identifying information will be shared without your consent.
+              <strong className="text-stone-100">Data notice:</strong> Your responses are sent to the AI provider selected by the researcher and stored according to this study&apos;s setup. Do not include information you do not want to share. Contact the researcher for retention, access, and deletion details.
             </div>
           </div>
 
           {/* Actions */}
-          <div className="p-6 pt-0 flex gap-3">
+          <div className="p-6 pt-0 space-y-3">
+            {consentError && (
+              <p role="alert" className="text-sm text-red-300 bg-red-950/40 border border-red-800 rounded-lg px-3 py-2">
+                {consentError}
+              </p>
+            )}
+            <div className="flex gap-3">
             {viewMode !== 'participant' && (
               <button
                 onClick={handleBack}
+                disabled={isSubmitting}
                 className="px-6 py-3 border border-stone-600 text-stone-400 rounded-xl hover:bg-stone-700 transition-colors flex items-center gap-2"
               >
                 <ArrowLeft size={18} /> Back
@@ -126,10 +168,17 @@ const Consent: React.FC = () => {
             )}
             <button
               onClick={handleConsent}
-              className="flex-1 py-3 bg-stone-600 hover:bg-stone-500 text-white font-semibold rounded-xl transition-all flex items-center justify-center gap-2"
+              disabled={isSubmitting}
+              aria-busy={isSubmitting}
+              className="flex-1 py-3 bg-stone-600 hover:bg-stone-500 text-white font-semibold rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              I Consent - Begin Interview <ArrowRight size={18} />
+              {isSubmitting ? (
+                <><Loader2 size={18} className="animate-spin" /> Recording consent...</>
+              ) : (
+                <>I Consent - Begin Interview <ArrowRight size={18} /></>
+              )}
             </button>
+            </div>
           </div>
         </div>
       </motion.div>

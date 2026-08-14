@@ -6,12 +6,16 @@ export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
 import { getRequestContext } from '@/lib/researcherContext';
+import { configurationRequiredResponse } from '@/lib/researcherAccess';
 import { saveStudy, saveInterview, isKVAvailable, getAllStudies } from '@/lib/kv';
 import { DEMO_STUDIES, DEMO_INTERVIEWS } from '@/lib/demoData';
 
 export async function POST() {
   try {
-    const { authorized, context, error } = await getRequestContext();
+    const access = await getRequestContext();
+    const setupResponse = configurationRequiredResponse(access);
+    if (setupResponse) return setupResponse;
+    const { authorized, context, error } = access;
     if (!authorized || !context) {
       return NextResponse.json({ error: error || 'Unauthorized' }, { status: 401 });
     }
@@ -69,7 +73,10 @@ export async function POST() {
 // DELETE /api/demo/seed - Clear demo data from KV
 export async function DELETE() {
   try {
-    const { authorized, context, error } = await getRequestContext();
+    const access = await getRequestContext();
+    const setupResponse = configurationRequiredResponse(access);
+    if (setupResponse) return setupResponse;
+    const { authorized, context, error } = access;
     if (!authorized || !context) {
       return NextResponse.json({ error: error || 'Unauthorized' }, { status: 401 });
     }

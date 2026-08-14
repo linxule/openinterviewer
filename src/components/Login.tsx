@@ -13,13 +13,38 @@ const Login: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<'standalone' | 'hosted' | null>(null);
+  const [oauthProviders, setOauthProviders] = useState<{ google: boolean; github: boolean }>({
+    google: false,
+    github: false,
+  });
+  const [configReady, setConfigReady] = useState(true);
+  const [modeLoaded, setModeLoaded] = useState(false);
+  const rawReturnTo = searchParams.get('redirect') || '/studies';
+  const returnTo = rawReturnTo.startsWith('/') && !rawReturnTo.startsWith('//')
+    ? rawReturnTo
+    : '/studies';
 
-  // Check deployment mode
   useEffect(() => {
-    fetch('/api/config/mode')
+    fetch('/api/config/readiness')
       .then(res => res.json())
-      .then(data => setMode(data.mode))
-      .catch(() => setMode('standalone'));
+      .then(data => {
+        if (data.mode === 'hosted' || data.mode === 'standalone') {
+          setMode(data.mode);
+        } else {
+          setMode(null);
+        }
+        setOauthProviders({
+          google: !!data.oauth?.google,
+          github: !!data.oauth?.github,
+        });
+        setConfigReady(data.ready !== false);
+      })
+      .catch(() => {
+        setMode(null);
+        setOauthProviders({ google: false, github: false });
+        setConfigReady(false);
+      })
+      .finally(() => setModeLoaded(true));
   }, []);
 
   // Check for OAuth error in URL params
@@ -33,6 +58,9 @@ const Login: React.FC = () => {
         invalid_state: 'Session expired. Please try again.',
         user_fetch_failed: 'Failed to get your profile. Please try again.',
         no_email: 'Could not get your email. Make sure your GitHub email is verified.',
+        email_unverified: 'A verified email is required to sign in.',
+        account_conflict: 'This email is already used with a different sign-in method.',
+        platform_unavailable: 'Sign-in is temporarily unavailable. Please try again.',
       };
       setError(errorMessages[oauthError] || 'Sign-in failed. Please try again.');
     }
@@ -71,7 +99,7 @@ const Login: React.FC = () => {
   };
 
   // Loading state while checking mode
-  if (mode === null) {
+  if (!modeLoaded) {
     return (
       <div className="min-h-screen bg-stone-900 flex items-center justify-center">
         <Loader2 size={24} className="animate-spin text-stone-400" />
@@ -95,21 +123,28 @@ const Login: React.FC = () => {
             <p className="text-stone-400 text-sm mt-1">
               {mode === 'hosted'
                 ? 'Sign in to access your research dashboard'
-                : 'Enter your admin password to access the dashboard'
-              }
+                : mode === 'standalone'
+                  ? 'Enter your admin password to access the dashboard'
+                  : 'Sign-in is unavailable because this server is not configured.'}
             </p>
           </div>
 
-          {error && (
+          {(error || (mode === 'hosted' && !configReady)) && (
             <div className="flex items-center gap-2 p-3 mb-4 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
               <AlertCircle size={16} className="flex-shrink-0" />
-              {error}
+              {error || 'This hosted instance is missing required configuration.'}
             </div>
           )}
 
           {mode === 'hosted' ? (
-            <OAuthLogin loading={loading} />
-          ) : (
+            configReady ? (
+              <OAuthLogin loading={loading} providers={oauthProviders} returnTo={returnTo} />
+            ) : (
+              <p className="text-sm text-stone-400 text-center">
+                Sign-in is disabled until the operator completes server configuration.
+              </p>
+            )
+          ) : mode === 'standalone' ? (
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
                 <label htmlFor="password" className="block text-sm font-medium text-stone-300 mb-1">
@@ -141,14 +176,14 @@ const Login: React.FC = () => {
                 )}
               </button>
             </form>
-          )}
+          ) : null}
 
           <div className="mt-6 pt-6 border-t border-stone-700 text-center">
             <button
-              onClick={() => router.push('/setup')}
+              onClick={() => router.push('/')}
               className="text-sm text-stone-400 hover:text-stone-300 transition-colors"
             >
-              Back to Study Setup
+              Back home
             </button>
           </div>
         </div>

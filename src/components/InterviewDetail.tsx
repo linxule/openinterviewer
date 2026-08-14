@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useRouter } from 'next/navigation';
 import { StoredInterview } from '@/types';
@@ -30,11 +30,7 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId }) => {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'transcript' | 'analysis'>('transcript');
 
-  useEffect(() => {
-    loadInterview();
-  }, [interviewId]);
-
-  const loadInterview = async () => {
+  const loadInterview = useCallback(async () => {
     setLoading(true);
     try {
       const data = await getInterview(interviewId);
@@ -44,7 +40,11 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [interviewId]);
+
+  useEffect(() => {
+    void loadInterview();
+  }, [loadInterview]);
 
   const handleDownloadJSON = () => {
     if (!interview) return;

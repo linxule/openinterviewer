@@ -43,7 +43,9 @@ export interface AIProvider {
     studyConfig: StudyConfig,
     syntheses: SynthesisResult[],
     interviewCount: number
-  ): Promise<Omit<AggregateSynthesisResult, 'studyId' | 'interviewCount' | 'generatedAt'>>;
+  ): Promise<Omit<AggregateSynthesisResult,
+    'studyId' | 'studyRevision' | 'interviewIds' | 'interviewCount' | 'aiProvider' | 'aiModel' | 'generatedAt'
+  >>;
 
   generateFollowupStudy(
     parentConfig: StudyConfig,

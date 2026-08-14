@@ -57,7 +57,8 @@ export const DEMO_STORED_STUDY: StoredStudy = {
   createdAt: DEMO_STUDY_CONFIG.createdAt,
   updatedAt: Date.now() - 2 * 24 * 60 * 60 * 1000,
   interviewCount: 3,
-  isLocked: true
+  isLocked: true,
+  revision: 1
 };
 
 // ============================================
@@ -370,7 +371,11 @@ export const PRIYA_INTERVIEW: StoredInterview = {
 
 export const DEMO_AGGREGATE_SYNTHESIS: AggregateSynthesisResult = {
   studyId: DEMO_STUDY_ID,
+  studyRevision: 1,
+  interviewIds: ['demo-interview-1', 'demo-interview-2', 'demo-interview-3'],
   interviewCount: 3,
+  aiProvider: 'gemini',
+  aiModel: 'demo-scripted',
   commonThemes: [
     {
       theme: 'Role Evolution from Execution to Judgment',

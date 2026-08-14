@@ -11,14 +11,18 @@ import {
   QuestionProgress
 } from '@/types';
 
-// Helper to build headers with optional auth token
-const buildHeaders = (participantToken?: string | null): HeadersInit => {
-  const headers: HeadersInit = { 'Content-Type': 'application/json' };
-  if (participantToken) {
-    headers['Authorization'] = `Bearer ${participantToken}`;
-  }
-  return headers;
-};
+// Participant authority is a short-lived HttpOnly same-site cookie. Share-link
+// codes and session credentials are never exposed to this JavaScript service.
+const buildHeaders = (
+  researcherPreview = false,
+  participantSessionHandle?: string | null
+): HeadersInit => ({
+  'Content-Type': 'application/json',
+  ...(researcherPreview ? { 'X-OpenInterviewer-Preview': '1' } : {}),
+  ...(!researcherPreview && participantSessionHandle
+    ? { 'X-OpenInterviewer-Participant-Session': participantSessionHandle }
+    : {}),
+});
 
 // Generate AI interviewer response
 export const generateInterviewResponse = async (
@@ -27,12 +31,14 @@ export const generateInterviewResponse = async (
   participantProfile: ParticipantProfile | null,
   questionProgress: QuestionProgress,
   currentContext: string,
-  participantToken?: string | null
+  participantToken?: string | null,
+  researcherPreview = false,
+  participantSessionHandle?: string | null
 ): Promise<AIInterviewResponse> => {
   try {
     const response = await fetch('/api/interview', {
       method: 'POST',
-      headers: buildHeaders(participantToken),
+      headers: buildHeaders(researcherPreview, participantSessionHandle),
       body: JSON.stringify({
         history,
         studyConfig,
@@ -49,25 +55,21 @@ export const generateInterviewResponse = async (
     return await response.json();
   } catch (error) {
     console.error('Error generating interview response:', error);
-    return {
-      message: "I appreciate you sharing that. What else comes to mind?",
-      questionAddressed: null,
-      phaseTransition: null,
-      profileUpdates: [],
-      shouldConclude: false
-    };
+    throw error;
   }
 };
 
 // Get initial interview greeting
 export const getInterviewGreeting = async (
   studyConfig: StudyConfig,
-  participantToken?: string | null
+  participantToken?: string | null,
+  researcherPreview = false,
+  participantSessionHandle?: string | null
 ): Promise<string> => {
   try {
     const response = await fetch('/api/greeting', {
       method: 'POST',
-      headers: buildHeaders(participantToken),
+      headers: buildHeaders(researcherPreview, participantSessionHandle),
       body: JSON.stringify({ studyConfig })
     });
 
@@ -79,7 +81,7 @@ export const getInterviewGreeting = async (
     return data.greeting;
   } catch (error) {
     console.error('Error getting interview greeting:', error);
-    return `Thank you for participating in this study! I'm excited to learn from your experiences. We'll explore about ${studyConfig.coreQuestions.length} questions together. To get started, could you share a bit about yourself and your background?`;
+    throw error;
   }
 };
 
@@ -89,12 +91,14 @@ export const synthesizeInterview = async (
   studyConfig: StudyConfig,
   behaviorData: BehaviorData,
   participantProfile: ParticipantProfile | null,
-  participantToken?: string | null
+  participantToken?: string | null,
+  researcherPreview = false,
+  participantSessionHandle?: string | null
 ): Promise<SynthesisResult> => {
   try {
     const response = await fetch('/api/synthesis', {
       method: 'POST',
-      headers: buildHeaders(participantToken),
+      headers: buildHeaders(researcherPreview, participantSessionHandle),
       body: JSON.stringify({
         history,
         studyConfig,
@@ -110,14 +114,7 @@ export const synthesizeInterview = async (
     return await response.json();
   } catch (error) {
     console.error('Error synthesizing interview:', error);
-    return {
-      statedPreferences: [],
-      revealedPreferences: [],
-      themes: [],
-      contradictions: [],
-      keyInsights: ['Analysis pending...'],
-      bottomLine: 'Interview synthesis in progress.'
-    };
+    throw error;
   }
 };
 
@@ -146,7 +143,11 @@ export const generateParticipantLink = async (
 // Verify participant token
 export const verifyParticipantToken = async (
   token: string
-): Promise<{ valid: boolean; data?: StudyConfig }> => {
+): Promise<{
+  valid: boolean;
+  data?: { studyConfig: StudyConfig; sessionHandle: string };
+  error?: string;
+}> => {
   try {
     const response = await fetch(`/api/generate-link?token=${encodeURIComponent(token)}`);
     return await response.json();

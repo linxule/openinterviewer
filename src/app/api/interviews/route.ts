@@ -4,22 +4,18 @@
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
-import { getAllInterviews, getStudyInterviews, isKVAvailable } from '@/lib/kv';
+import { getAllInterviewsChecked, getStudyInterviewsChecked } from '@/lib/kv';
 import { getRequestContext } from '@/lib/researcherContext';
+import { configurationRequiredResponse } from '@/lib/researcherAccess';
 
 export async function GET(request: Request) {
   try {
-    const { authorized, context, error } = await getRequestContext();
+    const access = await getRequestContext();
+    const setupResponse = configurationRequiredResponse(access);
+    if (setupResponse) return setupResponse;
+    const { authorized, context, error } = access;
     if (!authorized || !context) {
       return NextResponse.json({ error: error || 'Unauthorized' }, { status: 401 });
-    }
-
-    const kvAvailable = await isKVAvailable(context.kvClient);
-    if (!kvAvailable) {
-      return NextResponse.json({
-        interviews: [],
-        warning: 'Storage not configured. Connect Vercel KV to enable persistence.'
-      });
     }
 
     // Check for studyId filter
@@ -27,16 +23,29 @@ export async function GET(request: Request) {
     const studyId = searchParams.get('studyId');
 
     // Get interviews (filtered by study or all)
-    const interviews = studyId
-      ? await getStudyInterviews(studyId, context.kvClient)
-      : await getAllInterviews(context.kvClient);
+    const loaded = studyId
+      ? await getStudyInterviewsChecked(studyId, context.kvClient, 1_000)
+      : await getAllInterviewsChecked(context.kvClient, 1_000);
 
-    return NextResponse.json({ interviews });
+    if (loaded.status === 'unavailable') {
+      return NextResponse.json(
+        { error: 'Interview storage is temporarily unavailable.', retryable: true },
+        { status: 503 }
+      );
+    }
+    if (loaded.status === 'too-large') {
+      return NextResponse.json(
+        { error: 'This interview list is too large to load at once. Narrow it by study.' },
+        { status: 413 }
+      );
+    }
+
+    return NextResponse.json({ interviews: loaded.items });
   } catch (error) {
     console.error('Interviews API error:', error);
     return NextResponse.json(
       { error: 'Failed to fetch interviews' },
-      { status: 500 }
+      { status: 503 }
     );
   }
 }

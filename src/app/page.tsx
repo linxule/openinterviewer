@@ -1,6 +1,5 @@
-import { redirect } from 'next/navigation'
+import Landing from '@/components/Landing';
 
 export default function Home() {
-  // Redirect to all studies list by default
-  redirect('/studies')
+  return <Landing />;
 }

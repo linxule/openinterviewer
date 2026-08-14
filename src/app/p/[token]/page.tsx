@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useStore } from '@/store';
-import { ParticipantToken } from '@/types';
+import { StudyConfig } from '@/types';
 import Consent from '@/components/Consent';
 import InterviewChat from '@/components/InterviewChat';
 import Synthesis from '@/components/Synthesis';
@@ -17,10 +17,7 @@ export default function ParticipantPage() {
 
   const {
     currentStep,
-    setStep,
-    setStudyConfig,
-    setViewMode,
-    setParticipantToken,
+    beginParticipantSession,
     studyConfig
   } = useStore();
 
@@ -47,14 +44,15 @@ export default function ParticipantPage() {
           return;
         }
 
-        const tokenData = result.data as ParticipantToken;
-
-        // Set the study config from token
-        setStudyConfig(tokenData.studyConfig);
-        setParticipantToken(token);
-        setViewMode('participant');
-        setStep('consent');
+        const tokenData = result.data as { studyConfig: StudyConfig; sessionHandle?: string };
+        if (!tokenData.sessionHandle) {
+          setError('The participant session could not be established');
+          setLoading(false);
+          return;
+        }
+        beginParticipantSession(tokenData.studyConfig, null, tokenData.sessionHandle);
         setLoading(false);
+        router.replace('/consent');
       } catch (err) {
         console.error('Error loading study from token:', err);
         setError('Failed to load study configuration');
@@ -63,7 +61,7 @@ export default function ParticipantPage() {
     };
 
     loadStudyFromToken();
-  }, [token]);
+  }, [token, beginParticipantSession, router]);
 
   // Loading state
   if (loading) {

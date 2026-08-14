@@ -1,6 +1,7 @@
 import { Suspense } from 'react';
 import StudySetup from '@/components/StudySetup';
 import { Loader2 } from 'lucide-react';
+import { enforceResearcherPageSetup } from '@/lib/researcherAccess';
 
 function SetupLoading() {
   return (
@@ -10,7 +11,8 @@ function SetupLoading() {
   );
 }
 
-export default function SetupPage() {
+export default async function SetupPage() {
+  await enforceResearcherPageSetup();
   return (
     <Suspense fallback={<SetupLoading />}>
       <StudySetup />

@@ -1,41 +1,50 @@
-// POST /api/generate-link - Generate participant link with signed JWT token
-// Creates a stateless URL that embeds the study configuration
-// Note: Token is signed (integrity) not encrypted — payload is base64-visible to anyone with the URL
-// Requires admin authentication to prevent unauthorized link generation
+// POST /api/generate-link - Generate an opaque participant share link.
+// GET exchanges the one-time URL credential for a short-lived HttpOnly session.
+// Requires admin authentication AND a canonically saved study: only the study id
+// is accepted from legacy studyConfig input, and the record is fetched server-side.
+// Participant access authority is re-checked server-side at request time.
 
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
-import * as jose from 'jose';
-import { StudyConfig, ParticipantToken, LinkExpirationOption } from '@/types';
-import { getRequestContext } from '@/lib/researcherContext';
+import { StudyConfig, LinkExpirationOption } from '@/types';
+import { getParticipantRequestContext, getRequestContext } from '@/lib/researcherContext';
+import { configurationRequiredResponse } from '@/lib/researcherAccess';
+import {
+  createParticipantSessionToken,
+  getParticipantSessionCookieOptions,
+  getParticipantSessionCookieName,
+  PARTICIPANT_SESSION_HEADER_NAME,
+} from '@/lib/auth';
+import { getStudyChecked } from '@/lib/kv';
 import { isHostedMode } from '@/lib/mode';
+import { consumePlatformRateLimit, getStudyOwnerChecked } from '@/lib/platformDb';
+import { createParticipantLinkRecord, getParticipantLinkByCode } from '@/lib/participantLinks';
+import { getAppBaseUrl } from '@/lib/appBaseUrl';
 
-// Convert link expiration option to jose expiration string
-const getExpirationTime = (option?: LinkExpirationOption): string | null => {
+const STUDY_ID_PATTERN = /^[a-zA-Z0-9-]+$/;
+
+const getExpirationTime = (option?: LinkExpirationOption): number | null => {
   switch (option) {
-    case '7days': return '7d';
-    case '30days': return '30d';
-    case '90days': return '90d';
-    case 'never':
-    default:
-      return null; // No expiration
+    case '7days': return Date.now() + 7 * 24 * 60 * 60 * 1000;
+    case '30days': return Date.now() + 30 * 24 * 60 * 60 * 1000;
+    case '90days': return Date.now() + 90 * 24 * 60 * 60 * 1000;
+    case 'never': return null;
+    default: return Date.now() + 30 * 24 * 60 * 60 * 1000;
   }
 };
 
-// Get signing secret from environment
-// Uses dedicated PARTICIPANT_TOKEN_SECRET if available, falls back to ADMIN_PASSWORD
-const getSecret = () => {
-  const secret = process.env.PARTICIPANT_TOKEN_SECRET || process.env.ADMIN_PASSWORD;
-  if (!secret) {
-    throw new Error('Token signing secret not configured');
-  }
-  return new TextEncoder().encode(secret);
-};
+function publicBaseUrl(request: Request): string {
+  if (process.env.APP_BASE_URL || process.env.NODE_ENV === 'production') return getAppBaseUrl();
+  return new URL(request.url).origin;
+}
 
 export async function POST(request: Request) {
   try {
-    const { authorized, context, researcherId, error } = await getRequestContext();
+    const access = await getRequestContext();
+    const setupResponse = configurationRequiredResponse(access);
+    if (setupResponse) return setupResponse;
+    const { authorized, context, researcherId, error } = access;
     if (!authorized || !context) {
       return NextResponse.json(
         { error: error || 'Admin authentication required to generate participant links' },
@@ -43,63 +52,90 @@ export async function POST(request: Request) {
       );
     }
 
-    // Verify secret is configured
-    let secret: Uint8Array;
-    try {
-      secret = getSecret();
-    } catch {
-      return NextResponse.json(
-        { error: 'Token signing not configured. Set ADMIN_PASSWORD or PARTICIPANT_TOKEN_SECRET.' },
-        { status: 500 }
-      );
-    }
-
     const body = await request.json();
-    const { studyConfig } = body as { studyConfig: StudyConfig };
+    const { studyConfig } = body as { studyConfig?: Partial<StudyConfig> };
 
-    // Validate required fields
-    if (!studyConfig) {
+    // Accept only the study id from legacy studyConfig input
+    const studyId = typeof studyConfig?.id === 'string' ? studyConfig.id : '';
+    if (!studyId || !STUDY_ID_PATTERN.test(studyId)) {
       return NextResponse.json(
-        { error: 'Missing required field: studyConfig' },
+        { error: 'Missing or invalid study ID' },
         { status: 400 }
       );
     }
 
-    // Get expiration time from study config
-    const expirationTime = getExpirationTime(studyConfig.linkExpiration);
-
-    // Create token payload
-    const tokenData: ParticipantToken = {
-      studyId: studyConfig.id,
-      studyConfig,
-      createdAt: Date.now(),
-      // Store expiration info for display purposes
-      ...(expirationTime && { expiresAt: Date.now() + (expirationTime === '7d' ? 7 : expirationTime === '30d' ? 30 : 90) * 24 * 60 * 60 * 1000 }),
-      // In hosted mode, embed researcherId so participant requests can resolve the correct researcher
-      ...(isHostedMode() && researcherId && { researcherId }),
-    };
-
-    // Sign the token (with or without expiration)
-    let jwtBuilder = new jose.SignJWT(tokenData as unknown as jose.JWTPayload)
-      .setProtectedHeader({ alg: 'HS256' })
-      .setIssuedAt();
-
-    // Only set expiration if configured
-    if (expirationTime) {
-      jwtBuilder = jwtBuilder.setExpirationTime(expirationTime);
+    // Mint links only for canonically saved studies
+    const loaded = await getStudyChecked(studyId, context.kvClient);
+    if (loaded.status === 'unavailable') {
+      return NextResponse.json(
+        { error: 'Study storage is temporarily unavailable. Please try again.', retryable: true },
+        { status: 503 }
+      );
+    }
+    if (loaded.status === 'not-found') {
+      return NextResponse.json(
+        { error: 'Study not found. Save the study before generating a participant link.' },
+        { status: 404 }
+      );
     }
 
-    const token = await jwtBuilder.sign(secret);
+    const savedConfig = loaded.study.config;
+    if (savedConfig.linksEnabled === false) {
+      return NextResponse.json(
+        { error: 'Participant links are disabled for this study.' },
+        { status: 409 }
+      );
+    }
 
-    // Build the full URL
-    const baseUrl = process.env.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL}`
-      : process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
+    if (isHostedMode()) {
+      if (!researcherId) {
+        return NextResponse.json({ error: 'Researcher identity is required.' }, { status: 401 });
+      }
+      const rateLimit = await consumePlatformRateLimit(
+        'participant-link-create',
+        researcherId,
+        200,
+        3_600
+      );
+      if (rateLimit.status === 'unavailable') {
+        return NextResponse.json({ error: 'Participant link service is unavailable.' }, { status: 503 });
+      }
+      if (rateLimit.status === 'limited') {
+        return NextResponse.json(
+          { error: 'Too many participant links created. Try again later.' },
+          { status: 429, headers: { 'Retry-After': String(rateLimit.retryAfterSeconds) } }
+        );
+      }
+      const owner = await getStudyOwnerChecked(studyId);
+      if (owner.status === 'unavailable') {
+        return NextResponse.json({ error: 'Unable to verify study ownership.', retryable: true }, { status: 503 });
+      }
+      if (owner.status !== 'found' || owner.researcherId !== researcherId) {
+        return NextResponse.json({ error: 'Study ownership is not registered for this researcher.' }, { status: 409 });
+      }
+    }
 
-    const participantUrl = `${baseUrl}/p/${token}`;
+    const created = await createParticipantLinkRecord({
+      studyId,
+      studyRevision: loaded.study.revision ?? 1,
+      researcherId: isHostedMode() ? (researcherId ?? null) : null,
+      expiresAt: getExpirationTime(savedConfig.linkExpiration),
+      standaloneClient: context.kvClient,
+    });
+    if (created.status === 'quota-exceeded') {
+      return NextResponse.json(
+        { error: 'Participant link quota reached. Reuse existing links or wait for expired links to be pruned.' },
+        { status: 409 }
+      );
+    }
+    if (created.status !== 'created') {
+      return NextResponse.json({ error: 'Unable to create participant link.', retryable: true }, { status: 503 });
+    }
+
+    const participantUrl = `${publicBaseUrl(request)}/p/${created.code}`;
 
     return NextResponse.json({
-      token,
+      token: created.code,
       url: participantUrl
     });
   } catch (error) {
@@ -117,46 +153,59 @@ export async function POST(request: Request) {
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const token = searchParams.get('token');
+    const code = searchParams.get('token');
 
-    if (!token) {
+    if (!code) {
       return NextResponse.json(
         { error: 'Missing token parameter' },
         { status: 400 }
       );
     }
 
-    // Get secret for verification
-    let secret: Uint8Array;
-    try {
-      secret = getSecret();
-    } catch {
-      return NextResponse.json(
-        { valid: false, error: 'Token verification not configured' },
-        { status: 500 }
-      );
+    const loaded = await getParticipantLinkByCode(code);
+    if (loaded.status === 'unavailable') {
+      return NextResponse.json({ valid: false, error: 'Unable to verify participant link.', retryable: true }, { status: 503 });
+    }
+    if (loaded.status !== 'found') {
+      return NextResponse.json({ valid: false, error: 'This participant link is invalid, expired, or revoked.' }, { status: 403 });
     }
 
-    // Verify and decode the token (jose.jwtVerify checks expiration automatically)
-    const { payload } = await jose.jwtVerify(token, secret);
-
-    // Strip internal fields not needed by participants
-    const { researcherId: _rid, ...safePayload } = payload as unknown as ParticipantToken & { researcherId?: string };
-
-    return NextResponse.json({
-      valid: true,
-      data: safePayload as ParticipantToken
+    const sessionHandle = crypto.randomUUID();
+    const sessionToken = await createParticipantSessionToken(loaded.link, sessionHandle);
+    const sessionCookieName = getParticipantSessionCookieName(sessionHandle);
+    const liveRequest = new Request(request.url, {
+      headers: {
+        Cookie: `${sessionCookieName}=${sessionToken}`,
+        [PARTICIPANT_SESSION_HEADER_NAME]: sessionHandle,
+      },
     });
-  } catch (error) {
-    // Handle expired tokens specifically
-    if (error instanceof jose.errors.JWTExpired) {
+    const live = await getParticipantRequestContext(liveRequest);
+    if (!live.valid) {
       return NextResponse.json(
-        { valid: false, error: 'Token has expired. Please request a new participant link.' },
-        { status: 400 }
+        { valid: false, error: live.error || 'Participant link is no longer active', retryable: live.retryable },
+        { status: live.statusCode ?? 403 }
       );
     }
 
-    console.error('Token verification error:', error);
+    if (!live.study) {
+      return NextResponse.json({ valid: false, error: 'Study is no longer active.' }, { status: 403 });
+    }
+
+    const response = NextResponse.json({
+      valid: true,
+      data: { studyConfig: live.study.config, sessionHandle },
+    });
+    const remainingSeconds = loaded.link.expiresAt
+      ? Math.min(4 * 60 * 60, Math.max(1, Math.floor((loaded.link.expiresAt - Date.now()) / 1000)))
+      : undefined;
+    response.cookies.set(
+      sessionCookieName,
+      sessionToken,
+      getParticipantSessionCookieOptions(remainingSeconds)
+    );
+    return response;
+  } catch (error) {
+    console.error('Participant link exchange error:', error);
     return NextResponse.json(
       { valid: false, error: 'Invalid or expired token' },
       { status: 400 }

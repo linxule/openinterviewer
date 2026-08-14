@@ -7,12 +7,19 @@ export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { getInterviewProvider } from '@/lib/providers';
 import { getRequestContext } from '@/lib/researcherContext';
-import { getStudy, getStudyInterviews, isKVAvailable } from '@/lib/kv';
+import { configurationRequiredResponse } from '@/lib/researcherAccess';
+import { getStudy, getStudyInterviewsChecked, isKVAvailable } from '@/lib/kv';
+import { providerErrorResponse } from '@/lib/providerErrors';
+import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
 import { AggregateSynthesisResult, SynthesisResult } from '@/types';
+import { readBoundedJsonObject } from '@/lib/requestBody';
 
 export async function POST(request: Request) {
   try {
-    const { authorized, context, error } = await getRequestContext();
+    const access = await getRequestContext();
+    const setupResponse = configurationRequiredResponse(access);
+    if (setupResponse) return setupResponse;
+    const { authorized, context, error } = access;
     if (!authorized || !context) {
       return NextResponse.json({ error: error || 'Unauthorized' }, { status: 401 });
     }
@@ -25,9 +32,16 @@ export async function POST(request: Request) {
       );
     }
 
-    // Parse request body
-    const body = await request.json();
-    const { studyId } = body as { studyId: string };
+    const parsedBody = await readBoundedJsonObject(request, 4_096);
+    if (!parsedBody.ok) {
+      return NextResponse.json(
+        { error: parsedBody.status === 413 ? 'Aggregate request is too large.' : 'Invalid aggregate request.' },
+        { status: parsedBody.status }
+      );
+    }
+    const studyId = typeof parsedBody.value.studyId === 'string'
+      ? parsedBody.value.studyId
+      : '';
 
     if (!studyId) {
       return NextResponse.json(
@@ -46,25 +60,45 @@ export async function POST(request: Request) {
     }
 
     // Fetch all interviews for this study
-    const interviews = await getStudyInterviews(studyId, context.kvClient);
-    if (interviews.length < 2) {
+    const loadedInterviews = await getStudyInterviewsChecked(studyId, context.kvClient, 1_000);
+    if (loadedInterviews.status === 'unavailable') {
       return NextResponse.json(
-        { error: 'Need at least 2 interviews to generate aggregate synthesis' },
+        { error: 'Interview storage is temporarily unavailable.', retryable: true },
+        { status: 503 }
+      );
+    }
+    if (loadedInterviews.status === 'too-large') {
+      return NextResponse.json(
+        { error: 'This study has too many interviews for an interactive aggregate analysis.' },
+        { status: 413 }
+      );
+    }
+    const interviews = loadedInterviews.items;
+    const currentRevisionInterviews = interviews.filter(
+      interview => interview.studyRevision === study.revision && interview.synthesis
+    );
+
+    if (currentRevisionInterviews.length < 2) {
+      return NextResponse.json(
+        {
+          error: 'Need at least 2 completed interviews from the current study revision',
+          studyRevision: study.revision,
+          eligibleInterviewCount: currentRevisionInterviews.length,
+        },
         { status: 400 }
       );
     }
 
-    // Extract synthesis results from interviews
-    const syntheses: SynthesisResult[] = interviews
-      .filter(interview => interview.synthesis)
-      .map(interview => interview.synthesis!);
+    const syntheses: SynthesisResult[] = currentRevisionInterviews.map(
+      interview => interview.synthesis!
+    );
 
-    if (syntheses.length < 2) {
-      return NextResponse.json(
-        { error: 'Need at least 2 interviews with synthesis results' },
-        { status: 400 }
-      );
-    }
+    const platformLimited = await hostedAiRateLimitResponse(
+      request,
+      'aggregate',
+      { researcherId: context.researcherId }
+    );
+    if (platformLimited) return platformLimited;
 
     // Get the configured AI provider with researcher's API keys
     const provider = getInterviewProvider(study.config, {
@@ -73,16 +107,25 @@ export async function POST(request: Request) {
     });
 
     // Generate aggregate synthesis
-    const aggregateResult = await provider.synthesizeAggregate(
-      study.config,
-      syntheses,
-      interviews.length
-    );
+    let aggregateResult;
+    try {
+      aggregateResult = await provider.synthesizeAggregate(
+        study.config,
+        syntheses,
+        currentRevisionInterviews.length
+      );
+    } catch (providerError) {
+      return providerErrorResponse(providerError);
+    }
 
     // Build full result with metadata
     const fullResult: AggregateSynthesisResult = {
       studyId,
-      interviewCount: interviews.length,
+      studyRevision: study.revision,
+      interviewIds: currentRevisionInterviews.map(interview => interview.id),
+      interviewCount: currentRevisionInterviews.length,
+      aiProvider: study.config.aiProvider ?? 'gemini',
+      aiModel: study.config.aiModel ?? 'default',
       ...aggregateResult,
       generatedAt: Date.now()
     };

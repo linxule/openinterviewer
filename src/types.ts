@@ -142,6 +142,7 @@ export interface SynthesisResult {
   contradictions: string[];
   keyInsights: string[];
   bottomLine: string;
+  _receipt?: string;
 }
 
 // ============================================
@@ -155,7 +156,7 @@ export type AppStep =
   | 'synthesis'    // Analysis results
   | 'export';      // Export data
 
-export type ViewMode = 'researcher' | 'participant';
+export type ViewMode = 'researcher' | 'participant' | 'preview';
 
 export interface ContextEntry {
   id: string;
@@ -195,6 +196,12 @@ export interface StoredInterview {
   createdAt: number;
   completedAt: number;
   status: 'in_progress' | 'completed';
+  studyRevision?: number;
+  consentHash?: string;
+  consentAcceptedAt?: number;
+  aiProvider?: AIProviderType;
+  aiModel?: string;
+  participantLinkId?: string;
 }
 
 // ============================================
@@ -231,6 +238,9 @@ export interface ResearcherAccount {
   encryptedAnthropicApiKey: string | null;
 
   redisConfiguredAt: number | null;
+  // Monotonic CAS value for credential/onboarding lifecycle mutations.
+  // Accounts created before this field existed are treated as revision 0.
+  credentialRevision?: number;
 }
 
 // Safe subset for client-side display
@@ -256,6 +266,7 @@ export interface StoredStudy {
   updatedAt: number;
   interviewCount: number;        // Cached count for dashboard display
   isLocked: boolean;             // True after first interview collected
+  revision: number;              // Monotonic config/link-status revision
 }
 
 // ============================================
@@ -264,7 +275,11 @@ export interface StoredStudy {
 
 export interface AggregateSynthesisResult {
   studyId: string;
+  studyRevision: number;
+  interviewIds: string[];
   interviewCount: number;
+  aiProvider: AIProviderType;
+  aiModel: string;
   commonThemes: { theme: string; frequency: number; representativeQuotes: string[] }[];
   divergentViews: { topic: string; viewA: string; viewB: string }[];
   keyFindings: string[];

@@ -1,10 +1,19 @@
 // POST /api/interview - Generate AI interview response
 // Server-side only - API keys never sent to client
 // Requires valid participant token to prevent quota abuse
+// Provider/model/prompts always come from the canonical saved study loaded
+// server-side; request bodies carry only conversation/progress payloads.
 
 import { NextResponse } from 'next/server';
 import { getInterviewProvider } from '@/lib/providers';
 import { getParticipantRequestContext } from '@/lib/researcherContext';
+import { loadCanonicalStudy } from '@/lib/canonicalStudy';
+import { providerErrorResponse } from '@/lib/providerErrors';
+import { participantRateLimitResponse } from '@/lib/rateLimit';
+import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
+import { validateProfile, validateTranscript } from '@/lib/interviewSubmission';
+import { verifyParticipantConsent } from '@/lib/participantConsent';
+import { readBoundedJsonObject } from '@/lib/requestBody';
 import {
   StudyConfig,
   ParticipantProfile,
@@ -15,80 +24,150 @@ import {
 // Payload size limits to prevent abuse
 const MAX_HISTORY_MESSAGES = 100;
 const MAX_CONTEXT_LENGTH = 10000;
-const MAX_MESSAGE_LENGTH = 5000;
 
 export async function POST(request: Request) {
   try {
     // Verify participant token and resolve researcher context
-    const { valid, context, studyId, isAdmin, error } = await getParticipantRequestContext(request);
+    const { valid, context, studyId, isAdmin, error, statusCode, linkId, participantSessionId } = await getParticipantRequestContext(request);
     if (!valid || !context) {
       return NextResponse.json(
         { error: error || 'Valid participant token required' },
-        { status: 401 }
+        { status: statusCode ?? 401 }
       );
     }
 
-    const body = await request.json();
+    const parsedBody = await readBoundedJsonObject(request, 600_000);
+    if (!parsedBody.ok) {
+      return NextResponse.json(
+        { error: parsedBody.status === 413 ? 'Interview request is too large.' : 'Interview request is malformed.' },
+        { status: parsedBody.status }
+      );
+    }
+    const body = parsedBody.value;
     let {
       history,
-      studyConfig,
       participantProfile,
       questionProgress,
       currentContext
     } = body as {
       history: InterviewMessage[];
-      studyConfig: StudyConfig;
+      studyConfig?: StudyConfig; // Legacy display payload — never authoritative
       participantProfile: ParticipantProfile | null;
       questionProgress: QuestionProgress;
       currentContext: string;
     };
 
     // Validate required fields
-    if (!history || !studyConfig || !questionProgress) {
+    if (!history || !questionProgress) {
       return NextResponse.json(
-        { error: 'Missing required fields: history, studyConfig, questionProgress' },
+        { error: 'Missing required fields: history, questionProgress' },
         { status: 400 }
       );
     }
 
-    // Apply payload size limits
-    history = history.slice(-MAX_HISTORY_MESSAGES).map(msg => ({
-      ...msg,
-      content: msg.content?.slice(0, MAX_MESSAGE_LENGTH) || ''
-    }));
-    currentContext = (currentContext || '').slice(0, MAX_CONTEXT_LENGTH);
-    if (participantProfile?.rawContext) {
-      participantProfile = {
-        ...participantProfile,
-        rawContext: participantProfile.rawContext.slice(0, MAX_CONTEXT_LENGTH)
-      };
+    try {
+      history = validateTranscript(history).slice(-MAX_HISTORY_MESSAGES);
+      participantProfile = validateProfile(participantProfile);
+      if (typeof currentContext !== 'string' || currentContext.length > MAX_CONTEXT_LENGTH) {
+        throw new Error('invalid context');
+      }
+      if (
+        !questionProgress
+        || !Array.isArray(questionProgress.questionsAsked)
+        || questionProgress.questionsAsked.length > 200
+        || !questionProgress.questionsAsked.every(index => Number.isInteger(index) && index >= 0)
+        || typeof questionProgress.total !== 'number'
+        || typeof questionProgress.isComplete !== 'boolean'
+      ) {
+        throw new Error('invalid progress');
+      }
+    } catch {
+      return NextResponse.json({ error: 'Interview request is malformed or exceeds allowed limits.' }, { status: 400 });
     }
 
-    // Verify token's studyId matches the requested study (prevents token reuse across studies)
-    // Skip for admin users (researchers previewing their studies)
-    if (!isAdmin && studyId && studyConfig.id && studyId !== studyConfig.id) {
+    // Canonical study authority: the token's studyId wins; the body may carry
+    // only a study id for authenticated admin previews.
+    const canonical = await loadCanonicalStudy({
+      kvClient: context.kvClient,
+      tokenStudyId: studyId,
+      legacyBodyStudyId: (body as { studyConfig?: StudyConfig }).studyConfig?.id,
+      isAdmin,
+    });
+    if (!canonical.ok) {
+      return canonical.response;
+    }
+
+    if (!isAdmin) {
+      if (!participantSessionId) {
+        return NextResponse.json({ error: 'Participant session authority is incomplete.' }, { status: 401 });
+      }
+      const consent = await verifyParticipantConsent(
+        {
+          participantSessionId,
+          studyId: canonical.study.id,
+          studyRevision: canonical.study.revision ?? 1,
+          consentText: canonical.study.config.consentText || '',
+        },
+        context.kvClient
+      );
+      if (consent.status === 'unavailable') {
+        return NextResponse.json(
+          { error: 'Unable to verify participant consent. Please try again.', retryable: true },
+          { status: 503 }
+        );
+      }
+      if (consent.status !== 'accepted') {
+        return NextResponse.json(
+          { error: 'Participant consent is required before continuing the interview.', code: 'CONSENT_REQUIRED' },
+          { status: 428 }
+        );
+      }
+
+      const limited = await participantRateLimitResponse(
+        request,
+        canonical.study.id,
+        'interview',
+        context.kvClient,
+        { sessionId: participantSessionId, linkId, researcherId: context.researcherId }
+      );
+      if (limited) return limited;
+    }
+
+    const platformLimited = await hostedAiRateLimitResponse(
+      request,
+      'interview',
+      {
+        researcherId: context.researcherId,
+        participantSessionId: isAdmin ? undefined : participantSessionId,
+      }
+    );
+    if (platformLimited) return platformLimited;
+
+    let provider;
+    try {
+      provider = getInterviewProvider(canonical.study.config, {
+        geminiApiKey: context.geminiApiKey,
+        anthropicApiKey: context.anthropicApiKey,
+      });
+    } catch {
       return NextResponse.json(
-        { error: 'Token not valid for this study' },
-        { status: 403 }
+        { error: 'AI provider is not configured on the server.' },
+        { status: 502 }
       );
     }
 
-    // Get the configured AI provider with researcher's API keys
-    const provider = getInterviewProvider(studyConfig, {
-      geminiApiKey: context.geminiApiKey,
-      anthropicApiKey: context.anthropicApiKey,
-    });
-
-    // Generate response using the provider
-    const result = await provider.generateInterviewResponse(
-      history,
-      studyConfig,
-      participantProfile,
-      questionProgress,
-      currentContext
-    );
-
-    return NextResponse.json(result);
+    try {
+      const result = await provider.generateInterviewResponse(
+        history,
+        canonical.study.config,
+        participantProfile,
+        questionProgress,
+        currentContext
+      );
+      return NextResponse.json(result);
+    } catch (providerError) {
+      return providerErrorResponse(providerError);
+    }
   } catch (error) {
     console.error('Interview API error:', error);
     return NextResponse.json(

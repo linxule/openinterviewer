@@ -5,7 +5,7 @@ import { motion } from 'framer-motion';
 import { useRouter } from 'next/navigation';
 import {
   Database, Key, CheckCircle, XCircle, Loader2,
-  AlertCircle, ExternalLink, ArrowLeft, Save, ChevronDown, ChevronUp
+  AlertCircle, ExternalLink, ArrowLeft, ChevronDown, ChevronUp, Trash2, RotateCw
 } from 'lucide-react';
 
 interface ResearcherProfile {
@@ -15,6 +15,7 @@ interface ResearcherProfile {
   hasRedisConfigured: boolean;
   hasGeminiKey: boolean;
   hasAnthropicKey: boolean;
+  onboardingComplete: boolean;
 }
 
 interface ValidationState {
@@ -26,6 +27,7 @@ interface ValidationState {
 const Settings: React.FC = () => {
   const router = useRouter();
   const [profile, setProfile] = useState<ResearcherProfile | null>(null);
+  const [mode, setMode] = useState<'hosted' | 'standalone' | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Form state
@@ -42,6 +44,8 @@ const Settings: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [lifecycleBusy, setLifecycleBusy] = useState<string | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState('');
 
   // Expandable guide state
   const [geminiGuideOpen, setGeminiGuideOpen] = useState(false);
@@ -49,14 +53,26 @@ const Settings: React.FC = () => {
   const [redisGuideOpen, setRedisGuideOpen] = useState(false);
 
   useEffect(() => {
-    fetch('/api/auth/me')
+    fetch('/api/config/readiness')
       .then(res => res.json())
-      .then(data => {
-        if (data.profile) setProfile(data.profile);
-        setLoading(false);
+      .then(async data => {
+        const deploymentMode = data.mode === 'hosted' ? 'hosted' : 'standalone';
+        setMode(deploymentMode);
+        if (deploymentMode === 'hosted') {
+          const profileResponse = await fetch('/api/auth/me');
+          const profileData = await profileResponse.json();
+          if (profileData.profile) setProfile(profileData.profile);
+        }
       })
-      .catch(() => setLoading(false));
+      .catch(() => setMode(null))
+      .finally(() => setLoading(false));
   }, []);
+
+  const refreshProfile = async () => {
+    const response = await fetch('/api/auth/me', { cache: 'no-store' });
+    const data = await response.json();
+    if (data.profile) setProfile(data.profile);
+  };
 
   const validateAiKey = async (provider: 'gemini' | 'claude', apiKey: string) => {
     const setValidation = provider === 'gemini' ? setGeminiValidation : setAnthropicValidation;
@@ -120,9 +136,7 @@ const Settings: React.FC = () => {
       if (res.ok) {
         setSaveSuccess(true);
         // Refresh profile
-        const meRes = await fetch('/api/auth/me');
-        const meData = await meRes.json();
-        if (meData.profile) setProfile(meData.profile);
+        await refreshProfile();
         // Clear form fields
         setGeminiKey('');
         setAnthropicKey('');
@@ -137,6 +151,51 @@ const Settings: React.FC = () => {
       setSaveError('Connection error. Please try again.');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const clearCredential = async (
+    target: 'gemini' | 'anthropic' | 'redis' | 'all',
+    label: string
+  ) => {
+    if (!window.confirm(`Clear ${label}? Active studies that depend on it may stop working.`)) return;
+    setLifecycleBusy(target);
+    setSaveError(null);
+    setSaveSuccess(false);
+    try {
+      const response = await fetch('/api/account/credentials', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Failed to clear credential');
+      await refreshProfile();
+      setSaveSuccess(true);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Failed to clear credential');
+    } finally {
+      setLifecycleBusy(null);
+    }
+  };
+
+  const deleteAccount = async () => {
+    if (!profile || deleteConfirmation.trim().toLowerCase() !== profile.email.toLowerCase()) return;
+    setLifecycleBusy('account');
+    setSaveError(null);
+    try {
+      const response = await fetch('/api/account', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmation: deleteConfirmation }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Failed to delete account');
+      router.replace('/');
+      router.refresh();
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Failed to delete account');
+      setLifecycleBusy(null);
     }
   };
 
@@ -160,8 +219,57 @@ const Settings: React.FC = () => {
     );
   }
 
+  if (mode === 'standalone') {
+    return (
+      <div className="min-h-screen bg-stone-900 p-4 sm:p-8">
+        <div className="max-w-2xl mx-auto">
+          <div className="flex items-center gap-3 mb-8">
+            <button
+              onClick={() => router.push('/studies')}
+              className="p-2 hover:bg-stone-800 rounded-lg transition-colors"
+              aria-label="Back to studies"
+            >
+              <ArrowLeft size={20} className="text-stone-400" />
+            </button>
+            <div>
+              <h1 className="text-2xl font-bold text-white">Self-hosted settings</h1>
+              <p className="text-stone-400 text-sm">This instance is configured by its operator.</p>
+            </div>
+          </div>
+          <div className="bg-stone-800/50 rounded-xl border border-stone-700 p-6 space-y-4">
+            <p className="text-stone-300 leading-relaxed">
+              API keys, Redis credentials, and signing secrets are read from this deployment&apos;s
+              environment. They cannot be viewed or changed in the browser.
+            </p>
+            <p className="text-stone-400 text-sm">
+              Run <code className="text-stone-200">npm run setup:check</code> from the project directory,
+              then update the named variables in your hosting environment and redeploy.
+            </p>
+            <div className="flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={() => router.push('/self-host')}
+                className="px-4 py-2 bg-stone-700 hover:bg-stone-600 text-white rounded-lg"
+              >
+                Open self-host guide
+              </button>
+              <a
+                href="/api/health/ready"
+                target="_blank"
+                rel="noreferrer"
+                className="px-4 py-2 border border-stone-600 text-stone-300 rounded-lg hover:bg-stone-800"
+              >
+                View readiness status
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-stone-900 p-8">
+    <div className="min-h-screen bg-stone-900 p-4 sm:p-8">
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -171,6 +279,7 @@ const Settings: React.FC = () => {
           <button
             onClick={() => router.push('/studies')}
             className="p-2 hover:bg-stone-800 rounded-lg transition-colors"
+            aria-label="Back to studies"
           >
             <ArrowLeft size={20} className="text-stone-400" />
           </button>
@@ -186,7 +295,7 @@ const Settings: React.FC = () => {
         {profile && (
           <div className="bg-stone-800/50 rounded-xl border border-stone-700 p-6 mb-6">
             <h2 className="text-lg font-semibold text-white mb-4">Current Status</h2>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
               <div className="flex items-center gap-2">
                 <StatusIcon configured={profile.hasGeminiKey} />
                 <span className="text-stone-300 text-sm">Gemini Key</span>
@@ -203,6 +312,33 @@ const Settings: React.FC = () => {
           </div>
         )}
 
+        {profile && !profile.onboardingComplete && (
+          <div className="flex flex-col items-start gap-3 p-4 mb-6 bg-amber-500/10 border border-amber-500/30 rounded-xl sm:flex-row sm:items-center">
+            <AlertCircle size={18} className="text-amber-300 flex-shrink-0" />
+            <p className="text-amber-100/80 text-sm flex-1">
+              Storage and at least one valid AI key are required before studies can run.
+            </p>
+            <button
+              type="button"
+              onClick={() => router.push('/onboarding')}
+              className="text-sm text-amber-100 underline underline-offset-2"
+            >Finish setup</button>
+          </div>
+        )}
+
+        <div className="bg-blue-500/5 rounded-xl border border-blue-400/20 p-5 mb-6 text-sm text-stone-300 leading-relaxed">
+          <p className="font-medium text-stone-100 mb-2">How hosted BYOS credentials are handled</p>
+          <p>
+            OpenInterviewer stores your Redis and AI credentials encrypted in the platform database.
+            The hosted server decrypts them in memory when connecting on your behalf, and the app operator
+            controls the encryption keys and therefore can technically decrypt stored values. The service can
+            read and write your supplied Redis database; participant interview content is sent to the AI provider
+            selected for a study. Secrets are never returned to this page. Rotate a credential by entering its
+            replacement below, clear it here to disconnect the app, and rotate it at the provider to revoke access
+            completely.
+          </p>
+        </div>
+
         {/* AI API Keys */}
         <div className="bg-stone-800/50 rounded-xl border border-stone-700 p-6 mb-6">
           <div className="flex items-center gap-2 mb-4">
@@ -216,21 +352,32 @@ const Settings: React.FC = () => {
           <div className="space-y-4">
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className="text-sm font-medium text-stone-300">Gemini API Key</label>
-                <ValidationBadge state={geminiValidation} />
+                <label htmlFor="settings-gemini-key" className="text-sm font-medium text-stone-300">Gemini API Key</label>
+                <div className="flex items-center gap-2">
+                  <ValidationBadge state={geminiValidation} />
+                  {profile?.hasGeminiKey && (
+                    <button
+                      type="button"
+                      onClick={() => clearCredential('gemini', 'the Gemini key')}
+                      disabled={!!lifecycleBusy}
+                      className="text-xs text-red-300 hover:text-red-200 disabled:opacity-50"
+                    >Clear</button>
+                  )}
+                </div>
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-col gap-2 sm:flex-row">
                 <input
+                  id="settings-gemini-key"
                   type="password"
                   value={geminiKey}
                   onChange={(e) => { setGeminiKey(e.target.value); setGeminiValidation({ loading: false, valid: null, error: null }); }}
                   placeholder={profile?.hasGeminiKey ? '(currently set)' : 'AIza...'}
-                  className="flex-1 px-3 py-2 rounded-lg bg-stone-800 border border-stone-600 text-stone-100 placeholder-stone-500 text-sm focus:outline-none focus:ring-2 focus:ring-stone-500"
+                  className="min-w-0 flex-1 px-3 py-2 rounded-lg bg-stone-800 border border-stone-600 text-stone-100 placeholder-stone-500 text-sm focus:outline-none focus:ring-2 focus:ring-stone-500"
                 />
                 <button
                   onClick={() => validateAiKey('gemini', geminiKey)}
                   disabled={!geminiKey || geminiValidation.loading}
-                  className="px-3 py-2 bg-stone-700 hover:bg-stone-600 disabled:opacity-50 text-stone-300 text-sm rounded-lg transition-colors"
+                  className="px-3 py-2 bg-stone-700 hover:bg-stone-600 disabled:opacity-50 text-stone-300 text-sm rounded-lg transition-colors sm:self-auto"
                 >
                   Test
                 </button>
@@ -251,7 +398,7 @@ const Settings: React.FC = () => {
                   <div className="mt-2 p-3 bg-stone-800/30 border border-stone-600 rounded-lg text-xs space-y-2">
                     <ol className="list-decimal list-inside space-y-1 text-stone-300">
                       <li>Go to <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="text-stone-400 hover:text-stone-300 underline">aistudio.google.com/apikey</a></li>
-                      <li>Sign in and click "Create API key"</li>
+                      <li>Sign in and click &quot;Create API key&quot;</li>
                       <li>Copy the key (starts with AIza)</li>
                     </ol>
                     <div className="flex items-start gap-1.5 text-stone-400 mt-2">
@@ -265,16 +412,27 @@ const Settings: React.FC = () => {
 
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className="text-sm font-medium text-stone-300">Claude API Key</label>
-                <ValidationBadge state={anthropicValidation} />
+                <label htmlFor="settings-claude-key" className="text-sm font-medium text-stone-300">Claude API Key</label>
+                <div className="flex items-center gap-2">
+                  <ValidationBadge state={anthropicValidation} />
+                  {profile?.hasAnthropicKey && (
+                    <button
+                      type="button"
+                      onClick={() => clearCredential('anthropic', 'the Claude key')}
+                      disabled={!!lifecycleBusy}
+                      className="text-xs text-red-300 hover:text-red-200 disabled:opacity-50"
+                    >Clear</button>
+                  )}
+                </div>
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-col gap-2 sm:flex-row">
                 <input
+                  id="settings-claude-key"
                   type="password"
                   value={anthropicKey}
                   onChange={(e) => { setAnthropicKey(e.target.value); setAnthropicValidation({ loading: false, valid: null, error: null }); }}
                   placeholder={profile?.hasAnthropicKey ? '(currently set)' : 'sk-ant-...'}
-                  className="flex-1 px-3 py-2 rounded-lg bg-stone-800 border border-stone-600 text-stone-100 placeholder-stone-500 text-sm focus:outline-none focus:ring-2 focus:ring-stone-500"
+                  className="min-w-0 flex-1 px-3 py-2 rounded-lg bg-stone-800 border border-stone-600 text-stone-100 placeholder-stone-500 text-sm focus:outline-none focus:ring-2 focus:ring-stone-500"
                 />
                 <button
                   onClick={() => validateAiKey('claude', anthropicKey)}
@@ -319,16 +477,26 @@ const Settings: React.FC = () => {
           <div className="flex items-center gap-2 mb-4">
             <Database size={18} className="text-stone-400" />
             <h2 className="text-lg font-semibold text-white">Upstash Redis Storage</h2>
+            {profile?.hasRedisConfigured && (
+              <button
+                type="button"
+                onClick={() => clearCredential('redis', 'the Redis connection')}
+                disabled={!!lifecycleBusy}
+                className="ml-auto text-xs text-red-300 hover:text-red-200 disabled:opacity-50"
+              >Clear connection</button>
+            )}
           </div>
           <p className="text-stone-400 text-sm mb-4">
             Update your Redis credentials. Leave blank to keep the current connection.
             <span className="text-amber-400"> Warning: changing your Redis URL will disconnect from your current data.</span>
+            <span className="block mt-1">Clearing this connection never deletes data from the external Redis database.</span>
           </p>
 
           <div className="space-y-4">
             <div>
-              <label className="text-sm font-medium text-stone-300 mb-1 block">REST API URL</label>
+              <label htmlFor="settings-redis-url" className="text-sm font-medium text-stone-300 mb-1 block">REST API URL</label>
               <input
+                id="settings-redis-url"
                 type="text"
                 value={redisUrl}
                 onChange={(e) => { setRedisUrl(e.target.value); setRedisValidation({ loading: false, valid: null, error: null }); }}
@@ -337,8 +505,9 @@ const Settings: React.FC = () => {
               />
             </div>
             <div>
-              <label className="text-sm font-medium text-stone-300 mb-1 block">REST API Token</label>
+              <label htmlFor="settings-redis-token" className="text-sm font-medium text-stone-300 mb-1 block">REST API Token</label>
               <input
+                id="settings-redis-token"
                 type="password"
                 value={redisToken}
                 onChange={(e) => { setRedisToken(e.target.value); setRedisValidation({ loading: false, valid: null, error: null }); }}
@@ -346,7 +515,7 @@ const Settings: React.FC = () => {
                 className="w-full px-3 py-2 rounded-lg bg-stone-800 border border-stone-600 text-stone-100 placeholder-stone-500 text-sm focus:outline-none focus:ring-2 focus:ring-stone-500"
               />
             </div>
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-center gap-2">
                 <ValidationBadge state={redisValidation} />
                 {redisValidation.valid && <span className="text-green-400 text-sm">Connected</span>}
@@ -375,7 +544,7 @@ const Settings: React.FC = () => {
                 <div className="mt-2 p-3 bg-stone-800/30 border border-stone-600 rounded-lg text-xs space-y-2">
                   <ol className="list-decimal list-inside space-y-1 text-stone-300">
                     <li>Go to <a href="https://console.upstash.com" target="_blank" rel="noopener noreferrer" className="text-stone-400 hover:text-stone-300 underline">console.upstash.com</a> and sign in</li>
-                    <li>Click "+ Create Database" → choose Regional and Free plan</li>
+                    <li>Click &quot;+ Create Database&quot; → choose Regional and Free plan</li>
                     <li>After creation, go to database details → REST API section</li>
                     <li>Copy REST URL (https://*.upstash.io) and REST Token</li>
                   </ol>
@@ -398,7 +567,7 @@ const Settings: React.FC = () => {
           </div>
         )}
 
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             {saveSuccess && (
               <span className="text-green-400 text-sm flex items-center gap-1">
@@ -423,12 +592,50 @@ const Settings: React.FC = () => {
               </>
             ) : (
               <>
-                <Save size={18} />
-                Save Changes
+                <RotateCw size={18} />
+                Validate &amp; rotate
               </>
             )}
           </button>
         </div>
+
+        {profile && (
+          <div id="account" className="mt-8 bg-red-500/5 rounded-xl border border-red-500/30 p-6">
+            <div className="flex items-center gap-2 mb-2">
+              <Trash2 size={18} className="text-red-300" />
+              <h2 className="text-lg font-semibold text-white">Delete platform account</h2>
+            </div>
+            <p className="text-stone-400 text-sm leading-relaxed mb-4">
+              This removes your hosted account, encrypted credentials, and platform routing metadata.
+              It does not delete studies, interviews, or any other data in your external Upstash Redis database.
+              Manage or delete that external data directly in Upstash.
+            </p>
+            <label htmlFor="delete-account-confirmation" className="block text-xs text-stone-400 mb-1">
+              Enter {profile.email} to confirm
+            </label>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <input
+                id="delete-account-confirmation"
+                type="text"
+                value={deleteConfirmation}
+                onChange={(event) => setDeleteConfirmation(event.target.value)}
+                autoComplete="off"
+                className="min-w-0 flex-1 px-3 py-2 rounded-lg bg-stone-800 border border-red-500/30 text-stone-100 text-sm focus:outline-none focus:ring-2 focus:ring-red-500/40"
+              />
+              <button
+                type="button"
+                onClick={deleteAccount}
+                disabled={
+                  lifecycleBusy === 'account'
+                  || deleteConfirmation.trim().toLowerCase() !== profile.email.toLowerCase()
+                }
+                className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 disabled:opacity-40 text-white text-sm"
+              >
+                {lifecycleBusy === 'account' ? 'Deleting…' : 'Delete account'}
+              </button>
+            </div>
+          </div>
+        )}
       </motion.div>
     </div>
   );

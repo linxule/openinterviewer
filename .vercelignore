@@ -1,0 +1,6 @@
+.claude
+.git
+.github
+coverage
+playwright-report
+test-results

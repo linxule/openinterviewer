@@ -4,7 +4,6 @@ import React, { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { useStore } from '@/store';
-import { generateParticipantLink } from '@/services/geminiService';
 import { StudyConfig, ProfileField, AIBehavior, AIProviderType, LinkExpirationOption, GEMINI_MODELS, CLAUDE_MODELS, DEFAULT_GEMINI_MODEL, DEFAULT_CLAUDE_MODEL } from '@/types';
 import {
   FileText,
@@ -27,9 +26,19 @@ import {
   CheckCircle,
   GitBranch,
   Clock,
-  AlertTriangle,
-  ExternalLink
+  AlertTriangle
 } from 'lucide-react';
+
+type ConfigStatus = {
+  mode: 'hosted' | 'standalone';
+  hasAnthropicKey: boolean;
+  hasGeminiKey: boolean;
+};
+
+const isProviderConfigured = (
+  provider: AIProviderType,
+  status: ConfigStatus | null
+) => Boolean(status && (provider === 'claude' ? status.hasAnthropicKey : status.hasGeminiKey));
 
 // Common profile field presets
 const PROFILE_PRESETS: ProfileField[] = [
@@ -73,7 +82,7 @@ const StudySetup: React.FC = () => {
     studyConfig?.enableReasoning
   );
   const [linkExpiration, setLinkExpiration] = useState<LinkExpirationOption>(
-    studyConfig?.linkExpiration || 'never'
+    studyConfig?.linkExpiration || '30days'
   );
   const [consentText, setConsentText] = useState(
     studyConfig?.consentText ||
@@ -97,13 +106,12 @@ const StudySetup: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [savePending, setSavePending] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
 
   // Config status (API keys)
-  const [configStatus, setConfigStatus] = useState<{
-    hasAnthropicKey: boolean;
-    hasGeminiKey: boolean;
-  } | null>(null);
+  const [configStatus, setConfigStatus] = useState<ConfigStatus | null>(null);
+  const [configStatusError, setConfigStatusError] = useState<string | null>(null);
 
   // Sync savedStudyId with persisted config
   // Server-assigned IDs are UUIDs, client-side IDs start with "study-"
@@ -117,12 +125,13 @@ const StudySetup: React.FC = () => {
     }
   }, [studyConfig?.id]);
 
-  // Check auth status on mount
+  // Check auth status on mount — HTTP 200 is not enough; the JSON body is the truth.
   useEffect(() => {
     const checkAuth = async () => {
       try {
         const res = await fetch('/api/auth', { method: 'GET' });
-        setIsAuthenticated(res.ok);
+        const data = await res.json().catch(() => ({ authenticated: false }));
+        setIsAuthenticated(res.ok && data.authenticated === true);
       } catch {
         setIsAuthenticated(false);
       }
@@ -132,20 +141,41 @@ const StudySetup: React.FC = () => {
 
   // Fetch config status when authenticated
   useEffect(() => {
-    if (isAuthenticated) {
-      const fetchConfigStatus = async () => {
-        try {
-          const res = await fetch('/api/config/status');
-          if (res.ok) {
-            const data = await res.json();
-            setConfigStatus(data);
-          }
-        } catch {
-          // Silently fail - warnings just won't show
-        }
-      };
-      fetchConfigStatus();
+    if (isAuthenticated !== true) {
+      setConfigStatus(null);
+      setConfigStatusError(null);
+      return;
     }
+
+    let cancelled = false;
+    setConfigStatus(null);
+    setConfigStatusError(null);
+
+    const fetchConfigStatus = async () => {
+      try {
+        const res = await fetch('/api/config/status');
+        const data = await res.json().catch(() => ({}));
+        if (
+          !res.ok ||
+          (data.mode !== 'hosted' && data.mode !== 'standalone') ||
+          typeof data.hasAnthropicKey !== 'boolean' ||
+          typeof data.hasGeminiKey !== 'boolean'
+        ) {
+          throw new Error(data.error || 'Invalid provider status response');
+        }
+        if (!cancelled) setConfigStatus(data as ConfigStatus);
+      } catch (error) {
+        console.error('Could not verify configured AI providers:', error);
+        if (!cancelled) {
+          setConfigStatusError('Could not verify configured AI providers. Refresh this page and try again.');
+        }
+      }
+    };
+
+    void fetchConfigStatus();
+    return () => {
+      cancelled = true;
+    };
   }, [isAuthenticated]);
 
   // Check for follow-up or edit prefill on mount
@@ -286,7 +316,7 @@ const StudySetup: React.FC = () => {
   };
 
   const buildConfig = (): StudyConfig => ({
-    id: studyConfig?.id || `study-${Date.now()}`,
+    id: savedStudyId || studyConfig?.id || `study-${Date.now()}`,
     name: name || 'Untitled Study',
     description,
     researchQuestion,
@@ -296,9 +326,9 @@ const StudySetup: React.FC = () => {
     aiBehavior,
     aiProvider,
     aiModel,
-    enableReasoning,
+    enableReasoning: aiProvider === 'gemini' ? enableReasoning : undefined,
     linkExpiration,
-    linksEnabled: true, // Always true when creating/editing (revocation is in StudyDetail)
+    linksEnabled: studyConfig?.linksEnabled ?? true,
     consentText,
     createdAt: studyConfig?.createdAt || Date.now(),
     // Include parent study info if this is a follow-up
@@ -309,59 +339,96 @@ const StudySetup: React.FC = () => {
     })
   });
 
-  const handleSubmit = () => {
-    const config = buildConfig();
-    setStudyConfig(config);
-    setStep('consent');
-    router.push('/consent');
+  const requireResearcherAuth = () => {
+    if (isAuthenticated === true) return true;
+    router.push('/login?redirect=/setup');
+    return false;
+  };
+
+  const selectedProviderConfigured = isProviderConfigured(aiProvider, configStatus);
+  const selectedProviderName = aiProvider === 'claude' ? 'Anthropic Claude' : 'Google Gemini';
+  const selectedProviderEnvName = aiProvider === 'claude' ? 'ANTHROPIC_API_KEY' : 'GEMINI_API_KEY';
+  const providerUnavailableMessage = configStatusError
+    || (configStatus
+      ? `${selectedProviderName} is not configured for this ${configStatus.mode === 'hosted' ? 'account' : 'deployment'}.`
+      : 'Configured AI providers are still being checked.');
+
+  const requireConfiguredProvider = (reportError: (message: string) => void) => {
+    if (selectedProviderConfigured) return true;
+    reportError(providerUnavailableMessage);
+    return false;
   };
 
   const handlePreview = async () => {
-    setIsPreviewLoading(true);
-    const config = buildConfig();
-    setStudyConfig(config);
-
-    // Generate a temporary preview token for API authentication
-    try {
-      const { token } = await generateParticipantLink(config);
-      setParticipantToken(token);
-    } catch (error) {
-      // If token generation fails (e.g., not logged in), proceed anyway
-      // The admin session cookie will be used as fallback for authenticated researchers
-      console.warn('Could not generate preview token, using session auth:', error);
+    if (!requireResearcherAuth()) return;
+    if (!requireConfiguredProvider(setSaveError)) return;
+    if (!savedStudyId || isDirty) {
+      setSaveError('Save this study before previewing the version participants will receive.');
+      return;
     }
 
-    setIsPreviewLoading(false);
-    setViewMode('participant');
-    setStep('consent');
-    router.push('/consent');
+    setIsPreviewLoading(true);
+    try {
+      const response = await fetch(`/api/studies/${savedStudyId}`);
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || 'Could not load the saved study.');
+      }
+      const data = await response.json();
+      useStore.getState().resetParticipant();
+      setParticipantToken(null);
+      setStudyConfig(data.study.config);
+      setViewMode('preview');
+      setStep('consent');
+      router.push('/consent');
+    } catch (error) {
+      console.error('Could not load saved preview:', error);
+      setSaveError(error instanceof Error ? error.message : 'Could not load the saved study.');
+    } finally {
+      setIsPreviewLoading(false);
+    }
   };
 
   const handleGenerateLink = async () => {
+    if (!requireResearcherAuth()) {
+      setLinkError('auth');
+      return;
+    }
+    if (!requireConfiguredProvider(setLinkError)) return;
+    if (!savedStudyId || isDirty) {
+      setLinkError('Save this study before generating a participant link.');
+      return;
+    }
+
     setIsGeneratingLink(true);
     setLinkError(null);
     try {
-      const config = buildConfig();
-      setStudyConfig(config);
+      const response = await fetch(`/api/studies/${savedStudyId}`);
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        setLinkError(data.error || 'Could not load the saved study.');
+        return;
+      }
+      const saved = await response.json();
 
-      const response = await fetch('/api/generate-link', {
+      const linkResponse = await fetch('/api/generate-link', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ studyConfig: config })
+        body: JSON.stringify({ studyConfig: { id: saved.study.id } })
       });
 
-      if (!response.ok) {
-        if (response.status === 401) {
+      if (!linkResponse.ok) {
+        if (linkResponse.status === 401) {
           setLinkError('auth');
           setIsAuthenticated(false);
         } else {
-          const data = await response.json();
+          const data = await linkResponse.json();
           setLinkError(data.error || 'Failed to generate link');
         }
         return;
       }
 
-      const data = await response.json();
+      const data = await linkResponse.json();
       setParticipantLink(data.url);
     } catch (error) {
       console.error('Error generating link:', error);
@@ -388,10 +455,12 @@ const StudySetup: React.FC = () => {
     if (isAuthenticated === null) {
       return; // Auth check in progress - button should be disabled anyway
     }
+    if (!requireConfiguredProvider(setSaveError)) return;
 
     setIsSaving(true);
     setSaveSuccess(false);
     setSaveError(null);
+    setSavePending(false);
 
     try {
       const config = buildConfig();
@@ -406,6 +475,15 @@ const StudySetup: React.FC = () => {
           body: JSON.stringify({ config })
         }
       );
+      const data = await response.json().catch(() => ({})) as {
+        error?: string;
+        message?: string;
+        operationId?: string;
+        reconciliationPending?: boolean;
+        study?: { id: string; config: StudyConfig };
+        requiresConfirmation?: boolean;
+        warning?: string;
+      };
 
       if (!response.ok) {
         if (response.status === 401) {
@@ -416,13 +494,18 @@ const StudySetup: React.FC = () => {
 
         // Handle storage not configured (503)
         if (response.status === 503) {
-          setSaveError('Storage not configured. Please connect Vercel KV (Upstash Redis) in your deployment settings.');
+          setSaveError(data.operationId
+            ? data.error || 'Study creation is awaiting reconciliation. Open My Studies to retry repair.'
+            : data.error || (configStatus?.mode === 'hosted'
+              ? 'Storage is temporarily unavailable. Check Account & connections and try again.'
+              : configStatus?.mode === 'standalone'
+                ? 'Storage is unavailable. Check the self-host setup guide and run npm run setup:check, then try again.'
+                : 'Storage is unavailable. Verify your account or deployment setup and try again.'));
           return;
         }
 
         // Handle confirmation required (409) - study has interviews
         if (response.status === 409) {
-          const data = await response.json();
           if (data.requiresConfirmation) {
             const confirmed = window.confirm(
               `${data.warning}\n\nDo you want to continue?`
@@ -436,6 +519,11 @@ const StudySetup: React.FC = () => {
               });
               if (retryResponse.ok) {
                 const retryData = await retryResponse.json();
+                if (retryResponse.status === 202 || retryData.reconciliationPending) {
+                  setSavePending(true);
+                  setSaveError(retryData.message || 'Study update is awaiting reconciliation.');
+                  return;
+                }
                 setSavedStudyId(retryData.study.id);
                 setStudyConfig(retryData.study.config);
                 setSaveSuccess(true);
@@ -449,16 +537,22 @@ const StudySetup: React.FC = () => {
         }
 
         // Generic error
-        const data = await response.json().catch(() => ({}));
         setSaveError(data.error || 'Failed to save study. Please try again.');
         return;
       }
 
-      const data = await response.json();
+      if (!data.study) {
+        setSaveError(data.message || 'Study save did not return a saved study. Open My Studies to retry repair.');
+        return;
+      }
       setSavedStudyId(data.study.id);
-      setSaveSuccess(true);
       setStudyConfig(data.study.config);
       setIsDirty(false);
+      if (response.status === 202 || data.reconciliationPending) {
+        setSavePending(true);
+        return;
+      }
+      setSaveSuccess(true);
 
       // Navigate to study detail page after successful save
       router.push(`/studies/${data.study.id}`);
@@ -499,7 +593,7 @@ const StudySetup: React.FC = () => {
     {
       id: 'claude',
       label: 'Anthropic Claude',
-      desc: 'Nuanced reasoning. Best for complex, exploratory interviews.'
+      desc: 'Nuanced responses. Best for complex, exploratory interviews.'
     }
   ];
 
@@ -508,27 +602,28 @@ const StudySetup: React.FC = () => {
   );
 
   return (
-    <div className="min-h-screen bg-stone-900 p-8">
+    <div className="min-h-screen bg-stone-900 p-4 sm:p-8">
       <div className="max-w-3xl mx-auto">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           className="mb-8"
         >
-          <div className="flex items-center gap-3 mb-2">
+          <div className="flex flex-wrap items-center gap-3 mb-2">
             <button
               onClick={() => router.push('/studies')}
               className="p-2 text-stone-400 hover:text-stone-300 rounded-lg hover:bg-stone-800 transition-colors"
               title="Back to All Studies"
+              aria-label="Back to all studies"
             >
               <ArrowLeft size={20} />
             </button>
             <div className="w-10 h-10 rounded-xl bg-stone-700 flex items-center justify-center">
               <FileText className="text-stone-300" size={20} />
             </div>
-            <h1 className="text-3xl font-bold text-white">Study Setup</h1>
+            <h1 className="text-2xl font-bold text-white sm:text-3xl">Study Setup</h1>
 
-            <div className="flex gap-2 ml-auto">
+            <div className="order-last flex w-full flex-wrap gap-2 sm:order-none sm:ml-auto sm:w-auto">
               <button
                 onClick={loadExampleStudy}
                 className="px-4 py-2 text-sm bg-stone-700 hover:bg-stone-600 text-stone-300 rounded-xl transition-colors flex items-center gap-2"
@@ -540,9 +635,11 @@ const StudySetup: React.FC = () => {
                 <>
                   <button
                     onClick={handleSaveStudy}
-                    disabled={!isAuthenticated || isSaving || (!!savedStudyId && !isDirty)}
+                    disabled={!isAuthenticated || !selectedProviderConfigured || isSaving || (!!savedStudyId && !isDirty)}
                     className={`px-4 py-2 text-sm rounded-xl transition-colors flex items-center gap-2 disabled:cursor-not-allowed ${
-                      savedStudyId && !isDirty
+                      savePending
+                        ? 'bg-amber-900/50 text-amber-300 border border-amber-700'
+                        : savedStudyId && !isDirty
                         ? 'bg-green-900/50 text-green-400 border border-green-700'
                         : saveSuccess
                         ? 'bg-green-700 text-white'
@@ -558,11 +655,11 @@ const StudySetup: React.FC = () => {
                     ) : (
                       <Save size={16} />
                     )}
-                    {isSaving ? 'Saving...' : savedStudyId && isDirty ? 'Update Study' : savedStudyId ? 'Saved' : saveSuccess ? 'Saved!' : 'Save Study'}
+                    {isSaving ? 'Saving...' : savePending ? 'Repair pending' : savedStudyId && isDirty ? 'Update Study' : savedStudyId ? 'Saved' : saveSuccess ? 'Saved!' : 'Save Study'}
                   </button>
                   <button
                     onClick={handlePreview}
-                    disabled={isPreviewLoading}
+                    disabled={isPreviewLoading || isAuthenticated !== true || !selectedProviderConfigured || !savedStudyId || isDirty}
                     className="px-4 py-2 text-sm bg-stone-700 hover:bg-stone-600 text-stone-300 rounded-xl transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {isPreviewLoading ? (
@@ -576,7 +673,7 @@ const StudySetup: React.FC = () => {
               )}
             </div>
           </div>
-          <p className="text-stone-400 ml-[52px]">
+          <p className="text-stone-400 ml-0 sm:ml-[52px]">
             Configure your research interview study
           </p>
         </motion.div>
@@ -602,6 +699,7 @@ const StudySetup: React.FC = () => {
             <button
               onClick={() => setSaveError(null)}
               className="text-red-400 hover:text-red-300 flex-shrink-0"
+              aria-label="Dismiss save error"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <line x1="18" y1="6" x2="6" y2="18"/>
@@ -611,11 +709,34 @@ const StudySetup: React.FC = () => {
           </motion.div>
         )}
 
+        {savePending && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-amber-900/30 border border-amber-700/50 rounded-xl p-4 flex items-start gap-3"
+          >
+            <AlertTriangle size={20} className="text-amber-400 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <h4 className="font-medium text-amber-300 mb-1">Study saved; repair pending</h4>
+              <p className="text-sm text-amber-400/80">
+                The study is stored, but its hosted ownership record still needs reconciliation. Open My Studies to retry safely.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => router.push('/studies')}
+              className="rounded-lg border border-amber-700 px-3 py-2 text-sm text-amber-200 hover:bg-amber-900/40"
+            >
+              My Studies
+            </button>
+          </motion.div>
+        )}
+
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1 }}
-          className="bg-stone-800/50 rounded-2xl border border-stone-700 p-8 space-y-8"
+          className="space-y-8 rounded-2xl border border-stone-700 bg-stone-800/50 p-4 sm:p-8"
         >
           {/* Follow-up Study Banner */}
           {parentStudyInfo && (
@@ -722,7 +843,7 @@ const StudySetup: React.FC = () => {
                   key={field.id}
                   className="bg-stone-800 rounded-xl p-4 border border-stone-700"
                 >
-                  <div className="flex items-start gap-3">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
                     <div className="flex-1 space-y-2">
                       <input
                         type="text"
@@ -753,8 +874,10 @@ const StudySetup: React.FC = () => {
                         {field.required ? 'REQ' : 'OPT'}
                       </button>
                       <button
+                        type="button"
                         onClick={() => removeProfileField(field.id)}
                         className="p-1.5 text-stone-500 hover:text-red-400"
+                        aria-label={`Remove ${field.label || 'profile field'}`}
                       >
                         <X size={16} />
                       </button>
@@ -800,8 +923,10 @@ const StudySetup: React.FC = () => {
                   />
                   {coreQuestions.length > 1 && (
                     <button
+                      type="button"
                       onClick={() => removeQuestion(i)}
                       className="p-2.5 text-stone-500 hover:text-red-400 mt-1"
+                      aria-label={`Remove question ${i + 1}`}
                     >
                       <X size={18} />
                     </button>
@@ -840,8 +965,10 @@ const StudySetup: React.FC = () => {
                   />
                   {topicAreas.length > 1 && (
                     <button
+                      type="button"
                       onClick={() => removeTopic(i)}
                       className="p-2.5 text-stone-500 hover:text-red-400 mt-1"
+                      aria-label={`Remove topic ${i + 1}`}
                     >
                       <X size={18} />
                     </button>
@@ -908,8 +1035,9 @@ const StudySetup: React.FC = () => {
               </p>
             </div>
 
-            {/* AI Reasoning Mode */}
-            <div className="mt-4 space-y-2">
+            {/* Gemini reasoning mode. Claude forced structured tools currently
+                do not support manual extended-thinking controls. */}
+            {aiProvider === 'gemini' && <div className="mt-4 space-y-2">
               <label className="block text-sm font-medium text-stone-300">
                 AI Reasoning Mode
               </label>
@@ -923,32 +1051,59 @@ const StudySetup: React.FC = () => {
                 className="w-full px-4 py-3 rounded-xl bg-stone-800 border border-stone-600 text-stone-100 focus:outline-none focus:ring-2 focus:ring-stone-500 focus:border-stone-500"
               >
                 <option value="auto">Automatic (recommended)</option>
-                <option value="on">Always enabled</option>
-                <option value="off">Always disabled</option>
+                <option value="on">More thinking</option>
+                <option value="off">Minimize thinking</option>
               </select>
               <p className="text-xs text-stone-500">
-                Automatic: OFF for interviews (faster responses), ON for synthesis (deeper analysis using the configured synthesis model - may increase API costs)
+                Automatic lets Gemini choose a supported interview budget and uses high thinking for synthesis. Minimize uses each model&apos;s lowest supported interview setting and the synthesis model&apos;s low setting.
               </p>
-            </div>
+            </div>}
 
-            {/* Warning: Claude selected but no API key */}
-            {aiProvider === 'claude' && configStatus && !configStatus.hasAnthropicKey && (
-              <div className="bg-amber-900/30 border border-amber-700/50 rounded-xl p-4 flex items-start gap-3">
-                <AlertTriangle size={18} className="text-amber-400 flex-shrink-0 mt-0.5" />
+            {isAuthenticated === true && !configStatus && !configStatusError && (
+              <div
+                role="status"
+                className="flex items-start gap-3 rounded-xl border border-stone-600 bg-stone-800 p-4"
+              >
+                <Loader2 size={18} className="mt-0.5 shrink-0 animate-spin text-stone-400" />
+                <p className="text-sm text-stone-300">Checking configured AI providers…</p>
+              </div>
+            )}
+
+            {isAuthenticated === true && (configStatusError || (configStatus && !selectedProviderConfigured)) && (
+              <div
+                role="alert"
+                className="flex items-start gap-3 rounded-xl border border-amber-700/50 bg-amber-900/30 p-4"
+              >
+                <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-400" />
                 <div>
-                  <h4 className="font-medium text-amber-200 text-sm">Anthropic API Key Missing</h4>
-                  <p className="text-xs text-stone-400 mt-1">
-                    Claude interviews require the <code className="text-stone-300">ANTHROPIC_API_KEY</code> environment variable.
-                    Set this in your Vercel dashboard under Project Settings → Environment Variables.
+                  <h4 className="text-sm font-medium text-amber-200">
+                    {configStatusError ? 'Provider availability could not be verified' : `${selectedProviderName} is not available`}
+                  </h4>
+                  <p className="mt-1 text-xs text-stone-300">
+                    {configStatusError
+                      ? configStatusError
+                      : configStatus?.mode === 'hosted'
+                        ? `This account does not have a ${selectedProviderName} key. Add one in Account & connections or finish onboarding before saving or sharing this study.`
+                        : <>This deployment does not have <code className="text-stone-100">{selectedProviderEnvName}</code>. Add it server-side, run <code className="text-stone-100">npm run setup:check</code>, and redeploy before saving or sharing this study.</>}
                   </p>
-                  <a
-                    href="https://github.com/your-repo/research-tool-v2#configuring-api-keys"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-xs text-amber-400 hover:text-amber-300 mt-2"
-                  >
-                    View setup guide <ExternalLink size={12} />
-                  </a>
+                  {!configStatusError && configStatus?.mode === 'hosted' && (
+                    <button
+                      type="button"
+                      onClick={() => router.push('/settings')}
+                      className="mt-3 text-xs font-medium text-amber-300 underline underline-offset-2 hover:text-amber-200"
+                    >
+                      Account &amp; connections
+                    </button>
+                  )}
+                  {!configStatusError && configStatus?.mode === 'standalone' && (
+                    <button
+                      type="button"
+                      onClick={() => router.push('/self-host')}
+                      className="mt-3 text-xs font-medium text-amber-300 underline underline-offset-2 hover:text-amber-200"
+                    >
+                      Open self-host setup guide
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -1051,13 +1206,17 @@ const StudySetup: React.FC = () => {
                     </button>
                   </div>
                   <p className="text-xs text-stone-500">
-                    Share this link with participants. The study configuration is embedded in the URL.
+                    Share this opaque link with participants. Study settings and credentials are never embedded in the URL.
                   </p>
                 </div>
-              ) : isAuthenticated === false || linkError === 'auth' ? (
+              ) : isAuthenticated !== true || linkError === 'auth' ? (
                 <div className="space-y-3">
                   <div className="bg-stone-800 border border-stone-600 rounded-xl p-4 text-sm text-stone-300">
-                    <p className="mb-3">Login required to generate participant links.</p>
+                    <p className="mb-3">
+                      {isAuthenticated === null
+                        ? 'Checking researcher sign-in…'
+                        : 'Login required to generate participant links.'}
+                    </p>
                     <button
                       type="button"
                       onClick={() => router.push('/login')}
@@ -1073,7 +1232,7 @@ const StudySetup: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleGenerateLink}
-                    disabled={isGeneratingLink}
+                    disabled={isGeneratingLink || !selectedProviderConfigured || !savedStudyId || isDirty}
                     className="w-full py-3 bg-stone-700 hover:bg-stone-600 text-stone-300 font-medium rounded-xl transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <LinkIcon size={18} />
@@ -1088,14 +1247,24 @@ const StudySetup: React.FC = () => {
           )}
 
           {/* Submit */}
-          <div className="pt-4 border-t border-stone-700">
+          <div className="pt-4 border-t border-stone-700 space-y-3">
+            {isAuthenticated === false && (
+              <p className="text-sm text-stone-400">
+                Researcher sign-in is required to preview or start an interview from setup.
+              </p>
+            )}
             <button
-              onClick={handleSubmit}
-              disabled={!isValid}
+              onClick={handlePreview}
+              disabled={!isValid || isAuthenticated !== true || !selectedProviderConfigured || !savedStudyId || isDirty || isPreviewLoading}
               className="w-full py-4 bg-stone-600 hover:bg-stone-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-all flex items-center justify-center gap-2"
             >
-              Start Interview <ArrowRight size={18} />
+              Preview Saved Study <ArrowRight size={18} />
             </button>
+            {isAuthenticated === true && (!savedStudyId || isDirty) && (
+              <p className="text-sm text-stone-500 text-center">
+                Save changes to preview the exact version participants will receive.
+              </p>
+            )}
           </div>
         </motion.div>
       </div>

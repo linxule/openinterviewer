@@ -3,39 +3,52 @@
   "version": "1.0.0",
   "private": true,
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=24.15.0"
   },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "eslint . --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:unit": "vitest run",
+    "test:setup": "node --test tests/setup-checker.test.mjs",
+    "test:e2e": "playwright test",
+    "setup:check": "node scripts/check-setup.mjs",
+    "check": "npm run lint && npm run typecheck && npm run test"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.32.0",
-    "@google/genai": "^1.0.0",
+    "@anthropic-ai/sdk": "^0.117.1",
+    "@google/genai": "^2.17.1",
     "@upstash/redis": "^1.36.2",
-    "@vercel/kv": "^2.0.0",
     "arctic": "^3.7.0",
     "framer-motion": "^11.0.0",
     "jose": "^5.9.0",
     "jszip": "^3.10.1",
     "lucide-react": "^0.460.0",
-    "next": "^14.2.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
+    "next": "^16.3.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "react-markdown": "^9.0.0",
     "zustand": "^5.0.0"
   },
   "devDependencies": {
-    "@types/node": "^20",
-    "@types/react": "^18",
-    "@types/react-dom": "^18",
+    "@playwright/test": "^1.62.1",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/node": "^24",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
     "autoprefixer": "^10",
-    "eslint": "^8",
-    "eslint-config-next": "^14.2.0",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.3.1",
+    "jsdom": "^30.0.1",
     "postcss": "^8",
     "tailwindcss": "^3.4.0",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.10"
   }
 }

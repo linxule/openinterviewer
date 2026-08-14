@@ -1,5 +1,7 @@
 import StudyList from '@/components/StudyList';
+import { enforceResearcherPageSetup } from '@/lib/researcherAccess';
 
-export default function StudiesPage() {
+export default async function StudiesPage() {
+  await enforceResearcherPageSetup();
   return <StudyList />;
 }

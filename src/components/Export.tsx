@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { useStore } from '@/store';
 import {
@@ -15,6 +16,7 @@ import {
 } from 'lucide-react';
 
 const Export: React.FC = () => {
+  const router = useRouter();
   const {
     studyConfig,
     participantProfile,
@@ -22,6 +24,9 @@ const Export: React.FC = () => {
     questionProgress,
     behaviorData,
     synthesis,
+    viewMode,
+    setViewMode,
+    setStep,
     resetParticipant,
     reset
   } = useStore();
@@ -171,18 +176,62 @@ const Export: React.FC = () => {
 
   const handleNewParticipant = () => {
     resetParticipant();
+    router.push('/consent');
   };
 
   const handleNewStudy = () => {
     reset();
+    router.push('/setup');
+  };
+
+  const handleReturnToSynthesis = () => {
+    setStep('synthesis');
+    router.replace('/synthesis');
+  };
+
+  const handleRunPreviewAgain = () => {
+    resetParticipant();
+    setStep('consent');
+    router.push('/consent');
+  };
+
+  const handleReturnToStudySetup = () => {
+    resetParticipant();
+    setViewMode('researcher');
+    setStep('setup');
+    router.push('/setup');
   };
 
   // Calculate extracted profile fields
   const extractedFields = participantProfile?.fields.filter(f => f.status === 'extracted') || [];
   const totalFields = participantProfile?.fields.length || 0;
 
+  if (viewMode === 'participant') {
+    return (
+      <div className="min-h-screen bg-stone-900 p-4 sm:p-8 flex items-center justify-center">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="w-full max-w-lg rounded-xl border border-stone-700 bg-stone-800/50 p-6 text-center sm:p-8"
+        >
+          <h1 className="text-2xl font-bold text-white mb-3">Return to interview completion</h1>
+          <p className="text-stone-400 mb-6">
+            Submission status is shown on the previous screen. This page does not provide researcher export controls.
+          </p>
+          <button
+            type="button"
+            onClick={handleReturnToSynthesis}
+            className="w-full py-3 bg-stone-600 hover:bg-stone-500 text-white font-semibold rounded-xl transition-colors"
+          >
+            Return to completion status
+          </button>
+        </motion.div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-stone-900 p-8">
+    <div className="min-h-screen bg-stone-900 p-4 sm:p-8">
       <div className="max-w-2xl mx-auto">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -193,10 +242,12 @@ const Export: React.FC = () => {
             <CheckCircle className="text-stone-300" size={32} />
           </div>
           <h1 className="text-3xl font-bold text-white mb-2">
-            Interview Complete
+            {viewMode === 'preview' ? 'Preview complete' : 'Interview Complete'}
           </h1>
           <p className="text-stone-400">
-            Export your data and start a new session
+            {viewMode === 'preview'
+              ? 'Review or export this local preview. It was not added to study data.'
+              : 'Export your data and start a new session'}
           </p>
         </motion.div>
 
@@ -204,10 +255,10 @@ const Export: React.FC = () => {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1 }}
-          className="bg-stone-800/50 rounded-xl border border-stone-700 p-8 space-y-6"
+          className="bg-stone-800/50 rounded-xl border border-stone-700 p-5 space-y-6 sm:p-8"
         >
           {/* Stats */}
-          <div className="grid grid-cols-4 gap-3 text-center">
+          <div className="grid grid-cols-2 gap-3 text-center sm:grid-cols-4">
             <div className="bg-stone-800 rounded-xl p-4">
               <div className="text-2xl font-bold text-white">
                 {interviewHistory.length}
@@ -334,22 +385,41 @@ const Export: React.FC = () => {
 
           {/* Next Actions */}
           <div className="pt-4 border-t border-stone-700 space-y-3">
-            <h2 className="font-semibold text-white">What's Next?</h2>
+            <h2 className="font-semibold text-white">What&apos;s Next?</h2>
 
-            <button
-              onClick={handleNewParticipant}
-              className="w-full py-3 bg-stone-600 hover:bg-stone-500 text-white font-semibold rounded-xl transition-colors flex items-center justify-center gap-2"
-            >
-              <RotateCcw size={18} />
-              New Participant (Same Study)
-            </button>
-
-            <button
-              onClick={handleNewStudy}
-              className="w-full py-3 border border-stone-600 text-stone-400 rounded-xl hover:bg-stone-700 transition-colors"
-            >
-              Create New Study
-            </button>
+            {viewMode === 'preview' ? (
+              <>
+                <button
+                  onClick={handleRunPreviewAgain}
+                  className="w-full py-3 bg-stone-600 hover:bg-stone-500 text-white font-semibold rounded-xl transition-colors flex items-center justify-center gap-2"
+                >
+                  <RotateCcw size={18} />
+                  Run preview again
+                </button>
+                <button
+                  onClick={handleReturnToStudySetup}
+                  className="w-full py-3 border border-stone-600 text-stone-400 rounded-xl hover:bg-stone-700 transition-colors"
+                >
+                  Return to study setup
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={handleNewParticipant}
+                  className="w-full py-3 bg-stone-600 hover:bg-stone-500 text-white font-semibold rounded-xl transition-colors flex items-center justify-center gap-2"
+                >
+                  <RotateCcw size={18} />
+                  New Participant (Same Study)
+                </button>
+                <button
+                  onClick={handleNewStudy}
+                  className="w-full py-3 border border-stone-600 text-stone-400 rounded-xl hover:bg-stone-700 transition-colors"
+                >
+                  Create New Study
+                </button>
+              </>
+            )}
           </div>
         </motion.div>
       </div>

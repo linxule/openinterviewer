@@ -4,9 +4,11 @@
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
-import { getAllInterviews, isKVAvailable } from '@/lib/kv';
+import { getAllInterviewsChecked } from '@/lib/kv';
 import { getRequestContext } from '@/lib/researcherContext';
+import { configurationRequiredResponse } from '@/lib/researcherAccess';
 import JSZip from 'jszip';
+import { csvCell } from '@/lib/csv';
 import { StoredInterview } from '@/types';
 
 // Generate markdown transcript for an interview
@@ -74,21 +76,28 @@ function generateTranscript(interview: StoredInterview): string {
 
 export async function GET() {
   try {
-    const { authorized, context, error } = await getRequestContext();
+    const access = await getRequestContext();
+    const setupResponse = configurationRequiredResponse(access);
+    if (setupResponse) return setupResponse;
+    const { authorized, context, error } = access;
     if (!authorized || !context) {
       return NextResponse.json({ error: error || 'Unauthorized' }, { status: 401 });
     }
 
-    const kvAvailable = await isKVAvailable(context.kvClient);
-    if (!kvAvailable) {
+    const loaded = await getAllInterviewsChecked(context.kvClient, 500);
+    if (loaded.status === 'unavailable') {
       return NextResponse.json(
-        { error: 'Storage not configured' },
-        { status: 400 }
+        { error: 'Interview storage is temporarily unavailable.', retryable: true },
+        { status: 503 }
       );
     }
-
-    // Get all interviews
-    const interviews = await getAllInterviews(context.kvClient);
+    if (loaded.status === 'too-large') {
+      return NextResponse.json(
+        { error: 'This export is too large for an interactive download. Export a smaller study set.' },
+        { status: 413 }
+      );
+    }
+    const interviews = loaded.items;
 
     if (interviews.length === 0) {
       return NextResponse.json(
@@ -113,16 +122,16 @@ export async function GET() {
       zip.file(`${baseName}.md`, generateTranscript(interview));
     });
 
-    // Add summary CSV
+    // Add summary CSV (formula-safe cells)
     const csvLines = [
       'Interview ID,Study,Date,Duration (min),Messages,Themes,Key Insight'
     ];
     interviews.forEach(interview => {
       const duration = Math.round((interview.completedAt - interview.createdAt) / 1000 / 60);
       const themes = interview.synthesis?.themes.length || 0;
-      const insight = interview.synthesis?.bottomLine?.replace(/"/g, '""') || '';
+      const insight = interview.synthesis?.bottomLine || '';
       csvLines.push(
-        `"${interview.id}","${interview.studyName}","${new Date(interview.createdAt).toISOString()}",${duration},${interview.transcript.length},${themes},"${insight}"`
+        `${csvCell(interview.id)},${csvCell(interview.studyName)},${csvCell(new Date(interview.createdAt).toISOString())},${duration},${interview.transcript.length},${themes},${csvCell(insight)}`
       );
     });
     zip.file('summary.csv', csvLines.join('\n'));
@@ -141,7 +150,7 @@ export async function GET() {
     console.error('Export API error:', error);
     return NextResponse.json(
       { error: 'Failed to export interviews' },
-      { status: 500 }
+      { status: 503 }
     );
   }
 }
