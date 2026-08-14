@@ -18,12 +18,13 @@ Open `/demo` on a running instance. No login, provider key, or database is requi
 
 The demo:
 
-- uses scripted sample responses and analysis;
+- lets visitors steer a fictional participant through three questions with fixed, branching responses;
+- ends in an illustrative researcher note with an exact transcript quote, interpretation, nuance, and hypothesis to test;
 - makes no AI-provider or persistence request;
-- keeps typed sample input in browser memory only and does not transmit or persist it; and
+- accepts no visitor-written interview content and keeps its selected path in component memory only; and
 - is safe to run while the real provider and storage configuration is absent.
 
-It is useful for evaluating the interaction, not model quality, latency, or provider availability.
+Every response, follow-up, and insight is pre-written and visibly labeled as synthetic. The demo is useful for understanding the participant-to-researcher workflow, not model quality, latency, or provider availability.
 
 ## 2. Use a hosted researcher account
 

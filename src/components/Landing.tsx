@@ -1,79 +1,129 @@
 'use client';
 
 import Link from 'next/link';
-import { motion } from 'framer-motion';
-import { Beaker, LogIn, Server } from 'lucide-react';
+import { ArrowRight, Beaker, BookOpen, GitBranch, LogIn, Quote, Server } from 'lucide-react';
 
 const Landing: React.FC = () => {
   return (
-    <div className="min-h-screen bg-stone-900 flex items-center justify-center p-8">
-      <motion.div
-        initial={{ opacity: 0, y: 16 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="max-w-2xl w-full space-y-10"
-      >
-        <div className="space-y-3">
-          <p className="text-sm uppercase tracking-wide text-stone-400">OpenInterviewer</p>
-          <h1 className="text-4xl font-bold text-white">AI interviews for qualitative research</h1>
-          <p className="text-stone-400 text-lg">
-            Try a scripted sample first, or sign in to run real studies. The sample never stores data and does not use live AI.
-          </p>
-        </div>
+    <main className="min-h-dvh bg-stone-900 px-4 py-10 text-stone-100 sm:px-8 sm:py-16">
+      <div className="mx-auto max-w-5xl space-y-14">
+        <section aria-labelledby="landing-heading" className="grid items-end gap-8 lg:grid-cols-[1.2fr_0.8fr]">
+          <div className="space-y-6">
+            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-stone-400">
+              OpenInterviewer · Open source
+            </p>
+            <h1 id="landing-heading" className="max-w-3xl text-4xl font-bold tracking-tight text-white sm:text-6xl sm:leading-[1.05]">
+              Follow the answer, not just the script.
+            </h1>
+            <p className="max-w-2xl text-lg leading-8 text-stone-300 sm:text-xl">
+              Turn a research guide into an adaptive interview. Participants get thoughtful follow-ups; researchers get interpretations linked back to transcript evidence.
+            </p>
+            <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+              <Link
+                href="/demo"
+                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-stone-100 px-5 py-3 font-semibold text-stone-900 transition-colors hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 focus-visible:ring-offset-2 focus-visible:ring-offset-stone-900"
+              >
+                Try the scripted demo · 2 min
+                <ArrowRight aria-hidden="true" size={18} />
+              </Link>
+              <Link
+                href="/self-host"
+                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-stone-600 px-5 py-3 font-semibold text-stone-100 transition-colors hover:bg-stone-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+              >
+                <Server aria-hidden="true" size={18} />
+                Self-host your own
+              </Link>
+            </div>
+          </div>
 
-        <div className="grid gap-4">
-          <Link
-            href="/demo"
-            className="block rounded-2xl border border-stone-700 bg-stone-800/60 p-6 hover:border-stone-500 hover:bg-stone-800 transition-colors"
-          >
-            <div className="flex items-start gap-4">
-              <div className="w-10 h-10 rounded-xl bg-stone-700 flex items-center justify-center shrink-0">
-                <Beaker size={20} className="text-stone-300" />
-              </div>
+          <div className="rounded-2xl border border-amber-700/40 bg-amber-950/30 p-5">
+            <div className="flex items-start gap-3">
+              <Beaker aria-hidden="true" className="mt-0.5 shrink-0 text-amber-200" size={20} />
               <div>
-                <h2 className="text-lg font-semibold text-white">Try a sample</h2>
-                <p className="text-sm text-stone-400 mt-1">
-                  Keyless, scripted walkthrough. No account, no API keys, no saved responses, and no live model.
+                <h2 className="font-semibold text-amber-100">Safe to try immediately</h2>
+                <p className="mt-2 text-sm leading-6 text-amber-100/80">
+                  Fictional participant, fixed branches, no account, API key, live AI, interview API call, or saved data.
                 </p>
               </div>
             </div>
-          </Link>
+          </div>
+        </section>
 
+        <section aria-labelledby="workflow-heading" className="space-y-5">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-[0.16em] text-stone-400">The research loop</p>
+            <h2 id="workflow-heading" className="mt-2 text-2xl font-semibold text-white sm:text-3xl">
+              From a question to evidence you can inspect.
+            </h2>
+          </div>
+          <ol className="grid gap-4 md:grid-cols-3">
+            {[
+              {
+                icon: BookOpen,
+                step: '01',
+                title: 'Frame the study',
+                description: 'Define a research question, topic guide, and the context you need from participants.',
+              },
+              {
+                icon: GitBranch,
+                step: '02',
+                title: 'Follow the thread',
+                description: 'Probe what a participant means instead of mechanically asking the next prepared question.',
+              },
+              {
+                icon: Quote,
+                step: '03',
+                title: 'Trace the insight',
+                description: 'Review interpretations, nuances, and hypotheses alongside their transcript evidence.',
+              },
+            ].map(({ icon: Icon, step, title, description }) => (
+              <li key={step} className="rounded-2xl border border-stone-700 bg-stone-800/60 p-5 sm:p-6">
+                <div className="flex items-center justify-between">
+                  <Icon aria-hidden="true" className="text-stone-300" size={21} />
+                  <span className="text-xs font-semibold tracking-[0.16em] text-stone-400">{step}</span>
+                </div>
+                <h3 className="mt-6 text-lg font-semibold text-white">{title}</h3>
+                <p className="mt-2 text-sm leading-6 text-stone-400">{description}</p>
+              </li>
+            ))}
+          </ol>
+        </section>
+
+        <section aria-label="Ways to run OpenInterviewer" className="grid gap-4 border-t border-stone-800 pt-8 sm:grid-cols-2">
           <Link
             href="/login"
-            className="block rounded-2xl border border-stone-700 bg-stone-800/40 p-6 hover:border-stone-500 hover:bg-stone-800 transition-colors"
+            className="group rounded-2xl border border-stone-800 p-5 transition-colors hover:border-stone-600 hover:bg-stone-850"
           >
-            <div className="flex items-start gap-4">
-              <div className="w-10 h-10 rounded-xl bg-stone-700 flex items-center justify-center shrink-0">
-                <LogIn size={20} className="text-stone-300" />
-              </div>
-              <div>
-                <h2 className="text-lg font-semibold text-white">Researcher workspace</h2>
-                <p className="text-sm text-stone-400 mt-1">
-                  Sign in to create studies, generate participant links, and review interviews.
-                </p>
-              </div>
+            <div className="flex items-center gap-3">
+              <LogIn aria-hidden="true" className="text-stone-400" size={19} />
+              <h2 className="font-semibold text-white">Configured researcher workspace</h2>
             </div>
+            <p className="mt-2 text-sm leading-6 text-stone-400">
+              Sign in to a deployment that already has working storage and provider access.
+            </p>
+            <span className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-stone-200 group-hover:text-white">
+              Researcher sign in <ArrowRight aria-hidden="true" size={16} />
+            </span>
           </Link>
 
           <Link
             href="/self-host"
-            className="block rounded-2xl border border-stone-700 bg-stone-800/40 p-6 hover:border-stone-500 hover:bg-stone-800 transition-colors"
+            className="group rounded-2xl border border-stone-800 p-5 transition-colors hover:border-stone-600 hover:bg-stone-850"
           >
-            <div className="flex items-start gap-4">
-              <div className="w-10 h-10 rounded-xl bg-stone-700 flex items-center justify-center shrink-0">
-                <Server size={20} className="text-stone-300" />
-              </div>
-              <div>
-                <h2 className="text-lg font-semibold text-white">Self-host</h2>
-                <p className="text-sm text-stone-400 mt-1">
-                  Deploy your own instance with your API keys and storage. Open source, MIT licensed.
-                </p>
-              </div>
+            <div className="flex items-center gap-3">
+              <Server aria-hidden="true" className="text-stone-400" size={19} />
+              <h2 className="font-semibold text-white">Self-host</h2>
             </div>
+            <p className="mt-2 text-sm leading-6 text-stone-400">
+              Deploy the MIT-licensed application with your own provider keys and Upstash database.
+            </p>
+            <span className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-stone-200 group-hover:text-white">
+              View deployment guide <ArrowRight aria-hidden="true" size={16} />
+            </span>
           </Link>
-        </div>
-      </motion.div>
-    </div>
+        </section>
+      </div>
+    </main>
   );
 };
 
