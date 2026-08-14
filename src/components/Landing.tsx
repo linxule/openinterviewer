@@ -13,7 +13,7 @@ const Landing: React.FC = () => {
         className="max-w-2xl w-full space-y-10"
       >
         <div className="space-y-3">
-          <p className="text-sm uppercase tracking-wide text-stone-500">OpenInterviewer</p>
+          <p className="text-sm uppercase tracking-wide text-stone-400">OpenInterviewer</p>
           <h1 className="text-4xl font-bold text-white">AI interviews for qualitative research</h1>
           <p className="text-stone-400 text-lg">
             Try a scripted sample first, or sign in to run real studies. The sample never stores data and does not use live AI.
