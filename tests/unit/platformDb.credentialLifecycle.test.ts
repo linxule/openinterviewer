@@ -4,7 +4,10 @@ const platformClient = vi.hoisted(() => ({
   eval: vi.fn(),
   get: vi.fn(),
 }));
-vi.mock('@/lib/kvClient', () => ({ getPlatformClient: () => platformClient }));
+vi.mock('@/lib/kvClient', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/kvClient')>();
+  return { ...actual, getPlatformClient: () => platformClient };
+});
 vi.mock('@/lib/email', () => ({ normalizeEmail: (value: string) => value.toLowerCase() }));
 
 import {
@@ -12,17 +15,22 @@ import {
   beginDeleteStudyOperation,
   consumePlatformRateLimit,
   consumePlatformRateLimits,
-  deleteStudyOwnership,
   deleteResearcherAccount,
+  deleteStudyOwnership,
   getPendingStudyOperations,
   registerStudyOwnership,
   resolveStudyOperation,
+  UPDATE_RESEARCHER_CREDENTIALS_SCRIPT,
   updateResearcherCredentialsAtomic,
 } from '@/lib/platformDb';
+import { encodeAccountRecord, encodeStorageBinding } from '@/lib/platformDb.operations';
+import { buildSchemaLineageValue } from '@/lib/platformSchema';
+import { MemoryPlatformRedis } from '../helpers/memoryPlatformRedis';
 
 beforeEach(() => {
   vi.clearAllMocks();
   delete process.env.PLATFORM_KEY_PREFIX;
+  platformClient.get.mockResolvedValue(null);
 });
 
 describe('platform credential lifecycle scripts', () => {
@@ -85,6 +93,12 @@ describe('platform credential lifecycle scripts', () => {
   });
 
   it('fails closed and returns a retry window after the platform limit is exceeded', async () => {
+    platformClient.get.mockResolvedValueOnce(null);
+    await expect(consumePlatformRateLimit('credential-save', 'researcher-a', 12, 3_600))
+      .resolves.toEqual({ status: 'hold' });
+    expect(platformClient.eval).not.toHaveBeenCalled();
+
+    platformClient.get.mockResolvedValue(buildSchemaLineageValue(1));
     platformClient.eval.mockResolvedValue(13);
     const result = await consumePlatformRateLimit('credential-save', 'researcher-a', 12, 3_600);
 
@@ -94,7 +108,7 @@ describe('platform credential lifecycle scripts', () => {
   });
 
   it('maps credential CAS conflicts without claiming an update', async () => {
-    platformClient.eval.mockResolvedValue(-2);
+    platformClient.eval.mockResolvedValue(['oi:cred-conflict']);
     const result = await updateResearcherCredentialsAtomic(
       'researcher-a',
       3,
@@ -103,10 +117,137 @@ describe('platform credential lifecycle scripts', () => {
 
     expect(result).toEqual({ status: 'conflict' });
     expect(platformClient.eval).toHaveBeenCalledWith(
-      expect.stringContaining('credentialRevision'),
-      ['researcher:researcher-a'],
-      ['3', JSON.stringify({ encryptedGeminiApiKey: null, onboardingComplete: false })]
+      expect.stringContaining('credential-cas'),
+      [
+        'researcher:researcher-a',
+        'researcher-storage:researcher-a',
+        'researcher-studies:researcher-a',
+        'storage-researchers:_',
+        'storage-researchers:_',
+        'account-delete-journal',
+        'study-ops:v2',
+      ],
+      [
+        'researcher-a',
+        '3',
+        '',
+        '',
+        '',
+        'none',
+        '',
+        '',
+        '',
+        JSON.stringify({ encryptedGeminiApiKey: null, onboardingComplete: false }),
+        '1000',
+      ],
     );
+  });
+
+  it('refuses origin change or clear while studies exist and keeps token rotation on the same origin', async () => {
+    expect(UPDATE_RESEARCHER_CREDENTIALS_SCRIPT).toContain("redis.call('SCARD', KEYS[3])");
+    expect(UPDATE_RESEARCHER_CREDENTIALS_SCRIPT).toContain("redis.call('HEXISTS', KEYS[6], ARGV[1])");
+    expect(UPDATE_RESEARCHER_CREDENTIALS_SCRIPT).toContain("storage.storageId == ARGV[7]");
+    expect(UPDATE_RESEARCHER_CREDENTIALS_SCRIPT).toContain('bindingEpoch = tonumber(storage.bindingEpoch) + 1');
+    expect(UPDATE_RESEARCHER_CREDENTIALS_SCRIPT).toContain("return {'oi:cred-refused'}");
+    expect(UPDATE_RESEARCHER_CREDENTIALS_SCRIPT.indexOf("if storage.storageId == ARGV[7] then"))
+      .toBeLessThan(UPDATE_RESEARCHER_CREDENTIALS_SCRIPT.indexOf('bindingEpoch = tonumber(storage.bindingEpoch) + 1'));
+
+    const stored = encodeStorageBinding({
+      version: 2,
+      researcherId: 'researcher-a',
+      storageId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      originHash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      credentialRevision: 3,
+      bindingEpoch: 4,
+      cipherSnapshot: 'snap-old',
+    });
+    platformClient.get.mockResolvedValue(stored);
+    platformClient.eval.mockResolvedValue(['oi:cred-refused']);
+
+    await expect(updateResearcherCredentialsAtomic(
+      'researcher-a',
+      3,
+      { encryptedRedisUrl: null, encryptedRedisToken: null, redisConfiguredAt: null },
+    )).resolves.toEqual({ status: 'refused' });
+
+    const [script, keys, args] = platformClient.eval.mock.calls[0];
+    expect(script).toContain('credential-cas');
+    expect(keys[3]).toBe('storage-researchers:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    expect(args[5]).toBe('clear');
+  });
+
+  it('same-origin token rotation increments revision, keeps bindingEpoch, and requests scoped evict', async () => {
+    const storageId = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    platformClient.get.mockResolvedValue(encodeStorageBinding({
+      version: 2,
+      researcherId: 'researcher-a',
+      storageId,
+      originHash: storageId,
+      credentialRevision: 3,
+      bindingEpoch: 4,
+      cipherSnapshot: 'snap-old',
+    }));
+    platformClient.eval.mockResolvedValue([
+      'oi:cred-updated',
+      'oi:json:{"credentialRevision":4,"bindingEpoch":4,"storageId":"' + storageId + '","disposition":"scoped"}',
+    ]);
+
+    const encryptedUrl = 'cipher-url';
+    const encryptedToken = 'cipher-token';
+    const result = await updateResearcherCredentialsAtomic(
+      'researcher-a',
+      3,
+      { encryptedRedisUrl: encryptedUrl, encryptedRedisToken: encryptedToken, redisConfiguredAt: 9 },
+      { storageId },
+    );
+
+    expect(result).toEqual({
+      status: 'updated',
+      credentialRevision: 4,
+      bindingEpoch: 4,
+      storageId,
+      evict: { disposition: 'scoped', researcherId: 'researcher-a', storageId },
+    });
+    expect(platformClient.eval.mock.calls[0][2][5]).toBe('set');
+    expect(platformClient.eval.mock.calls[0][2][6]).toBe(storageId);
+    expect(platformClient.eval.mock.calls[0][2][8]).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('maps journal HEXISTS to adel and transport may-have-committed to ambiguous', async () => {
+    platformClient.eval.mockResolvedValueOnce(['oi:cred-adel']);
+    await expect(updateResearcherCredentialsAtomic(
+      'researcher-a',
+      1,
+      { onboardingComplete: true },
+    )).resolves.toEqual({ status: 'adel' });
+
+    const { RedisCommitAmbiguousError } = await import('@/lib/redisPort');
+    platformClient.eval.mockRejectedValueOnce(new RedisCommitAmbiguousError('may-have-committed'));
+    await expect(updateResearcherCredentialsAtomic(
+      'researcher-a',
+      1,
+      { onboardingComplete: true },
+    )).resolves.toEqual({ status: 'ambiguous' });
+  });
+
+  it('already redis-less clear is updated with disposition none', async () => {
+    platformClient.get.mockResolvedValue(null);
+    platformClient.eval.mockResolvedValue([
+      'oi:cred-updated',
+      'oi:json:{"credentialRevision":2,"bindingEpoch":0,"storageId":null,"disposition":"none"}',
+    ]);
+    await expect(updateResearcherCredentialsAtomic(
+      'researcher-a',
+      1,
+      { encryptedRedisUrl: null, encryptedRedisToken: null, redisConfiguredAt: null },
+    )).resolves.toEqual({
+      status: 'updated',
+      credentialRevision: 2,
+      bindingEpoch: 0,
+      storageId: null,
+      evict: { disposition: 'none' },
+    });
+    expect(platformClient.eval.mock.calls[0][2][5]).toBe('clear');
   });
 
   it('removes study ownership only for the expected researcher', async () => {
@@ -251,8 +392,9 @@ describe('platform credential lifecycle scripts', () => {
     expect(platformClient.get).toHaveBeenCalledTimes(2);
   });
 
-  it('deletes only platform keys and returns the detached routing count', async () => {
-    platformClient.eval.mockResolvedValue([1, 2]);
+  it('does not claim terminal deletion on schema-hold', async () => {
+    const redis = new MemoryPlatformRedis();
+    redis.strings.set('researcher:researcher-a', encodeAccountRecord({ id: 'researcher-a' }));
     const researcher = {
       id: 'researcher-a',
       email: 'owner@example.com',
@@ -271,39 +413,64 @@ describe('platform credential lifecycle scripts', () => {
       encryptedOpenRouterApiKey: null,
       redisConfiguredAt: 1,
     };
-    const result = await deleteResearcherAccount(researcher);
+    const result = await deleteResearcherAccount(researcher, 1_000, { client: redis.asPort() });
 
-    expect(result).toEqual({ status: 'deleted', detachedStudyCount: 2 });
-    const [, keys, args] = platformClient.eval.mock.calls[0];
-    expect(keys).toEqual([
-      'researcher:researcher-a',
-      'oauth:google:oauth-a',
-      'email:owner@example.com',
-      'all-researchers',
-      'researcher-studies:researcher-a',
-      'participant-links:researcher-a',
-      'study-operations:researcher-a',
-    ]);
-    expect(args).toEqual([
-      'study-owner:',
-      '1000',
-      'researcher-a',
-      'participant-link:',
-      'study-operation:',
-      'study-operation-lock:',
-    ]);
-    expect(JSON.stringify(platformClient.eval.mock.calls[0])).not.toContain('external-token');
+    expect(result).toEqual({ status: 'unavailable' });
+    expect(redis.strings.has('researcher:researcher-a')).toBe(true);
+    expect(JSON.stringify(redis.writes)).not.toContain('encrypted-external-token');
+    expect(JSON.stringify(redis.writes)).not.toContain('encrypted-ai-key');
+  });
+
+  it('deletes only platform keys and never writes BYOS material', async () => {
+    const redis = new MemoryPlatformRedis();
+    redis.strings.set('schema-lineage', buildSchemaLineageValue(1));
+    redis.strings.set('researcher:researcher-a', encodeAccountRecord({ id: 'researcher-a' }));
+    redis.strings.set('oauth:google:oauth-a', 'researcher-a');
+    redis.strings.set('email:owner@example.com', 'researcher-a');
+    redis.sets.set('all-researchers', new Set(['researcher-a']));
+    const researcher = {
+      id: 'researcher-a',
+      email: 'owner@example.com',
+      name: 'Owner',
+      avatarUrl: null,
+      oauthProvider: 'google' as const,
+      oauthId: 'oauth-a',
+      createdAt: 1,
+      lastLoginAt: 1,
+      onboardingComplete: true,
+      encryptedRedisUrl: 'encrypted-external-url',
+      encryptedRedisToken: 'encrypted-external-token',
+      encryptedGeminiApiKey: 'encrypted-ai-key',
+      encryptedAnthropicApiKey: null,
+      encryptedOpenAiApiKey: null,
+      encryptedOpenRouterApiKey: null,
+      redisConfiguredAt: 1,
+    };
+    const result = await deleteResearcherAccount(researcher, 1_000, { client: redis.asPort() });
+
+    expect(result.status).toBe('deleted');
+    expect(redis.strings.has('researcher:researcher-a')).toBe(false);
+    expect(JSON.stringify(redis.writes)).not.toContain('encrypted-external-token');
+    expect(JSON.stringify(redis.writes)).not.toContain('encrypted-ai-key');
   });
 
   it('refuses unbounded automatic account cleanup', async () => {
-    platformClient.eval.mockResolvedValue([-2, 1001]);
+    const redis = new MemoryPlatformRedis();
+    redis.strings.set('schema-lineage', buildSchemaLineageValue(1));
+    const journal = new Map<string, string>();
+    for (let i = 0; i < 100; i += 1) {
+      journal.set(`other-${i}`, 'oi:adel-journal:{"version":2}');
+    }
+    redis.hashes.set('account-delete-journal', journal);
+    redis.strings.set('researcher:researcher-a', encodeAccountRecord({ id: 'researcher-a' }));
     const result = await deleteResearcherAccount({
       id: 'researcher-a', email: 'owner@example.com', name: 'Owner', avatarUrl: null,
       oauthProvider: 'google', oauthId: 'oauth-a', createdAt: 1, lastLoginAt: 1,
       onboardingComplete: true, encryptedRedisUrl: null, encryptedRedisToken: null,
       encryptedGeminiApiKey: null, encryptedAnthropicApiKey: null,
       encryptedOpenAiApiKey: null, encryptedOpenRouterApiKey: null, redisConfiguredAt: null,
-    });
+    }, 1_000, { client: redis.asPort() });
     expect(result).toEqual({ status: 'too-many-records' });
+    expect(redis.hashes.get('account-delete-journal')?.has('researcher-a')).toBe(false);
   });
 });

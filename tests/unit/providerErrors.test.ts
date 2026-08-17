@@ -135,7 +135,8 @@ describe('providerCallError', () => {
     expect(failure).toBeInstanceOf(ProviderFailure);
     expect((failure as ProviderFailure).kind).toBe('rate-limited');
     expect(errorSpy).toHaveBeenCalledTimes(1);
-    expect(errorSpy.mock.calls[0][1]).toEqual({
+    expect(JSON.parse(String(errorSpy.mock.calls[0][0]))).toMatchObject({
+      event: 'provider.failure',
       provider: 'gemini',
       operation: 'interview',
       errorType: 'Error',
@@ -143,6 +144,17 @@ describe('providerCallError', () => {
     });
     // Never leak SDK error messages, bodies, or keys into logs.
     expect(JSON.stringify(errorSpy.mock.calls[0])).not.toContain('sk-abc123');
+  });
+
+  it('does not emit a second log when providerErrorResponse handles the classified failure', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const raw = Object.assign(new Error('secret provider body sk-abc123'), { status: 502 });
+    const failure = providerCallError('gemini', 'interview', raw);
+    const response = providerErrorResponse(failure);
+    expect(response.status).toBe(502);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain('sk-abc123');
+    errorSpy.mockRestore();
   });
 });
 
@@ -162,11 +174,17 @@ describe('providerErrorResponse', () => {
   });
 
   it('returns 500 for unexpected errors without echoing their message', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const response = providerErrorResponse(new Error('secret provider detail'));
     expect(response.status).toBe(500);
     const body = await response.json();
     expect(body.error).toBe('Failed to generate response');
     expect(JSON.stringify(body)).not.toContain('secret provider detail');
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    const payload = JSON.parse(String(errorSpy.mock.calls[0][0])) as { event: string; route: string };
+    expect(payload).toMatchObject({ event: 'route.failure', route: 'provider', errorType: 'Error' });
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain('secret provider detail');
+    errorSpy.mockRestore();
   });
 
   it('keeps all client messages generic', async () => {

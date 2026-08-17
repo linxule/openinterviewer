@@ -6,22 +6,36 @@ export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { getPublicConfig } from '@/lib/hostedConfig';
 import { getKVClient, getPlatformClient } from '@/lib/kvClient';
+import { ensurePlatformSchemaLineage } from '@/lib/platformSchema';
 
 const READINESS_TIMEOUT_MS = 2_000;
 
-async function databaseReady(mode: 'standalone' | 'hosted'): Promise<boolean> {
+async function withTimeout<T>(work: Promise<T>): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     const deadline = new Promise<never>((_, reject) => {
       timeout = setTimeout(() => reject(new Error('readiness timeout')), READINESS_TIMEOUT_MS);
     });
-    const client = mode === 'hosted' ? getPlatformClient() : getKVClient();
-    const pong = await Promise.race([client.ping(), deadline]);
-    return pong === 'PONG';
-  } catch {
-    return false;
+    return await Promise.race([work, deadline]);
   } finally {
     if (timeout) clearTimeout(timeout);
+  }
+}
+
+async function databaseReady(mode: 'standalone' | 'hosted'): Promise<boolean> {
+  try {
+    const client = mode === 'hosted' ? getPlatformClient() : getKVClient();
+    return await withTimeout(client.ping()) === 'PONG';
+  } catch {
+    return false;
+  }
+}
+
+async function schemaLineageReady(): Promise<boolean> {
+  try {
+    return await withTimeout(ensurePlatformSchemaLineage(getPlatformClient())) === 'ok';
+  } catch {
+    return false;
   }
 }
 
@@ -31,7 +45,10 @@ export async function GET() {
   const platformReady = config.mode && configurationReady
     ? await databaseReady(config.mode)
     : false;
-  const ready = configurationReady && platformReady;
+  const schemaReady = config.mode === 'hosted' && configurationReady && platformReady
+    ? await schemaLineageReady()
+    : config.mode !== 'hosted';
+  const ready = Boolean(configurationReady && platformReady && schemaReady);
 
   return NextResponse.json(
     {
@@ -40,6 +57,7 @@ export async function GET() {
       checks: {
         configuration: configurationReady,
         platformDatabase: platformReady,
+        ...(config.mode === 'hosted' ? { schemaLineage: schemaReady } : {}),
       },
     },
     {

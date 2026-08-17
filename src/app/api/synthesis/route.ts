@@ -8,7 +8,11 @@ import { NextResponse } from 'next/server';
 import {
   getInterviewProvider,
 } from '@/lib/providers';
-import { getParticipantRequestContext, providerKeysFromContext } from '@/lib/researcherContext';
+import {
+  providerKeysFromContext,
+  resolveParticipantOrPreviewContext,
+  selectedStudyIdFromParticipantBody,
+} from '@/lib/researcherContext';
 import { loadCanonicalStudy } from '@/lib/canonicalStudy';
 import { providerErrorResponse } from '@/lib/providerErrors';
 import { participantRateLimitResponse } from '@/lib/rateLimit';
@@ -23,18 +27,10 @@ import {
   InterviewMessage,
   BehaviorData
 } from '@/types';
+import { createRequestId, logRequestFailure } from '@/lib/requestLog';
 
 export async function POST(request: Request) {
   try {
-    // Verify participant token and resolve researcher context
-    const { valid, context, studyId, isAdmin, error, statusCode, linkId, participantSessionId } = await getParticipantRequestContext(request);
-    if (!valid || !context) {
-      return NextResponse.json(
-        { error: error || 'Valid participant token required' },
-        { status: statusCode ?? 401 }
-      );
-    }
-
     const parsedBody = await readBoundedJsonObject(request, 600_000);
     if (!parsedBody.ok) {
       return NextResponse.json(
@@ -43,6 +39,18 @@ export async function POST(request: Request) {
       );
     }
     const body = parsedBody.value;
+
+    const { valid, context, studyId, isAdmin, error, statusCode, linkId, participantSessionId } =
+      await resolveParticipantOrPreviewContext(request, {
+        purpose: 'read',
+        selectedStudyId: selectedStudyIdFromParticipantBody(body),
+      });
+    if (!valid || !context) {
+      return NextResponse.json(
+        { error: error || 'Valid participant token required' },
+        { status: statusCode ?? 401 }
+      );
+    }
     let {
       history,
       behaviorData,
@@ -163,7 +171,13 @@ export async function POST(request: Request) {
       return providerErrorResponse(providerError);
     }
   } catch (error) {
-    console.error('Synthesis API error:', error);
+    logRequestFailure({
+      event: 'route.failure',
+      route: '/api/synthesis',
+      method: 'POST',
+      status: 500,
+      requestId: createRequestId(request.headers.get('x-request-id')),
+    }, error);
     return NextResponse.json(
       { error: 'Failed to synthesize interview' },
       { status: 500 }

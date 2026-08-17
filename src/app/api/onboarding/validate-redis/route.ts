@@ -9,6 +9,8 @@ import { isHostedMode } from '@/lib/mode';
 import { normalizeCredential, validateRedisCredentials } from '@/lib/credentialValidation';
 import { consumePlatformRateLimit } from '@/lib/platformDb';
 import { readBoundedJsonObject } from '@/lib/requestBody';
+import { schemaHoldResponse } from '@/lib/researcherAccess';
+import { createRequestId, logRequestFailure } from '@/lib/requestLog';
 
 export async function POST(request: Request) {
   if (!isHostedMode()) {
@@ -20,6 +22,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: error || 'Unauthorized' }, { status: 401 });
   }
   const rateLimit = await consumePlatformRateLimit('redis-validation', researcherId, 30, 3_600);
+  if (rateLimit.status === 'hold') return schemaHoldResponse();
   if (rateLimit.status === 'unavailable') {
     return NextResponse.json({ error: 'Validation is temporarily unavailable' }, { status: 503 });
   }
@@ -52,7 +55,13 @@ export async function POST(request: Request) {
       { status: result.reason === 'invalid' ? 400 : 503 }
     );
   } catch (error) {
-    console.error('Redis validation error:', error);
+    logRequestFailure({
+      event: 'route.failure',
+      route: '/api/onboarding/validate-redis',
+      method: 'POST',
+      status: 200,
+      requestId: createRequestId(request.headers.get('x-request-id')),
+    }, error);
     return NextResponse.json({
       valid: false,
       error: 'Failed to connect. Check your URL and token.',

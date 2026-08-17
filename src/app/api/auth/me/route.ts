@@ -7,6 +7,7 @@ import { NextResponse } from 'next/server';
 import { getHostedResearcherIdentity, getRequestContext } from '@/lib/researcherContext';
 import { getResearcherByIdChecked, toResearcherProfile } from '@/lib/platformDb';
 import { isHostedMode } from '@/lib/mode';
+import { logRequestFailure } from '@/lib/requestLog';
 
 export async function GET() {
   try {
@@ -42,7 +43,12 @@ export async function GET() {
       profile: toResearcherProfile(loaded.researcher),
     });
   } catch (error) {
-    console.error('Auth me error:', error);
+    logRequestFailure({
+      event: 'route.failure',
+      route: '/api/auth/me',
+      method: 'GET',
+      status: 500,
+    }, error);
     return NextResponse.json(
       { error: 'Failed to get profile' },
       { status: 500 }

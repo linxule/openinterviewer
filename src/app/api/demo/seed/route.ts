@@ -16,6 +16,7 @@ import {
   resolveAITransport,
 } from '@/lib/aiTransport';
 import { isHostedMode } from '@/lib/mode';
+import { logRequestFailure } from '@/lib/requestLog';
 
 export async function POST() {
   try {
@@ -105,7 +106,12 @@ export async function POST() {
       }
     });
   } catch (error) {
-    console.error('Sample workspace seed error:', error);
+    logRequestFailure({
+      event: 'route.failure',
+      route: '/api/demo/seed',
+      method: 'POST',
+      status: 500,
+    }, error);
     return NextResponse.json(
       { error: 'Failed to seed sample workspace data' },
       { status: 500 }
@@ -161,7 +167,12 @@ export async function DELETE() {
       }
     });
   } catch (error) {
-    console.error('Sample workspace clear error:', error);
+    logRequestFailure({
+      event: 'route.failure',
+      route: '/api/demo/seed',
+      method: 'DELETE',
+      status: 500,
+    }, error);
     return NextResponse.json(
       { error: 'Failed to clear sample workspace data' },
       { status: 500 }

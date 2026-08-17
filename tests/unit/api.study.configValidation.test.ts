@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { STUDY_MUTATION_MAX_BYTES } from '@/lib/studyConfigValidation';
 import { makeStoredStudy, makeStudyConfig } from '../fixtures/models';
 
-const contextMock = vi.hoisted(() => ({ getRequestContext: vi.fn() }));
+const contextMock = vi.hoisted(() => ({
+  getRequestContext: vi.fn(),
+  getAuthorizedResearcherStudyContext: vi.fn(),
+}));
 vi.mock('@/lib/researcherContext', () => contextMock);
 
 const kvMock = vi.hoisted(() => ({
@@ -45,6 +48,17 @@ beforeEach(() => {
     },
     researcherId: 'researcher-a',
   });
+  contextMock.getAuthorizedResearcherStudyContext.mockImplementation(async (id: string) => ({
+    authorized: true,
+    context: {
+      kvClient: {},
+      geminiApiKey: 'gemini-key',
+      anthropicApiKey: null,
+      openaiApiKey: null,
+      openrouterApiKey: null,
+    },
+    researcherId: 'researcher-a',
+  }));
   kvMock.isKVAvailable.mockResolvedValue(true);
   kvMock.createStudyAtomic.mockResolvedValue('created');
 });
@@ -132,5 +146,35 @@ describe('study route configuration validation', () => {
 
     expect(response.status).toBe(400);
     expect(kvMock.replaceStudyConfigAtomic).not.toHaveBeenCalled();
+  });
+
+  it('maps persist-guard to 409 STUDY_OPERATION_PENDING and conflict to 409 without inventing a 503', async () => {
+    const config = makeStudyConfig({ id: 'study-validation', createdAt: 123 });
+    kvMock.getStudy.mockResolvedValue(makeStoredStudy({
+      id: 'study-validation',
+      config,
+      createdAt: 123,
+      revision: 3,
+    }));
+    kvMock.replaceStudyConfigAtomic.mockResolvedValue({ status: 'persist-guard' });
+
+    const guarded = await PUT(request(
+      'http://localhost/api/studies/study-validation',
+      'PUT',
+      { config: { name: 'Later' } }
+    ), { params: Promise.resolve({ id: 'study-validation' }) });
+    expect(guarded.status).toBe(409);
+    await expect(guarded.json()).resolves.toMatchObject({
+      code: 'STUDY_OPERATION_PENDING',
+      retryable: true,
+    });
+
+    kvMock.replaceStudyConfigAtomic.mockResolvedValue({ status: 'conflict' });
+    const conflicted = await PUT(request(
+      'http://localhost/api/studies/study-validation',
+      'PUT',
+      { config: { name: 'Later' } }
+    ), { params: Promise.resolve({ id: 'study-validation' }) });
+    expect(conflicted.status).toBe(409);
   });
 });

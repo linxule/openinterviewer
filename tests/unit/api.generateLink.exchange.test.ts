@@ -6,6 +6,31 @@ import { makeStudyConfig } from '../fixtures/models';
 const contextMock = vi.hoisted(() => ({
   getParticipantRequestContext: vi.fn(),
   getRequestContext: vi.fn(),
+  getAuthorizedResearcherStudyContext: vi.fn(),
+  presentStudyAuthority: vi.fn((result: { status: string }, audience: 'researcher' | 'participant') => {
+    if (result.status === 'allow') return { ok: true };
+    if (audience === 'participant') {
+      if (result.status === 'live' || result.status === 'deny' || result.status === 'notfound' || result.status === 'noacct') {
+        return { ok: false, statusCode: 404, error: 'This study is no longer active.' };
+      }
+      return {
+        ok: false,
+        statusCode: 503,
+        error: 'Unable to verify study status. Please try again later.',
+        retryable: result.status !== 'hold',
+      };
+    }
+    if (result.status === 'live') {
+      return {
+        ok: false,
+        statusCode: 409,
+        error: 'A study operation is already in progress.',
+        retryable: true,
+        code: 'STUDY_OPERATION_PENDING',
+      };
+    }
+    return { ok: false, statusCode: 503, error: 'Unable to verify study authority', retryable: true };
+  }),
 }));
 
 vi.mock('@/lib/researcherContext', () => contextMock);
@@ -13,6 +38,24 @@ vi.mock('@/lib/researcherContext', () => contextMock);
 const participantLinksMock = vi.hoisted(() => ({
   createParticipantLinkRecord: vi.fn(),
   getParticipantLinkByCode: vi.fn(),
+  asStudyAuthorityFromLink: vi.fn((result: { status: string; phase?: 'reserving' | 'pending' | 'resolving' | 'publishing' }) => {
+    if (result.status === 'live' && result.phase) return { status: 'live', phase: result.phase };
+    if (
+      result.status === 'adel'
+      || result.status === 'hold'
+      || result.status === 'noacct'
+      || result.status === 'deny'
+      || result.status === 'notfound'
+      || result.status === 'corrupt'
+      || result.status === 'mismatch'
+      || result.status === 'unavailable'
+      || result.status === 'ambiguous'
+      || result.status === 'invalid'
+    ) {
+      return { status: result.status };
+    }
+    return null;
+  }),
 }));
 
 vi.mock('@/lib/participantLinks', () => participantLinksMock);
@@ -63,6 +106,9 @@ beforeEach(() => {
     },
     researcherId: null,
   });
+  contextMock.getAuthorizedResearcherStudyContext.mockImplementation(
+    () => contextMock.getRequestContext(),
+  );
 });
 
 afterEach(() => {
@@ -93,6 +139,34 @@ describe('GET /api/generate-link participant-session exchange', () => {
     expect(cookieA).toContain('HttpOnly');
     expect(cookieB).toContain('HttpOnly');
     expect(cookieA).not.toBe(cookieB);
+  });
+
+  it('maps live exchange to an opaque 404 and sets no participant cookie', async () => {
+    participantLinksMock.getParticipantLinkByCode.mockResolvedValue({
+      status: 'live',
+      phase: 'pending',
+    });
+
+    const response = await GET(new Request('http://localhost/api/generate-link?token=code-a'));
+    const body = await response.json();
+
+    expect(response.status).toBe(404);
+    expect(body).toEqual({ valid: false, error: 'This study is no longer active.' });
+    expect(response.headers.get('set-cookie')).toBeNull();
+    expect(contextMock.getParticipantRequestContext).not.toHaveBeenCalled();
+  });
+
+  it('maps pair-mismatch exchange to 503 and sets no participant cookie', async () => {
+    participantLinksMock.getParticipantLinkByCode.mockResolvedValue({ status: 'mismatch' });
+
+    const response = await GET(new Request('http://localhost/api/generate-link?token=code-a'));
+    const body = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(body.valid).toBe(false);
+    expect(body.retryable).toBe(true);
+    expect(response.headers.get('set-cookie')).toBeNull();
+    expect(contextMock.getParticipantRequestContext).not.toHaveBeenCalled();
   });
 });
 

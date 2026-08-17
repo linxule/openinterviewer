@@ -10,19 +10,11 @@ import {
   AIInterviewResponse,
   QuestionProgress
 } from '@/types';
+import { logRequestFailure } from '@/lib/requestLog';
+import { buildParticipantOrPreviewHeaders } from '@/services/participantHeaders';
 
 // Participant authority is a short-lived HttpOnly same-site cookie. Share-link
 // codes and session credentials are never exposed to this JavaScript service.
-const buildHeaders = (
-  researcherPreview = false,
-  participantSessionHandle?: string | null
-): HeadersInit => ({
-  'Content-Type': 'application/json',
-  ...(researcherPreview ? { 'X-OpenInterviewer-Preview': '1' } : {}),
-  ...(!researcherPreview && participantSessionHandle
-    ? { 'X-OpenInterviewer-Participant-Session': participantSessionHandle }
-    : {}),
-});
 
 // Generate AI interviewer response
 export const generateInterviewResponse = async (
@@ -37,7 +29,10 @@ export const generateInterviewResponse = async (
   try {
     const response = await fetch('/api/interview', {
       method: 'POST',
-      headers: buildHeaders(researcherPreview, participantSessionHandle),
+      headers: buildParticipantOrPreviewHeaders({
+        researcherPreview,
+        participantSessionHandle,
+      }),
       body: JSON.stringify({
         history,
         studyConfig,
@@ -53,7 +48,7 @@ export const generateInterviewResponse = async (
 
     return await response.json();
   } catch (error) {
-    console.error('Error generating interview response:', error);
+    logRequestFailure({ event: 'route.failure' }, error);
     throw error;
   }
 };
@@ -67,7 +62,10 @@ export const getInterviewGreeting = async (
   try {
     const response = await fetch('/api/greeting', {
       method: 'POST',
-      headers: buildHeaders(researcherPreview, participantSessionHandle),
+      headers: buildParticipantOrPreviewHeaders({
+        researcherPreview,
+        participantSessionHandle,
+      }),
       body: JSON.stringify({ studyConfig })
     });
 
@@ -78,7 +76,7 @@ export const getInterviewGreeting = async (
     const data = await response.json();
     return data.greeting;
   } catch (error) {
-    console.error('Error getting interview greeting:', error);
+    logRequestFailure({ event: 'route.failure' }, error);
     throw error;
   }
 };
@@ -95,7 +93,10 @@ export const synthesizeInterview = async (
   try {
     const response = await fetch('/api/synthesis', {
       method: 'POST',
-      headers: buildHeaders(researcherPreview, participantSessionHandle),
+      headers: buildParticipantOrPreviewHeaders({
+        researcherPreview,
+        participantSessionHandle,
+      }),
       body: JSON.stringify({
         history,
         studyConfig,
@@ -110,7 +111,7 @@ export const synthesizeInterview = async (
 
     return await response.json();
   } catch (error) {
-    console.error('Error synthesizing interview:', error);
+    logRequestFailure({ event: 'route.failure' }, error);
     throw error;
   }
 };

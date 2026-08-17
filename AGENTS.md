@@ -6,7 +6,7 @@ This is the canonical repository guide for coding agents and contributors. `READ
 
 1. Run `git status --short --branch` and preserve unrelated work. The local `.claude/` directory is user-owned unless the user explicitly puts it in scope.
 2. Read the relevant implementation and its paired tests before editing. Do not infer current production state from source code.
-3. Use Node 24 (`.nvmrc` and `.node-version`) and npm. `package-lock.json` is authoritative.
+3. Use Node 24.19+ (`.nvmrc` and `.node-version` are `24.19.0`) and npm. `package-lock.json` is authoritative.
 4. For Next.js behavior, consult the version-matched guides in `node_modules/next/dist/docs/`; this is Next.js 16, not an older App Router contract.
 5. Never use production credentials, real participant content, or a writable production database for tests.
 
@@ -39,7 +39,7 @@ The sample-workspace seed is not the public demo. `/demo` is component-memory-on
 ### Deployment and request authority
 
 - Mode resolution: `src/lib/mode.ts`
-- Configuration/readiness: `src/lib/hostedConfig.ts`, `src/lib/appBaseUrl.ts`
+- Configuration/readiness: `src/lib/hostedConfig.ts`, `src/lib/appBaseUrl.ts`, `src/lib/platformSchema.ts`
 - Session and participant-cookie contracts: `src/lib/auth.ts`
 - Page protection: `src/proxy.ts`, `src/lib/researcherAccess.ts`
 - Researcher/participant request contexts: `src/lib/researcherContext.ts`
@@ -50,9 +50,14 @@ The sample-workspace seed is not the public demo. `/demo` is component-memory-on
 
 - Researcher studies/interviews and atomic Redis scripts: `src/lib/kv.ts`
 - Redis client construction, cache lifecycle, and Upstash URL validation: `src/lib/kvClient.ts`
-- Hosted accounts, ownership, quotas, and operation records: `src/lib/platformDb.ts`
+- Public Redis port and node-redis test adapter: `src/lib/redisPort.ts`, `src/lib/redisNodeAdapter.ts`
+- Closed Redis wire parsers: `src/lib/wire/`
+- Hosted accounts, ownership, quotas, and operation records: `src/lib/platformDb.ts`, `src/lib/platformDb.operations.ts`, `src/lib/platformDb.accountDelete.ts`
+- Create idempotency mapping: `src/lib/createIdempotency.ts`
+- Hosted owned-study collection loading: `src/lib/ownedStudies.ts`
 - Hosted credential envelopes: `src/lib/crypto.ts`
 - Cross-database study-operation repair: `src/lib/studyOperationReconciler.ts`
+- Disposable Redis fault harness: `tests/helpers/disposableRedis.ts`, `tests/helpers/faultManifest.ts`
 
 Hosted study create/delete is a durable cross-database operation. Preserve the operation marker/tombstone and reconciliation protocol; a superficially simpler sequence can reintroduce orphaned ownership or BYOS records.
 
@@ -98,6 +103,8 @@ The participant sequence is link exchange -> HttpOnly participant session -> con
 | Auth/participant authority | `auth.ts`, `proxy.ts`, `researcherContext.ts`, participant libraries | matching auth/consent/link tests + `npm run check` |
 | Storage/tenancy | `kv.ts`, `kvClient.ts`, `platformDb.ts`, reconciler | atomicity/tenancy/saga tests + `npm run check` |
 | Providers/provenance | `aiTransport.ts`, `providers/`, `prompts/`, interview/synthesis routes | transport/provider/provenance tests + direct/Gateway build contracts + `npm run check` |
+| Structured request logs | `src/lib/requestLog.ts`, `providerErrors.ts`, API catch sites | `requestLog.test.ts` + `providerErrors.test.ts` + health/config contract tests |
+| Participant/preview headers | `src/services/participantHeaders.ts`, `interviewApi.ts`, `storageService.ts`, `Consent.tsx` | `participantHeaders.test.ts` + `participantSessionHeaders.test.ts` + consent/isolation suites |
 | Researcher UI | components, services, page entry | paired component/API tests; inspect 375px when layout changes |
 
 Tests live in `tests/unit/` and mirror the security or product boundary they protect. Prefer a realistic regression at that boundary over snapshots of implementation detail.

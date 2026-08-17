@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 24.19.0
           cache: npm
       - run: npm ci
       - name: Audit production dependencies
@@ -75,6 +75,7 @@ jobs:
           PLATFORM_KV_REST_API_URL: https://build-test.upstash.io
           PLATFORM_KV_REST_API_TOKEN: hosted-build-platform-token
           PLATFORM_KEY_PREFIX: build-test
+          PLATFORM_SCHEMA_LINEAGE: v2-clean
           CREDENTIAL_ENCRYPTION_KEYS: '{"build-test":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}'
           CREDENTIAL_ENCRYPTION_ACTIVE_KEY_ID: build-test
           GOOGLE_CLIENT_ID: hosted-build-google-client
@@ -110,6 +111,7 @@ jobs:
           PLATFORM_KV_REST_API_URL: https://build-test.upstash.io
           PLATFORM_KV_REST_API_TOKEN: hosted-build-platform-token
           PLATFORM_KEY_PREFIX: build-test
+          PLATFORM_SCHEMA_LINEAGE: v2-clean
           CREDENTIAL_ENCRYPTION_KEYS: '{"build-test":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}'
           CREDENTIAL_ENCRYPTION_ACTIVE_KEY_ID: build-test
           GOOGLE_CLIENT_ID: hosted-build-google-client
@@ -127,7 +129,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 24.19.0
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium
@@ -138,3 +140,33 @@ jobs:
           name: playwright-report
           path: playwright-report
           if-no-files-found: ignore
+
+  redis-crash:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.19.0
+          cache: npm
+      - run: npm ci
+      - name: Real-Redis crash cuts
+        run: npm run test:redis-crash
+        env:
+          REDIS_URL: ''
+
+  adversarial:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.19.0
+          cache: npm
+      - run: npm ci
+      - name: Shared-BYOS adversarial matrix
+        run: npm run test:adversarial
+        env:
+          REDIS_URL: ''

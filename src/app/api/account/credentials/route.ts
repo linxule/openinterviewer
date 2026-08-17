@@ -10,9 +10,9 @@ import {
   getResearcherByIdChecked,
   updateResearcherCredentialsAtomic,
 } from '@/lib/platformDb';
-import { decrypt } from '@/lib/crypto';
 import { evictResearcherClients } from '@/lib/kvClient';
 import { readBoundedJsonObject } from '@/lib/requestBody';
+import { schemaHoldResponse } from '@/lib/researcherAccess';
 
 type CredentialTarget = 'gemini' | 'anthropic' | 'openai' | 'openrouter' | 'redis' | 'all';
 
@@ -41,6 +41,7 @@ export async function DELETE(request: Request) {
     );
   }
   const rateLimit = await consumePlatformRateLimit('credential-clear', identity.researcherId, 30, 3_600);
+  if (rateLimit.status === 'hold') return schemaHoldResponse();
   if (rateLimit.status === 'unavailable') {
     return NextResponse.json({ error: 'Credential service is temporarily unavailable' }, { status: 503 });
   }
@@ -105,20 +106,23 @@ export async function DELETE(request: Request) {
   if (result.status === 'conflict') {
     return NextResponse.json({ error: 'Credentials changed in another request. Refresh and try again.' }, { status: 409 });
   }
+  if (result.status === 'refused') {
+    return NextResponse.json(
+      { error: 'Cannot clear Redis while studies or live operations exist.' },
+      { status: 409 },
+    );
+  }
+  if (result.status === 'ambiguous') {
+    return NextResponse.json(
+      { error: 'Credential update may have committed. Refresh and retry.', retryable: true, reason: 'ambiguous' },
+      { status: 503 },
+    );
+  }
   if (result.status !== 'updated') {
     return NextResponse.json({ error: 'Failed to clear credentials' }, { status: 503 });
   }
 
-  if ((target === 'redis' || target === 'all') && researcher.encryptedRedisUrl) {
-    try {
-      evictResearcherClients(decrypt(researcher.encryptedRedisUrl, {
-        researcherId: identity.researcherId,
-        purpose: 'redis-url',
-      }));
-    } catch {
-      evictResearcherClients();
-    }
-  }
+  evictResearcherClients(result.evict);
 
   return NextResponse.json({
     success: true,

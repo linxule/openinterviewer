@@ -11,6 +11,7 @@ import {
   updateResearcherCredentialsAtomic,
 } from '@/lib/platformDb';
 import { isHostedMode } from '@/lib/mode';
+import { schemaHoldResponse } from '@/lib/researcherAccess';
 import { decrypt } from '@/lib/crypto';
 import { validateAiCredential, validateRedisCredentials } from '@/lib/credentialValidation';
 import { cookies } from 'next/headers';
@@ -18,6 +19,7 @@ import {
   normalizeOAuthReturnPath,
   POST_ONBOARDING_RETURN_COOKIE_NAME,
 } from '@/lib/hostedOAuth';
+import { logRequestFailure } from '@/lib/requestLog';
 
 export async function POST() {
   if (!isHostedMode()) {
@@ -30,6 +32,7 @@ export async function POST() {
   }
 
   const rateLimit = await consumePlatformRateLimit('onboarding-complete', researcherId, 12, 3_600);
+  if (rateLimit.status === 'hold') return schemaHoldResponse();
   if (rateLimit.status === 'unavailable') {
     return NextResponse.json({ error: 'Onboarding validation is temporarily unavailable' }, { status: 503 });
   }
@@ -129,7 +132,12 @@ export async function POST() {
     cookieStore.delete(POST_ONBOARDING_RETURN_COOKIE_NAME);
     return NextResponse.json({ success: true, redirectPath });
   } catch (error) {
-    console.error('Onboarding complete error:', error);
+    logRequestFailure({
+      event: 'route.failure',
+      route: '/api/onboarding/complete',
+      method: 'POST',
+      status: 500,
+    }, error);
     return NextResponse.json(
       { error: 'Failed to complete onboarding' },
       { status: 500 }

@@ -10,15 +10,17 @@ import {
   consumePlatformRateLimit,
   updateResearcherCredentialsAtomic,
 } from '@/lib/platformDb';
-import { decrypt, encrypt } from '@/lib/crypto';
+import { encrypt } from '@/lib/crypto';
 import { isHostedMode } from '@/lib/mode';
 import {
   normalizeCredential,
   validateAiCredential,
   validateRedisCredentials,
 } from '@/lib/credentialValidation';
-import { evictResearcherClients } from '@/lib/kvClient';
+import { evictResearcherClients, storageIdFromRedisUrl } from '@/lib/kvClient';
 import { readBoundedJsonObject } from '@/lib/requestBody';
+import { schemaHoldResponse } from '@/lib/researcherAccess';
+import { createRequestId, logRequestFailure } from '@/lib/requestLog';
 
 const hasOwn = (value: object, field: string) => Object.prototype.hasOwnProperty.call(value, field);
 const providerLabel = {
@@ -46,6 +48,7 @@ export async function POST(request: Request) {
   }
 
   const rateLimit = await consumePlatformRateLimit('credential-save', researcherId, 12, 3_600);
+  if (rateLimit.status === 'hold') return schemaHoldResponse();
   if (rateLimit.status === 'unavailable') {
     return NextResponse.json({ error: 'Credential service is temporarily unavailable' }, { status: 503 });
   }
@@ -201,33 +204,50 @@ export async function POST(request: Request) {
       || (hasOpenRouter ? !!openRouterApiKey : !!researcher.encryptedOpenRouterApiKey);
     if (!resultingHasRedis || !resultingHasAi) updates.onboardingComplete = false;
 
-    const result = await updateResearcherCredentialsAtomic(
-      researcherId,
-      researcher.credentialRevision ?? 0,
-      updates
-    );
+    let origin: { storageId: string } | undefined;
+    if (redisUrl && redisToken) {
+      const storageId = storageIdFromRedisUrl(redisUrl);
+      if (!storageId) {
+        return NextResponse.json({ error: 'Redis credentials are invalid' }, { status: 400 });
+      }
+      origin = { storageId };
+    }
+
+    const result = origin
+      ? await updateResearcherCredentialsAtomic(
+        researcherId,
+        researcher.credentialRevision ?? 0,
+        updates,
+        origin,
+      )
+      : await updateResearcherCredentialsAtomic(
+        researcherId,
+        researcher.credentialRevision ?? 0,
+        updates,
+      );
     if (result.status === 'conflict') {
       return NextResponse.json({ error: 'Credentials changed in another request. Refresh and try again.' }, { status: 409 });
     }
+    if (result.status === 'refused') {
+      return NextResponse.json(
+        { error: 'Cannot replace Redis while studies or live operations exist.' },
+        { status: 409 },
+      );
+    }
     if (result.status === 'not-found') {
       return NextResponse.json({ error: 'Researcher account not found' }, { status: 404 });
+    }
+    if (result.status === 'ambiguous') {
+      return NextResponse.json(
+        { error: 'Credential update may have committed. Refresh and retry.', retryable: true, reason: 'ambiguous' },
+        { status: 503 },
+      );
     }
     if (result.status !== 'updated') {
       return NextResponse.json({ error: 'Failed to save credentials' }, { status: 503 });
     }
 
-    if (hasRedisUrl && researcher.encryptedRedisUrl) {
-      try {
-        evictResearcherClients(decrypt(researcher.encryptedRedisUrl, {
-          researcherId,
-          purpose: 'redis-url',
-        }));
-      } catch {
-        // A corrupt/retired envelope cannot safely identify its cache entry.
-        // Clear the bounded cache rather than retaining a superseded token.
-        evictResearcherClients();
-      }
-    }
+    evictResearcherClients(result.evict);
 
     return NextResponse.json({
       success: true,
@@ -241,7 +261,13 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
-    console.error('Save credentials error:', error);
+    logRequestFailure({
+      event: 'route.failure',
+      route: '/api/onboarding/save-credentials',
+      method: 'POST',
+      status: 500,
+      requestId: createRequestId(request.headers.get('x-request-id')),
+    }, error);
     return NextResponse.json(
       { error: 'Failed to save credentials' },
       { status: 500 }

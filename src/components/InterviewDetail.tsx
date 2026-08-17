@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useRouter } from 'next/navigation';
 import { StoredInterview } from '@/types';
-import { getInterview } from '@/services/storageService';
+import { getInterview, StudyOperationPendingError } from '@/services/storageService';
 import ReactMarkdown from 'react-markdown';
 import {
   Loader2,
@@ -22,25 +22,31 @@ import {
 
 interface InterviewDetailProps {
   interviewId: string;
+  studyId?: string;
 }
 
-const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId }) => {
+const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId }) => {
   const router = useRouter();
   const [interview, setInterview] = useState<StoredInterview | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'transcript' | 'analysis'>('transcript');
+  const [operationPending, setOperationPending] = useState(false);
 
   const loadInterview = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await getInterview(interviewId);
+      const data = await getInterview(interviewId, studyId);
       setInterview(data);
     } catch (error) {
-      console.error('Error loading interview:', error);
+      if (error instanceof StudyOperationPendingError) {
+        setOperationPending(true);
+      } else {
+        console.error('Error loading interview:', error);
+      }
     } finally {
       setLoading(false);
     }
-  }, [interviewId]);
+  }, [interviewId, studyId]);
 
   useEffect(() => {
     void loadInterview();
@@ -122,8 +128,14 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId }) => {
     return (
       <div className="min-h-screen bg-stone-900 flex items-center justify-center p-8">
         <div className="text-center">
-          <h1 className="text-xl font-semibold text-white mb-2">Interview Not Found</h1>
-          <p className="text-stone-400 mb-4">This interview may have been deleted.</p>
+          <h1 className="text-xl font-semibold text-white mb-2">
+            {operationPending ? 'Study change pending' : 'Interview Not Found'}
+          </h1>
+          <p className="text-stone-400 mb-4">
+            {operationPending
+              ? 'A study operation is already in progress.'
+              : 'This interview may have been deleted.'}
+          </p>
           <button
             onClick={() => router.push('/dashboard')}
             className="px-4 py-2 bg-stone-600 text-white rounded-xl"

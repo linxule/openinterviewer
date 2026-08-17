@@ -3,7 +3,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeStoredStudy } from '../fixtures/models';
 
-const contextMock = vi.hoisted(() => ({ getParticipantRequestContext: vi.fn() }));
+const contextMock = vi.hoisted(() => ({
+  getParticipantRequestContext: vi.fn(),
+  resolveParticipantOrPreviewContext: vi.fn((request: Request, options?: unknown) =>
+    contextMock.getParticipantRequestContext(request, options)
+  ),
+  selectedStudyIdFromParticipantBody: vi.fn((body: Record<string, unknown>) => {
+    if (typeof body.studyId === 'string' && body.studyId.length > 0) return body.studyId;
+    return undefined;
+  }),
+}));
 vi.mock('@/lib/researcherContext', () => contextMock);
 
 const consentMock = vi.hoisted(() => ({ recordParticipantConsent: vi.fn() }));

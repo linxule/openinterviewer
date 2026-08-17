@@ -6,6 +6,7 @@ import { motion } from 'framer-motion';
 import { useStore } from '@/store';
 import { Shield, ArrowRight, ArrowLeft, MessageSquare, Clock, HelpCircle, Loader2 } from 'lucide-react';
 import { PROVIDER_OPTIONS } from '@/lib/providerRegistry';
+import { buildParticipantOrPreviewHeaders } from '@/services/participantHeaders';
 
 const Consent: React.FC = () => {
   const router = useRouter();
@@ -29,13 +30,10 @@ const Consent: React.FC = () => {
     try {
       const response = await fetch('/api/consent', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(viewMode === 'preview' ? { 'X-OpenInterviewer-Preview': '1' } : {}),
-          ...(viewMode === 'participant' && participantSessionHandle
-            ? { 'X-OpenInterviewer-Participant-Session': participantSessionHandle }
-            : {}),
-        },
+        headers: buildParticipantOrPreviewHeaders({
+          researcherPreview: viewMode === 'preview',
+          participantSessionHandle,
+        }),
         body: JSON.stringify({ studyId: studyConfig.id }),
       });
       const data = await response.json().catch(() => ({})) as {

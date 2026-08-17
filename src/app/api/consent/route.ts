@@ -1,11 +1,24 @@
 import { NextResponse } from 'next/server';
 import { loadCanonicalStudy } from '@/lib/canonicalStudy';
 import { recordParticipantConsent } from '@/lib/participantConsent';
-import { getParticipantRequestContext } from '@/lib/researcherContext';
+import {
+  resolveParticipantOrPreviewContext,
+  selectedStudyIdFromParticipantBody,
+} from '@/lib/researcherContext';
 import { readBoundedJsonObject } from '@/lib/requestBody';
+import { createRequestId, logRequestFailure } from '@/lib/requestLog';
 
 export async function POST(request: Request) {
   try {
+    const parsedBody = await readBoundedJsonObject(request, 1_000);
+    if (!parsedBody.ok) {
+      return NextResponse.json(
+        { error: parsedBody.status === 413 ? 'Consent request is too large.' : 'Consent request is malformed.' },
+        { status: parsedBody.status }
+      );
+    }
+    const assertedStudyId = selectedStudyIdFromParticipantBody(parsedBody.value);
+
     const {
       valid,
       context,
@@ -16,24 +29,16 @@ export async function POST(request: Request) {
       isAdmin,
       error,
       statusCode,
-    } = await getParticipantRequestContext(request);
+    } = await resolveParticipantOrPreviewContext(request, {
+      purpose: 'read',
+      selectedStudyId: assertedStudyId,
+    });
     if (!valid || !context) {
       return NextResponse.json(
         { error: error || 'A valid participant or researcher preview session is required.' },
         { status: statusCode ?? 401 }
       );
     }
-
-    const parsedBody = await readBoundedJsonObject(request, 1_000);
-    if (!parsedBody.ok) {
-      return NextResponse.json(
-        { error: parsedBody.status === 413 ? 'Consent request is too large.' : 'Consent request is malformed.' },
-        { status: parsedBody.status }
-      );
-    }
-    const assertedStudyId = typeof parsedBody.value.studyId === 'string'
-      ? parsedBody.value.studyId
-      : undefined;
 
     // Preview records are deliberately ephemeral: the authenticated researcher
     // exercises the same transition without writing participant consent data.
@@ -95,7 +100,13 @@ export async function POST(request: Request) {
       acceptedAt: recorded.consent.acceptedAt,
     });
   } catch (error) {
-    console.error('Participant consent API error:', error);
+    logRequestFailure({
+      event: 'route.failure',
+      route: '/api/consent',
+      method: 'POST',
+      status: 500,
+      requestId: createRequestId(request.headers.get('x-request-id')),
+    }, error);
     return NextResponse.json(
       { error: 'Failed to record participant consent.' },
       { status: 500 }

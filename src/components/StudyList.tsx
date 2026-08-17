@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useRouter } from 'next/navigation';
-import { StoredStudy } from '@/types';
+import { isPendingStudyStub, StudyWorkspaceItem } from '@/types';
 import {
   deleteStudy,
   getAllStudies,
@@ -31,7 +31,7 @@ import {
 
 const StudyList: React.FC = () => {
   const router = useRouter();
-  const [studies, setStudies] = useState<StoredStudy[]>([]);
+  const [studies, setStudies] = useState<StudyWorkspaceItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
@@ -45,9 +45,14 @@ const StudyList: React.FC = () => {
   const loadStudies = async () => {
     setLoading(true);
     try {
-      const { studies: data, warning } = await getAllStudies();
+      const { studies: data, pendingStudies, warning, outcome } = await getAllStudies();
       setStudies(data);
-      setKvWarning(warning || null);
+      setKvWarning(warning || (outcome.status !== 'ok' ? outcome.error : null));
+      if (pendingStudies && pendingStudies.length > 0) {
+        setOperationNotice(
+          `${pendingStudies.length} study operation(s) are awaiting reconciliation.`,
+        );
+      }
     } catch (error) {
       console.error('Error loading studies:', error);
     } finally {
@@ -271,11 +276,17 @@ const StudyList: React.FC = () => {
           >
             <AlertTriangle size={20} className="text-amber-400 flex-shrink-0 mt-0.5" />
             <div className="flex-1">
-              <h4 className="font-medium text-amber-300 mb-1">Storage Not Configured</h4>
+              <h4 className="font-medium text-amber-300 mb-1">
+                {kvWarning.toLowerCase().includes('unavailable')
+                  ? 'Workspace unavailable'
+                  : 'Storage Not Configured'}
+              </h4>
               <p className="text-sm text-amber-400/80">{kvWarning}</p>
-              <p className="text-sm text-amber-400/60 mt-2">
-                See the README for setup instructions using Upstash Redis.
-              </p>
+              {!kvWarning.toLowerCase().includes('unavailable') && (
+                <p className="text-sm text-amber-400/60 mt-2">
+                  See the README for setup instructions using Upstash Redis.
+                </p>
+              )}
             </div>
           </motion.div>
         )}
@@ -296,7 +307,7 @@ const StudyList: React.FC = () => {
                 className="ml-auto inline-flex items-center gap-2 rounded-lg border border-amber-700 px-3 py-2 text-sm text-amber-200 hover:bg-amber-900/40 disabled:opacity-50"
               >
                 <RefreshCw size={14} className={isReconciling ? 'animate-spin' : ''} />
-                Retry repair
+                Reconcile
               </button>
             )}
           </motion.div>
@@ -344,11 +355,16 @@ const StudyList: React.FC = () => {
             <div className="w-16 h-16 rounded-full bg-stone-800 flex items-center justify-center mx-auto mb-4">
               <BookOpen size={32} className="text-stone-500" />
             </div>
-            <h2 className="text-xl font-semibold text-white mb-2">No Studies Yet</h2>
+            <h2 className="text-xl font-semibold text-white mb-2">
+              {kvWarning ? 'Workspace unavailable' : 'No Studies Yet'}
+            </h2>
             <p className="text-stone-400 mb-6">
-              Create your first study or load a synthetic sample workspace.
+              {kvWarning
+                ? kvWarning
+                : 'Create your first study or load a synthetic sample workspace.'}
             </p>
             <div className="flex items-center justify-center gap-4">
+              {!kvWarning && (
               <button
                 onClick={() => router.push('/setup')}
                 className="px-6 py-3 bg-stone-600 hover:bg-stone-500 text-white rounded-xl transition-colors flex items-center gap-2"
@@ -356,6 +372,7 @@ const StudyList: React.FC = () => {
                 <Plus size={18} />
                 Create Study
               </button>
+              )}
               {!kvWarning && (
                 <button
                   onClick={handleLoadSample}
@@ -379,7 +396,10 @@ const StudyList: React.FC = () => {
           </motion.div>
         ) : (
           <div className="grid gap-4 md:grid-cols-2">
-            {studies.map((study, index) => (
+            {studies.map((study, index) => {
+              const pending = isPendingStudyStub(study);
+              const name = pending ? 'Study change pending' : study.config.name;
+              return (
               <motion.div
                 key={study.id}
                 initial={{ opacity: 0, y: 20 }}
@@ -392,7 +412,7 @@ const StudyList: React.FC = () => {
                   <button
                     onClick={() => setMenuOpenId(menuOpenId === study.id ? null : study.id)}
                     className="p-2 text-stone-500 hover:text-stone-400 rounded-lg hover:bg-stone-700"
-                    aria-label={`Open actions for ${study.config.name}`}
+                    aria-label={`Open actions for ${name}`}
                   >
                     <MoreVertical size={16} />
                   </button>
@@ -410,19 +430,20 @@ const StudyList: React.FC = () => {
                       </button>
                       <button
                         onClick={() => {
-                          // Store study config in sessionStorage for setup page
+                          if (pending) return;
                           sessionStorage.setItem('prefillStudyConfig', JSON.stringify(study.config));
                           router.push(`/setup?prefill=edit&studyId=${study.id}`);
                           setMenuOpenId(null);
                         }}
-                        className="w-full px-4 py-2 text-left text-sm text-stone-300 hover:bg-stone-700 flex items-center gap-2"
+                        disabled={pending}
+                        className="w-full px-4 py-2 text-left text-sm text-stone-300 hover:bg-stone-700 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <LinkIcon size={14} />
                         Edit & Generate Link
                       </button>
                       <button
                         onClick={() => handleDelete(study.id)}
-                        disabled={deletingId === study.id || study.interviewCount > 0}
+                        disabled={pending || deletingId === study.id || (!pending && study.interviewCount > 0)}
                         className="w-full px-4 py-2 text-left text-sm text-red-400 hover:bg-stone-700 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         {deletingId === study.id ? (
@@ -444,11 +465,16 @@ const StudyList: React.FC = () => {
                   <div className="flex items-start gap-3 mb-3 pr-8">
                     <div className="flex-1">
                       <h3 className="font-semibold text-white text-lg mb-1">
-                        {study.config.name}
+                        {name}
                       </h3>
-                      {study.config.description && (
+                      {!pending && study.config.description && (
                         <p className="text-sm text-stone-400 line-clamp-2">
                           {study.config.description}
+                        </p>
+                      )}
+                      {pending && (
+                        <p className="text-sm text-amber-300">
+                          Reconciliation pending ({study.phase})
                         </p>
                       )}
                     </div>
@@ -458,16 +484,24 @@ const StudyList: React.FC = () => {
                   <div className="flex items-center gap-4 text-sm text-stone-500 mb-3">
                     <div className="flex items-center gap-1">
                       <Users size={14} />
-                      <span>{study.interviewCount} interviews</span>
+                      <span>{pending ? 0 : study.interviewCount} interviews</span>
                     </div>
+                    {!pending && (
                     <div className="flex items-center gap-1">
                       <Calendar size={14} />
                       <span>{formatDate(study.createdAt)}</span>
                     </div>
+                    )}
                   </div>
 
                   {/* Status badges */}
                   <div className="flex items-center gap-2">
+                    {pending ? (
+                      <span className="px-2 py-1 text-xs rounded-full bg-amber-900/50 text-amber-300">
+                        Reconciliation pending
+                      </span>
+                    ) : (
+                    <>
                     <span className={`px-2 py-1 text-xs rounded-full flex items-center gap-1 ${
                       study.isLocked
                         ? 'bg-stone-700 text-stone-400'
@@ -479,10 +513,13 @@ const StudyList: React.FC = () => {
                     <span className="px-2 py-1 text-xs rounded-full bg-stone-700 text-stone-400">
                       {study.config.coreQuestions.length} questions
                     </span>
+                    </>
+                    )}
                   </div>
                 </div>
               </motion.div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

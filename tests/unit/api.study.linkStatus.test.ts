@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeStoredStudy } from '../fixtures/models';
 
-const contextMock = vi.hoisted(() => ({ getRequestContext: vi.fn() }));
+const contextMock = vi.hoisted(() => ({
+  getRequestContext: vi.fn(),
+  getAuthorizedResearcherStudyContext: vi.fn(),
+  getHostedResearcherIdentity: vi.fn(),
+}));
 vi.mock('@/lib/researcherContext', () => contextMock);
 
 const kvMock = vi.hoisted(() => ({
@@ -26,10 +30,9 @@ const request = (body: unknown) => new Request('http://localhost/api/studies/stu
 
 beforeEach(() => {
   vi.clearAllMocks();
-  contextMock.getRequestContext.mockResolvedValue({
-    authorized: true,
-    context: { kvClient: {} },
-  });
+  const access = { authorized: true, context: { kvClient: {} } };
+  contextMock.getRequestContext.mockResolvedValue(access);
+  contextMock.getAuthorizedResearcherStudyContext.mockResolvedValue(access);
   kvMock.isKVAvailable.mockResolvedValue(true);
 });
 
@@ -53,5 +56,18 @@ describe('study participant-link status updates', () => {
     expect(await response.json()).toMatchObject({
       study: { config: { linksEnabled: false } },
     });
+  });
+
+  it('maps persist-guard link serialization to 409 STUDY_OPERATION_PENDING', async () => {
+    kvMock.getStudy.mockResolvedValue(makeStoredStudy({ id: 'study-links' }));
+    kvMock.setStudyLinksEnabled.mockResolvedValue({ status: 'persist-guard' });
+
+    const response = await PUT(request({ linksEnabled: false }), {
+      params: Promise.resolve({ id: 'study-links' }),
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: 'STUDY_OPERATION_PENDING' });
+    expect(kvMock.replaceStudyConfigAtomic).not.toHaveBeenCalled();
   });
 });

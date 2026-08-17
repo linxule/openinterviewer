@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const MIN_NODE = [24, 15, 0];
+const MIN_NODE = [24, 19, 0];
 const MODES = new Set(['demo', 'standalone', 'hosted']);
 const AI_PROVIDERS = {
   gemini: { key: 'GEMINI_API_KEY', label: 'Gemini' },
@@ -240,7 +240,7 @@ export function validateSetup({
   }
 
   if (!parsedNode || !versionAtLeast(parsedNode, MIN_NODE)) {
-    checks.push(check('error', 'node.unsupported', 'Node.js 24.15.0 or newer is required.'));
+    checks.push(check('error', 'node.unsupported', 'Node.js 24.19.0 or newer is required.'));
   } else {
     checks.push(check('pass', 'node.supported', 'The Node.js version is supported.'));
   }
@@ -378,6 +378,29 @@ export function validateSetup({
     addRequiredEnv(checks, env, 'PLATFORM_KEY_PREFIX');
     validateUrl(checks, env, 'PLATFORM_KV_REST_API_URL', { upstash: true, production });
     validateHostedKeyring(checks, env);
+
+    const schemaLineage = isPresent(env, 'PLATFORM_SCHEMA_LINEAGE')
+      ? env.PLATFORM_SCHEMA_LINEAGE.trim()
+      : '';
+    if (schemaLineage && schemaLineage !== 'v2-clean') {
+      checks.push(check(
+        'error',
+        'env.PLATFORM_SCHEMA_LINEAGE.invalid',
+        'PLATFORM_SCHEMA_LINEAGE must be unset or exactly v2-clean.',
+      ));
+    } else if (production && schemaLineage !== 'v2-clean') {
+      checks.push(check(
+        'error',
+        'env.PLATFORM_SCHEMA_LINEAGE.hold',
+        'Hosted production would HOLD schema lineage. Set PLATFORM_SCHEMA_LINEAGE=v2-clean only after attesting this prefix/database has no v1 study-operation rows.',
+      ));
+    } else if (production) {
+      checks.push(check(
+        'pass',
+        'env.PLATFORM_SCHEMA_LINEAGE.v2-clean',
+        'Platform schema lineage bootstrap is allowed.',
+      ));
+    }
 
     const oauthProviders = [
       ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'],

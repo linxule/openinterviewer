@@ -293,6 +293,19 @@ export interface StoredStudy {
   revision: number;              // Monotonic config/link-status revision
 }
 
+export interface PendingStudyStub {
+  id: string;
+  reconciliationPending: true;
+  operationId: string;
+  phase: string;
+}
+
+export type StudyWorkspaceItem = StoredStudy | PendingStudyStub;
+
+export function isPendingStudyStub(study: StudyWorkspaceItem): study is PendingStudyStub {
+  return 'reconciliationPending' in study && study.reconciliationPending === true;
+}
+
 // ============================================
 // Aggregate Synthesis (Cross-Interview)
 // ============================================

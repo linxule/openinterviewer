@@ -6,15 +6,23 @@
 
 import { createHash } from 'crypto';
 import { NextResponse } from 'next/server';
-import { persistCompletedInterview } from '@/lib/kv';
-import { getParticipantRequestContext } from '@/lib/researcherContext';
+import {
+  INTERVIEW_PERSISTING_PREFIX,
+  parsePersistingGuard,
+  persistCompletedInterview,
+} from '@/lib/kv';
+import {
+  resolveParticipantOrPreviewContext,
+  selectedStudyIdFromParticipantBody,
+} from '@/lib/researcherContext';
 import { loadCanonicalStudy } from '@/lib/canonicalStudy';
 import { StoredInterview } from '@/types';
 import { validateInterviewSubmission } from '@/lib/interviewSubmission';
-import { getParticipantRateLimitCounters } from '@/lib/rateLimit';
+import { getSavePersistRatePlan } from '@/lib/rateLimit';
 import { verifySynthesisReceipt } from '@/lib/synthesisReceipt';
 import { verifyParticipantConsent, type ParticipantConsentRecord } from '@/lib/participantConsent';
 import { readBoundedJsonObject } from '@/lib/requestBody';
+import { createRequestId, logRequestFailure } from '@/lib/requestLog';
 
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -34,7 +42,16 @@ function submissionFingerprint(value: unknown): string {
 
 export async function POST(request: Request) {
   try {
-    // Verify participant token or admin session and resolve researcher context
+    const parsedBody = await readBoundedJsonObject(request, 512_000);
+    if (!parsedBody.ok) {
+      return NextResponse.json(
+        { error: parsedBody.status === 413 ? 'Interview submission is too large.' : 'Interview submission is malformed.' },
+        { status: parsedBody.status }
+      );
+    }
+    const body = parsedBody.value;
+    const selectedStudyId = selectedStudyIdFromParticipantBody(body);
+
     const {
       valid,
       context,
@@ -45,22 +62,17 @@ export async function POST(request: Request) {
       linkId,
       participantSessionId,
       studyRevision,
-    } = await getParticipantRequestContext(request);
+      persistRepairOnly,
+    } = await resolveParticipantOrPreviewContext(request, {
+      purpose: 'new-persist',
+      selectedStudyId,
+    });
     if (!valid || !context) {
       return NextResponse.json(
         { error: error || 'Valid participant token or admin session required' },
         { status: statusCode ?? 401 }
       );
     }
-
-    const parsedBody = await readBoundedJsonObject(request, 512_000);
-    if (!parsedBody.ok) {
-      return NextResponse.json(
-        { error: parsedBody.status === 413 ? 'Interview submission is too large.' : 'Interview submission is malformed.' },
-        { status: parsedBody.status }
-      );
-    }
-    const body = parsedBody.value;
     let clientData;
     try {
       clientData = validateInterviewSubmission(body);
@@ -149,10 +161,9 @@ export async function POST(request: Request) {
       });
     }
 
-    const rateLimits = getParticipantRateLimitCounters(
+    const rateLimits = getSavePersistRatePlan(
       request,
       canonical.study.id,
-      'save',
       { sessionId: participantSessionId, linkId, researcherId: context.researcherId }
     );
     if (!rateLimits) {
@@ -209,6 +220,37 @@ export async function POST(request: Request) {
       routedProvider: synthesisProvenance.routedProvider,
     });
 
+    if (persistRepairOnly) {
+      let storedGuard: ReturnType<typeof parsePersistingGuard> = null;
+      try {
+        storedGuard = parsePersistingGuard(
+          await context.kvClient.get(`${INTERVIEW_PERSISTING_PREFIX}${interviewId}`)
+        );
+      } catch (error) {
+        logRequestFailure({
+      event: 'route.failure',
+      route: '/api/interviews/save',
+      method: 'POST',
+      status: 503,
+      requestId: createRequestId(request.headers.get('x-request-id')),
+    }, error);
+        return NextResponse.json(
+          { error: 'Storage is temporarily unavailable. Interview not saved. Please try again.', retryable: true },
+          { status: 503 }
+        );
+      }
+      if (
+        !storedGuard
+        || storedGuard.interviewId !== interviewId
+        || storedGuard.studyId !== canonical.study.id
+        || storedGuard.fingerprint !== fingerprint
+        || storedGuard.identity.participantSessionId !== participantSessionId
+        || storedGuard.identity.linkId !== linkId
+      ) {
+        return NextResponse.json({ error: 'This study is no longer active.' }, { status: 404 });
+      }
+    }
+
     const persistence = await persistCompletedInterview(
       interview,
       fingerprint,
@@ -216,11 +258,15 @@ export async function POST(request: Request) {
         allowDisabledLinks: false,
         expectedStudyRevision: canonical.study.revision ?? 1,
         rateLimits,
+        identity: {
+          participantSessionId: participantSessionId ?? null,
+          linkId: linkId ?? null,
+        },
       },
       context.kvClient
     );
 
-    if (persistence.status === 'unavailable') {
+    if (persistence.status === 'unavailable' || persistence.status === 'ambiguous' || persistence.status === 'persist-guard') {
       return NextResponse.json(
         { error: 'Storage is temporarily unavailable. Interview not saved. Please try again.', retryable: true },
         { status: 503 }
@@ -258,9 +304,16 @@ export async function POST(request: Request) {
       success: true,
       id: interview.id,
       created: persistence.status === 'created',
+      ...(persistence.status === 'duplicate' ? { duplicate: true } : {}),
     });
   } catch (error) {
-    console.error('Save interview API error:', error);
+    logRequestFailure({
+      event: 'route.failure',
+      route: '/api/interviews/save',
+      method: 'POST',
+      status: 500,
+      requestId: createRequestId(request.headers.get('x-request-id')),
+    }, error);
     return NextResponse.json(
       { error: 'Failed to save interview' },
       { status: 500 }

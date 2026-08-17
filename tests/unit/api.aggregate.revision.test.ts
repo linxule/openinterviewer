@@ -6,6 +6,7 @@ import { GEMINI_SYNTHESIS_MODEL, OPENROUTER_SYNTHESIS_MODEL } from '@/types';
 
 const contextMock = vi.hoisted(() => ({
   getRequestContext: vi.fn(),
+  getAuthorizedResearcherStudyContext: vi.fn(),
   providerKeysFromContext: vi.fn((context: Record<string, unknown>) => ({
     geminiApiKey: context.geminiApiKey,
     anthropicApiKey: context.anthropicApiKey,
@@ -17,6 +18,7 @@ vi.mock('@/lib/researcherContext', () => contextMock);
 
 const kvMock = vi.hoisted(() => ({
   getStudy: vi.fn(),
+  getStudyChecked: vi.fn(),
   getStudyInterviewsChecked: vi.fn(),
   isKVAvailable: vi.fn(),
 }));
@@ -67,12 +69,19 @@ beforeEach(() => {
       anthropicApiKey: null,
       openaiApiKey: null,
       openrouterApiKey: null,
-      researcherId: 'researcher-a',
     },
+    researcherId: 'researcher-a',
   });
+  contextMock.getAuthorizedResearcherStudyContext.mockImplementation(
+    () => contextMock.getRequestContext(),
+  );
   platformRateLimitMock.hostedAiRateLimitResponse.mockResolvedValue(null);
   receiptMock.createAggregateSynthesisReceipt.mockResolvedValue('aggregate-receipt');
   kvMock.isKVAvailable.mockResolvedValue(true);
+  kvMock.getStudyChecked.mockImplementation(async (id: string) => {
+    const study = await kvMock.getStudy(id);
+    return study ? { status: 'found', study } : { status: 'not-found' };
+  });
   getInterviewProvider.mockReturnValue({ synthesizeAggregate });
   synthesizeAggregate.mockResolvedValue({
     value: aggregate,

@@ -3,8 +3,16 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useRouter } from 'next/navigation';
-import { StoredInterview, StoredStudy } from '@/types';
-import { getAllInterviews, exportAllInterviews, getStudyInterviews, getAllStudies } from '@/services/storageService';
+import { isPendingStudyStub, StoredInterview, StudyWorkspaceItem } from '@/types';
+import {
+  readAllInterviews,
+  exportAllInterviews,
+  getStudyInterviews,
+  getAllStudies,
+  reconcileStudyOperations,
+  ResearcherStorageUnavailableError,
+  StudyOperationPendingError,
+} from '@/services/storageService';
 import {
   Loader2,
   FileText,
@@ -18,33 +26,49 @@ import {
   LogOut,
   Filter,
   BookOpen,
-  Settings
+  Settings,
+  RefreshCw,
+  AlertTriangle
 } from 'lucide-react';
 
 const Dashboard: React.FC = () => {
   const router = useRouter();
   const [interviews, setInterviews] = useState<StoredInterview[]>([]);
-  const [studies, setStudies] = useState<StoredStudy[]>([]);
+  const [studies, setStudies] = useState<StudyWorkspaceItem[]>([]);
   const [selectedStudyId, setSelectedStudyId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [warning, setWarning] = useState<string | null>(null);
+  const [operationPending, setOperationPending] = useState(false);
+  const [isReconciling, setIsReconciling] = useState(false);
 
   // Load studies on mount
   useEffect(() => {
     loadStudies();
   }, []);
 
-  // Load interviews when study filter changes
+  // Load interviews when study filter changes.
   useEffect(() => {
     loadInterviews(selectedStudyId);
+    // loadInterviews is recreated each render; selectedStudyId is the load key.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedStudyId]);
+
 
   const loadStudies = async () => {
     try {
-      const { studies: data, warning: storageWarning } = await getAllStudies();
+      const { studies: data, pendingStudies, warning: storageWarning, outcome } = await getAllStudies();
       setStudies(data);
-      setWarning(storageWarning ?? null);
+      setWarning(
+        outcome.status === 'unavailable'
+          ? outcome.error
+          : (storageWarning ?? null),
+      );
+      setOperationPending(
+        outcome.status === 'pending'
+        || (pendingStudies?.length ?? 0) > 0
+        || data.some(isPendingStudyStub),
+      );
     } catch (error) {
       console.error('Error loading studies:', error);
     }
@@ -53,15 +77,50 @@ const Dashboard: React.FC = () => {
   const loadInterviews = async (studyId: string | null) => {
     setLoading(true);
     try {
-      const data = studyId
-        ? await getStudyInterviews(studyId)
-        : await getAllInterviews();
-      setInterviews(data);
+      const selected = studies.find((study) => study.id === studyId);
+      if (selected && isPendingStudyStub(selected)) {
+        setOperationPending(true);
+        setInterviews([]);
+        return;
+      }
+      if (studyId) {
+        setInterviews(await getStudyInterviews(studyId));
+        return;
+      }
+      const outcome = await readAllInterviews();
+      if (outcome.status === 'ok') {
+        setInterviews(outcome.value.interviews);
+        if (outcome.value.pendingStudies.length > 0) setOperationPending(true);
+        return;
+      }
+      if (outcome.status === 'pending') {
+        setOperationPending(true);
+        setInterviews([]);
+        return;
+      }
+      setInterviews([]);
+      setWarning(outcome.error);
     } catch (error) {
-      console.error('Error loading interviews:', error);
+      if (error instanceof StudyOperationPendingError) {
+        setOperationPending(true);
+        setInterviews([]);
+      } else if (error instanceof ResearcherStorageUnavailableError) {
+        setWarning(error.message);
+      } else {
+        console.error('Error loading interviews:', error);
+      }
     } finally {
       setLoading(false);
     }
+  };
+
+  const runReconciliation = async () => {
+    setIsReconciling(true);
+    const result = await reconcileStudyOperations();
+    setIsReconciling(false);
+    if (result.success && result.stillPending === 0) setOperationPending(false);
+    await loadStudies();
+    await loadInterviews(selectedStudyId);
   };
 
   const handleExportAll = async () => {
@@ -77,14 +136,20 @@ const Dashboard: React.FC = () => {
         URL.revokeObjectURL(url);
       }
     } catch (error) {
-      console.error('Error exporting:', error);
+      if (error instanceof StudyOperationPendingError) {
+        setOperationPending(true);
+      } else if (error instanceof ResearcherStorageUnavailableError) {
+        setWarning(error.message);
+      } else {
+        console.error('Error exporting:', error);
+      }
     } finally {
       setExporting(false);
     }
   };
 
-  const handleViewInterview = (id: string) => {
-    router.push(`/dashboard/interview/${id}`);
+  const handleViewInterview = (id: string, studyId: string) => {
+    router.push(`/dashboard/interview/${id}?studyId=${encodeURIComponent(studyId)}`);
   };
 
   const handleLogout = async () => {
@@ -158,7 +223,7 @@ const Dashboard: React.FC = () => {
               {interviews.length > 0 && (
                 <button
                   onClick={handleExportAll}
-                  disabled={exporting}
+                  disabled={exporting || operationPending}
                   className="px-4 py-2 text-sm bg-stone-600 hover:bg-stone-500 text-white rounded-xl transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {exporting ? (
@@ -179,6 +244,22 @@ const Dashboard: React.FC = () => {
             </div>
           </div>
         </motion.div>
+
+        {operationPending && (
+          <div className="mb-6 bg-amber-900/30 border border-amber-700/50 rounded-xl p-4 flex items-center gap-3">
+            <AlertTriangle size={20} className="text-amber-400 flex-shrink-0" />
+            <p className="text-sm text-amber-300">A study operation is already in progress.</p>
+            <button
+              type="button"
+              onClick={() => void runReconciliation()}
+              disabled={isReconciling}
+              className="ml-auto inline-flex items-center gap-2 rounded-lg border border-amber-700 px-3 py-2 text-sm text-amber-200 hover:bg-amber-900/40 disabled:opacity-50"
+            >
+              <RefreshCw size={14} className={isReconciling ? 'animate-spin' : ''} />
+              Reconcile
+            </button>
+          </div>
+        )}
 
         {/* Warning */}
         {warning && (
@@ -207,7 +288,9 @@ const Dashboard: React.FC = () => {
               <option value="">All Studies</option>
               {studies.map((study) => (
                 <option key={study.id} value={study.id}>
-                  {study.config.name} ({study.interviewCount} interviews)
+                  {isPendingStudyStub(study)
+                    ? `Pending ${study.id.slice(0, 8)}`
+                    : `${study.config.name} (${study.interviewCount} interviews)`}
                 </option>
               ))}
             </select>
@@ -236,16 +319,32 @@ const Dashboard: React.FC = () => {
             <div className="w-16 h-16 rounded-full bg-stone-800 flex items-center justify-center mx-auto mb-4">
               <FileText size={32} className="text-stone-500" />
             </div>
-            <h2 className="text-xl font-semibold text-white mb-2">No Interviews Yet</h2>
-            <p className="text-stone-400 mb-6">
-              Completed interviews will appear here. Share participant links to start collecting data.
-            </p>
-            <button
-              onClick={() => router.push('/setup')}
-              className="px-6 py-3 bg-stone-600 hover:bg-stone-500 text-white rounded-xl transition-colors"
-            >
-              Create Study Link
-            </button>
+            {operationPending ? (
+              <>
+                <h2 className="text-xl font-semibold text-white mb-2">Study change pending</h2>
+                <p className="text-stone-400 mb-6">
+                  Interview export and collection reads will resume after reconciliation.
+                </p>
+              </>
+            ) : warning ? (
+              <>
+                <h2 className="text-xl font-semibold text-white mb-2">Workspace unavailable</h2>
+                <p className="text-stone-400 mb-6">{warning}</p>
+              </>
+            ) : (
+              <>
+                <h2 className="text-xl font-semibold text-white mb-2">No Interviews Yet</h2>
+                <p className="text-stone-400 mb-6">
+                  Completed interviews will appear here. Share participant links to start collecting data.
+                </p>
+                <button
+                  onClick={() => router.push('/setup')}
+                  className="px-6 py-3 bg-stone-600 hover:bg-stone-500 text-white rounded-xl transition-colors"
+                >
+                  Create Study Link
+                </button>
+              </>
+            )}
           </motion.div>
         ) : (
           <div className="space-y-4">
@@ -256,7 +355,7 @@ const Dashboard: React.FC = () => {
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: index * 0.05 }}
                 className="bg-stone-800/50 rounded-xl border border-stone-700 p-6 hover:border-stone-600 transition-colors cursor-pointer"
-                onClick={() => handleViewInterview(interview.id)}
+                onClick={() => handleViewInterview(interview.id, interview.studyId)}
               >
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
@@ -310,7 +409,7 @@ const Dashboard: React.FC = () => {
                     className="p-2 text-stone-400 hover:text-stone-300 transition-colors"
                     onClick={(e) => {
                       e.stopPropagation();
-                      handleViewInterview(interview.id);
+                      handleViewInterview(interview.id, interview.studyId);
                     }}
                   >
                     <Eye size={20} />

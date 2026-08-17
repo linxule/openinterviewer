@@ -2,23 +2,37 @@
 // Supports both standalone (env-var singleton) and hosted (per-researcher dynamic) modes
 // All functions accept an optional Redis client parameter for multi-tenant support
 
-import { Redis } from '@upstash/redis';
+import type { RedisPort } from './redisPort';
+import { RedisCommitAmbiguousError } from './redisPort';
 import { getKVClient } from './kvClient';
+import { resolveDeploymentMode } from './mode';
 import { StoredInterview, StoredStudy } from '@/types';
+import { HEX64, MAX_STUDY_REVISION, ok, UNAVAILABLE, type WireResult } from './wire/types';
+import { parseFamilyWire, parsePersistResult, parsePrefixedJson } from './wire/parse';
+import { parseStudyCasResult } from './wire/studyCas';
+import type { PersistRatePlanRow } from './rateLimit';
+import { logRequestFailure } from './requestLog';
 
 // Key prefixes for organizing data
 const INTERVIEW_PREFIX = 'interview:';
 const STUDY_INDEX_PREFIX = 'study-interviews:';
 const STUDY_PREFIX = 'study:';
 const ALL_STUDIES_KEY = 'all-studies';
+const ALL_INTERVIEWS_KEY = 'all-interviews';
+export const INTERVIEW_VALUE_PREFIX = 'oi:interview:';
+export const STUDY_VALUE_PREFIX = 'oi:study:';
+export const FINGERPRINT_VALUE_PREFIX = 'oi:fp:';
+export const PERSIST_GUARD_VALUE_PREFIX = 'oi:pguard:';
+export const INTERVIEW_PERSISTING_PREFIX = 'interview-persisting:';
+export const MAX_PERSIST_RATE_PLAN = 4;
 
 // Helper: resolve the Redis client to use
-function resolveClient(client?: Redis): Redis {
+function resolveClient(client?: RedisPort): RedisPort {
   return client ?? getKVClient();
 }
 
 // Get interview by ID
-export async function getInterview(id: string, client?: Redis): Promise<StoredInterview | null> {
+export async function getInterview(id: string, client?: RedisPort): Promise<StoredInterview | null> {
   const result = await getInterviewChecked(id, client);
   if (result.status === 'unavailable') throw new Error('Interview storage is temporarily unavailable');
   return result.status === 'found' ? result.interview : null;
@@ -29,13 +43,13 @@ export type InterviewLoadResult =
   | { status: 'not-found' }
   | { status: 'unavailable' };
 
-export async function getInterviewChecked(id: string, client?: Redis): Promise<InterviewLoadResult> {
+export async function getInterviewChecked(id: string, client?: RedisPort): Promise<InterviewLoadResult> {
   try {
     const kv = resolveClient(client);
-    const interview = await kv.get<StoredInterview>(`${INTERVIEW_PREFIX}${id}`);
+    const interview = decodeStoredInterview(await kv.get(`${INTERVIEW_PREFIX}${id}`));
     return interview ? { status: 'found', interview } : { status: 'not-found' };
   } catch (error) {
-    console.error('Error getting interview:', error);
+    logRequestFailure({ event: 'kv.unavailable' }, error);
     return { status: 'unavailable' };
   }
 }
@@ -43,21 +57,23 @@ export async function getInterviewChecked(id: string, client?: Redis): Promise<I
 // Save interview (create or update).
 // This is reserved for trusted maintenance/demo data. Participant completion
 // uses persistCompletedInterview() below so completed records are immutable.
-export async function saveInterview(interview: StoredInterview, client?: Redis): Promise<boolean> {
+export async function saveInterview(interview: StoredInterview, client?: RedisPort): Promise<boolean> {
   try {
     const kv = resolveClient(client);
     // Save the interview
-    await kv.set(`${INTERVIEW_PREFIX}${interview.id}`, interview);
+    await kv.set(`${INTERVIEW_PREFIX}${interview.id}`, JSON.stringify(interview));
 
     // Add to study index for easy lookup by study
     await kv.sadd(`${STUDY_INDEX_PREFIX}${interview.studyId}`, interview.id);
 
-    // Add to global index
-    await kv.sadd('all-interviews', interview.id);
+    const mode = resolveDeploymentMode();
+    if (!mode.ok || mode.mode !== 'hosted') {
+      await kv.sadd(ALL_INTERVIEWS_KEY, interview.id);
+    }
 
     return true;
   } catch (error) {
-    console.error('Error saving interview:', error);
+    logRequestFailure({ event: 'kv.unavailable' }, error);
     return false;
   }
 }
@@ -70,126 +86,557 @@ export type PersistCompletedInterviewResult =
   | { status: 'links-disabled' }
   | { status: 'revision-stale' }
   | { status: 'rate-limited' }
-  | { status: 'unavailable' };
+  | { status: 'persist-guard' }
+  | { status: 'unavailable' }
+  | { status: 'ambiguous' };
 
-export type AtomicRateLimitCounter = {
-  key: string;
-  maximum: number;
-  windowSeconds: number;
+export type AtomicRateLimitCounter = PersistRatePlanRow;
+
+export interface PersistingGuard {
+  version: 2;
+  interviewId: string;
+  studyId: string;
+  fingerprint: string;
+  expectedRevision: number;
+  deploymentMode: 'hosted' | 'standalone';
+  ratePlan: PersistRatePlanRow[];
+  identity: { participantSessionId: string | null; linkId: string | null };
+  frozenUpdatedAt: number;
+}
+
+export type PersistCompletedInterviewOptions = {
+  expectedStudyRevision: number;
+  allowDisabledLinks?: boolean;
+  rateLimits?: PersistRatePlanRow[];
+  identity?: { participantSessionId: string | null; linkId: string | null };
 };
 
-const PERSIST_COMPLETED_INTERVIEW_SCRIPT = `
-local studyJson = redis.call('GET', KEYS[4])
-if not studyJson then
-  return -2
+function decodeStoredInterview(value: unknown): StoredInterview | null {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const rec = value as Record<string, unknown>;
+    if (typeof rec.id !== 'string' || typeof rec.studyId !== 'string') return null;
+    if (rec.status !== 'completed' && rec.status !== 'in_progress') return null;
+    if (typeof rec.createdAt !== 'number' || typeof rec.completedAt !== 'number') return null;
+    return value as StoredInterview;
+  }
+  if (typeof value !== 'string' || !value.startsWith(INTERVIEW_VALUE_PREFIX)) return null;
+  try {
+    return decodeStoredInterview(JSON.parse(value.slice(INTERVIEW_VALUE_PREFIX.length)));
+  } catch {
+    return null;
+  }
+}
+
+export function encodeInterviewValue(interview: StoredInterview): string {
+  return `${INTERVIEW_VALUE_PREFIX}${JSON.stringify(interview)}`;
+}
+
+export function encodeFingerprintValue(fingerprint: string): string {
+  return `${FINGERPRINT_VALUE_PREFIX}${fingerprint}`;
+}
+
+export function encodePersistingGuard(guard: PersistingGuard): string {
+  return `${PERSIST_GUARD_VALUE_PREFIX}${JSON.stringify(guard)}`;
+}
+
+export function parsePersistingGuard(value: unknown): PersistingGuard | null {
+  const parsed = parsePrefixedJson(value, PERSIST_GUARD_VALUE_PREFIX);
+  if (!parsed.ok) return null;
+  const payload = parsed.payload;
+  if (payload.version !== 2) return null;
+  if (typeof payload.interviewId !== 'string' || payload.interviewId.length === 0) return null;
+  if (typeof payload.studyId !== 'string' || payload.studyId.length === 0) return null;
+  if (typeof payload.fingerprint !== 'string' || !HEX64.test(payload.fingerprint)) return null;
+  if (!Number.isSafeInteger(payload.expectedRevision) || (payload.expectedRevision as number) < 1) {
+    return null;
+  }
+  if ((payload.expectedRevision as number) > MAX_STUDY_REVISION) return null;
+  if (payload.deploymentMode !== 'hosted' && payload.deploymentMode !== 'standalone') return null;
+  if (!Array.isArray(payload.ratePlan) || payload.ratePlan.length > MAX_PERSIST_RATE_PLAN) return null;
+  const ratePlan: PersistRatePlanRow[] = [];
+  for (const row of payload.ratePlan) {
+    if (!row || typeof row !== 'object') return null;
+    const rec = row as Record<string, unknown>;
+    if (typeof rec.key !== 'string' || !rec.key.startsWith('interview-rate:')) return null;
+    if (!Number.isSafeInteger(rec.maximum) || (rec.maximum as number) < 1) return null;
+    if (!Number.isSafeInteger(rec.windowSeconds) || (rec.windowSeconds as number) < 1) return null;
+    if (!Number.isSafeInteger(rec.windowStart) || (rec.windowStart as number) < 0) return null;
+    ratePlan.push({
+      key: rec.key,
+      maximum: rec.maximum as number,
+      windowSeconds: rec.windowSeconds as number,
+      windowStart: rec.windowStart as number,
+    });
+  }
+  const identity = payload.identity;
+  if (!identity || typeof identity !== 'object' || Array.isArray(identity)) return null;
+  const identityRec = identity as Record<string, unknown>;
+  if (identityRec.participantSessionId !== null && typeof identityRec.participantSessionId !== 'string') {
+    return null;
+  }
+  if (identityRec.linkId !== null && typeof identityRec.linkId !== 'string') return null;
+  if (!Number.isSafeInteger(payload.frozenUpdatedAt) || (payload.frozenUpdatedAt as number) < 0) {
+    return null;
+  }
+  return {
+    version: 2,
+    interviewId: payload.interviewId,
+    studyId: payload.studyId,
+    fingerprint: payload.fingerprint,
+    expectedRevision: payload.expectedRevision as number,
+    deploymentMode: payload.deploymentMode,
+    ratePlan,
+    identity: {
+      participantSessionId: identityRec.participantSessionId as string | null,
+      linkId: identityRec.linkId as string | null,
+    },
+    frozenUpdatedAt: payload.frozenUpdatedAt as number,
+  };
+}
+
+function persistOutcome(
+  wire: unknown
+): PersistCompletedInterviewResult {
+  const parsed = parsePersistResult(wire);
+  if (parsed.status !== 'ok') return { status: 'unavailable' };
+  switch (parsed.value.outcome) {
+    case 'created':
+      return { status: 'created' };
+    case 'duplicate':
+      return { status: 'duplicate' };
+    case 'conflict':
+      return { status: 'conflict' };
+    case 'not-found':
+      return { status: 'study-not-found' };
+    case 'links-disabled':
+      return { status: 'links-disabled' };
+    case 'revision-stale':
+      return { status: 'revision-stale' };
+    case 'rate-limited':
+      return { status: 'rate-limited' };
+    case 'guard':
+      return { status: 'persist-guard' };
+    case 'started':
+      return { status: 'unavailable' };
+    default:
+      return { status: 'unavailable' };
+  }
+}
+
+function persistKeys(
+  interview: { id: string; studyId: string },
+  mode: 'hosted' | 'standalone',
+  ratePlan: PersistRatePlanRow[]
+): string[] {
+  const rateKeys = [
+    ratePlan[0]?.key ?? '',
+    ratePlan[1]?.key ?? '',
+    ratePlan[2]?.key ?? '',
+    ratePlan[3]?.key ?? '',
+  ];
+  const keys = [
+    `${INTERVIEW_PREFIX}${interview.id}`,
+    `interview-fingerprint:${interview.id}`,
+    `${INTERVIEW_PERSISTING_PREFIX}${interview.id}`,
+    `${STUDY_PERSISTING_PREFIX}${interview.studyId}`,
+    `${STUDY_PREFIX}${interview.studyId}`,
+    `${STUDY_MUTATION_GUARD_PREFIX}${interview.studyId}`,
+    `${STUDY_INDEX_PREFIX}${interview.studyId}`,
+    ...rateKeys,
+  ];
+  if (mode === 'standalone') keys.push(ALL_INTERVIEWS_KEY);
+  return keys;
+}
+
+function persistP1Args(
+  interview: StoredInterview,
+  fingerprint: string,
+  guard: PersistingGuard,
+  options: PersistCompletedInterviewOptions
+): string[] {
+  const maxima = [0, 1, 2, 3].map(index => String(guard.ratePlan[index]?.maximum ?? 0));
+  return [
+    encodeInterviewValue(interview),
+    encodeFingerprintValue(fingerprint),
+    encodePersistingGuard(guard),
+    interview.id,
+    String(options.expectedStudyRevision),
+    options.allowDisabledLinks ? '1' : '0',
+    guard.deploymentMode,
+    guard.identity.participantSessionId ?? '',
+    guard.identity.linkId ?? '',
+    ...maxima,
+  ];
+}
+
+function persistFinishArgs(guard: PersistingGuard): string[] {
+  const windows = [0, 1, 2, 3].map(index => String(guard.ratePlan[index]?.windowSeconds ?? 0));
+  return [
+    encodeFingerprintValue(guard.fingerprint),
+    guard.interviewId,
+    String(guard.expectedRevision),
+    guard.deploymentMode,
+    guard.identity.participantSessionId ?? '',
+    guard.identity.linkId ?? '',
+    ...windows,
+  ];
+}
+
+export const PERSIST_COMPLETED_INTERVIEW_P1_SCRIPT = `
+local function decode_json(value, prefix)
+  if type(value) ~= 'string' or string.sub(value, 1, #prefix) ~= prefix then return nil end
+  local ok, obj = pcall(cjson.decode, string.sub(value, #prefix + 1))
+  if not ok or type(obj) ~= 'table' then return nil end
+  return obj
 end
 
-local study = cjson.decode(studyJson)
-if ARGV[5] ~= '1' and study.config and study.config.linksEnabled == false then
-  return -3
+local function decode_study(raw)
+  if type(raw) ~= 'string' then return nil, false end
+  local prefixed = string.sub(raw, 1, 9) == 'oi:study:'
+  local payload = prefixed and string.sub(raw, 10) or raw
+  local ok, obj = pcall(cjson.decode, payload)
+  if not ok or type(obj) ~= 'table' then return nil, prefixed end
+  return obj, prefixed
 end
 
-local existingInterview = redis.call('GET', KEYS[1])
-local existingFingerprint = redis.call('GET', KEYS[5])
-if existingInterview or existingFingerprint then
-  if existingInterview and existingFingerprint == ARGV[2] then
-    return 0
+local function decode_fp(value)
+  if type(value) ~= 'string' or string.sub(value, 1, 6) ~= 'oi:fp:' then return nil end
+  return string.sub(value, 7)
+end
+
+local function valid_immutable(obj, interviewId, studyId)
+  if type(obj) ~= 'table' then return false end
+  if obj.id ~= interviewId or obj.studyId ~= studyId then return false end
+  if obj.status ~= 'completed' then return false end
+  if tonumber(obj.createdAt) == nil or tonumber(obj.completedAt) == nil then return false end
+  return true
+end
+
+local mode = ARGV[7]
+if mode ~= 'standalone' and mode ~= 'hosted' then
+  return {'oi:persist-unavailable'}
+end
+if mode == 'hosted' and #KEYS ~= 11 then
+  return {'oi:persist-unavailable'}
+end
+if mode == 'standalone' and #KEYS ~= 12 then
+  return {'oi:persist-unavailable'}
+end
+
+local study, _prefixed = decode_study(redis.call('GET', KEYS[5]))
+if not study then
+  return {'oi:persist-not-found'}
+end
+if ARGV[6] ~= '1' and study.config and study.config.linksEnabled == false then
+  return {'oi:persist-links'}
+end
+if (tonumber(study.revision) or 1) ~= tonumber(ARGV[5]) then
+  return {'oi:persist-revision'}
+end
+
+local mutation = decode_json(redis.call('GET', KEYS[6]), 'oi:smg:')
+local existingInterviewRaw = redis.call('GET', KEYS[1])
+local existingFp = decode_fp(redis.call('GET', KEYS[2]))
+local existingGuard = decode_json(redis.call('GET', KEYS[3]), 'oi:pguard:')
+local requestFp = decode_fp(ARGV[2])
+if not requestFp then
+  return {'oi:persist-unavailable'}
+end
+
+local matchingRetry = false
+if existingGuard then
+  if existingGuard.fingerprint ~= requestFp
+    or existingGuard.interviewId ~= ARGV[4]
+    or existingGuard.studyId ~= study.id
+    or existingGuard.deploymentMode ~= mode
+    or tostring(existingGuard.expectedRevision) ~= ARGV[5]
+    or (existingGuard.identity and existingGuard.identity.participantSessionId or '') ~= ARGV[8]
+    or (existingGuard.identity and existingGuard.identity.linkId or '') ~= ARGV[9]
+  then
+    return {'oi:persist-conflict'}
   end
-  return -1
+  matchingRetry = true
 end
 
-local currentRevision = tonumber(study.revision or 1)
-if currentRevision ~= tonumber(ARGV[6]) then
-  return -4
+if existingInterviewRaw or existingFp then
+  local stored = decode_json(existingInterviewRaw, 'oi:interview:')
+  if not stored then
+    stored = decode_study(existingInterviewRaw)
+  end
+  if existingFp and existingFp ~= requestFp then
+    return {'oi:persist-conflict'}
+  end
+  if stored and (stored.id ~= ARGV[4] or stored.studyId ~= study.id) then
+    return {'oi:persist-conflict'}
+  end
+  if stored and not valid_immutable(stored, ARGV[4], study.id) then
+    return {'oi:persist-conflict'}
+  end
+  if existingFp == requestFp and stored and redis.call('SISMEMBER', KEYS[7], ARGV[4]) == 1 and not existingGuard then
+    return {'oi:persist-duplicate'}
+  end
+  matchingRetry = true
 end
 
-local rateLimitCount = tonumber(ARGV[7] or '0')
-for i = 1, rateLimitCount do
-  local maximum = tonumber(ARGV[7 + (i - 1) * 2 + 1])
-  local count = tonumber(redis.call('GET', KEYS[5 + i]) or '0')
-  if count >= maximum then
-    return -5
+if mutation and mutation.state ~= 'created' and not matchingRetry then
+  -- fault cut persist-cancel
+  -- fault cut persist-deleted
+  return {'oi:persist-guard'}
+end
+
+if not matchingRetry then
+  for i = 1, 4 do
+    local rateKey = KEYS[7 + i]
+    if rateKey ~= '' then
+      local maximum = tonumber(ARGV[9 + i]) or 0
+      local score = redis.call('ZSCORE', rateKey, ARGV[4])
+      if not score and redis.call('ZCARD', rateKey) >= maximum and maximum > 0 then
+        return {'oi:persist-rate'}
+      end
+    end
+  end
+  redis.call('SET', KEYS[1], ARGV[1], 'NX')
+  redis.call('SET', KEYS[2], ARGV[2], 'NX')
+end
+
+if existingInterviewRaw and not redis.call('GET', KEYS[2]) then
+  redis.call('SET', KEYS[2], ARGV[2], 'NX')
+  if decode_fp(redis.call('GET', KEYS[2])) ~= requestFp then
+    return {'oi:persist-conflict'}
   end
 end
 
-for i = 1, rateLimitCount do
-  local window = tonumber(ARGV[7 + (i - 1) * 2 + 2])
-  local count = redis.call('INCR', KEYS[5 + i])
-  if count == 1 then redis.call('EXPIRE', KEYS[5 + i], window) end
+if not existingGuard then
+  redis.call('SET', KEYS[3], ARGV[3])
 end
-
-redis.call('SET', KEYS[1], ARGV[1])
-redis.call('SET', KEYS[5], ARGV[2])
-redis.call('SADD', KEYS[2], ARGV[3])
-redis.call('SADD', KEYS[3], ARGV[3])
-
-study.interviewCount = redis.call('SCARD', KEYS[2])
-study.isLocked = true
-study.updatedAt = tonumber(ARGV[4])
-redis.call('SET', KEYS[4], cjson.encode(study))
-
-return 1
+redis.call('SADD', KEYS[4], ARGV[4])
+return {'oi:persist-started'}
 `;
 
+export const PERSIST_COMPLETED_INTERVIEW_FINISH_SCRIPT = `
+local function decode_json(value, prefix)
+  if type(value) ~= 'string' or string.sub(value, 1, #prefix) ~= prefix then return nil end
+  local ok, obj = pcall(cjson.decode, string.sub(value, #prefix + 1))
+  if not ok or type(obj) ~= 'table' then return nil end
+  return obj
+end
+
+local function decode_study(raw)
+  if type(raw) ~= 'string' then return nil, false end
+  local prefixed = string.sub(raw, 1, 9) == 'oi:study:'
+  local payload = prefixed and string.sub(raw, 10) or raw
+  local ok, obj = pcall(cjson.decode, payload)
+  if not ok or type(obj) ~= 'table' then return nil, prefixed end
+  return obj, prefixed
+end
+
+local function encode_study(obj, prefixed)
+  local encoded = cjson.encode(obj)
+  if prefixed then return 'oi:study:' .. encoded end
+  return encoded
+end
+
+local function decode_fp(value)
+  if type(value) ~= 'string' or string.sub(value, 1, 6) ~= 'oi:fp:' then return nil end
+  return string.sub(value, 7)
+end
+
+local function valid_immutable(obj, interviewId, studyId)
+  if type(obj) ~= 'table' then return false end
+  if obj.id ~= interviewId or obj.studyId ~= studyId then return false end
+  if obj.status ~= 'completed' then return false end
+  if tonumber(obj.createdAt) == nil or tonumber(obj.completedAt) == nil then return false end
+  return true
+end
+
+local mode = ARGV[4]
+if mode ~= 'standalone' and mode ~= 'hosted' then
+  return {'oi:persist-unavailable'}
+end
+if mode == 'hosted' and #KEYS ~= 11 then
+  return {'oi:persist-unavailable'}
+end
+if mode == 'standalone' and #KEYS ~= 12 then
+  return {'oi:persist-unavailable'}
+end
+
+local requestFp = decode_fp(ARGV[1])
+local guard = decode_json(redis.call('GET', KEYS[3]), 'oi:pguard:')
+if not guard then
+  local stored = decode_json(redis.call('GET', KEYS[1]), 'oi:interview:')
+  local existingFp = decode_fp(redis.call('GET', KEYS[2]))
+  if stored and existingFp == requestFp and valid_immutable(stored, ARGV[2], stored.studyId) and redis.call('SISMEMBER', KEYS[7], ARGV[2]) == 1 then
+    return {'oi:persist-duplicate'}
+  end
+  return {'oi:persist-unavailable'}
+end
+
+if guard.interviewId ~= ARGV[2]
+  or guard.fingerprint ~= requestFp
+  or guard.deploymentMode ~= mode
+  or tostring(guard.expectedRevision) ~= ARGV[3]
+  or (guard.identity and guard.identity.participantSessionId or '') ~= ARGV[5]
+  or (guard.identity and guard.identity.linkId or '') ~= ARGV[6]
+then
+  -- fault cut persist-conflict
+  return {'oi:persist-conflict'}
+end
+
+local stored = decode_json(redis.call('GET', KEYS[1]), 'oi:interview:')
+local existingFp = decode_fp(redis.call('GET', KEYS[2]))
+if not stored or existingFp ~= requestFp or not valid_immutable(stored, guard.interviewId, guard.studyId) then
+  return {'oi:persist-conflict'}
+end
+
+local study, studyPrefixed = decode_study(redis.call('GET', KEYS[5]))
+if not study or study.id ~= guard.studyId then
+  return {'oi:persist-not-found'}
+end
+if (tonumber(study.revision) or 1) ~= tonumber(guard.expectedRevision) then
+  return {'oi:persist-revision'}
+end
+
+redis.call('SADD', KEYS[7], ARGV[2])
+-- fault cut F1
+if mode == 'standalone' then
+  redis.call('SADD', KEYS[12], ARGV[2])
+end
+
+study.interviewCount = redis.call('SCARD', KEYS[7])
+study.isLocked = true
+study.updatedAt = tonumber(guard.frozenUpdatedAt)
+redis.call('SET', KEYS[5], encode_study(study, studyPrefixed))
+-- fault cut F2
+
+for i = 1, 4 do
+  local rateKey = KEYS[7 + i]
+  if rateKey ~= '' then
+    redis.call('ZADD', rateKey, 1, ARGV[2])
+    -- fault cut F3
+    local window = tonumber(ARGV[6 + i]) or 0
+    if window > 0 then
+      redis.call('EXPIRE', rateKey, window + 60)
+      -- fault cut F4
+    end
+  end
+end
+
+-- fault cut F5
+-- fault cut persist-guard-cleanup
+redis.call('DEL', KEYS[3])
+redis.call('SREM', KEYS[4], ARGV[2])
+return {'oi:persist-created'}
+`;
+
+function mapPersistCommitError(error: unknown): PersistCompletedInterviewResult {
+  if (error instanceof RedisCommitAmbiguousError) {
+    return { status: error.commitState === 'may-have-committed' ? 'ambiguous' : 'unavailable' };
+  }
+  return { status: 'unavailable' };
+}
+
+export async function persistCompletedInterviewP1(
+  interview: StoredInterview,
+  submissionFingerprint: string,
+  options: PersistCompletedInterviewOptions,
+  client?: RedisPort
+): Promise<PersistCompletedInterviewResult | { status: 'started'; guard: PersistingGuard }> {
+  const resolvedMode = resolveDeploymentMode();
+  if (!resolvedMode.ok) return { status: 'unavailable' };
+  if (!HEX64.test(submissionFingerprint)) return { status: 'unavailable' };
+  if (
+    !Number.isSafeInteger(options.expectedStudyRevision)
+    || options.expectedStudyRevision < 1
+    || options.expectedStudyRevision > MAX_STUDY_REVISION
+  ) {
+    return { status: 'unavailable' };
+  }
+  const ratePlan = (options.rateLimits ?? []).slice(0, MAX_PERSIST_RATE_PLAN);
+  if ((options.rateLimits?.length ?? 0) > MAX_PERSIST_RATE_PLAN) return { status: 'unavailable' };
+  if (ratePlan.some(row => !row.key.startsWith('interview-rate:'))) return { status: 'unavailable' };
+
+  const guard: PersistingGuard = {
+    version: 2,
+    interviewId: interview.id,
+    studyId: interview.studyId,
+    fingerprint: submissionFingerprint,
+    expectedRevision: options.expectedStudyRevision,
+    deploymentMode: resolvedMode.mode,
+    ratePlan,
+    identity: {
+      participantSessionId: options.identity?.participantSessionId ?? null,
+      linkId: options.identity?.linkId ?? null,
+    },
+    frozenUpdatedAt: Date.now(),
+  };
+
+  try {
+    const wire = await resolveClient(client).eval(
+      PERSIST_COMPLETED_INTERVIEW_P1_SCRIPT,
+      persistKeys(interview, resolvedMode.mode, ratePlan),
+      persistP1Args(interview, submissionFingerprint, guard, options)
+    );
+    const parsed = parsePersistResult(wire);
+    if (parsed.status !== 'ok') return { status: 'unavailable' };
+    if (parsed.value.outcome === 'started') return { status: 'started', guard };
+    return persistOutcome(wire);
+  } catch (error) {
+    logRequestFailure({ event: 'kv.unavailable' }, error);
+    return mapPersistCommitError(error);
+  }
+}
+
+export async function persistCompletedInterviewFinish(
+  guard: PersistingGuard,
+  client?: RedisPort
+): Promise<PersistCompletedInterviewResult> {
+  const resolvedMode = resolveDeploymentMode();
+  if (!resolvedMode.ok || resolvedMode.mode !== guard.deploymentMode) {
+    return { status: 'unavailable' };
+  }
+  try {
+    const wire = await resolveClient(client).eval(
+      PERSIST_COMPLETED_INTERVIEW_FINISH_SCRIPT,
+      persistKeys({ id: guard.interviewId, studyId: guard.studyId }, resolvedMode.mode, guard.ratePlan),
+      persistFinishArgs(guard)
+    );
+    const parsed = parsePersistResult(wire);
+    if (parsed.status !== 'ok') return { status: 'unavailable' };
+    if (parsed.value.outcome === 'started') return { status: 'unavailable' };
+    return persistOutcome(wire);
+  } catch (error) {
+    logRequestFailure({ event: 'kv.unavailable' }, error);
+    return mapPersistCommitError(error);
+  }
+}
+
 /**
- * Atomically create a completed interview and all of its metadata side effects.
- *
- * A retry carrying the same submission fingerprint is a successful no-op. An
- * existing id with different content is a conflict and is never overwritten.
- * The study count is derived from the study index inside the same Redis script,
- * avoiding both process-local dedupe and read/modify/write races.
+ * Crash-total participant completion: P1 writes interview + fingerprint +
+ * persisting guard without indexes or rate ZADDs; Finish is the exact retry
+ * that SADD indexes, locks the study, ZADDs once, then deletes the guard.
  */
 export async function persistCompletedInterview(
   interview: StoredInterview,
   submissionFingerprint: string,
-  options: {
-    expectedStudyRevision: number;
-    allowDisabledLinks?: boolean;
-    rateLimits?: AtomicRateLimitCounter[];
-  },
-  client?: Redis
+  options: PersistCompletedInterviewOptions,
+  client?: RedisPort
 ): Promise<PersistCompletedInterviewResult> {
+  const p1 = await persistCompletedInterviewP1(interview, submissionFingerprint, options, client);
+  if (p1.status !== 'started') return p1;
+
+  const kv = resolveClient(client);
+  let frozen = p1.guard;
   try {
-    const kv = resolveClient(client);
-    const result = await kv.eval<string[], number>(
-      PERSIST_COMPLETED_INTERVIEW_SCRIPT,
-      [
-        `${INTERVIEW_PREFIX}${interview.id}`,
-        `${STUDY_INDEX_PREFIX}${interview.studyId}`,
-        'all-interviews',
-        `${STUDY_PREFIX}${interview.studyId}`,
-        `interview-fingerprint:${interview.id}`,
-        ...(options.rateLimits ?? []).map(limit => limit.key),
-      ],
-      [
-        JSON.stringify(interview),
-        submissionFingerprint,
-        interview.id,
-        String(Date.now()),
-        options.allowDisabledLinks ? '1' : '0',
-        String(options.expectedStudyRevision),
-        String(options.rateLimits?.length ?? 0),
-        ...(options.rateLimits ?? []).flatMap(limit => [
-          String(limit.maximum),
-          String(limit.windowSeconds),
-        ]),
-      ]
+    const storedGuard = parsePersistingGuard(
+      await kv.get(`${INTERVIEW_PERSISTING_PREFIX}${interview.id}`)
     );
-
-    if (result === 1) return { status: 'created' };
-    if (result === 0) return { status: 'duplicate' };
-    if (result === -1) return { status: 'conflict' };
-    if (result === -2) return { status: 'study-not-found' };
-    if (result === -3) return { status: 'links-disabled' };
-    if (result === -4) return { status: 'revision-stale' };
-    if (result === -5) return { status: 'rate-limited' };
-
-    console.error('Unexpected completed interview persistence result:', result);
-    return { status: 'unavailable' };
+    if (storedGuard) frozen = storedGuard;
   } catch (error) {
-    console.error('Error persisting completed interview:', error);
-    return { status: 'unavailable' };
+    logRequestFailure({ event: 'kv.unavailable' }, error);
+    return mapPersistCommitError(error);
   }
+
+  return persistCompletedInterviewFinish(frozen, client);
 }
 
 export type CollectionLoadResult<T> =
@@ -199,49 +646,50 @@ export type CollectionLoadResult<T> =
 
 async function getInterviewCollectionChecked(
   indexKey: string,
-  client?: Redis,
+  client?: RedisPort,
   maximum = 5_000
 ): Promise<CollectionLoadResult<StoredInterview>> {
   try {
     const kv = resolveClient(client);
     const count = await kv.scard(indexKey);
     if (count > maximum) return { status: 'too-large', count, maximum };
-    const ids = await kv.smembers(indexKey);
+    const ids = (await kv.smembers(indexKey)) as string[];
     if (!ids || ids.length === 0) return { status: 'ok', items: [] };
     if (ids.length > maximum) return { status: 'too-large', count: ids.length, maximum };
 
     const interviews = await Promise.all(
-      ids.map(id => kv.get<StoredInterview>(`${INTERVIEW_PREFIX}${id}`))
+      ids.map(id => kv.get(`${INTERVIEW_PREFIX}${id}`))
     );
 
     return {
       status: 'ok',
       items: interviews
+        .map(decodeStoredInterview)
         .filter((i): i is StoredInterview => i !== null)
         .sort((a, b) => b.createdAt - a.createdAt),
     };
   } catch (error) {
-    console.error('Error getting interview collection:', error);
+    logRequestFailure({ event: 'kv.unavailable' }, error);
     return { status: 'unavailable' };
   }
 }
 
 export async function getAllInterviewsChecked(
-  client?: Redis,
+  client?: RedisPort,
   maximum = 5_000
 ): Promise<CollectionLoadResult<StoredInterview>> {
   return getInterviewCollectionChecked('all-interviews', client, maximum);
 }
 
 // Get all interviews. Prefer the checked variant in request handlers.
-export async function getAllInterviews(client?: Redis): Promise<StoredInterview[]> {
+export async function getAllInterviews(client?: RedisPort): Promise<StoredInterview[]> {
   const result = await getAllInterviewsChecked(client);
   if (result.status !== 'ok') throw new Error(`Interview collection ${result.status}`);
   return result.items;
 }
 
 // Get interviews for a specific study
-export async function getStudyInterviews(studyId: string, client?: Redis): Promise<StoredInterview[]> {
+export async function getStudyInterviews(studyId: string, client?: RedisPort): Promise<StoredInterview[]> {
   const result = await getStudyInterviewsChecked(studyId, client);
   if (result.status !== 'ok') throw new Error(`Study interview collection ${result.status}`);
   return result.items;
@@ -249,14 +697,14 @@ export async function getStudyInterviews(studyId: string, client?: Redis): Promi
 
 export async function getStudyInterviewsChecked(
   studyId: string,
-  client?: Redis,
+  client?: RedisPort,
   maximum = 5_000
 ): Promise<CollectionLoadResult<StoredInterview>> {
   return getInterviewCollectionChecked(`${STUDY_INDEX_PREFIX}${studyId}`, client, maximum);
 }
 
 // Delete interview
-export async function deleteInterview(id: string, studyId: string, client?: Redis): Promise<boolean> {
+export async function deleteInterview(id: string, studyId: string, client?: RedisPort): Promise<boolean> {
   try {
     const kv = resolveClient(client);
     await kv.del(`${INTERVIEW_PREFIX}${id}`);
@@ -264,13 +712,13 @@ export async function deleteInterview(id: string, studyId: string, client?: Redi
     await kv.srem('all-interviews', id);
     return true;
   } catch (error) {
-    console.error('Error deleting interview:', error);
+    logRequestFailure({ event: 'kv.unavailable' }, error);
     return false;
   }
 }
 
 // Check if KV is available (for development without KV)
-export async function isKVAvailable(client?: Redis): Promise<boolean> {
+export async function isKVAvailable(client?: RedisPort): Promise<boolean> {
   try {
     const kv = resolveClient(client);
     await kv.ping();
@@ -285,21 +733,81 @@ export async function isKVAvailable(client?: Redis): Promise<boolean> {
 // ============================================
 
 // Save study (create or update)
-export async function saveStudy(study: StoredStudy, client?: Redis): Promise<boolean> {
+export async function saveStudy(study: StoredStudy, client?: RedisPort): Promise<boolean> {
   try {
     const kv = resolveClient(client);
-    await kv.set(`${STUDY_PREFIX}${study.id}`, study);
+    await kv.set(`${STUDY_PREFIX}${study.id}`, JSON.stringify(study));
     await kv.sadd(ALL_STUDIES_KEY, study.id);
     return true;
   } catch (error) {
-    console.error('Error saving study:', error);
+    logRequestFailure({ event: 'kv.unavailable' }, error);
     return false;
   }
 }
 
-export type CreateStudyResult = 'created' | 'conflict' | 'cancelled' | 'unavailable';
+export type CreateStudyResult =
+  | 'created'
+  | 'conflict'
+  | 'cancelled'
+  | 'unavailable'
+  | 'ambiguous';
 
-const STUDY_OPERATION_MARKER_PREFIX = 'study-operation-result:';
+export type DeleteStudyStatus =
+  | 'deleted'
+  | 'cancelled'
+  | 'not-found'
+  | 'conflict'
+  | 'still-pending'
+  | 'unavailable'
+  | 'ambiguous';
+
+export type DeleteStudyResult = {
+  status: DeleteStudyStatus;
+  success: boolean;
+  error?: string;
+  code?: 'STUDY_PERSIST_PENDING';
+  reason?: 'ambiguous';
+};
+
+export type CreateDeleteWireOutcome =
+  | { outcome: 'created' }
+  | { outcome: 'deleted' }
+  | { outcome: 'cancelled' }
+  | { outcome: 'still-pending' }
+  | { outcome: 'not-found' }
+  | { outcome: 'conflict'; revision: number }
+  | { outcome: 'invalid' };
+
+export type StandaloneReceiptResolution = 'created' | 'deleted' | 'cancelled';
+
+export interface StandaloneOperationReceipt {
+  version: 2;
+  studyId: string;
+  kind: 'create' | 'delete';
+  researcherId: string;
+  resolution: StandaloneReceiptResolution;
+  markerId: string;
+  createdAt: number;
+  generation: number;
+  idempotencyHash: string | null;
+}
+
+export interface StudyMutationGuard {
+  version: 2;
+  studyId: string;
+  kind: 'create' | 'delete';
+  generation: number;
+  state: 'in-flight' | 'cancelled' | 'deleted' | 'created';
+  markerId: string;
+}
+
+export const RECEIPT_TTL_SECONDS = 604_800;
+export const STUDY_OPERATION_MARKER_PREFIX = 'study-operation-result:';
+export const STUDY_MUTATION_GUARD_PREFIX = 'study-mutation-guard:';
+export const STUDY_PERSISTING_PREFIX = 'study-persisting:';
+export const RECEIPT_VALUE_PREFIX = 'oi:receipt:';
+export const MUTATION_GUARD_VALUE_PREFIX = 'oi:smg:';
+const STUDY_ID_TOKEN = /^[A-Za-z0-9-]{1,128}$/;
 
 export function studyOperationMarkerId(operationId: string, createdAt: number): string | null {
   if (!/^(create|delete):[A-Za-z0-9-]{1,128}$/.test(operationId)
@@ -310,41 +818,306 @@ export function studyOperationMarkerId(operationId: string, createdAt: number): 
   return `${operationId}:${createdAt}`;
 }
 
-const CREATE_STUDY_SCRIPT = `
-if ARGV[3] ~= '' and redis.call('GET', KEYS[3]) == 'cancelled' then return -2 end
-if redis.call('EXISTS', KEYS[1]) == 1 then
-  if ARGV[3] ~= '' then redis.call('SET', KEYS[3], 'created') end
-  return 0
+export function standaloneCreateMarkerId(studyId: string, createdAt: number): string | null {
+  return studyOperationMarkerId(`create:${studyId}`, createdAt);
+}
+
+export function standaloneDeleteMarkerId(studyId: string): string | null {
+  return studyOperationMarkerId(`delete:${studyId}`, 0);
+}
+
+export function encodeOperationReceipt(receipt: StandaloneOperationReceipt): string {
+  return `${RECEIPT_VALUE_PREFIX}${JSON.stringify(receipt)}`;
+}
+
+export function encodeMutationGuard(guard: StudyMutationGuard): string {
+  return `${MUTATION_GUARD_VALUE_PREFIX}${JSON.stringify(guard)}`;
+}
+
+export function parseOperationReceipt(value: unknown): StandaloneOperationReceipt | null {
+  const parsed = parsePrefixedJson(value, RECEIPT_VALUE_PREFIX);
+  if (!parsed.ok) return null;
+  const payload = parsed.payload;
+  if (payload.version !== 2) return null;
+  if (typeof payload.studyId !== 'string' || !STUDY_ID_TOKEN.test(payload.studyId)) return null;
+  if (payload.kind !== 'create' && payload.kind !== 'delete') return null;
+  if (typeof payload.researcherId !== 'string' || payload.researcherId.length === 0) return null;
+  if (
+    payload.resolution !== 'created'
+    && payload.resolution !== 'deleted'
+    && payload.resolution !== 'cancelled'
+  ) {
+    return null;
+  }
+  if (typeof payload.markerId !== 'string' || payload.markerId.length === 0) return null;
+  if (!Number.isSafeInteger(payload.createdAt) || (payload.createdAt as number) < 0) return null;
+  if (!Number.isSafeInteger(payload.generation) || (payload.generation as number) < 1) return null;
+  if (payload.idempotencyHash !== null && (typeof payload.idempotencyHash !== 'string' || payload.idempotencyHash.length === 0)) {
+    return null;
+  }
+  return {
+    version: 2,
+    studyId: payload.studyId,
+    kind: payload.kind,
+    researcherId: payload.researcherId,
+    resolution: payload.resolution,
+    markerId: payload.markerId,
+    createdAt: payload.createdAt as number,
+    generation: payload.generation as number,
+    idempotencyHash: payload.idempotencyHash as string | null,
+  };
+}
+
+export function parseMutationGuard(value: unknown): StudyMutationGuard | null {
+  const parsed = parsePrefixedJson(value, MUTATION_GUARD_VALUE_PREFIX);
+  if (!parsed.ok) return null;
+  const payload = parsed.payload;
+  if (payload.version !== 2) return null;
+  if (typeof payload.studyId !== 'string' || !STUDY_ID_TOKEN.test(payload.studyId)) return null;
+  if (payload.kind !== 'create' && payload.kind !== 'delete') return null;
+  if (!Number.isSafeInteger(payload.generation) || (payload.generation as number) < 1) return null;
+  if (
+    payload.state !== 'in-flight'
+    && payload.state !== 'cancelled'
+    && payload.state !== 'deleted'
+    && payload.state !== 'created'
+  ) {
+    return null;
+  }
+  if (typeof payload.markerId !== 'string' || payload.markerId.length === 0) return null;
+  return {
+    version: 2,
+    studyId: payload.studyId,
+    kind: payload.kind,
+    generation: payload.generation as number,
+    state: payload.state,
+    markerId: payload.markerId,
+  };
+}
+
+export function parseCreateDeleteResult(wire: unknown): WireResult<CreateDeleteWireOutcome> {
+  const parsed = parseFamilyWire('byos-mutation', wire);
+  if (parsed.status !== 'ok') return parsed;
+  switch (parsed.value.tag) {
+    case 'oi:created':
+      return ok({ outcome: 'created' });
+    case 'oi:deleted':
+      return ok({ outcome: 'deleted' });
+    case 'oi:cancelled':
+      return ok({ outcome: 'cancelled' });
+    case 'oi:still-pending':
+      return ok({ outcome: 'still-pending' });
+    case 'oi:not-found':
+      return ok({ outcome: 'not-found' });
+    case 'oi:conflict':
+      return ok({ outcome: 'conflict', revision: parsed.value.payload as number });
+    case 'oi:invalid':
+      return ok({ outcome: 'invalid' });
+    default:
+      return UNAVAILABLE;
+  }
+}
+
+function classifyCommitError(error: unknown): 'ambiguous' | 'unavailable' {
+  if (error instanceof RedisCommitAmbiguousError) {
+    return error.commitState === 'may-have-committed' ? 'ambiguous' : 'unavailable';
+  }
+  return 'unavailable';
+}
+
+function receiptKey(markerId: string): string {
+  return `${STUDY_OPERATION_MARKER_PREFIX}${markerId}`;
+}
+
+function mutationGuardKey(studyId: string): string {
+  return `${STUDY_MUTATION_GUARD_PREFIX}${studyId}`;
+}
+
+function persistingKey(studyId: string): string {
+  return `${STUDY_PERSISTING_PREFIX}${studyId}`;
+}
+
+export const CREATE_STUDY_SCRIPT = `
+local function receipt_resolution(value)
+  if type(value) ~= 'string' or string.sub(value, 1, 11) ~= 'oi:receipt:' then return nil end
+  local ok, obj = pcall(cjson.decode, string.sub(value, 12))
+  if not ok or type(obj) ~= 'table' or type(obj.resolution) ~= 'string' then return nil end
+  return obj.resolution
 end
+
+local mode = ARGV[6]
+if mode ~= 'standalone' and mode ~= 'hosted' then
+  return {'oi:byos-unavailable'}
+end
+if mode == 'hosted' and #KEYS ~= 4 then
+  return {'oi:byos-unavailable'}
+end
+if mode == 'standalone' and #KEYS ~= 5 then
+  return {'oi:byos-unavailable'}
+end
+
+local existingReceipt
+local guard
+if mode == 'hosted' then
+  existingReceipt = redis.call('GET', KEYS[2])
+  guard = redis.call('GET', KEYS[3])
+else
+  existingReceipt = redis.call('GET', KEYS[3])
+  guard = redis.call('GET', KEYS[4])
+end
+if existingReceipt then
+  local resolution = receipt_resolution(existingReceipt)
+  if resolution == 'created' then return {'oi:created'} end
+  if resolution == 'cancelled' then return {'oi:cancelled'} end
+  if resolution == 'deleted' then return {'oi:conflict', 'oi:revision:0'} end
+  return {'oi:byos-unavailable'}
+end
+
+if guard then
+  if type(guard) ~= 'string' or string.sub(guard, 1, 7) ~= 'oi:smg:' then
+    return {'oi:byos-unavailable'}
+  end
+  local ok, obj = pcall(cjson.decode, string.sub(guard, 8))
+  if not ok or type(obj) ~= 'table' then
+    return {'oi:byos-unavailable'}
+  end
+  if obj.state == 'cancelled' then
+    return {'oi:cancelled'}
+  end
+  if obj.state == 'deleted' or (obj.state == 'in-flight' and obj.kind == 'delete') then
+    return {'oi:conflict', 'oi:revision:0'}
+  end
+end
+
+if mode == 'hosted' then
+  if redis.call('SCARD', KEYS[4]) > 0 then
+    return {'oi:still-pending'}
+  end
+elseif redis.call('SCARD', KEYS[5]) > 0 then
+  return {'oi:still-pending'}
+end
+
+if redis.call('EXISTS', KEYS[1]) == 1 then
+  local stored = redis.call('GET', KEYS[1])
+  -- Dual-read: writers now prefix with oi:study:, but legacy unprefixed
+  -- bodies of the same study are the same content and must repair (W2), not
+  -- conflict. Keep until all writers prefix.
+  local legacy = string.sub(ARGV[1], 9)
+  if stored ~= ARGV[1] and stored ~= legacy then
+    return {'oi:conflict', 'oi:revision:0'}
+  end
+  -- fault cut W2: study present, receipt not terminal
+  if mode == 'standalone' then
+    redis.call('SADD', KEYS[2], ARGV[2])
+    redis.call('SET', KEYS[3], ARGV[4], 'EX', 604800)
+    redis.call('SET', KEYS[4], ARGV[5])
+  else
+    redis.call('SET', KEYS[2], ARGV[4], 'EX', 604800)
+    redis.call('SET', KEYS[3], ARGV[5])
+  end
+  return {'oi:created'}
+end
+
+-- fault cut W1 / S1: mapping reserved, study absent
 redis.call('SET', KEYS[1], ARGV[1])
-redis.call('SADD', KEYS[2], ARGV[2])
-if ARGV[3] ~= '' then redis.call('SET', KEYS[3], 'created') end
-return 1
+-- fault cut S2: study SET committed, all-studies not yet
+if mode == 'standalone' then
+  redis.call('SADD', KEYS[2], ARGV[2])
+end
+-- fault cut S3: study+index committed, receipt absent
+if mode == 'hosted' then
+  redis.call('SET', KEYS[2], ARGV[4], 'EX', 604800)
+  redis.call('SET', KEYS[3], ARGV[5])
+else
+  redis.call('SET', KEYS[3], ARGV[4], 'EX', 604800)
+  redis.call('SET', KEYS[4], ARGV[5])
+end
+-- fault cut S4: receipt committed
+return {'oi:created'}
 `;
 
 export async function createStudyAtomic(
   study: StoredStudy,
-  client?: Redis,
-  operationMarkerId?: string
+  client?: RedisPort,
+  operationMarkerId?: string,
+  options?: { idempotencyHash?: string | null; researcherId?: string }
 ): Promise<CreateStudyResult> {
+  const markerId = operationMarkerId
+    || standaloneCreateMarkerId(study.id, study.createdAt)
+    || null;
+  if (!markerId || !STUDY_ID_TOKEN.test(study.id)) return 'unavailable';
+
+  const receipt: StandaloneOperationReceipt = {
+    version: 2,
+    studyId: study.id,
+    kind: 'create',
+    researcherId: options?.researcherId || 'standalone',
+    resolution: 'created',
+    markerId,
+    createdAt: study.createdAt,
+    generation: 1,
+    idempotencyHash: options?.idempotencyHash ?? null,
+  };
+  const guard: StudyMutationGuard = {
+    version: 2,
+    studyId: study.id,
+    kind: 'create',
+    generation: 1,
+    state: 'created',
+    markerId,
+  };
+
   try {
+    const resolvedMode = resolveDeploymentMode();
+    if (!resolvedMode.ok) return 'unavailable';
+    const hosted = resolvedMode.mode === 'hosted';
+
     const kv = resolveClient(client);
-    const result = await kv.eval<string[], number>(
+    const existing = await kv.get(receiptKey(markerId));
+    if (existing !== null && existing !== undefined) {
+      const parsed = parseOperationReceipt(existing);
+      if (!parsed) return 'unavailable';
+      if (parsed.resolution === 'created') return 'created';
+      if (parsed.resolution === 'cancelled') return 'cancelled';
+      return 'conflict';
+    }
+
+    const keys = hosted
+      ? [
+          `${STUDY_PREFIX}${study.id}`,
+          receiptKey(markerId),
+          mutationGuardKey(study.id),
+          persistingKey(study.id),
+        ]
+      : [
+          `${STUDY_PREFIX}${study.id}`,
+          ALL_STUDIES_KEY,
+          receiptKey(markerId),
+          mutationGuardKey(study.id),
+          persistingKey(study.id),
+        ];
+    const wire = await kv.eval(
       CREATE_STUDY_SCRIPT,
+      keys,
       [
-        `${STUDY_PREFIX}${study.id}`,
-        ALL_STUDIES_KEY,
-        `${STUDY_OPERATION_MARKER_PREFIX}${operationMarkerId || 'standalone'}`,
-      ],
-      [JSON.stringify(study), study.id, operationMarkerId || '']
+        `${STUDY_VALUE_PREFIX}${JSON.stringify(study)}`,
+        study.id,
+        markerId,
+        encodeOperationReceipt(receipt),
+        encodeMutationGuard(guard),
+        resolvedMode.mode,
+      ]
     );
-    if (result === 1) return 'created';
-    if (result === 0) return 'conflict';
-    if (result === -2) return 'cancelled';
+    const parsed = parseCreateDeleteResult(wire);
+    if (parsed.status !== 'ok') return 'unavailable';
+    if (parsed.value.outcome === 'created') return 'created';
+    if (parsed.value.outcome === 'cancelled') return 'cancelled';
+    if (parsed.value.outcome === 'conflict' || parsed.value.outcome === 'invalid') return 'conflict';
+    if (parsed.value.outcome === 'still-pending') return 'unavailable';
     return 'unavailable';
   } catch (error) {
-    console.error('Error creating study:', error);
-    return 'unavailable';
+    logRequestFailure({ event: 'kv.unavailable' }, error);
+    return classifyCommitError(error);
   }
 }
 
@@ -352,76 +1125,179 @@ export type StudyMutationResult =
   | { status: 'updated'; study: StoredStudy }
   | { status: 'conflict' }
   | { status: 'not-found' }
-  | { status: 'unavailable' };
+  | { status: 'unavailable' }
+  | { status: 'ambiguous' }
+  | { status: 'persist-guard' };
 
-const SET_STUDY_LINKS_SCRIPT = `
-local studyJson = redis.call('GET', KEYS[1])
-if not studyJson then return nil end
-local study = cjson.decode(studyJson)
+function asStoredStudy(value: unknown): StoredStudy | null {
+  if (typeof value === 'string') {
+    if (!value.startsWith(STUDY_VALUE_PREFIX)) return null;
+    try {
+      return asStoredStudy(JSON.parse(value.slice(STUDY_VALUE_PREFIX.length)));
+    } catch {
+      return null;
+    }
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const rec = value as Record<string, unknown>;
+  if (typeof rec.id !== 'string' || !STUDY_ID_TOKEN.test(rec.id)) return null;
+  if (!rec.config || typeof rec.config !== 'object' || Array.isArray(rec.config)) return null;
+  if (!Number.isFinite(rec.createdAt) || !Number.isFinite(rec.updatedAt)) return null;
+  if (!Number.isFinite(rec.interviewCount) || (rec.interviewCount as number) < 0) return null;
+  if (typeof rec.isLocked !== 'boolean') return null;
+  if (!Number.isFinite(rec.revision) || (rec.revision as number) < 1) return null;
+  return value as StoredStudy;
+}
+
+function mutationPersistGuard(wire: unknown): StudyMutationResult | null {
+  if (!Array.isArray(wire) || wire[0] !== 'oi:persist-guard') return null;
+  const parsed = parsePersistResult(wire);
+  return parsed.status === 'ok' && parsed.value.outcome === 'guard'
+    ? { status: 'persist-guard' }
+    : { status: 'unavailable' };
+}
+
+function mapStudyCasWire(wire: unknown): StudyMutationResult {
+  const blocked = mutationPersistGuard(wire);
+  if (blocked) return blocked;
+  const parsed = parseStudyCasResult(wire);
+  if (parsed.status !== 'ok') return { status: 'unavailable' };
+  switch (parsed.value.outcome) {
+    case 'updated': {
+      const study = asStoredStudy(parsed.value.study);
+      return study ? { status: 'updated', study } : { status: 'unavailable' };
+    }
+    case 'not-found':
+      return { status: 'not-found' };
+    case 'conflict':
+      return { status: 'conflict' };
+    default:
+      return { status: 'unavailable' };
+  }
+}
+
+function studyCasKeys(studyId: string): string[] {
+  return [
+    `${STUDY_PREFIX}${studyId}`,
+    `${STUDY_PERSISTING_PREFIX}${studyId}`,
+    mutationGuardKey(studyId),
+  ];
+}
+
+const STUDY_CAS_LUA = `
+local function decode_study(raw)
+  if type(raw) ~= 'string' then return nil, false end
+  local prefixed = string.sub(raw, 1, 9) == 'oi:study:'
+  local payload = prefixed and string.sub(raw, 10) or raw
+  local ok, obj = pcall(cjson.decode, payload)
+  if not ok or type(obj) ~= 'table' then return nil, prefixed end
+  return obj, prefixed
+end
+
+local function encode_study(obj, prefixed)
+  local encoded = cjson.encode(obj)
+  if prefixed then return 'oi:study:' .. encoded end
+  return encoded
+end
+
+if redis.call('SCARD', KEYS[2]) > 0 then
+  return {'oi:persist-guard'}
+end
+
+local mutationRaw = redis.call('GET', KEYS[3])
+if mutationRaw then
+  if type(mutationRaw) ~= 'string' or string.sub(mutationRaw, 1, 7) ~= 'oi:smg:' then
+    return {'oi:byos-unavailable'}
+  end
+  local mok, mutation = pcall(cjson.decode, string.sub(mutationRaw, 8))
+  if not mok or type(mutation) ~= 'table' then
+    return {'oi:byos-unavailable'}
+  end
+  if mutation.state ~= 'created' then
+    return {'oi:persist-guard'}
+  end
+end
+`;
+
+export const SET_STUDY_LINKS_SCRIPT = `${STUDY_CAS_LUA}
+local study, prefixed = decode_study(redis.call('GET', KEYS[1]))
+if not study then return {'oi:not-found'} end
 if not study.config then study.config = {} end
 study.config.linksEnabled = ARGV[1] == '1'
 study.updatedAt = tonumber(ARGV[2])
-study.revision = (tonumber(study.revision) or 1) + 1
-local updated = cjson.encode(study)
-redis.call('SET', KEYS[1], updated)
-return updated
+local nextRev = (tonumber(study.revision) or 1) + 1
+if nextRev > 99999999999999 then return {'oi:invalid'} end
+study.revision = nextRev
+redis.call('SET', KEYS[1], encode_study(study, prefixed))
+return {'oi:updated', 'oi:json:' .. cjson.encode(study)}
 `;
 
 export async function setStudyLinksEnabled(
   studyId: string,
   enabled: boolean,
-  client?: Redis
+  client?: RedisPort
 ): Promise<StudyMutationResult> {
+  if (!STUDY_ID_TOKEN.test(studyId)) return { status: 'unavailable' };
   try {
     const kv = resolveClient(client);
-    const value = await kv.eval<string[], StoredStudy | null>(
+    const value = await kv.eval(
       SET_STUDY_LINKS_SCRIPT,
-      [`${STUDY_PREFIX}${studyId}`],
+      studyCasKeys(studyId),
       [enabled ? '1' : '0', String(Date.now())]
     );
-    if (value === null) return { status: 'not-found' };
-    return { status: 'updated', study: value };
+    return mapStudyCasWire(value);
   } catch (error) {
-    console.error('Error updating study link status:', error);
-    return { status: 'unavailable' };
+    logRequestFailure({ event: 'kv.unavailable' }, error);
+    return classifyCommitError(error) === 'ambiguous'
+      ? { status: 'ambiguous' }
+      : { status: 'unavailable' };
   }
 }
 
-const REPLACE_STUDY_CONFIG_SCRIPT = `
-local studyJson = redis.call('GET', KEYS[1])
-if not studyJson then return {0} end
-local study = cjson.decode(studyJson)
-if (tonumber(study.revision) or 1) ~= tonumber(ARGV[1]) then return {-1} end
-study.config = cjson.decode(ARGV[2])
+export const REPLACE_STUDY_CONFIG_SCRIPT = `${STUDY_CAS_LUA}
+local study, prefixed = decode_study(redis.call('GET', KEYS[1]))
+if not study then return {'oi:not-found'} end
+if (tonumber(study.revision) or 1) ~= tonumber(ARGV[1]) then
+  return {'oi:conflict', 'oi:revision:' .. string.format('%.0f', math.floor(tonumber(study.revision) or 1))}
+end
+local cok, config = pcall(cjson.decode, ARGV[2])
+if not cok or type(config) ~= 'table' then return {'oi:invalid'} end
+study.config = config
 study.updatedAt = tonumber(ARGV[3])
-study.revision = (tonumber(study.revision) or 1) + 1
-local updated = cjson.encode(study)
-redis.call('SET', KEYS[1], updated)
-return {1, updated}
+local nextRev = (tonumber(study.revision) or 1) + 1
+if nextRev > 99999999999999 then return {'oi:invalid'} end
+study.revision = nextRev
+redis.call('SET', KEYS[1], encode_study(study, prefixed))
+return {'oi:updated', 'oi:json:' .. cjson.encode(study)}
 `;
 
 export async function replaceStudyConfigAtomic(
   studyId: string,
   expectedRevision: number,
   config: StoredStudy['config'],
-  client?: Redis
+  client?: RedisPort
 ): Promise<StudyMutationResult> {
+  if (!STUDY_ID_TOKEN.test(studyId)) return { status: 'unavailable' };
+  if (
+    !Number.isSafeInteger(expectedRevision)
+    || expectedRevision < 1
+    || expectedRevision > MAX_STUDY_REVISION
+  ) {
+    return { status: 'unavailable' };
+  }
   try {
     const kv = resolveClient(client);
-    const result = await kv.eval<string[], [number, StoredStudy?]>(
+    const result = await kv.eval(
       REPLACE_STUDY_CONFIG_SCRIPT,
-      [`${STUDY_PREFIX}${studyId}`],
+      studyCasKeys(studyId),
       [String(expectedRevision), JSON.stringify(config), String(Date.now())]
     );
-    if (result[0] === 0) return { status: 'not-found' };
-    if (result[0] === -1) return { status: 'conflict' };
-    if (result[0] === 1 && result[1]) {
-      return { status: 'updated', study: result[1] };
-    }
-    return { status: 'unavailable' };
+    return mapStudyCasWire(result);
   } catch (error) {
-    console.error('Error replacing study config:', error);
-    return { status: 'unavailable' };
+    logRequestFailure({ event: 'kv.unavailable' }, error);
+    return classifyCommitError(error) === 'ambiguous'
+      ? { status: 'ambiguous' }
+      : { status: 'unavailable' };
   }
 }
 
@@ -433,13 +1309,13 @@ export type StudyLoadResult =
   | { status: 'unavailable' };
 
 // Read a study, distinguishing "no such record" from "storage could not be read".
-export async function getStudyChecked(id: string, client?: Redis): Promise<StudyLoadResult> {
+export async function getStudyChecked(id: string, client?: RedisPort): Promise<StudyLoadResult> {
   try {
     const kv = resolveClient(client);
-    const study = await kv.get<StoredStudy>(`${STUDY_PREFIX}${id}`);
+    const study = asStoredStudy(await kv.get(`${STUDY_PREFIX}${id}`));
     return study ? { status: 'found', study } : { status: 'not-found' };
   } catch (error) {
-    console.error('Error reading study from storage:', error);
+    logRequestFailure({ event: 'kv.unavailable' }, error);
     return { status: 'unavailable' };
   }
 }
@@ -447,7 +1323,7 @@ export async function getStudyChecked(id: string, client?: Redis): Promise<Study
 // Get study by ID.
 // Returns null only for a genuine miss. Storage failures throw so callers can
 // fail closed instead of mistaking an unavailable store for a missing record.
-export async function getStudy(id: string, client?: Redis): Promise<StoredStudy | null> {
+export async function getStudy(id: string, client?: RedisPort): Promise<StoredStudy | null> {
   const result = await getStudyChecked(id, client);
   if (result.status === 'unavailable') {
     throw new Error('Study storage is temporarily unavailable');
@@ -456,96 +1332,321 @@ export async function getStudy(id: string, client?: Redis): Promise<StoredStudy 
 }
 
 // Get all studies
-export async function getAllStudies(client?: Redis): Promise<StoredStudy[]> {
+export async function getAllStudies(client?: RedisPort): Promise<StoredStudy[]> {
   const result = await getAllStudiesChecked(client);
   if (result.status !== 'ok') throw new Error(`Study collection ${result.status}`);
   return result.items;
 }
 
 export async function getAllStudiesChecked(
-  client?: Redis,
+  client?: RedisPort,
   maximum = 1_000
 ): Promise<CollectionLoadResult<StoredStudy>> {
   try {
     const kv = resolveClient(client);
     const count = await kv.scard(ALL_STUDIES_KEY);
     if (count > maximum) return { status: 'too-large', count, maximum };
-    const ids = await kv.smembers(ALL_STUDIES_KEY);
+    const ids = (await kv.smembers(ALL_STUDIES_KEY)) as string[];
     if (!ids || ids.length === 0) return { status: 'ok', items: [] };
     if (ids.length > maximum) return { status: 'too-large', count: ids.length, maximum };
 
     const studies = await Promise.all(
-      ids.map(id => kv.get<StoredStudy>(`${STUDY_PREFIX}${id}`))
+      ids.map(id => kv.get(`${STUDY_PREFIX}${id}`))
     );
 
     return {
       status: 'ok',
       items: studies
+        .map(asStoredStudy)
         .filter((s): s is StoredStudy => s !== null)
         .sort((a, b) => b.createdAt - a.createdAt),
     };
   } catch (error) {
-    console.error('Error getting all studies:', error);
+    logRequestFailure({ event: 'kv.unavailable' }, error);
     return { status: 'unavailable' };
   }
 }
 
-const DELETE_EMPTY_STUDY_SCRIPT = `
-if ARGV[2] ~= '' and redis.call('GET', KEYS[4]) == 'cancelled' then return -2 end
-if redis.call('SCARD', KEYS[2]) > 0 then return 0 end
-if redis.call('EXISTS', KEYS[1]) == 0 then
-  if ARGV[2] ~= '' then redis.call('SET', KEYS[4], 'deleted') end
-  return -1
+export const DELETE_EMPTY_STUDY_SCRIPT = `
+local function receipt_resolution(value)
+  if type(value) ~= 'string' or string.sub(value, 1, 11) ~= 'oi:receipt:' then return nil end
+  local ok, obj = pcall(cjson.decode, string.sub(value, 12))
+  if not ok or type(obj) ~= 'table' or type(obj.resolution) ~= 'string' then return nil end
+  return obj.resolution
 end
+
+local function same_generation_guard(value)
+  if type(value) ~= 'string' or string.sub(value, 1, 7) ~= 'oi:smg:' then return false end
+  local ok, obj = pcall(cjson.decode, string.sub(value, 8))
+  if not ok or type(obj) ~= 'table' then return false end
+  return obj.markerId == ARGV[2] and tostring(obj.generation) == ARGV[5]
+end
+
+local mode = ARGV[6]
+if mode ~= 'standalone' and mode ~= 'hosted' then
+  return {'oi:byos-unavailable'}
+end
+if mode == 'hosted' and #KEYS ~= 5 then
+  return {'oi:byos-unavailable'}
+end
+if mode == 'standalone' and #KEYS ~= 6 then
+  return {'oi:byos-unavailable'}
+end
+
+local function cleanup_this_generation()
+  local guardKey, persistSet
+  if mode == 'hosted' then
+    guardKey = KEYS[4]
+    persistSet = KEYS[5]
+  else
+    guardKey = KEYS[5]
+    persistSet = KEYS[6]
+  end
+  local guard = redis.call('GET', guardKey)
+  if same_generation_guard(guard) then
+    redis.call('DEL', guardKey)
+  end
+  local members = redis.call('SMEMBERS', persistSet)
+  if type(members) ~= 'table' then return end
+  for i = 1, #members do
+    local pkey = 'interview-persisting:' .. members[i]
+    local raw = redis.call('GET', pkey)
+    if type(raw) == 'string' and string.sub(raw, 1, 10) == 'oi:pguard:' then
+      local ok, obj = pcall(cjson.decode, string.sub(raw, 11))
+      if ok and type(obj) == 'table' and obj.markerId == ARGV[2] and tostring(obj.generation) == ARGV[5] then
+        redis.call('DEL', pkey)
+        redis.call('SREM', persistSet, members[i])
+      end
+    end
+  end
+end
+
+local existingReceipt
+if mode == 'hosted' then
+  existingReceipt = redis.call('GET', KEYS[3])
+else
+  existingReceipt = redis.call('GET', KEYS[4])
+end
+if existingReceipt then
+  local resolution = receipt_resolution(existingReceipt)
+  if resolution == 'deleted' then
+    cleanup_this_generation()
+    return {'oi:deleted'}
+  end
+  if resolution == 'cancelled' then
+    cleanup_this_generation()
+    return {'oi:cancelled'}
+  end
+  if resolution ~= 'created' then return {'oi:byos-unavailable'} end
+end
+
+-- Before any SCARD/EXISTS study decision, refuse a live persist generation.
+if mode == 'hosted' then
+  if redis.call('SCARD', KEYS[5]) > 0 then
+    return {'oi:still-pending'}
+  end
+elseif redis.call('SCARD', KEYS[6]) > 0 then
+  return {'oi:still-pending'}
+end
+
+if mode == 'hosted' then
+  redis.call('SET', KEYS[4], ARGV[4])
+else
+  redis.call('SET', KEYS[5], ARGV[4])
+end
+-- fault cut D1: mutation guard written, study present
+
+if redis.call('SCARD', KEYS[2]) > 0 then
+  return {'oi:conflict', 'oi:revision:0'}
+end
+
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  if mode == 'standalone' then
+    redis.call('SREM', KEYS[3], ARGV[1])
+    redis.call('SET', KEYS[4], ARGV[3], 'EX', 604800)
+  else
+    redis.call('SET', KEYS[3], ARGV[3], 'EX', 604800)
+  end
+  -- fault cut D4: receipt written, this-generation guard not cleaned
+  cleanup_this_generation()
+  return {'oi:deleted'}
+end
+
 redis.call('DEL', KEYS[1])
-redis.call('SREM', KEYS[3], ARGV[1])
-if ARGV[2] ~= '' then redis.call('SET', KEYS[4], 'deleted') end
-return 1
+-- fault cut D2: study DEL, index not SREM
+if mode == 'standalone' then
+  redis.call('SREM', KEYS[3], ARGV[1])
+end
+-- fault cut D3: study+index removed, receipt absent
+if mode == 'hosted' then
+  redis.call('SET', KEYS[3], ARGV[3], 'EX', 604800)
+else
+  redis.call('SET', KEYS[4], ARGV[3], 'EX', 604800)
+end
+-- fault cut D4: receipt written, this-generation guard not cleaned
+cleanup_this_generation()
+return {'oi:deleted'}
 `;
+
+function deleteResult(
+  status: DeleteStudyStatus,
+  error?: string,
+  extra?: { code?: 'STUDY_PERSIST_PENDING'; reason?: 'ambiguous' }
+): DeleteStudyResult {
+  if (status === 'deleted') return { status, success: true };
+  return { status, success: false, error, ...extra };
+}
 
 // Delete a study only if no interview exists. The emptiness check and delete
 // are one Redis operation, so an interview commit cannot create an orphan by
-// interleaving between them.
+// interleaving between them. No caller GET of the study body.
 export async function deleteStudy(
   id: string,
-  client?: Redis,
+  client?: RedisPort,
   operationMarkerId?: string
-): Promise<{ success: boolean; error?: string }> {
+): Promise<DeleteStudyResult> {
+  const markerId = operationMarkerId || standaloneDeleteMarkerId(id);
+  if (!markerId || !STUDY_ID_TOKEN.test(id)) {
+    return deleteResult('unavailable', 'Failed to delete study');
+  }
+
+  const receipt: StandaloneOperationReceipt = {
+    version: 2,
+    studyId: id,
+    kind: 'delete',
+    researcherId: 'standalone',
+    resolution: 'deleted',
+    markerId,
+    createdAt: 0,
+    generation: 1,
+    idempotencyHash: null,
+  };
+  const guard: StudyMutationGuard = {
+    version: 2,
+    studyId: id,
+    kind: 'delete',
+    generation: 1,
+    state: 'in-flight',
+    markerId,
+  };
+
   try {
+    const resolvedMode = resolveDeploymentMode();
+    if (!resolvedMode.ok) return deleteResult('unavailable', 'Failed to delete study');
+    const hosted = resolvedMode.mode === 'hosted';
+
     const kv = resolveClient(client);
-    const result = await kv.eval<string[], number>(
+    const existing = await kv.get(receiptKey(markerId));
+    if (existing !== null && existing !== undefined) {
+      const parsed = parseOperationReceipt(existing);
+      if (!parsed) return deleteResult('unavailable', 'Failed to delete study');
+      if (parsed.resolution === 'deleted' || parsed.resolution === 'cancelled') {
+        const guardRaw = await kv.get(mutationGuardKey(id));
+        const leftover = parseMutationGuard(guardRaw);
+        const sameGeneration = Boolean(
+          leftover
+          && leftover.markerId === markerId
+          && leftover.generation === 1
+        );
+        if (!sameGeneration) {
+          return parsed.resolution === 'deleted'
+            ? deleteResult('deleted')
+            : deleteResult('cancelled', 'Study operation cancelled');
+        }
+      }
+    }
+
+    const keys = hosted
+      ? [
+          `${STUDY_PREFIX}${id}`,
+          `${STUDY_INDEX_PREFIX}${id}`,
+          receiptKey(markerId),
+          mutationGuardKey(id),
+          persistingKey(id),
+        ]
+      : [
+          `${STUDY_PREFIX}${id}`,
+          `${STUDY_INDEX_PREFIX}${id}`,
+          ALL_STUDIES_KEY,
+          receiptKey(markerId),
+          mutationGuardKey(id),
+          persistingKey(id),
+        ];
+    const wire = await kv.eval(
       DELETE_EMPTY_STUDY_SCRIPT,
+      keys,
       [
-        `${STUDY_PREFIX}${id}`,
-        `${STUDY_INDEX_PREFIX}${id}`,
-        ALL_STUDIES_KEY,
-        `${STUDY_OPERATION_MARKER_PREFIX}${operationMarkerId || 'standalone'}`,
-      ],
-      [id, operationMarkerId || '']
+        id,
+        markerId,
+        encodeOperationReceipt(receipt),
+        encodeMutationGuard(guard),
+        '1',
+        resolvedMode.mode,
+      ]
     );
-    if (result === 0) {
-      return { success: false, error: 'Cannot delete study with existing interviews' };
+    const parsed = parseCreateDeleteResult(wire);
+    if (parsed.status !== 'ok') return deleteResult('unavailable', 'Failed to delete study');
+    if (parsed.value.outcome === 'deleted') return deleteResult('deleted');
+    if (parsed.value.outcome === 'cancelled') {
+      return deleteResult('cancelled', 'Study operation cancelled');
     }
-    if (result === -1) {
-      return { success: false, error: 'Study not found' };
+    if (parsed.value.outcome === 'still-pending') {
+      return deleteResult('still-pending', 'STUDY_PERSIST_PENDING', { code: 'STUDY_PERSIST_PENDING' });
     }
-    if (result === -2) {
-      return { success: false, error: 'Study operation cancelled' };
+    if (parsed.value.outcome === 'conflict') {
+      return deleteResult('conflict', 'Cannot delete study with existing interviews');
     }
-    if (result !== 1) {
-      return { success: false, error: 'Failed to delete study' };
+    if (parsed.value.outcome === 'not-found') {
+      return deleteResult('not-found', 'Study not found');
     }
-    return { success: true };
+    return deleteResult('unavailable', 'Failed to delete study');
   } catch (error) {
-    console.error('Error deleting study:', error);
-    return { success: false, error: 'Failed to delete study' };
+    logRequestFailure({ event: 'kv.unavailable' }, error);
+    const classified = classifyCommitError(error);
+    return classified === 'ambiguous'
+      ? deleteResult('ambiguous', 'Failed to delete study', { reason: 'ambiguous' })
+      : deleteResult('unavailable', 'Failed to delete study');
   }
 }
 
 export type SettleStudyOperationMutationResult =
   | 'mutation-applied'
   | 'mutation-cancelled'
-  | 'unavailable';
+  | 'unavailable'
+  | 'ambiguous';
+
+export const SETTLE_STUDY_OPERATION_SCRIPT = `
+local function receipt_resolution(value)
+  if type(value) ~= 'string' or string.sub(value, 1, 11) ~= 'oi:receipt:' then return nil end
+  local ok, obj = pcall(cjson.decode, string.sub(value, 12))
+  if not ok or type(obj) ~= 'table' or type(obj.resolution) ~= 'string' then return nil end
+  return obj.resolution
+end
+
+local marker = receipt_resolution(redis.call('GET', KEYS[2]))
+local exists = redis.call('EXISTS', KEYS[1]) == 1
+if ARGV[1] == 'create' then
+  if marker == 'created' or exists then
+    redis.call('SET', KEYS[2], ARGV[2], 'EX', 604800)
+    redis.call('SET', KEYS[3], ARGV[4])
+    return {'oi:created'}
+  end
+  redis.call('SET', KEYS[2], ARGV[3], 'EX', 604800)
+  redis.call('SET', KEYS[3], ARGV[5])
+  return {'oi:cancelled'}
+end
+if ARGV[1] == 'delete' then
+  if marker == 'deleted' or not exists then
+    redis.call('SET', KEYS[2], ARGV[2], 'EX', 604800)
+    redis.call('SET', KEYS[3], ARGV[4])
+    return {'oi:deleted'}
+  end
+  redis.call('SET', KEYS[2], ARGV[3], 'EX', 604800)
+  redis.call('SET', KEYS[3], ARGV[5])
+  return {'oi:cancelled'}
+end
+return {'oi:byos-unavailable'}
+`;
 
 // Atomically observes the study and installs a BYOS tombstone for the inverse
 // outcome. A delayed original mutation must check the same marker, so once this
@@ -554,43 +1655,62 @@ export async function settleStudyOperationMutation(
   kind: 'create' | 'delete',
   studyId: string,
   operationMarkerId: string,
-  client?: Redis
+  client?: RedisPort
 ): Promise<SettleStudyOperationMutationResult> {
-  const script = `
-    local marker = redis.call('GET', KEYS[2])
-    local exists = redis.call('EXISTS', KEYS[1]) == 1
-    if ARGV[1] == 'create' then
-      if marker == 'created' or exists then
-        redis.call('SET', KEYS[2], 'created')
-        return 1
-      end
-      redis.call('SET', KEYS[2], 'cancelled')
-      return 0
-    end
-    if ARGV[1] == 'delete' then
-      if marker == 'deleted' or not exists then
-        redis.call('SET', KEYS[2], 'deleted')
-        return 1
-      end
-      redis.call('SET', KEYS[2], 'cancelled')
-      return 0
-    end
-    return -1
-  `;
+  const appliedResolution = kind === 'create' ? 'created' : 'deleted';
+  const applied: StandaloneOperationReceipt = {
+    version: 2,
+    studyId,
+    kind,
+    researcherId: 'standalone',
+    resolution: appliedResolution,
+    markerId: operationMarkerId,
+    createdAt: 0,
+    generation: 1,
+    idempotencyHash: null,
+  };
+  const cancelled: StandaloneOperationReceipt = {
+    ...applied,
+    resolution: 'cancelled',
+  };
+  const appliedGuard: StudyMutationGuard = {
+    version: 2,
+    studyId,
+    kind,
+    generation: 1,
+    state: appliedResolution,
+    markerId: operationMarkerId,
+  };
+  const cancelledGuard: StudyMutationGuard = {
+    ...appliedGuard,
+    state: 'cancelled',
+  };
+
   try {
-    const result = Number(await resolveClient(client).eval<string[], number>(
-      script,
+    const wire = await resolveClient(client).eval(
+      SETTLE_STUDY_OPERATION_SCRIPT,
       [
         `${STUDY_PREFIX}${studyId}`,
-        `${STUDY_OPERATION_MARKER_PREFIX}${operationMarkerId}`,
+        receiptKey(operationMarkerId),
+        mutationGuardKey(studyId),
       ],
-      [kind]
-    ));
-    if (result === 1) return 'mutation-applied';
-    if (result === 0) return 'mutation-cancelled';
+      [
+        kind,
+        encodeOperationReceipt(applied),
+        encodeOperationReceipt(cancelled),
+        encodeMutationGuard(appliedGuard),
+        encodeMutationGuard(cancelledGuard),
+      ]
+    );
+    const parsed = parseCreateDeleteResult(wire);
+    if (parsed.status !== 'ok') return 'unavailable';
+    if (parsed.value.outcome === 'created' || parsed.value.outcome === 'deleted') {
+      return 'mutation-applied';
+    }
+    if (parsed.value.outcome === 'cancelled') return 'mutation-cancelled';
     return 'unavailable';
   } catch (error) {
-    console.error('Error settling study operation mutation:', error);
-    return 'unavailable';
+    logRequestFailure({ event: 'kv.unavailable' }, error);
+    return classifyCommitError(error);
   }
 }

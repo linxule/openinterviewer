@@ -48,9 +48,17 @@ export type HostedConfigError =
   | 'gateway_not_supported_hosted'
   | 'missing_ai_gateway_auth'
   | 'invalid_gateway_ai_provider'
-  | 'invalid_gateway_zdr';
+  | 'invalid_gateway_zdr'
+  | 'invalid_platform_schema_lineage'
+  | 'schema_hold';
 
 export type OAuthProviderId = 'google' | 'github';
+
+// Runtime schema-lineage HOLD (Revision 12 §4): hosted APIs offline, writes
+// 503 { retryable:false, reason:'schema-hold' }, readiness false. Readiness
+// routes consult Redis lineage after env validation.
+export const SCHEMA_HOLD_ERROR: HostedConfigError = 'schema_hold';
+export const PLATFORM_SCHEMA_LINEAGE_SENTINEL = 'v2-clean';
 
 export type PublicConfigView = {
   mode: 'standalone' | 'hosted' | null;
@@ -177,6 +185,14 @@ export function validateHostedConfig(env: ConfigEnv = process.env): HostedConfig
     errors.push('missing_platform_key_prefix');
   } else if (!/^[a-z0-9_-]{1,64}$/.test(keyPrefix)) {
     errors.push('invalid_platform_key_prefix');
+  }
+
+  // The only value that bootstraps a new v2 lineage sentinel is exactly
+  // 'v2-clean'; anything else set is a configuration error. Unset is legal
+  // (existing sentinel, or HOLD until an operator sets it).
+  const schemaLineage = present(env.PLATFORM_SCHEMA_LINEAGE);
+  if (schemaLineage && schemaLineage !== PLATFORM_SCHEMA_LINEAGE_SENTINEL) {
+    errors.push('invalid_platform_schema_lineage');
   }
 
   const redisUrl = present(env.PLATFORM_KV_REST_API_URL);

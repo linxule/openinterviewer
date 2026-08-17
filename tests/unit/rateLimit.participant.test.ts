@@ -1,7 +1,7 @@
 // @vitest-environment node
 
-import { Redis } from '@upstash/redis';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { RedisPort } from '@/lib/redisPort';
 import { participantRateLimitResponse } from '@/lib/rateLimit';
 
 afterEach(() => {
@@ -12,7 +12,7 @@ describe('participant AI rate limiting', () => {
   it('checks both a hashed client budget and a study-wide budget', async () => {
     process.env.RATE_LIMIT_SALT = 'test-only-rate-limit-salt';
     const evalMock = vi.fn().mockResolvedValue([1, 0, 0]);
-    const client = { eval: evalMock } as unknown as Redis;
+    const client = { eval: evalMock } as unknown as RedisPort;
     const request = new Request('http://localhost/api/interview', {
       headers: { 'x-forwarded-for': '203.0.113.9' },
     });
@@ -43,7 +43,7 @@ describe('participant AI rate limiting', () => {
   it('returns 429 with Retry-After when a budget is exceeded', async () => {
     const client = {
       eval: vi.fn().mockResolvedValue([0, 1, 17]),
-    } as unknown as Redis;
+    } as unknown as RedisPort;
 
     const response = await participantRateLimitResponse(
       new Request('http://localhost/api/interview'),
@@ -61,7 +61,7 @@ describe('participant AI rate limiting', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const client = {
       eval: vi.fn().mockRejectedValue(new Error('redis down')),
-    } as unknown as Redis;
+    } as unknown as RedisPort;
 
     const response = await participantRateLimitResponse(
       new Request('http://localhost/api/greeting'),

@@ -1,6 +1,5 @@
 // @vitest-environment node
 
-import { Redis } from '@upstash/redis';
 import { createHash } from 'crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -10,6 +9,7 @@ import {
   ParticipantLinkRecord,
   revokeParticipantLink,
 } from '@/lib/participantLinks';
+import type { RedisPort } from '@/lib/redisPort';
 
 const clients = vi.hoisted(() => ({
   getKVClient: vi.fn(),
@@ -31,7 +31,7 @@ afterEach(() => {
 describe('opaque participant links', () => {
   it('stores only a SHA-256 link id and returns a 256-bit opaque code', async () => {
     const evalMock = vi.fn().mockResolvedValue(1);
-    const client = { eval: evalMock } as unknown as Redis;
+    const client = { eval: evalMock } as unknown as RedisPort;
 
     const result = await createParticipantLinkRecord({
       studyId: 'study-a',
@@ -63,11 +63,11 @@ describe('opaque participant links', () => {
       expiresAt: Date.now() + 60_000,
       revokedAt: null,
     };
-    const client = { get: vi.fn().mockResolvedValue(active) } as unknown as Redis;
+    const client = { get: vi.fn().mockResolvedValue(active) } as unknown as RedisPort;
 
     const created = await createParticipantLinkRecord({
       studyId: 'study-a', studyRevision: 1, researcherId: null, expiresAt: null,
-      standaloneClient: { eval: vi.fn().mockResolvedValue(1) } as unknown as Redis,
+      standaloneClient: { eval: vi.fn().mockResolvedValue(1) } as unknown as RedisPort,
     });
     expect(created.status).toBe('created');
     if (created.status !== 'created') return;
@@ -85,7 +85,7 @@ describe('opaque participant links', () => {
     process.env.DEPLOYMENT_MODE = 'hosted';
     process.env.PLATFORM_KEY_PREFIX = 'test';
     const evalMock = vi.fn().mockResolvedValue(-1);
-    const platform = { eval: evalMock } as unknown as Redis;
+    const platform = { eval: evalMock } as unknown as RedisPort;
 
     // Hosted storage is normally resolved by getPlatformClient; pass through a
     // temporary module-level mock by exercising the script shape directly via
@@ -120,11 +120,17 @@ describe('opaque participant links', () => {
     const otherStudy: ParticipantLinkRecord = {
       ...active, id: ids[3], studyId: 'study-b', createdAt: now - 2_000,
     };
+    const records = new Map<string, ParticipantLinkRecord | null>([
+      [`participant-link:${ids[0]}`, active],
+      [`participant-link:${ids[1]}`, null],
+      [`participant-link:${ids[2]}`, expired],
+      [`participant-link:${ids[3]}`, otherStudy],
+    ]);
     const client = {
-      sscan: vi.fn().mockResolvedValue(['0', ids]),
-      mget: vi.fn().mockResolvedValue([active, null, expired, otherStudy]),
+      smembers: vi.fn().mockResolvedValue(ids),
+      get: vi.fn(async (key: string) => records.get(key) ?? null),
       srem: vi.fn().mockResolvedValue(2),
-    } as unknown as Redis;
+    } as unknown as RedisPort;
 
     const result = await listParticipantLinksForStudy({
       studyId: 'study-a', researcherId: null, standaloneClient: client,
@@ -146,28 +152,34 @@ describe('opaque participant links', () => {
   it('atomically checks canonical hosted ownership and the link owner when revoking', async () => {
     process.env.DEPLOYMENT_MODE = 'hosted';
     process.env.PLATFORM_KEY_PREFIX = 'staging';
-    const evalMock = vi.fn().mockResolvedValue(1);
+    const evalMock = vi.fn().mockResolvedValue(['oi:link-revoked']);
     clients.getPlatformClient.mockReturnValue({ eval: evalMock });
     vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
     const linkId = 'a'.repeat(64);
+    const studyId = '11111111-1111-4111-8111-111111111111';
 
     await expect(revokeParticipantLink({
       linkId,
-      studyId: 'study-a',
+      studyId,
       researcherId: 'researcher-a',
     })).resolves.toEqual({ status: 'revoked', revokedAt: 1_800_000_000_000 });
 
     const [script, keys, args] = evalMock.mock.calls[0] as [string, string[], string[]];
-    expect(script).toContain("redis.call('GET', KEYS[3]) ~= ARGV[2]");
-    expect(script).toContain('link.researcherId ~= ARGV[2]');
-    expect(script).toContain("redis.call('PTTL', KEYS[1])");
+    expect(script).toContain('-- hosted-link-authority-passed');
+    expect(script).toContain('-- hosted-link-revoke');
+    expect(script).toContain('link.researcherId ~= ARGV[1]');
+    expect(script).toContain("redis.call('PTTL', KEYS[6])");
     expect(keys).toEqual([
+      'staging:account-delete-journal',
+      `staging:study-owner:${studyId}`,
+      'staging:study-ops:v2',
+      `staging:study-op-lock:${studyId}`,
+      'staging:schema-lineage',
       `staging:participant-link:${linkId}`,
       'staging:participant-links:researcher-a',
-      'staging:study-owner:study-a',
     ]);
-    expect(args).toEqual([
-      linkId, 'researcher-a', 'study-a', '1', '1800000000000',
-    ]);
+    expect(args.slice(0, 3)).toEqual(['researcher-a', studyId, 'link']);
+    expect(args[7]).toBe(linkId);
+    expect(args[8]).toBe('1800000000000');
   });
 });

@@ -1,6 +1,7 @@
 import { createHmac } from 'crypto';
-import { Redis } from '@upstash/redis';
+import type { RedisPort } from './redisPort';
 import { NextResponse } from 'next/server';
+import { logRequestFailure } from './requestLog';
 
 type ParticipantOperation = 'greeting' | 'interview' | 'synthesis' | 'save';
 
@@ -14,6 +15,13 @@ export type ParticipantRateLimitCounter = {
   key: string;
   maximum: number;
   windowSeconds: number;
+};
+
+export type PersistRatePlanRow = {
+  key: string;
+  maximum: number;
+  windowSeconds: number;
+  windowStart: number;
 };
 
 const LIMITS: Record<ParticipantOperation, Limit[]> = {
@@ -65,23 +73,73 @@ end
 return {1, 0, 0}
 `;
 
+function rateLimitSalt(): string {
+  return process.env.RATE_LIMIT_SALT
+    || process.env.PARTICIPANT_TOKEN_SECRET
+    || 'openinterviewer-rate-limit';
+}
+
 function clientIdentity(request: Request): string {
   const forwarded = request.headers.get('x-vercel-forwarded-for')
     || request.headers.get('x-forwarded-for')
     || request.headers.get('x-real-ip')
     || 'unknown';
   const address = forwarded.split(',')[0]?.trim() || 'unknown';
-  const salt = process.env.RATE_LIMIT_SALT
-    || process.env.PARTICIPANT_TOKEN_SECRET
-    || 'openinterviewer-rate-limit';
-  return createHmac('sha256', salt).update(address).digest('hex').slice(0, 24);
+  return createHmac('sha256', rateLimitSalt()).update(address).digest('hex').slice(0, 24);
+}
+
+function saveLimitSubject(
+  limit: Limit,
+  studyId: string,
+  identity: string,
+  authority: { sessionId?: string; linkId?: string; researcherId?: string | null }
+): string | null {
+  if (limit.scope === 'client') return `${studyId}:${identity}`;
+  if (limit.scope === 'session') return authority.sessionId ?? null;
+  if (limit.scope === 'link') return authority.linkId ?? null;
+  if (limit.scope === 'researcher') return authority.researcherId ?? studyId;
+  return studyId;
+}
+
+/**
+ * Frozen save-admission plan rows. Finish ZADDs `interviewId` on
+ * `interview-rate:{planId}:{windowStart}` with score 1 and EXPIRE window+60.
+ * planId is HMAC-SHA-256 of the salted scope subject so client IPs never appear
+ * in Redis keys. Salt is unchanged from the request limiter.
+ */
+export function getSavePersistRatePlan(
+  request: Request,
+  studyId: string,
+  authority: { sessionId?: string; linkId?: string; researcherId?: string | null } = {},
+  nowMs: number = Date.now()
+): PersistRatePlanRow[] | null {
+  const identity = clientIdentity(request);
+  const nowSeconds = Math.floor(nowMs / 1000);
+  const rows: PersistRatePlanRow[] = [];
+
+  for (const limit of LIMITS.save) {
+    const subject = saveLimitSubject(limit, studyId, identity, authority);
+    if (!subject) return null;
+    const planId = createHmac('sha256', rateLimitSalt())
+      .update(`save:${limit.scope}:${limit.windowSeconds}:${subject}`)
+      .digest('hex');
+    const windowStart = Math.floor(nowSeconds / limit.windowSeconds) * limit.windowSeconds;
+    rows.push({
+      key: `interview-rate:${planId}:${windowStart}`,
+      maximum: limit.maximum,
+      windowSeconds: limit.windowSeconds,
+      windowStart,
+    });
+  }
+
+  return rows;
 }
 
 export async function participantRateLimitResponse(
   request: Request,
   studyId: string,
   operation: ParticipantOperation,
-  client: Redis,
+  client: RedisPort,
   authority: { sessionId?: string; linkId?: string; researcherId?: string | null } = {}
 ): Promise<NextResponse | null> {
   try {
@@ -95,11 +153,11 @@ export async function participantRateLimitResponse(
     const keys = counters.map(counter => counter.key);
     const args = counters.flatMap(counter => [String(counter.maximum), String(counter.windowSeconds)]);
 
-    const [allowed, rejectedIndex, ttl] = await client.eval<string[], [number, number, number]>(
+    const [allowed, rejectedIndex, ttl] = (await client.eval(
       CONSUME_LIMITS_SCRIPT,
       keys,
       args
-    );
+    )) as [number, number, number];
     if (allowed !== 1) {
       const rejectedLimit = LIMITS[operation][Math.max(0, rejectedIndex - 1)];
       const retryAfter = Math.max(1, ttl > 0 ? ttl : rejectedLimit.windowSeconds);
@@ -110,10 +168,7 @@ export async function participantRateLimitResponse(
     }
     return null;
   } catch (error) {
-    console.error('Participant rate limiter unavailable', {
-      operation,
-      errorType: error instanceof Error ? error.name : 'UnknownError',
-    });
+    logRequestFailure({ event: 'kv.unavailable', operation }, error);
     return NextResponse.json(
       { error: 'Unable to verify request limits. Please try again later.', retryable: true },
       { status: 503 }

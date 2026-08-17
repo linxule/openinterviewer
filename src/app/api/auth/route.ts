@@ -14,6 +14,7 @@ import {
   SESSION_COOKIE_NAME
 } from '@/lib/auth';
 import { isHostedMode } from '@/lib/mode';
+import { createRequestId, logRequestEvent, logRequestFailure } from '@/lib/requestLog';
 
 export async function POST(request: Request) {
   try {
@@ -41,7 +42,7 @@ export async function POST(request: Request) {
 
     if (!adminPassword) {
       // SECURITY: Never allow access without ADMIN_PASSWORD configured
-      console.error('ADMIN_PASSWORD not configured - authentication disabled');
+      logRequestEvent({ event: 'route.failure', route: '/api/auth', method: 'POST', status: 500, reason: 'not-configured' });
       return NextResponse.json(
         { error: 'Authentication not configured. Set ADMIN_PASSWORD environment variable.' },
         { status: 500 }
@@ -67,7 +68,13 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error('Auth API error:', error);
+    logRequestFailure({
+      event: 'route.failure',
+      route: '/api/auth',
+      method: 'POST',
+      status: 500,
+      requestId: createRequestId(request.headers.get('x-request-id')),
+    }, error);
     return NextResponse.json(
       { error: 'Authentication failed' },
       { status: 500 }

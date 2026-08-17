@@ -1,10 +1,15 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { useStore } from '@/store';
 import { StudyConfig, ProfileField, AIBehavior, AIProviderType, LinkExpirationOption } from '@/types';
+import { saveStudy } from '@/services/storageService';
+import {
+  IDEMPOTENCY_KEY_CONSUMED,
+  IDEMPOTENCY_KEY_REUSE,
+} from '@/lib/studyMutationClassification';
 import {
   DEFAULT_MODEL_BY_PROVIDER,
   isKnownProviderModel,
@@ -57,6 +62,80 @@ const PROVIDER_ENV_NAME = {
   openai: 'OPENAI_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
 } as const satisfies Record<AIProviderType, string>;
+
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const IDEM_STATE_STORAGE = 'oi:create-idempotency-state';
+const AUTH_EPOCH_STORAGE = 'oi:create-authority-epoch';
+
+type PersistedCreateIdempotency = {
+  intentKey: string;
+  authorityEpoch: number;
+  key: string;
+};
+
+const canUseSessionStorage = () =>
+  typeof window !== 'undefined' && typeof sessionStorage !== 'undefined';
+
+function readAuthorityEpoch(): number {
+  if (!canUseSessionStorage()) return 0;
+  const raw = sessionStorage.getItem(AUTH_EPOCH_STORAGE);
+  const value = raw == null ? 0 : Number(raw);
+  return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+function writeAuthorityEpoch(epoch: number) {
+  if (!canUseSessionStorage()) return;
+  sessionStorage.setItem(AUTH_EPOCH_STORAGE, String(epoch));
+}
+
+function readPersistedCreateIdempotency(): PersistedCreateIdempotency | null {
+  if (!canUseSessionStorage()) return null;
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(IDEM_STATE_STORAGE) || 'null') as PersistedCreateIdempotency | null;
+    if (
+      parsed
+      && typeof parsed.intentKey === 'string'
+      && Number.isSafeInteger(parsed.authorityEpoch)
+      && typeof parsed.key === 'string'
+      && UUID_V4.test(parsed.key)
+    ) {
+      return parsed;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function persistCreateIdempotency(state: PersistedCreateIdempotency) {
+  if (!canUseSessionStorage()) return;
+  sessionStorage.setItem(IDEM_STATE_STORAGE, JSON.stringify(state));
+}
+
+function setupIntentKey(prefill: string | null, studyId: string | null, parentId: string | null): string {
+  if (prefill === 'edit' && studyId) return `edit:${studyId}`;
+  if (prefill === 'followup') return parentId ? `followup:${parentId}` : 'followup';
+  return 'create';
+}
+
+function isCreateIntentKey(intentKey: string): boolean {
+  return intentKey === 'create' || intentKey.startsWith('followup');
+}
+
+function adoptCreateIdempotencyKey(intentKey: string, authorityEpoch: number): string {
+  const stored = readPersistedCreateIdempotency();
+  if (
+    stored
+    && stored.intentKey === intentKey
+    && stored.authorityEpoch === authorityEpoch
+    && UUID_V4.test(stored.key)
+  ) {
+    return stored.key;
+  }
+  const key = crypto.randomUUID();
+  persistCreateIdempotency({ intentKey, authorityEpoch, key });
+  return key;
+}
 
 const isProviderConfigured = (
   provider: AIProviderType,
@@ -138,6 +217,24 @@ const StudySetup: React.FC = () => {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savePending, setSavePending] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
+
+  const initialPrefill = searchParams.get('prefill');
+  const existingServerId = studyConfig?.id && UUID_V4.test(studyConfig.id) ? studyConfig.id : null;
+  const initialIntentKey = setupIntentKey(
+    initialPrefill || (existingServerId && initialPrefill !== 'followup' ? 'edit' : null),
+    searchParams.get('studyId') || existingServerId,
+    null
+  );
+  const initialAuthorityEpoch = readAuthorityEpoch();
+  const initialCreateKey = isCreateIntentKey(initialIntentKey)
+    ? adoptCreateIdempotencyKey(initialIntentKey, initialAuthorityEpoch)
+    : null;
+  const authorityEpochRef = useRef(initialAuthorityEpoch);
+  const lastAuthRef = useRef<boolean | null>(null);
+  const actionGenerationRef = useRef(0);
+  const createCompletedRef = useRef(false);
+  const intentKeyRef = useRef(initialIntentKey);
+  const createIdempotencyKeyRef = useRef<string | null>(initialCreateKey);
 
   // Config status (API keys)
   const [configStatus, setConfigStatus] = useState<ConfigStatus | null>(null);
@@ -277,6 +374,76 @@ const StudySetup: React.FC = () => {
       }
     }
   }, [searchParams]);
+
+  // One UUID v4 per create/follow-up intent. Remounts restore via intentKey +
+  // authorityEpoch. Edit never owns a key. Intent change invalidates in-flight work.
+  useEffect(() => {
+    const prefill = searchParams.get('prefill');
+    let nextIntent = setupIntentKey(
+      prefill,
+      searchParams.get('studyId'),
+      parentStudyInfo?.id ?? null
+    );
+    if (nextIntent === 'create' && intentKeyRef.current.startsWith('edit:')) {
+      nextIntent = intentKeyRef.current;
+    }
+    const current = intentKeyRef.current;
+    if (
+      current === 'followup'
+      && nextIntent.startsWith('followup:')
+      && createIdempotencyKeyRef.current
+    ) {
+      intentKeyRef.current = nextIntent;
+      persistCreateIdempotency({
+        intentKey: nextIntent,
+        authorityEpoch: authorityEpochRef.current,
+        key: createIdempotencyKeyRef.current,
+      });
+      return;
+    }
+    if (nextIntent === current) {
+      if (isCreateIntentKey(nextIntent) && !createIdempotencyKeyRef.current) {
+        createIdempotencyKeyRef.current = adoptCreateIdempotencyKey(
+          nextIntent,
+          authorityEpochRef.current
+        );
+      }
+      return;
+    }
+    actionGenerationRef.current += 1;
+    createCompletedRef.current = false;
+    setIsSaving(false);
+    intentKeyRef.current = nextIntent;
+    if (!isCreateIntentKey(nextIntent)) {
+      createIdempotencyKeyRef.current = null;
+      return;
+    }
+    createIdempotencyKeyRef.current = adoptCreateIdempotencyKey(
+      nextIntent,
+      authorityEpochRef.current
+    );
+  }, [searchParams, parentStudyInfo?.id]);
+
+  useEffect(() => {
+    if (isAuthenticated === null) return;
+    if (lastAuthRef.current === null) {
+      lastAuthRef.current = isAuthenticated;
+      return;
+    }
+    if (lastAuthRef.current === isAuthenticated) return;
+    lastAuthRef.current = isAuthenticated;
+    const nextEpoch = authorityEpochRef.current + 1;
+    authorityEpochRef.current = nextEpoch;
+    writeAuthorityEpoch(nextEpoch);
+    actionGenerationRef.current += 1;
+    setIsSaving(false);
+    if (isCreateIntentKey(intentKeyRef.current)) {
+      createIdempotencyKeyRef.current = adoptCreateIdempotencyKey(
+        intentKeyRef.current,
+        nextEpoch
+      );
+    }
+  }, [isAuthenticated]);
 
   // Sync form with studyConfig when it changes (e.g., after loading example)
   useEffect(() => {
@@ -512,6 +679,25 @@ const StudySetup: React.FC = () => {
     }
   };
 
+  const applySaveIfCurrent = (
+    ticket: number,
+    intentKey: string,
+    epoch: number,
+    idempotencyKey: string | null
+  ) => {
+    if (ticket !== actionGenerationRef.current) return false;
+    if (intentKey !== intentKeyRef.current) return false;
+    if (epoch !== authorityEpochRef.current) return false;
+    if (
+      isCreateIntentKey(intentKey)
+      && idempotencyKey
+      && createIdempotencyKeyRef.current !== idempotencyKey
+    ) {
+      return false;
+    }
+    return true;
+  };
+
   const handleSaveStudy = async () => {
     // Fix auth race condition: check for explicit false, not falsy
     if (isAuthenticated === false) {
@@ -524,110 +710,125 @@ const StudySetup: React.FC = () => {
     if (!requireConfiguredProvider(setSaveError)) return;
     if (!requireValidModel(setSaveError)) return;
 
+    const ticket = actionGenerationRef.current;
+    const intentKey = intentKeyRef.current;
+    const epoch = authorityEpochRef.current;
+    const isUpdate = !isCreateIntentKey(intentKey) || createCompletedRef.current;
+    let idempotencyKey: string | null = null;
+    if (!isUpdate) {
+      idempotencyKey = createIdempotencyKeyRef.current
+        ?? adoptCreateIdempotencyKey(intentKey, epoch);
+      createIdempotencyKeyRef.current = idempotencyKey;
+    }
+
     setIsSaving(true);
     setSaveSuccess(false);
     setSaveError(null);
-    setSavePending(false);
+    if (!isUpdate) {
+      setSavePending(false);
+    }
+
+    const applyConfirmedUpdate = async (config: StudyConfig) => {
+      const retry = await saveStudy({
+        config,
+        updateStudyId: savedStudyId || undefined,
+        confirmed: true,
+      });
+      if (!applySaveIfCurrent(ticket, intentKey, epoch, idempotencyKey)) return;
+      if (retry.classification.outcome === 'pending-create') {
+        setSavePending(true);
+        setSaveError(retry.classification.body.message || 'Study update is awaiting reconciliation.');
+        return;
+      }
+      if (retry.classification.outcome === 'success' && retry.classification.body.study) {
+        const study = retry.classification.body.study;
+        setSavedStudyId(study.id);
+        if (study.config) setStudyConfig(study.config as StudyConfig);
+        setSaveSuccess(true);
+        setIsDirty(false);
+        router.push(`/studies/${study.id}`);
+      }
+    };
 
     try {
       const config = buildConfig();
-      const isUpdate = !!savedStudyId;
+      const result = await saveStudy({
+        config,
+        updateStudyId: isUpdate ? savedStudyId || undefined : undefined,
+        idempotencyKey: isUpdate ? undefined : idempotencyKey || undefined,
+      });
+      if (!applySaveIfCurrent(ticket, intentKey, epoch, idempotencyKey)) return;
 
-      // For updates, the API may return 409 if study has interviews
-      const response = await fetch(
-        isUpdate ? `/api/studies/${savedStudyId}` : '/api/studies',
-        {
-          method: isUpdate ? 'PUT' : 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ config })
+      const { classification } = result;
+      if (classification.outcome === 'unauthorized') {
+        setIsAuthenticated(false);
+        router.push('/login');
+        return;
+      }
+
+      if (classification.outcome === 'pending-create') {
+        const study = classification.body.study;
+        if (study?.id) {
+          setSavedStudyId(study.id);
+          if (study.config) setStudyConfig(study.config as StudyConfig);
         }
-      );
-      const data = await response.json().catch(() => ({})) as {
-        error?: string;
-        message?: string;
-        operationId?: string;
-        reconciliationPending?: boolean;
-        study?: { id: string; config: StudyConfig };
-        requiresConfirmation?: boolean;
-        warning?: string;
-      };
+        setSavePending(true);
+        return;
+      }
 
-      if (!response.ok) {
-        if (response.status === 401) {
-          setIsAuthenticated(false);
-          router.push('/login');
+      if (classification.outcome === 'success' && classification.body.study) {
+        const study = classification.body.study;
+        setSavedStudyId(study.id);
+        if (study.config) setStudyConfig(study.config as StudyConfig);
+        setIsDirty(false);
+        if (!isUpdate) createCompletedRef.current = true;
+        setSaveSuccess(true);
+        router.push(`/studies/${study.id}`);
+        return;
+      }
+
+      if (classification.outcome === 'confirm-required') {
+        const confirmed = window.confirm(
+          `${classification.warning}\n\nDo you want to continue?`
+        );
+        if (confirmed) await applyConfirmedUpdate(config);
+        return;
+      }
+
+      if (classification.outcome === 'error') {
+        const code = classification.body.code;
+        if (code === IDEMPOTENCY_KEY_REUSE) {
+          setSaveError('This create key was already used with a different study. Start a new save.');
           return;
         }
-
-        // Handle storage not configured (503)
-        if (response.status === 503) {
-          setSaveError(data.operationId
-            ? data.error || 'Study creation is awaiting reconciliation. Open My Studies to retry repair.'
-            : data.error || (configStatus?.mode === 'hosted'
+        if (code === IDEMPOTENCY_KEY_CONSUMED) {
+          setSaveError('This create was already completed and then deleted. Start a new save.');
+          return;
+        }
+        if (classification.status === 503) {
+          setSaveError(classification.body.operationId
+            ? classification.body.error || 'Study creation is awaiting reconciliation. Open My Studies to retry repair.'
+            : classification.body.error || (configStatus?.mode === 'hosted'
               ? 'Storage is temporarily unavailable. Check Account & connections and try again.'
               : configStatus?.mode === 'standalone'
                 ? 'Storage is unavailable. Check the self-host setup guide and run npm run setup:check, then try again.'
                 : 'Storage is unavailable. Verify your account or deployment setup and try again.'));
           return;
         }
-
-        // Handle confirmation required (409) - study has interviews
-        if (response.status === 409) {
-          if (data.requiresConfirmation) {
-            const confirmed = window.confirm(
-              `${data.warning}\n\nDo you want to continue?`
-            );
-            if (confirmed) {
-              // Retry with confirmed: true
-              const retryResponse = await fetch(`/api/studies/${savedStudyId}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ config, confirmed: true })
-              });
-              if (retryResponse.ok) {
-                const retryData = await retryResponse.json();
-                if (retryResponse.status === 202 || retryData.reconciliationPending) {
-                  setSavePending(true);
-                  setSaveError(retryData.message || 'Study update is awaiting reconciliation.');
-                  return;
-                }
-                setSavedStudyId(retryData.study.id);
-                setStudyConfig(retryData.study.config);
-                setSaveSuccess(true);
-                setIsDirty(false);
-                // Navigate to study detail page after confirmed save
-                router.push(`/studies/${retryData.study.id}`);
-              }
-            }
-            return;
-          }
-        }
-
-        // Generic error
-        setSaveError(data.error || 'Failed to save study. Please try again.');
+        setSaveError(classification.body.error || 'Failed to save study. Please try again.');
         return;
       }
 
-      if (!data.study) {
-        setSaveError(data.message || 'Study save did not return a saved study. Open My Studies to retry repair.');
-        return;
-      }
-      setSavedStudyId(data.study.id);
-      setStudyConfig(data.study.config);
-      setIsDirty(false);
-      if (response.status === 202 || data.reconciliationPending) {
-        setSavePending(true);
-        return;
-      }
-      setSaveSuccess(true);
-
-      // Navigate to study detail page after successful save
-      router.push(`/studies/${data.study.id}`);
+      setSaveError('Study save did not return a saved study. Open My Studies to retry repair.');
     } catch (error) {
       console.error('Error saving study:', error);
-      setSaveError('Network error. Please check your connection and try again.');
+      if (applySaveIfCurrent(ticket, intentKey, epoch, idempotencyKey)) {
+        setSaveError('Network error. Please check your connection and try again.');
+      }
     } finally {
-      setIsSaving(false);
+      if (ticket === actionGenerationRef.current) {
+        setIsSaving(false);
+      }
     }
   };
 
@@ -695,7 +896,7 @@ const StudySetup: React.FC = () => {
                 <>
                   <button
                     onClick={handleSaveStudy}
-                    disabled={!isAuthenticated || !selectedProviderConfigured || !selectedModelValid || isSaving || (!!savedStudyId && !isDirty)}
+                    disabled={!isAuthenticated || !selectedProviderConfigured || !selectedModelValid || isSaving || (!!savedStudyId && !isDirty && !savePending)}
                     className={`px-4 py-2 text-sm rounded-xl transition-colors flex items-center gap-2 disabled:cursor-not-allowed ${
                       savePending
                         ? 'bg-amber-900/50 text-amber-300 border border-amber-700'

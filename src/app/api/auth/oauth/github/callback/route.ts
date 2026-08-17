@@ -18,6 +18,7 @@ import {
   oauthRedirectUrl,
   selectVerifiedGitHubEmail,
 } from '@/lib/hostedOAuth';
+import { createRequestId, logRequestFailure } from '@/lib/requestLog';
 
 export async function GET(request: Request) {
   if (!isHostedMode() || !isOAuthProviderConfigured('github')) {
@@ -122,7 +123,13 @@ export async function GET(request: Request) {
     }
     return NextResponse.redirect(new URL(result.redirectPath, baseUrl));
   } catch (error) {
-    console.error('GitHub OAuth callback error:', error);
+    logRequestFailure({
+      event: 'route.failure',
+      route: '/api/auth/oauth/github/callback',
+      method: 'GET',
+      status: 307,
+      requestId: createRequestId(request.headers.get('x-request-id')),
+    }, error);
     return NextResponse.redirect(oauthRedirectUrl('oauth_failed'));
   }
 }

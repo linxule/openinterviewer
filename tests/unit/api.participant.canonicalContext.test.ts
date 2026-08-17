@@ -14,6 +14,18 @@ import { makeStoredStudy, makeStudyConfig } from '../fixtures/models';
 
 const contextMock = vi.hoisted(() => ({
   getParticipantRequestContext: vi.fn(),
+  resolveParticipantOrPreviewContext: vi.fn((request: Request, options?: unknown) =>
+    contextMock.getParticipantRequestContext(request, options)
+  ),
+  selectedStudyIdFromParticipantBody: vi.fn((body: Record<string, unknown>) => {
+    if (typeof body.studyId === 'string' && body.studyId.length > 0) return body.studyId;
+    const studyConfig = body.studyConfig;
+    if (studyConfig && typeof studyConfig === 'object' && studyConfig !== null && 'id' in studyConfig) {
+      const id = (studyConfig as { id?: unknown }).id;
+      if (typeof id === 'string' && id.length > 0) return id;
+    }
+    return undefined;
+  }),
   providerKeysFromContext: vi.fn((context: Record<string, unknown>) => ({
     geminiApiKey: context.geminiApiKey,
     anthropicApiKey: context.anthropicApiKey,

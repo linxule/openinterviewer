@@ -13,7 +13,15 @@ const storageMock = vi.hoisted(() => ({
   getAllStudies: vi.fn(),
   reconcileStudyOperations: vi.fn(),
 }));
-vi.mock('@/services/storageService', () => storageMock);
+vi.mock('@/services/storageService', async (importOriginal) => {
+  const actual = await importOriginal() as typeof import('@/services/storageService');
+  return {
+    ...actual,
+    deleteStudy: storageMock.deleteStudy,
+    getAllStudies: storageMock.getAllStudies,
+    reconcileStudyOperations: storageMock.reconcileStudyOperations,
+  };
+});
 
 const storeMock = vi.hoisted(() => ({
   state: {} as Record<string, unknown>,
@@ -25,7 +33,7 @@ import StudySetup from '@/components/StudySetup';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  storageMock.getAllStudies.mockResolvedValue({ studies: [] });
+  storageMock.getAllStudies.mockResolvedValue({ studies: [], outcome: { status: 'ok' } });
   storageMock.reconcileStudyOperations.mockResolvedValue({
     success: true,
     completed: 0,
@@ -51,7 +59,7 @@ describe('hosted study operation recovery UI', () => {
     });
     storageMock.getAllStudies.mockImplementation(async () => {
       calls.push('list');
-      return { studies: [] };
+      return { studies: [], outcome: { status: 'ok' } };
     });
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
       JSON.stringify({ mode: 'hosted' }),
@@ -98,8 +106,10 @@ describe('hosted study operation recovery UI', () => {
       throw new Error(`Unexpected fetch: ${path}`);
     });
     vi.stubGlobal('fetch', fetchMock);
+    vi.spyOn(crypto, 'randomUUID').mockReturnValue('11111111-1111-4111-8111-111111111111');
 
     render(<StudySetup />);
+    await waitFor(() => expect(screen.queryByText(/Checking configured AI providers/i)).not.toBeInTheDocument());
     fireEvent.change(screen.getByPlaceholderText('e.g., AI Adoption in Healthcare'), {
       target: { value: 'Pending Study' },
     });
@@ -112,7 +122,7 @@ describe('hosted study operation recovery UI', () => {
     fireEvent.click(save);
 
     expect(await screen.findByText('Study saved; repair pending')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Repair pending' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Repair pending' })).toBeInTheDocument();
     expect(storeMock.state.setStudyConfig).toHaveBeenCalledWith(study.config);
     expect(router.push).not.toHaveBeenCalledWith('/studies/server-study');
   });
@@ -121,6 +131,7 @@ describe('hosted study operation recovery UI', () => {
     const config = makeStudyConfig({ id: 'study-delete', name: 'Pending Delete Study' });
     storageMock.getAllStudies.mockResolvedValue({
       studies: [makeStoredStudy({ id: 'study-delete', config })],
+      outcome: { status: 'ok' },
     });
     storageMock.deleteStudy.mockResolvedValue({
       success: false,

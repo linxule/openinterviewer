@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
-import { Redis } from '@upstash/redis';
+import { logRequestFailure } from './requestLog';
+import type { RedisPort } from './redisPort';
 
 export const PARTICIPANT_CONSENT_TTL_SECONDS = 4 * 60 * 60;
 
@@ -107,7 +108,7 @@ export async function recordParticipantConsent(
     studyRevision: number;
     consentText: string;
   },
-  client: Redis
+  client: RedisPort
 ): Promise<RecordParticipantConsentResult> {
   const expected = expectedBinding(options);
   if (
@@ -127,7 +128,7 @@ export async function recordParticipantConsent(
 
   try {
     const stored = parseConsentRecord(
-      await client.eval<string[], unknown>(
+      await client.eval(
         RECORD_CONSENT_SCRIPT,
         [consentKey(expected.participantSessionId)],
         [JSON.stringify(consent), String(PARTICIPANT_CONSENT_TTL_SECONDS)]
@@ -136,9 +137,7 @@ export async function recordParticipantConsent(
     if (!stored || !matchesBinding(stored, expected)) return { status: 'conflict' };
     return { status: 'accepted', consent: stored };
   } catch (error) {
-    console.error('Participant consent storage unavailable', {
-      errorType: error instanceof Error ? error.name : 'UnknownError',
-    });
+    logRequestFailure({ event: 'kv.unavailable' }, error);
     return { status: 'unavailable' };
   }
 }
@@ -150,7 +149,7 @@ export async function verifyParticipantConsent(
     studyRevision: number;
     consentText: string;
   },
-  client: Redis
+  client: RedisPort
 ): Promise<VerifyParticipantConsentResult> {
   const expected = expectedBinding(options);
   if (
@@ -170,9 +169,7 @@ export async function verifyParticipantConsent(
     if (!matchesBinding(stored, expected)) return { status: 'mismatch' };
     return { status: 'accepted', consent: stored };
   } catch (error) {
-    console.error('Participant consent lookup unavailable', {
-      errorType: error instanceof Error ? error.name : 'UnknownError',
-    });
+    logRequestFailure({ event: 'kv.unavailable' }, error);
     return { status: 'unavailable' };
   }
 }

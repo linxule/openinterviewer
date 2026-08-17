@@ -4,36 +4,28 @@
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
-import type { Redis } from '@upstash/redis';
+import type { RedisPort } from '../../../../../lib/redisPort';
 import { getStudyChecked } from '@/lib/kv';
 import { isHostedMode } from '@/lib/mode';
 import {
+  asStudyAuthorityFromLink,
   listParticipantLinksForStudy,
   revokeParticipantLink,
 } from '@/lib/participantLinks';
-import { getStudyOwnerChecked } from '@/lib/platformDb';
 import { readBoundedJsonObject } from '@/lib/requestBody';
 import { configurationRequiredResponse } from '@/lib/researcherAccess';
-import { getRequestContext } from '@/lib/researcherContext';
+import { getAuthorizedResearcherStudyContext, presentStudyAuthority } from '@/lib/researcherContext';
+import { mapStudyLoad } from '@/lib/ownedStudies';
 
 const STUDY_ID_PATTERN = /^[A-Za-z0-9-]{1,128}$/;
 const LINK_ID_PATTERN = /^[a-f0-9]{64}$/;
 const MAX_DELETE_BODY_BYTES = 4_096;
 
 type StudyLinkAccess =
-  | { ok: true; studyId: string; researcherId: string | null; standaloneClient: Redis }
+  | { ok: true; studyId: string; researcherId: string | null; standaloneClient: RedisPort }
   | { ok: false; response: NextResponse };
 
 async function authorizeStudyLinkAccess(studyId: string): Promise<StudyLinkAccess> {
-  const access = await getRequestContext();
-  const setupResponse = configurationRequiredResponse(access);
-  if (setupResponse) return { ok: false, response: setupResponse };
-  if (!access.authorized || !access.context) {
-    return {
-      ok: false,
-      response: NextResponse.json({ error: access.error || 'Unauthorized' }, { status: 401 }),
-    };
-  }
   if (!STUDY_ID_PATTERN.test(studyId)) {
     return {
       ok: false,
@@ -41,57 +33,37 @@ async function authorizeStudyLinkAccess(studyId: string): Promise<StudyLinkAcces
     };
   }
 
-  // Both modes require a real canonical BYOS/standalone study record. A link
-  // index alone is never authority to inspect or mutate a study's links.
-  const loaded = await getStudyChecked(studyId, access.context.kvClient);
-  if (loaded.status === 'unavailable') {
+  const gated = await getAuthorizedResearcherStudyContext(studyId, 'link');
+  const denied = configurationRequiredResponse(gated);
+  if (denied) return { ok: false, response: denied };
+  if (!gated.authorized || !gated.context) {
     return {
       ok: false,
       response: NextResponse.json(
-        { error: 'Study storage is temporarily unavailable', retryable: true },
-        { status: 503 }
+        {
+          error: gated.error || 'Unauthorized',
+          retryable: gated.retryable,
+          ...(gated.code ? { code: gated.code } : {}),
+          ...(gated.reason ? { reason: gated.reason } : {}),
+        },
+        { status: gated.statusCode ?? 401 },
       ),
     };
   }
-  if (loaded.status === 'not-found') {
-    return {
-      ok: false,
-      response: NextResponse.json({ error: 'Study not found' }, { status: 404 }),
-    };
-  }
 
-  const hosted = isHostedMode();
-  const researcherId = hosted ? (access.researcherId ?? null) : null;
-  if (hosted) {
-    if (!researcherId) {
-      return {
-        ok: false,
-        response: NextResponse.json({ error: 'Researcher identity is required' }, { status: 401 }),
-      };
-    }
-    const owner = await getStudyOwnerChecked(studyId);
-    if (owner.status === 'unavailable') {
-      return {
-        ok: false,
-        response: NextResponse.json(
-          { error: 'Unable to verify study ownership', retryable: true },
-          { status: 503 }
-        ),
-      };
-    }
-    if (owner.status !== 'found' || owner.researcherId !== researcherId) {
-      return {
-        ok: false,
-        response: NextResponse.json({ error: 'Study ownership does not match this account' }, { status: 403 }),
-      };
-    }
+  // Both modes require a real canonical BYOS/standalone study record. A link
+  // index alone is never authority to inspect or mutate a study's links.
+  const loaded = await getStudyChecked(studyId, gated.context.kvClient);
+  const mapped = mapStudyLoad(loaded);
+  if (!mapped.ok) {
+    return { ok: false, response: NextResponse.json(mapped.body, { status: mapped.status }) };
   }
 
   return {
     ok: true,
     studyId,
-    researcherId,
-    standaloneClient: access.context.kvClient,
+    researcherId: isHostedMode() ? (gated.researcherId ?? null) : null,
+    standaloneClient: gated.context.kvClient,
   };
 }
 
@@ -110,6 +82,21 @@ export async function GET(
     standaloneClient: access.standaloneClient,
     maximum: 1_000,
   });
+  const listAuthority = asStudyAuthorityFromLink(result);
+  if (listAuthority) {
+    const presented = presentStudyAuthority(listAuthority, 'researcher');
+    if (!presented.ok) {
+      return NextResponse.json(
+        {
+          error: presented.error,
+          retryable: presented.retryable,
+          ...(presented.code ? { code: presented.code } : {}),
+          ...(presented.reason ? { reason: presented.reason } : {}),
+        },
+        { status: presented.statusCode },
+      );
+    }
+  }
   if (result.status !== 'ok') {
     return NextResponse.json(
       { error: 'Participant link service is temporarily unavailable', retryable: true },
@@ -149,6 +136,21 @@ export async function DELETE(
     researcherId: access.researcherId,
     standaloneClient: access.standaloneClient,
   });
+  const revokeAuthority = asStudyAuthorityFromLink(result);
+  if (revokeAuthority) {
+    const presented = presentStudyAuthority(revokeAuthority, 'researcher');
+    if (!presented.ok) {
+      return NextResponse.json(
+        {
+          error: presented.error,
+          retryable: presented.retryable,
+          ...(presented.code ? { code: presented.code } : {}),
+          ...(presented.reason ? { reason: presented.reason } : {}),
+        },
+        { status: presented.statusCode },
+      );
+    }
+  }
   if (result.status === 'not-found') {
     return NextResponse.json({ error: 'Participant link not found' }, { status: 404 });
   }

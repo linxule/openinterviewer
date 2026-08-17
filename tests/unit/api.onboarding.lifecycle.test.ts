@@ -32,7 +32,10 @@ const validationMock = vi.hoisted(() => ({
 }));
 vi.mock('@/lib/credentialValidation', () => validationMock);
 
-const kvClientMock = vi.hoisted(() => ({ evictResearcherClients: vi.fn() }));
+const kvClientMock = vi.hoisted(() => ({
+  evictResearcherClients: vi.fn(),
+  storageIdFromRedisUrl: vi.fn(() => 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'),
+}));
 vi.mock('@/lib/kvClient', () => kvClientMock);
 
 vi.mock('@/lib/mode', () => ({ isHostedMode: () => true }));
@@ -74,7 +77,13 @@ beforeEach(() => {
   });
   platformMock.getResearcherByIdChecked.mockResolvedValue({ status: 'found', researcher: account() });
   platformMock.consumePlatformRateLimit.mockResolvedValue({ status: 'allowed', remaining: 10 });
-  platformMock.updateResearcherCredentialsAtomic.mockResolvedValue({ status: 'updated', credentialRevision: 5 });
+  platformMock.updateResearcherCredentialsAtomic.mockResolvedValue({
+    status: 'updated',
+    credentialRevision: 5,
+    bindingEpoch: 0,
+    storageId: null,
+    evict: { disposition: 'none' },
+  });
   validationMock.validateRedisCredentials.mockResolvedValue({ valid: true });
   validationMock.validateAiCredential.mockResolvedValue({ valid: true });
 });
@@ -224,7 +233,7 @@ describe('hosted credential lifecycle routes', () => {
         onboardingComplete: false,
       })
     );
-    expect(kvClientMock.evictResearcherClients).toHaveBeenCalledWith('plain:redis-url');
+    expect(kvClientMock.evictResearcherClients).toHaveBeenCalledWith({ disposition: 'none' });
   });
 
   it('clears OpenAI without resetting onboarding while OpenRouter remains configured', async () => {
@@ -255,5 +264,54 @@ describe('hosted credential lifecycle routes', () => {
       onboardingComplete: true,
       configured: { openai: false, openrouter: true },
     });
+  });
+
+  it('binds Redis saves to storageId and evicts with the CAS disposition', async () => {
+    const storageId = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    platformMock.updateResearcherCredentialsAtomic.mockResolvedValue({
+      status: 'updated',
+      credentialRevision: 5,
+      bindingEpoch: 0,
+      storageId,
+      evict: { disposition: 'scoped', researcherId: 'researcher-a', storageId },
+    });
+    const request = new Request('http://localhost/api/onboarding/save-credentials', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        redisUrl: 'https://owner.upstash.io',
+        redisToken: 'rotated-token',
+      }),
+    });
+    const response = await saveCredentials(request);
+
+    expect(response.status).toBe(200);
+    expect(kvClientMock.storageIdFromRedisUrl).toHaveBeenCalledWith('https://owner.upstash.io');
+    expect(platformMock.updateResearcherCredentialsAtomic).toHaveBeenCalledWith(
+      'researcher-a',
+      4,
+      expect.objectContaining({
+        encryptedRedisUrl: 'encrypted:https://owner.upstash.io',
+        encryptedRedisToken: 'encrypted:rotated-token',
+      }),
+      { storageId },
+    );
+    expect(kvClientMock.evictResearcherClients).toHaveBeenCalledWith({
+      disposition: 'scoped',
+      researcherId: 'researcher-a',
+      storageId,
+    });
+  });
+
+  it('returns 409 when Redis clear is refused because studies or live ops exist', async () => {
+    platformMock.updateResearcherCredentialsAtomic.mockResolvedValue({ status: 'refused' });
+    const request = new Request('http://localhost/api/account/credentials', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target: 'redis' }),
+    });
+    const response = await clearCredentials(request);
+    expect(response.status).toBe(409);
+    expect(kvClientMock.evictResearcherClients).not.toHaveBeenCalled();
   });
 });

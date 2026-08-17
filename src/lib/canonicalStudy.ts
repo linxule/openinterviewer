@@ -6,10 +6,11 @@
 // authenticated admin previews.
 
 import { NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
+import type { RedisPort } from './redisPort';
 import { getStudy } from './kv';
 import { StoredStudy } from '@/types';
 import { validateStudyConfig } from './studyConfigValidation';
+import { logRequestEvent, logRequestFailure } from './requestLog';
 
 const STUDY_ID_PATTERN = /^[a-zA-Z0-9-]+$/;
 
@@ -18,7 +19,7 @@ export type CanonicalStudyResult =
   | { ok: false; response: NextResponse };
 
 export async function loadCanonicalStudy(opts: {
-  kvClient: Redis;
+  kvClient: RedisPort;
   tokenStudyId?: string;
   legacyBodyStudyId?: string;
   isAdmin?: boolean;
@@ -46,7 +47,7 @@ export async function loadCanonicalStudy(opts: {
       || !Number.isSafeInteger(study.revision)
       || study.revision < 1
     ) {
-      console.error('Canonical study record is malformed', { studyId });
+      logRequestEvent({ event: 'route.failure', route: 'canonical-study', errorType: 'MalformedStudy' });
       return {
         ok: false,
         response: NextResponse.json(
@@ -57,7 +58,7 @@ export async function loadCanonicalStudy(opts: {
     }
     return { ok: true, study: { ...study, config: validated.config } };
   } catch (err) {
-    console.error('Failed to load canonical study:', err);
+    logRequestFailure({ event: 'kv.unavailable' }, err);
     return {
       ok: false,
       response: NextResponse.json(

@@ -8,8 +8,9 @@ export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
 import { StudyConfig, LinkExpirationOption } from '@/types';
-import { getParticipantRequestContext, getRequestContext } from '@/lib/researcherContext';
-import { configurationRequiredResponse } from '@/lib/researcherAccess';
+import { getAuthorizedResearcherStudyContext, getParticipantRequestContext, presentStudyAuthority } from '@/lib/researcherContext';
+import { mapStudyLoad } from '@/lib/ownedStudies';
+import { configurationRequiredResponse, schemaHoldResponse } from '@/lib/researcherAccess';
 import {
   createParticipantSessionToken,
   getParticipantSessionCookieOptions,
@@ -18,12 +19,13 @@ import {
 } from '@/lib/auth';
 import { getStudyChecked } from '@/lib/kv';
 import { isHostedMode } from '@/lib/mode';
-import { consumePlatformRateLimit, getStudyOwnerChecked } from '@/lib/platformDb';
-import { createParticipantLinkRecord, getParticipantLinkByCode } from '@/lib/participantLinks';
+import { consumePlatformRateLimit } from '@/lib/platformDb';
+import { asStudyAuthorityFromLink, createParticipantLinkRecord, getParticipantLinkByCode } from '@/lib/participantLinks';
 import { getAppBaseUrl } from '@/lib/appBaseUrl';
 import { missingProviderCredential } from '@/lib/providerAvailability';
 import { validateStudyConfig } from '@/lib/studyConfigValidation';
 import { resolveAITransport } from '@/lib/aiTransport';
+import { createRequestId, logRequestFailure } from '@/lib/requestLog';
 
 const STUDY_ID_PATTERN = /^[a-zA-Z0-9-]+$/;
 
@@ -44,17 +46,6 @@ function publicBaseUrl(request: Request): string {
 
 export async function POST(request: Request) {
   try {
-    const access = await getRequestContext();
-    const setupResponse = configurationRequiredResponse(access);
-    if (setupResponse) return setupResponse;
-    const { authorized, context, researcherId, error } = access;
-    if (!authorized || !context) {
-      return NextResponse.json(
-        { error: error || 'Admin authentication required to generate participant links' },
-        { status: 401 }
-      );
-    }
-
     const body = await request.json();
     const { studyConfig } = body as { studyConfig?: Partial<StudyConfig> };
 
@@ -67,22 +58,30 @@ export async function POST(request: Request) {
       );
     }
 
-    // Mint links only for canonically saved studies
-    const loaded = await getStudyChecked(studyId, context.kvClient);
-    if (loaded.status === 'unavailable') {
+    const gated = await getAuthorizedResearcherStudyContext(studyId, 'link');
+    const denied = configurationRequiredResponse(gated);
+    if (denied) return denied;
+    if (!gated.authorized || !gated.context) {
       return NextResponse.json(
-        { error: 'Study storage is temporarily unavailable. Please try again.', retryable: true },
-        { status: 503 }
-      );
-    }
-    if (loaded.status === 'not-found') {
-      return NextResponse.json(
-        { error: 'Study not found. Save the study before generating a participant link.' },
-        { status: 404 }
+        {
+          error: gated.error || 'Unauthorized',
+          retryable: gated.retryable,
+          ...(gated.code ? { code: gated.code } : {}),
+          ...(gated.reason ? { reason: gated.reason } : {}),
+        },
+        { status: gated.statusCode ?? 401 },
       );
     }
 
-    const validatedStudy = validateStudyConfig(loaded.study.config);
+    // Mint links only for canonically saved studies
+    const loaded = await getStudyChecked(studyId, gated.context.kvClient);
+    const mapped = mapStudyLoad(
+      loaded,
+      'Study not found. Save the study before generating a participant link.',
+    );
+    if (!mapped.ok) return NextResponse.json(mapped.body, { status: mapped.status });
+
+    const validatedStudy = validateStudyConfig(mapped.study.config);
     if (!validatedStudy.ok) {
       return NextResponse.json({
         error: 'Review and save this study with an explicit AI provider and model before creating participant links.',
@@ -99,7 +98,7 @@ export async function POST(request: Request) {
 
     let missingProvider;
     try {
-      missingProvider = missingProviderCredential(context, savedConfig);
+      missingProvider = missingProviderCredential(gated.context, savedConfig);
     } catch {
       return NextResponse.json({ error: 'The selected AI provider is invalid.' }, { status: 400 });
     }
@@ -112,15 +111,16 @@ export async function POST(request: Request) {
     }
 
     if (isHostedMode()) {
-      if (!researcherId) {
+      if (!gated.researcherId) {
         return NextResponse.json({ error: 'Researcher identity is required.' }, { status: 401 });
       }
       const rateLimit = await consumePlatformRateLimit(
         'participant-link-create',
-        researcherId,
+        gated.researcherId,
         200,
         3_600
       );
+      if (rateLimit.status === 'hold') return schemaHoldResponse();
       if (rateLimit.status === 'unavailable') {
         return NextResponse.json({ error: 'Participant link service is unavailable.' }, { status: 503 });
       }
@@ -130,22 +130,30 @@ export async function POST(request: Request) {
           { status: 429, headers: { 'Retry-After': String(rateLimit.retryAfterSeconds) } }
         );
       }
-      const owner = await getStudyOwnerChecked(studyId);
-      if (owner.status === 'unavailable') {
-        return NextResponse.json({ error: 'Unable to verify study ownership.', retryable: true }, { status: 503 });
-      }
-      if (owner.status !== 'found' || owner.researcherId !== researcherId) {
-        return NextResponse.json({ error: 'Study ownership is not registered for this researcher.' }, { status: 409 });
-      }
     }
 
     const created = await createParticipantLinkRecord({
       studyId,
-      studyRevision: loaded.study.revision ?? 1,
-      researcherId: isHostedMode() ? (researcherId ?? null) : null,
+      studyRevision: mapped.study.revision ?? 1,
+      researcherId: isHostedMode() ? (gated.researcherId ?? null) : null,
       expiresAt: getExpirationTime(savedConfig.linkExpiration),
-      standaloneClient: context.kvClient,
+      standaloneClient: gated.context.kvClient,
     });
+    const createdAuthority = asStudyAuthorityFromLink(created);
+    if (createdAuthority) {
+      const presented = presentStudyAuthority(createdAuthority, 'researcher');
+      if (!presented.ok) {
+        return NextResponse.json(
+          {
+            error: presented.error,
+            retryable: presented.retryable,
+            ...(presented.code ? { code: presented.code } : {}),
+            ...(presented.reason ? { reason: presented.reason } : {}),
+          },
+          { status: presented.statusCode },
+        );
+      }
+    }
     if (created.status === 'quota-exceeded') {
       return NextResponse.json(
         { error: 'Participant link quota reached. Reuse existing links or wait for expired links to be pruned.' },
@@ -163,7 +171,13 @@ export async function POST(request: Request) {
       url: participantUrl
     });
   } catch (error) {
-    console.error('Generate link API error:', error);
+    logRequestFailure({
+      event: 'route.failure',
+      route: '/api/generate-link',
+      method: 'POST',
+      status: 500,
+      requestId: createRequestId(request.headers.get('x-request-id')),
+    }, error);
     return NextResponse.json(
       { error: 'Failed to generate participant link' },
       { status: 500 }
@@ -188,6 +202,16 @@ export async function GET(request: Request) {
     }
 
     const loaded = await getParticipantLinkByCode(code);
+    const exchangeAuthority = asStudyAuthorityFromLink(loaded);
+    if (exchangeAuthority) {
+      const presented = presentStudyAuthority(exchangeAuthority, 'participant');
+      if (!presented.ok) {
+        return NextResponse.json(
+          { valid: false, error: presented.error, retryable: presented.retryable },
+          { status: presented.statusCode },
+        );
+      }
+    }
     if (loaded.status === 'unavailable') {
       return NextResponse.json({ valid: false, error: 'Unable to verify participant link.', retryable: true }, { status: 503 });
     }
@@ -234,7 +258,13 @@ export async function GET(request: Request) {
     );
     return response;
   } catch (error) {
-    console.error('Participant link exchange error:', error);
+    logRequestFailure({
+      event: 'route.failure',
+      route: '/api/generate-link',
+      method: 'GET',
+      status: 400,
+      requestId: createRequestId(request.headers.get('x-request-id')),
+    }, error);
     return NextResponse.json(
       { valid: false, error: 'Invalid or expired token' },
       { status: 400 }

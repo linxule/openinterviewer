@@ -2,7 +2,24 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const contextMock = vi.hoisted(() => ({ getRequestContext: vi.fn() }));
+const contextMock = vi.hoisted(() => ({
+  getRequestContext: vi.fn(),
+  getAuthorizedResearcherStudyContext: vi.fn(),
+  presentStudyAuthority: vi.fn((result: { status: string }) => {
+    if (result.status === 'allow') return { ok: true };
+    if (result.status === 'live') {
+      return {
+        ok: false,
+        statusCode: 409,
+        error: 'A study operation is already in progress.',
+        retryable: true,
+        code: 'STUDY_OPERATION_PENDING',
+      };
+    }
+    if (result.status === 'deny') return { ok: false, statusCode: 403, error: 'Forbidden' };
+    return { ok: false, statusCode: 503, error: 'Unable to verify study authority', retryable: true };
+  }),
+}));
 vi.mock('@/lib/researcherContext', () => contextMock);
 
 const accessMock = vi.hoisted(() => ({ configurationRequiredResponse: vi.fn() }));
@@ -20,6 +37,24 @@ vi.mock('@/lib/platformDb', () => platformMock);
 const linksMock = vi.hoisted(() => ({
   listParticipantLinksForStudy: vi.fn(),
   revokeParticipantLink: vi.fn(),
+  asStudyAuthorityFromLink: vi.fn((result: { status: string; phase?: 'reserving' | 'pending' | 'resolving' | 'publishing' }) => {
+    if (result.status === 'live' && result.phase) return { status: 'live', phase: result.phase };
+    if (
+      result.status === 'adel'
+      || result.status === 'hold'
+      || result.status === 'noacct'
+      || result.status === 'deny'
+      || result.status === 'notfound'
+      || result.status === 'corrupt'
+      || result.status === 'mismatch'
+      || result.status === 'unavailable'
+      || result.status === 'ambiguous'
+      || result.status === 'invalid'
+    ) {
+      return { status: result.status };
+    }
+    return null;
+  }),
 }));
 vi.mock('@/lib/participantLinks', () => linksMock);
 
@@ -36,6 +71,9 @@ beforeEach(() => {
     context: { kvClient },
     researcherId: 'researcher-a',
   });
+  contextMock.getAuthorizedResearcherStudyContext.mockImplementation(
+    () => contextMock.getRequestContext(),
+  );
   modeMock.isHostedMode.mockReturnValue(true);
   kvMock.getStudyChecked.mockResolvedValue({ status: 'found', study: { id: 'study-a' } });
   platformMock.getStudyOwnerChecked.mockResolvedValue({
@@ -76,7 +114,7 @@ describe('researcher participant-link management API', () => {
   });
 
   it('fails closed without listing when hosted ownership is unavailable', async () => {
-    platformMock.getStudyOwnerChecked.mockResolvedValue({ status: 'unavailable' });
+    kvMock.getStudyChecked.mockResolvedValue({ status: 'unavailable' });
 
     const response = await GET(
       new Request('http://localhost/api/studies/study-a/participant-links'),
@@ -140,5 +178,33 @@ describe('researcher participant-link management API', () => {
     ), routeContext);
 
     expect(response.status).toBe(403);
+  });
+
+  it('maps a live study operation on list/revoke to retryable 409 without further success', async () => {
+    linksMock.listParticipantLinksForStudy.mockResolvedValue({ status: 'live', phase: 'pending' });
+    const listResponse = await GET(
+      new Request('http://localhost/api/studies/study-a/participant-links'),
+      routeContext,
+    );
+    await expect(listResponse.json()).resolves.toMatchObject({
+      code: 'STUDY_OPERATION_PENDING',
+      retryable: true,
+    });
+    expect(listResponse.status).toBe(409);
+
+    linksMock.revokeParticipantLink.mockResolvedValue({ status: 'live', phase: 'reserving' });
+    const revokeResponse = await DELETE(new Request(
+      'http://localhost/api/studies/study-a/participant-links',
+      {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ linkId: 'd'.repeat(64) }),
+      },
+    ), routeContext);
+    expect(revokeResponse.status).toBe(409);
+    await expect(revokeResponse.json()).resolves.toMatchObject({
+      code: 'STUDY_OPERATION_PENDING',
+      retryable: true,
+    });
   });
 });

@@ -4,6 +4,7 @@
 // provider error bodies, credentials, or request data in responses.
 
 import { NextResponse } from 'next/server';
+import { logRequestFailure, wasErrorLogged } from './requestLog';
 
 // Failure classification (see providerErrorResponse for the wire mapping):
 // - 'config': provider rejected the request itself (auth, invalid model, bad
@@ -43,7 +44,14 @@ export class ProviderTimeoutError extends Error {
 // Redacted provider failure logging: never log SDK error bodies, response
 // payloads, prompts, keys, or user content — only the error type and status.
 export function logProviderFailure(provider: string, operation: string, err: unknown): void {
-  const safe: { provider: string; operation: string; errorType: string; status?: number } = {
+  const safe: {
+    event: 'provider.failure';
+    provider: string;
+    operation: string;
+    errorType: string;
+    status?: number;
+  } = {
+    event: 'provider.failure',
     provider,
     operation,
     errorType: err instanceof Error ? err.name : 'UnknownError',
@@ -53,7 +61,7 @@ export function logProviderFailure(provider: string, operation: string, err: unk
   } else if (err && typeof err === 'object' && 'statusCode' in err && typeof err.statusCode === 'number') {
     safe.status = err.statusCode;
   }
-  console.error('AI provider failure', safe);
+  logRequestFailure(safe, err);
 }
 
 // HTTP-ish status extracted from any SDK error without reading its message or
@@ -189,6 +197,12 @@ export function providerErrorResponse(err: unknown): NextResponse {
         );
     }
   }
-  logProviderFailure('unknown', 'route', err);
+  if (!wasErrorLogged(err)) {
+    logRequestFailure({
+      event: 'route.failure',
+      route: 'provider',
+      errorType: err instanceof Error ? err.name : 'UnknownError',
+    }, err);
+  }
   return NextResponse.json({ error: 'Failed to generate response' }, { status: 500 });
 }

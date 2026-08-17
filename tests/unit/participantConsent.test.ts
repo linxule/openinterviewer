@@ -1,7 +1,7 @@
 // @vitest-environment node
 
-import { Redis } from '@upstash/redis';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { RedisPort } from '@/lib/redisPort';
 import {
   hashConsentText,
   PARTICIPANT_CONSENT_TTL_SECONDS,
@@ -35,7 +35,7 @@ describe('participant consent storage', () => {
     const evalMock = vi.fn().mockImplementation(
       (_script: string, _keys: string[], args: string[]) => JSON.parse(args[0])
     );
-    const client = { eval: evalMock } as unknown as Redis;
+    const client = { eval: evalMock } as unknown as RedisPort;
 
     await expect(recordParticipantConsent(binding, client)).resolves.toEqual({
       status: 'accepted',
@@ -52,7 +52,7 @@ describe('participant consent storage', () => {
 
   it('returns the original acceptedAt for an idempotent retry', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(consentRecord.acceptedAt + 10_000);
-    const client = { eval: vi.fn().mockResolvedValue(consentRecord) } as unknown as Redis;
+    const client = { eval: vi.fn().mockResolvedValue(consentRecord) } as unknown as RedisPort;
 
     await expect(recordParticipantConsent(binding, client)).resolves.toEqual({
       status: 'accepted',
@@ -63,20 +63,20 @@ describe('participant consent storage', () => {
   it('rejects a stored record bound to different consent', async () => {
     const client = {
       eval: vi.fn().mockResolvedValue({ ...consentRecord, consentHash: 'b'.repeat(64) }),
-    } as unknown as Redis;
+    } as unknown as RedisPort;
 
     await expect(recordParticipantConsent(binding, client)).resolves.toEqual({ status: 'conflict' });
   });
 
   it('distinguishes accepted, missing, mismatched, and unavailable reads', async () => {
-    const acceptedClient = { get: vi.fn().mockResolvedValue(consentRecord) } as unknown as Redis;
-    const missingClient = { get: vi.fn().mockResolvedValue(null) } as unknown as Redis;
+    const acceptedClient = { get: vi.fn().mockResolvedValue(consentRecord) } as unknown as RedisPort;
+    const missingClient = { get: vi.fn().mockResolvedValue(null) } as unknown as RedisPort;
     const mismatchedClient = {
       get: vi.fn().mockResolvedValue({ ...consentRecord, studyRevision: 2 }),
-    } as unknown as Redis;
+    } as unknown as RedisPort;
     const unavailableClient = {
       get: vi.fn().mockRejectedValue(new Error('redis down')),
-    } as unknown as Redis;
+    } as unknown as RedisPort;
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     await expect(verifyParticipantConsent(binding, acceptedClient)).resolves.toEqual({

@@ -16,6 +16,7 @@ import {
   OAUTH_RETURN_COOKIE_NAME,
   oauthRedirectUrl,
 } from '@/lib/hostedOAuth';
+import { logRequestFailure } from '@/lib/requestLog';
 
 export async function GET(request: Request) {
   if (!isHostedMode() || !isOAuthProviderConfigured('google')) {
@@ -68,7 +69,12 @@ export async function GET(request: Request) {
 
     return NextResponse.redirect(url);
   } catch (error) {
-    console.error('Google OAuth initiation error:', error);
+    logRequestFailure({
+      event: 'route.failure',
+      route: '/api/auth/oauth/google',
+      method: 'GET',
+      status: 307,
+    }, error);
     return NextResponse.redirect(oauthRedirectUrl('oauth_init_failed'));
   }
 }

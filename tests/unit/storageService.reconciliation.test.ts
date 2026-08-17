@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   deleteStudy,
+  exportAllInterviews,
+  getAllStudies,
+  getInterview,
+  getStudy,
   reconcileStudyOperations,
+  ResearcherStorageUnavailableError,
+  StudyOperationPendingError,
 } from '@/services/storageService';
 
 afterEach(() => {
@@ -53,5 +59,40 @@ describe('hosted study operation client contract', () => {
       stillPending: 3,
     });
     expect(fetchMock).toHaveBeenCalledWith('/api/studies/reconcile', { method: 'POST' });
+  });
+
+  it('throws STUDY_OPERATION_PENDING from study and interview reads', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({
+      error: 'A study operation is already in progress.',
+      code: 'STUDY_OPERATION_PENDING',
+    }), { status: 409, headers: { 'Content-Type': 'application/json' } }))));
+
+    await expect(getStudy('study-a')).rejects.toBeInstanceOf(StudyOperationPendingError);
+    await expect(getInterview('int-a', 'study-a')).rejects.toBeInstanceOf(StudyOperationPendingError);
+  });
+
+
+  it('types 409 live-only export as pending rather than empty success', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: 'A study operation is already in progress.',
+      code: 'STUDY_OPERATION_PENDING',
+      retryable: true,
+    }), { status: 409, headers: { 'Content-Type': 'application/json' } })));
+
+    await expect(exportAllInterviews()).rejects.toBeInstanceOf(StudyOperationPendingError);
+  });
+
+  it('types 503 study list and export outcomes without inventing empty success', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({
+      error: 'Study storage is temporarily unavailable.',
+      retryable: true,
+    }), { status: 503, headers: { 'Content-Type': 'application/json' } }))));
+
+    await expect(getAllStudies()).resolves.toMatchObject({
+      studies: [],
+      warning: 'Study storage is temporarily unavailable.',
+      outcome: { status: 'unavailable', retryable: true },
+    });
+    await expect(exportAllInterviews()).rejects.toBeInstanceOf(ResearcherStorageUnavailableError);
   });
 });

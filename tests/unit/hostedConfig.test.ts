@@ -91,6 +91,13 @@ describe('hosted config validator', () => {
     }))).toContain('invalid_credential_key');
   });
 
+  it('rejects a non-v2-clean PLATFORM_SCHEMA_LINEAGE value', () => {
+    expect(validateHostedConfig(hostedEnv({ PLATFORM_SCHEMA_LINEAGE: 'v1' })))
+      .toContain('invalid_platform_schema_lineage');
+    expect(validateHostedConfig(hostedEnv({ PLATFORM_SCHEMA_LINEAGE: 'v2-clean' }))).toEqual([]);
+    expect(validateHostedConfig(hostedEnv({ PLATFORM_SCHEMA_LINEAGE: '' }))).toEqual([]);
+  });
+
   it('validates standalone readiness independently from hosted settings', () => {
     const env: NodeJS.ProcessEnv = {
       NODE_ENV: 'production',

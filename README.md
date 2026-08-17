@@ -265,20 +265,17 @@ Do not point legacy and hosted releases at the same writable keyspace. A rollbac
 
 ## Future hosted cutover runbook
 
-No deploy command in this repository performs the cutover automatically. For a hosted release:
+No deploy command in this repository performs the cutover automatically. Hosted v2 isolation uses a schema-lineage sentinel. Absence of `study-ops:v2` is not proof that a prefix or database is safe.
 
-1. Create a separate staging Vercel project with a stable staging domain.
-2. Use a separate platform Redis database, or at minimum a unique `PLATFORM_KEY_PREFIX`; never share a production write namespace.
-3. Create staging-only OAuth clients with exact staging callback URLs.
-4. Scope all staging environment variables to the staging project and run `npm run setup:check -- --mode hosted --production` without exposing values.
-5. Deploy without attaching the production domain.
-6. Verify `/demo`, OAuth failure and success paths, onboarding, credential replacement/clear, and two researcher accounts with isolated storage.
-7. For each test account, verify study create/edit, opaque-link exchange, consent, interview completion, export, expiry, revocation, and account logout.
-8. Create the production candidate without changing the production alias. Use production-only OAuth clients, secrets, key prefix/database, and `APP_BASE_URL`.
-9. Record the current production deployment and environment snapshot as the exact rollback target.
-10. Promote the verified candidate, then run a small post-cutover smoke test. Do not reuse real participant content.
-11. If rollback is necessary, restore the previous deployment/domain and its matching environment/storage together. Keep hosted data isolated and export it separately.
-12. After the rollback window, remove legacy access deliberately, rotate superseded signing/encryption keys, and document the retirement.
+1. Set a new `PLATFORM_KEY_PREFIX` or a new platform Redis before enabling v2. Never share a production write namespace with staging or a pre-v2 keyspace.
+2. Set `PLATFORM_SCHEMA_LINEAGE=v2-clean` only after attesting that this prefix/database has no v1 `study-operation` / `study-operations` / pre-authority-leak owner rows. Hosted production `npm run setup:check -- --mode hosted --production` fails if lineage would HOLD.
+3. Unset `PLATFORM_SCHEMA_LINEAGE` after the sentinel exists (optional); bootstrap remains idempotent on GET.
+4. Do not roll back the deployment to pre-v2 after researchers have v2 data. Roll forward, or take hosted APIs offline. Unknown lineage is HOLD: readiness is false and writes return 503 `schema-hold`.
+5. Account deletion is journaled, resume-safe, and does not wipe BYOS.
+6. Credential cache eviction is isolate-local; TTL is 5 minutes; the account-deletion journal fails closed across isolates.
+7. Real-Redis tests never point at production and never `FLUSHDB` a preexisting URL. They create a disposable instance (or an attested CI service) and brand the adapter with a runner-minted token.
+
+Create staging-only OAuth clients, scope environment variables to the staging project, and verify `/demo`, OAuth, onboarding, two isolated researcher accounts, opaque-link exchange, consent, interview completion, export, and account deletion resume before promoting a production candidate. Do not reuse real participant content.
 
 ## Development and verification
 
@@ -289,12 +286,15 @@ npm run lint
 npm run typecheck
 npm test
 npm run test:setup
+npm run setup:check -- --mode demo
 npm run build
 npm run test:e2e
+npm run test:redis-crash
+npm run test:adversarial
 git diff --check
 ```
 
-The browser regression proves that the keyless demo does not contact application AI APIs or external services.
+The browser regression proves that the keyless demo does not contact application AI APIs or external services. Production logs are allowlisted JSON and never contain prompts, keys, or bodies. Real-Redis crash and shared-BYOS adversarial jobs never accept an inherited production `REDIS_URL`.
 
 For ordinary updates to an already configured deployment, use a reviewed pull request, require the CI and preview checks, merge to `main`, then verify the exact Git-backed production deployment on the canonical domain and scan runtime errors. The longer runbook above is for the first hosted-mode infrastructure cutover, not every application release.
 

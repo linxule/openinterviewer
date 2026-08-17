@@ -8,43 +8,44 @@ import { NextResponse } from 'next/server';
 import {
   getInterviewProvider,
 } from '@/lib/providers';
-import { getRequestContext, providerKeysFromContext } from '@/lib/researcherContext';
+import { getAuthorizedResearcherStudyContext, providerKeysFromContext } from '@/lib/researcherContext';
 import { configurationRequiredResponse } from '@/lib/researcherAccess';
 import { getStudyChecked, getStudyInterviewsChecked } from '@/lib/kv';
+import { mapCollectionLoad, mapStudyLoad } from '@/lib/ownedStudies';
 import { AggregateSynthesisResult, StudyConfig } from '@/types';
 import { readBoundedJsonObject } from '@/lib/requestBody';
 import { validateAggregateSynthesisPayload } from '@/lib/providerValidation';
 import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
 import { providerErrorResponse } from '@/lib/providerErrors';
 import { verifyAggregateSynthesisReceipt } from '@/lib/synthesisReceipt';
+import { createRequestId, logRequestFailure } from '@/lib/requestLog';
 
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const access = await getRequestContext();
-    const setupResponse = configurationRequiredResponse(access);
-    if (setupResponse) return setupResponse;
-    const { authorized, context, error } = access;
-    if (!authorized || !context) {
-      return NextResponse.json({ error: error || 'Unauthorized' }, { status: 401 });
-    }
-
     const { id: studyId } = await params;
 
-    // Fetch parent study
-    const loadedStudy = await getStudyChecked(studyId, context.kvClient);
-    if (loadedStudy.status === 'unavailable') {
-      return NextResponse.json({ error: 'Study storage is temporarily unavailable.', retryable: true }, { status: 503 });
-    }
-    if (loadedStudy.status === 'not-found') {
+    const gated = await getAuthorizedResearcherStudyContext(studyId, 'read');
+    const denied = configurationRequiredResponse(gated);
+    if (denied) return denied;
+    if (!gated.authorized || !gated.context) {
       return NextResponse.json(
-        { error: 'Study not found' },
-        { status: 404 }
+        {
+          error: gated.error || 'Unauthorized',
+          retryable: gated.retryable,
+          ...(gated.code ? { code: gated.code } : {}),
+          ...(gated.reason ? { reason: gated.reason } : {}),
+        },
+        { status: gated.statusCode ?? 401 },
       );
     }
-    const parentStudy = loadedStudy.study;
+
+    const loadedStudy = await getStudyChecked(studyId, gated.context.kvClient);
+    const studyMapped = mapStudyLoad(loadedStudy);
+    if (!studyMapped.ok) return NextResponse.json(studyMapped.body, { status: studyMapped.status });
+    const parentStudy = studyMapped.study;
 
     const parsedBody = await readBoundedJsonObject(request, 256_000);
     if (!parsedBody.ok) {
@@ -92,15 +93,17 @@ export async function POST(
       return NextResponse.json({ error: 'Synthesis provenance does not match the current study.' }, { status: 409 });
     }
 
-    const loadedInterviews = await getStudyInterviewsChecked(parentStudy.id, context.kvClient, 1_000);
-    if (loadedInterviews.status === 'unavailable') {
-      return NextResponse.json({ error: 'Interview storage is temporarily unavailable.', retryable: true }, { status: 503 });
+    const loadedInterviews = await getStudyInterviewsChecked(parentStudy.id, gated.context.kvClient, 1_000);
+    const interviewsMapped = mapCollectionLoad(loadedInterviews, {
+      unavailable: 'Interview storage is temporarily unavailable.',
+      tooLarge: 'This study has too many interviews for interactive follow-up generation.',
+    });
+    if (!interviewsMapped.ok) {
+      return NextResponse.json(interviewsMapped.body, { status: interviewsMapped.status });
     }
-    if (loadedInterviews.status === 'too-large') {
-      return NextResponse.json({ error: 'This study has too many interviews for interactive follow-up generation.' }, { status: 413 });
-    }
+    const loadedInterviewItems = interviewsMapped.items;
     const eligibleIds = new Set(
-      loadedInterviews.items
+      loadedInterviewItems
         .filter(interview => interview.studyRevision === parentStudy.revision && interview.synthesis)
         .map(interview => interview.id)
     );
@@ -125,14 +128,14 @@ export async function POST(
     const platformLimited = await hostedAiRateLimitResponse(
       request,
       'followup',
-      { researcherId: context.researcherId }
+      { researcherId: gated.researcherId }
     );
     if (platformLimited) return platformLimited;
 
     // Get the configured AI provider with researcher's API keys.
     let provider;
     try {
-      provider = getInterviewProvider(parentStudy.config, providerKeysFromContext(context));
+      provider = getInterviewProvider(parentStudy.config, providerKeysFromContext(gated.context));
     } catch {
       return NextResponse.json(
         { error: 'AI provider is not configured on the server.' },
@@ -180,7 +183,13 @@ export async function POST(
       }
     });
   } catch (error) {
-    console.error('Generate follow-up API error:', error);
+    logRequestFailure({
+      event: 'route.failure',
+      route: '/api/studies/[id]/generate-followup',
+      method: 'POST',
+      status: 500,
+      requestId: createRequestId(request.headers.get('x-request-id')),
+    }, error);
     return NextResponse.json(
       { error: 'Failed to generate follow-up study' },
       { status: 500 }

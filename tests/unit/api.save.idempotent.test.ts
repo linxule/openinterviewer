@@ -1,7 +1,24 @@
+import { createHash } from 'crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeStoredInterview } from '../fixtures/models';
 import { CLAUDE_SYNTHESIS_MODEL, GEMINI_SYNTHESIS_MODEL } from '@/types';
 import { resolveProviderType, resolveSynthesisModel } from '@/lib/providers';
+
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, nested]) => [key, canonicalize(nested)])
+    );
+  }
+  return value;
+}
+
+function submissionFingerprint(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(canonicalize(value))).digest('hex');
+}
 
 /**
  * Interview save idempotency contract.
@@ -13,6 +30,18 @@ import { resolveProviderType, resolveSynthesisModel } from '@/lib/providers';
 
 const contextMock = vi.hoisted(() => ({
   getParticipantRequestContext: vi.fn(),
+  resolveParticipantOrPreviewContext: vi.fn((request: Request, options?: unknown) =>
+    contextMock.getParticipantRequestContext(request, options)
+  ),
+  selectedStudyIdFromParticipantBody: vi.fn((body: Record<string, unknown>) => {
+    if (typeof body.studyId === 'string' && body.studyId.length > 0) return body.studyId;
+    const studyConfig = body.studyConfig;
+    if (studyConfig && typeof studyConfig === 'object' && studyConfig !== null && 'id' in studyConfig) {
+      const id = (studyConfig as { id?: unknown }).id;
+      if (typeof id === 'string' && id.length > 0) return id;
+    }
+    return undefined;
+  }),
 }));
 
 vi.mock('@/lib/researcherContext', () => contextMock);
@@ -26,7 +55,7 @@ vi.mock('@/lib/canonicalStudy', () => canonicalMock);
 const receiptMock = vi.hoisted(() => ({ verifySynthesisReceipt: vi.fn() }));
 vi.mock('@/lib/synthesisReceipt', () => receiptMock);
 
-const rateLimitMock = vi.hoisted(() => ({ getParticipantRateLimitCounters: vi.fn() }));
+const rateLimitMock = vi.hoisted(() => ({ getSavePersistRatePlan: vi.fn() }));
 vi.mock('@/lib/rateLimit', () => rateLimitMock);
 
 const consentMock = vi.hoisted(() => ({ verifyParticipantConsent: vi.fn() }));
@@ -34,6 +63,8 @@ vi.mock('@/lib/participantConsent', () => consentMock);
 
 const kvMock = vi.hoisted(() => ({
   persistCompletedInterview: vi.fn(),
+  INTERVIEW_PERSISTING_PREFIX: 'interview-persisting:',
+  parsePersistingGuard: vi.fn(),
 }));
 
 vi.mock('@/lib/kv', () => kvMock);
@@ -81,8 +112,8 @@ beforeEach(() => {
       acceptedAt: 1_700_000_000_000,
     },
   });
-  rateLimitMock.getParticipantRateLimitCounters.mockReturnValue([
-    { key: 'rate:session', maximum: 2, windowSeconds: 86_400 },
+  rateLimitMock.getSavePersistRatePlan.mockReturnValue([
+    { key: 'interview-rate:session:0', maximum: 2, windowSeconds: 86_400, windowStart: 0 },
   ]);
   kvMock.persistCompletedInterview
     .mockResolvedValueOnce({ status: 'created' })
@@ -143,7 +174,13 @@ describe('POST /api/interviews/save idempotency', () => {
       expect.any(String),
       expect.objectContaining({
         expectedStudyRevision: 1,
-        rateLimits: [{ key: 'rate:session', maximum: 2, windowSeconds: 86_400 }],
+        rateLimits: [{
+          key: 'interview-rate:session:0',
+          maximum: 2,
+          windowSeconds: 86_400,
+          windowStart: 0,
+        }],
+        identity: { participantSessionId: 'session-a', linkId: 'a'.repeat(64) },
       }),
       expect.any(Object)
     );
@@ -251,6 +288,42 @@ describe('POST /api/interviews/save idempotency', () => {
     expect(res.status).toBe(409);
   });
 
+  it('treats a second POST with a different Date.now as an immutable duplicate', async () => {
+    const interview = makeStoredInterview({ id: 'interview-x', studyId: 'study-a' });
+    const body = {
+      id: interview.id,
+      studyId: interview.studyId,
+      studyName: interview.studyName,
+      transcript: interview.transcript,
+      participantProfile: interview.participantProfile,
+      behaviorData: interview.behaviorData,
+      createdAt: 1_700_000_000_000,
+      synthesis: {
+        statedPreferences: [], revealedPreferences: [], themes: [], contradictions: [],
+        keyInsights: ['Insight'], bottomLine: 'Bottom line', _receipt: 'receipt',
+      },
+    };
+
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_100_000);
+    const first = await POST(makeRequest(body));
+    vi.setSystemTime(1_700_000_200_000);
+    const second = await POST(makeRequest(body));
+    vi.useRealTimers();
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(await second.json()).toMatchObject({ success: true, created: false, duplicate: true });
+
+    const firstInterview = kvMock.persistCompletedInterview.mock.calls[0][0] as { completedAt: number };
+    const secondInterview = kvMock.persistCompletedInterview.mock.calls[1][0] as { completedAt: number };
+    const firstFingerprint = kvMock.persistCompletedInterview.mock.calls[0][1] as string;
+    const secondFingerprint = kvMock.persistCompletedInterview.mock.calls[1][1] as string;
+    expect(firstInterview.completedAt).toBe(1_700_000_100_000);
+    expect(secondInterview.completedAt).toBe(1_700_000_200_000);
+    expect(firstFingerprint).toBe(secondFingerprint);
+  });
+
   it('maps an atomic save quota rejection without persisting a partial interview', async () => {
     kvMock.persistCompletedInterview.mockReset().mockResolvedValue({ status: 'rate-limited' });
     const interview = makeStoredInterview({
@@ -266,5 +339,124 @@ describe('POST /api/interviews/save idempotency', () => {
 
     expect(response.status).toBe(429);
     expect(response.headers.get('retry-after')).toBe('3600');
+  });
+
+  it('asks participant context for new-persist so live create cannot start a save', async () => {
+    const interview = makeStoredInterview({ id: 'interview-x', studyId: 'study-a' });
+    await POST(makeRequest({
+      ...interview,
+      synthesis: {
+        statedPreferences: [], revealedPreferences: [], themes: [], contradictions: [],
+        keyInsights: ['Insight'], bottomLine: 'Bottom line', _receipt: 'receipt',
+      },
+    }));
+    expect(contextMock.getParticipantRequestContext).toHaveBeenCalledWith(
+      expect.any(Request),
+      expect.objectContaining({ purpose: 'new-persist', selectedStudyId: 'study-a' }),
+    );
+  });
+
+  it('does not persist a preview save even with a selected study id', async () => {
+    contextMock.getParticipantRequestContext.mockResolvedValue({
+      valid: true,
+      context: { kvClient: { get: vi.fn() } },
+      isAdmin: true,
+      studyId: 'study-a',
+    });
+    const interview = makeStoredInterview({ id: 'interview-preview', studyId: 'study-a' });
+
+    const response = await POST(makeRequest({
+      ...interview,
+      synthesis: {
+        statedPreferences: [], revealedPreferences: [], themes: [], contradictions: [],
+        keyInsights: ['Insight'], bottomLine: 'Bottom line', _receipt: 'receipt',
+      },
+    }));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ success: true, preview: true, created: false });
+    expect(kvMock.persistCompletedInterview).not.toHaveBeenCalled();
+  });
+
+  it('finishes persist-repair only when the stored guard matches identity and fingerprint', async () => {
+    const get = vi.fn().mockResolvedValue('oi:pguard:{}');
+    contextMock.getParticipantRequestContext.mockResolvedValue({
+      valid: true,
+      context: { kvClient: { get } },
+      studyId: 'study-a',
+      isAdmin: false,
+      linkId: 'a'.repeat(64),
+      participantSessionId: 'session-a',
+      studyRevision: 1,
+      persistRepairOnly: true,
+    });
+    const interview = makeStoredInterview({ id: 'interview-x', studyId: 'study-a' });
+    const synthesis = {
+      statedPreferences: [],
+      revealedPreferences: [],
+      themes: [],
+      contradictions: [],
+      keyInsights: ['Insight'],
+      bottomLine: 'Bottom line',
+    };
+    const fingerprint = submissionFingerprint({
+      id: 'session-session-a',
+      studyId: 'study-a',
+      participantProfile: interview.participantProfile,
+      transcript: interview.transcript,
+      synthesis,
+      behaviorData: interview.behaviorData,
+      createdAt: interview.createdAt ?? null,
+      consentHash: 'a'.repeat(64),
+      consentAcceptedAt: 1_700_000_000_000,
+      aiProvider: 'gemini',
+      aiModel: GEMINI_SYNTHESIS_MODEL,
+      requestedAiModel: undefined,
+      routedProvider: undefined,
+    });
+    kvMock.parsePersistingGuard.mockReturnValue({
+      interviewId: 'session-session-a',
+      studyId: 'study-a',
+      fingerprint,
+      identity: { participantSessionId: 'session-a', linkId: 'a'.repeat(64) },
+    });
+    kvMock.persistCompletedInterview.mockReset().mockResolvedValue({ status: 'created' });
+
+    const response = await POST(makeRequest({
+      ...interview,
+      synthesis: { ...synthesis, _receipt: 'receipt' },
+    }));
+
+    expect(response.status).toBe(200);
+    expect(get).toHaveBeenCalledWith('interview-persisting:session-session-a');
+    expect(kvMock.persistCompletedInterview).toHaveBeenCalledOnce();
+  });
+
+  it('returns opaque 404 and does not persist when persist-repair has no matching guard', async () => {
+    const get = vi.fn().mockResolvedValue(null);
+    contextMock.getParticipantRequestContext.mockResolvedValue({
+      valid: true,
+      context: { kvClient: { get } },
+      studyId: 'study-a',
+      isAdmin: false,
+      linkId: 'a'.repeat(64),
+      participantSessionId: 'session-a',
+      studyRevision: 1,
+      persistRepairOnly: true,
+    });
+    kvMock.parsePersistingGuard.mockReturnValue(null);
+    const interview = makeStoredInterview({ id: 'interview-x', studyId: 'study-a' });
+
+    const response = await POST(makeRequest({
+      ...interview,
+      synthesis: {
+        statedPreferences: [], revealedPreferences: [], themes: [], contradictions: [],
+        keyInsights: ['Insight'], bottomLine: 'Bottom line', _receipt: 'receipt',
+      },
+    }));
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: 'This study is no longer active.' });
+    expect(kvMock.persistCompletedInterview).not.toHaveBeenCalled();
   });
 });

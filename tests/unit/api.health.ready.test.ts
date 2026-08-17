@@ -11,6 +11,11 @@ vi.mock('@/lib/kvClient', () => ({
   getKVClient: () => ({ ping: pingMock }),
 }));
 
+const schemaMock = vi.hoisted(() => ({
+  ensurePlatformSchemaLineage: vi.fn(async () => 'ok'),
+}));
+vi.mock('@/lib/platformSchema', () => schemaMock);
+
 import { GET } from '@/app/api/health/ready/route';
 
 beforeEach(() => {
@@ -39,6 +44,11 @@ describe('deployment readiness endpoint', () => {
     pingMock.mockResolvedValue('PONG');
     const ready = await GET();
     expect(ready.status).toBe(200);
+    expect(await ready.json()).toEqual({
+      ready: true,
+      mode: 'hosted',
+      checks: { configuration: true, platformDatabase: true, schemaLineage: true },
+    });
 
     pingMock.mockResolvedValue('NOPE');
     const unavailable = await GET();
@@ -46,7 +56,21 @@ describe('deployment readiness endpoint', () => {
     expect(await unavailable.json()).toEqual({
       ready: false,
       mode: 'hosted',
-      checks: { configuration: true, platformDatabase: false },
+      checks: { configuration: true, platformDatabase: false, schemaLineage: false },
+    });
+  });
+
+  it('treats hosted schema-hold as not ready', async () => {
+    configMock.getPublicConfig.mockReturnValue({ mode: 'hosted', ready: true });
+    pingMock.mockResolvedValue('PONG');
+    schemaMock.ensurePlatformSchemaLineage.mockResolvedValueOnce('hold');
+
+    const response = await GET();
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      ready: false,
+      mode: 'hosted',
+      checks: { configuration: true, platformDatabase: true, schemaLineage: false },
     });
   });
 
@@ -65,7 +89,7 @@ describe('deployment readiness endpoint', () => {
     expect(body).toEqual({
       ready: false,
       mode: 'hosted',
-      checks: { configuration: false, platformDatabase: false },
+      checks: { configuration: false, platformDatabase: false, schemaLineage: false },
     });
     expect(JSON.stringify(body)).not.toContain('weak_session_secret');
   });

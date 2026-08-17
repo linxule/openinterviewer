@@ -27,6 +27,10 @@ export async function enforceResearcherPageSetup(options?: { onboardingPage?: bo
   }
 }
 
+export function schemaHoldResponse(): NextResponse {
+  return NextResponse.json({ retryable: false, reason: 'schema-hold' }, { status: 503 });
+}
+
 /** Return the standard hosted setup denial before a route falls through to 401. */
 export function configurationRequiredResponse(
   access: RequestContextResult
@@ -34,7 +38,12 @@ export function configurationRequiredResponse(
   if (!access.setupRequired) {
     if (access.statusCode && !access.context) {
       return NextResponse.json(
-        { error: access.error || 'Researcher service is temporarily unavailable', retryable: access.retryable },
+        {
+          error: access.error || 'Researcher service is temporarily unavailable',
+          retryable: access.retryable,
+          ...(access.code ? { code: access.code } : {}),
+          ...(access.reason ? { reason: access.reason } : {}),
+        },
         { status: access.statusCode }
       );
     }

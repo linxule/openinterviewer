@@ -5,7 +5,13 @@ import { motion } from 'framer-motion';
 import { useRouter } from 'next/navigation';
 import { StoredStudy, StoredInterview, AggregateSynthesisResult } from '@/types';
 import type { ParticipantLinkMetadata } from '@/lib/participantLinks';
-import { getStudy, getStudyInterviews } from '@/services/storageService';
+import {
+  getStudy,
+  getStudyInterviews,
+  reconcileStudyOperations,
+  ResearcherStorageUnavailableError,
+  StudyOperationPendingError,
+} from '@/services/storageService';
 import {
   Loader2,
   ArrowLeft,
@@ -38,6 +44,10 @@ interface StudyDetailProps {
 
 type TabType = 'overview' | 'interviews' | 'settings';
 
+function isStudyOperationPending(response: Response, data: { code?: string }) {
+  return response.status === 409 && data.code === 'STUDY_OPERATION_PENDING';
+}
+
 const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
   const router = useRouter();
   const [study, setStudy] = useState<StoredStudy | null>(null);
@@ -56,6 +66,9 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
   const [linksLoading, setLinksLoading] = useState(true);
   const [linksError, setLinksError] = useState<string | null>(null);
   const [revokingLinkId, setRevokingLinkId] = useState<string | null>(null);
+  const [operationPending, setOperationPending] = useState(false);
+  const [storageUnavailable, setStorageUnavailable] = useState<string | null>(null);
+  const [isReconciling, setIsReconciling] = useState(false);
 
   const loadParticipantLinks = useCallback(async () => {
     setLinksLoading(true);
@@ -67,7 +80,13 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
       const data = await response.json() as {
         links?: ParticipantLinkMetadata[];
         error?: string;
+        code?: string;
       };
+      if (isStudyOperationPending(response, data)) {
+        setOperationPending(true);
+        setParticipantLinks([]);
+        return;
+      }
       if (!response.ok) {
         throw new Error(data.error || 'Failed to load participant links');
       }
@@ -90,12 +109,32 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
       ]);
       setStudy(studyData);
       setInterviews(interviewData);
+      setStorageUnavailable(null);
     } catch (error) {
-      console.error('Error loading study:', error);
+      if (error instanceof StudyOperationPendingError) {
+        setOperationPending(true);
+        setInterviews([]);
+      } else if (error instanceof ResearcherStorageUnavailableError) {
+        setStorageUnavailable(error.message);
+        setLinksError(error.message);
+      } else {
+        console.error('Error loading study:', error);
+      }
     } finally {
       setLoading(false);
     }
   }, [studyId]);
+
+  const runReconciliation = async () => {
+    setIsReconciling(true);
+    const result = await reconcileStudyOperations();
+    setIsReconciling(false);
+    if (result.success && result.stillPending === 0) {
+      setOperationPending(false);
+    }
+    await loadStudyData();
+    await loadParticipantLinks();
+  };
 
   useEffect(() => {
     void loadStudyData();
@@ -106,7 +145,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
   }, [loadParticipantLinks]);
 
   const handleToggleLinksEnabled = async () => {
-    if (!study) return;
+    if (!study || operationPending) return;
 
     const newLinksEnabled = !(study.config.linksEnabled ?? true);
     setIsTogglingLinks(true);
@@ -118,8 +157,13 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
         body: JSON.stringify({ linksEnabled: newLinksEnabled })
       });
 
+      const data = await response.json().catch(() => ({})) as { code?: string; error?: string };
+      if (isStudyOperationPending(response, data)) {
+        setOperationPending(true);
+        return;
+      }
       if (!response.ok) {
-        throw new Error('Failed to update study');
+        throw new Error(data.error || 'Failed to update study');
       }
 
       // Update local state
@@ -139,7 +183,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
   };
 
   const handleGenerateLink = async () => {
-    if (!study) return;
+    if (!study || operationPending) return;
 
     setGeneratingLink(true);
     try {
@@ -149,12 +193,14 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
         body: JSON.stringify({ studyConfig: study.config })
       });
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to generate link');
+      const data = await response.json().catch(() => ({})) as { error?: string; code?: string; url?: string };
+      if (isStudyOperationPending(response, data)) {
+        setOperationPending(true);
+        return;
       }
-
-      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to generate link');
+      }
       if (data.url) {
         setParticipantLink(data.url);
         await loadParticipantLinks();
@@ -176,7 +222,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
   };
 
   const handleRevokeLink = async (link: ParticipantLinkMetadata) => {
-    if (link.revokedAt !== null) return;
+    if (operationPending || link.revokedAt !== null) return;
     if (!window.confirm('Revoke this participant link? Anyone using it will lose access immediately.')) {
       return;
     }
@@ -188,7 +234,11 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ linkId: link.id }),
       });
-      const data = await response.json() as { error?: string };
+      const data = await response.json() as { error?: string; code?: string };
+      if (isStudyOperationPending(response, data)) {
+        setOperationPending(true);
+        return;
+      }
       if (!response.ok) {
         throw new Error(data.error || 'Failed to revoke participant link');
       }
@@ -202,6 +252,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
   };
 
   const handleGenerateAggregateSynthesis = async () => {
+    if (operationPending) return;
     if (interviews.length < 2) {
       alert('Need at least 2 interviews to generate aggregate synthesis');
       return;
@@ -215,13 +266,19 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
         body: JSON.stringify({ studyId })
       });
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to generate synthesis');
+      const data = await response.json().catch(() => ({})) as {
+        error?: string;
+        code?: string;
+        synthesis?: AggregateSynthesisResult;
+      };
+      if (isStudyOperationPending(response, data)) {
+        setOperationPending(true);
+        return;
       }
-
-      const data = await response.json();
-      setAggregateSynthesis(data.synthesis);
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to generate synthesis');
+      }
+      if (data.synthesis) setAggregateSynthesis(data.synthesis);
     } catch (error) {
       console.error('Error generating aggregate synthesis:', error);
       alert(error instanceof Error ? error.message : 'Failed to generate synthesis');
@@ -231,7 +288,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
   };
 
   const handleGenerateFollowup = async () => {
-    if (!aggregateSynthesis) {
+    if (operationPending || !aggregateSynthesis) {
       alert('Generate aggregate analysis first');
       return;
     }
@@ -244,12 +301,18 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
         body: JSON.stringify({ synthesis: aggregateSynthesis })
       });
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to generate follow-up study');
+      const data = await response.json().catch(() => ({})) as {
+        error?: string;
+        code?: string;
+        followUpConfig?: unknown;
+      };
+      if (isStudyOperationPending(response, data)) {
+        setOperationPending(true);
+        return;
       }
-
-      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to generate follow-up study');
+      }
 
       // Store prefill config in sessionStorage and navigate to setup
       sessionStorage.setItem('prefillStudyConfig', JSON.stringify(data.followUpConfig));
@@ -288,13 +351,35 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
   if (!study) {
     return (
       <div className="min-h-screen bg-stone-900 flex items-center justify-center">
-        <div className="text-center">
+        <div className="text-center max-w-md">
           <AlertCircle size={48} className="text-stone-500 mx-auto mb-4" />
-          <h2 className="text-xl font-semibold text-white mb-2">Study Not Found</h2>
-          <p className="text-stone-400 mb-4">The study you&apos;re looking for doesn&apos;t exist.</p>
+          {operationPending ? (
+            <>
+              <h2 className="text-xl font-semibold text-white mb-2">Study change pending</h2>
+              <p className="text-stone-400 mb-4">A study operation is already in progress.</p>
+              <button
+                type="button"
+                onClick={() => void runReconciliation()}
+                disabled={isReconciling}
+                className="px-4 py-2 bg-stone-700 hover:bg-stone-600 text-white rounded-xl disabled:opacity-50"
+              >
+                {isReconciling ? 'Reconciling…' : 'Reconcile'}
+              </button>
+            </>
+          ) : storageUnavailable ? (
+            <>
+              <h2 className="text-xl font-semibold text-white mb-2">Workspace unavailable</h2>
+              <p className="text-stone-400 mb-4">{storageUnavailable}</p>
+            </>
+          ) : (
+            <>
+              <h2 className="text-xl font-semibold text-white mb-2">Study Not Found</h2>
+              <p className="text-stone-400 mb-4">The study you&apos;re looking for doesn&apos;t exist.</p>
+            </>
+          )}
           <button
             onClick={() => router.push('/studies')}
-            className="px-4 py-2 bg-stone-700 hover:bg-stone-600 text-white rounded-xl"
+            className="mt-3 px-4 py-2 bg-stone-700 hover:bg-stone-600 text-white rounded-xl"
           >
             Back to Studies
           </button>
@@ -355,6 +440,22 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
             </div>
           </div>
         </motion.div>
+
+        {operationPending && (
+          <div className="mb-6 bg-amber-900/30 border border-amber-700/50 rounded-xl p-4 flex items-center gap-3">
+            <AlertCircle size={20} className="text-amber-400 flex-shrink-0" />
+            <p className="text-sm text-amber-300">A study operation is already in progress.</p>
+            <button
+              type="button"
+              onClick={() => void runReconciliation()}
+              disabled={isReconciling}
+              className="ml-auto inline-flex items-center gap-2 rounded-lg border border-amber-700 px-3 py-2 text-sm text-amber-200 hover:bg-amber-900/40 disabled:opacity-50"
+            >
+              <RefreshCw size={14} className={isReconciling ? 'animate-spin' : ''} />
+              Reconcile
+            </button>
+          </div>
+        )}
 
         {/* Tabs */}
         <div className="mb-6 grid grid-cols-3 border-b border-stone-700" role="tablist" aria-label="Study sections">
@@ -424,7 +525,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                   </h3>
                   <button
                     onClick={handleGenerateAggregateSynthesis}
-                    disabled={isGeneratingAggregate || interviews.length < 2}
+                    disabled={operationPending || isGeneratingAggregate || interviews.length < 2}
                     className="flex w-full items-center justify-center gap-2 rounded-lg bg-stone-700 px-4 py-2 text-sm text-stone-300 transition-colors hover:bg-stone-600 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
                   >
                     {isGeneratingAggregate ? (
@@ -464,7 +565,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                     <div className="pt-4 border-t border-stone-700">
                       <button
                         onClick={handleGenerateFollowup}
-                        disabled={isGeneratingFollowup}
+                        disabled={operationPending || isGeneratingFollowup}
                         className="px-4 py-2 text-sm bg-stone-600 hover:bg-stone-500 text-white rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         {isGeneratingFollowup ? (
@@ -506,7 +607,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: index * 0.05 }}
                     className="cursor-pointer rounded-xl border border-stone-700 bg-stone-800/50 p-4 transition-colors hover:border-stone-600 sm:p-6"
-                    onClick={() => router.push(`/dashboard/interview/${interview.id}`)}
+                    onClick={() => router.push(`/dashboard/interview/${interview.id}?studyId=${encodeURIComponent(studyId)}`)}
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
@@ -551,7 +652,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                         className="p-2 text-stone-400 hover:text-stone-300 transition-colors"
                         onClick={(e) => {
                           e.stopPropagation();
-                          router.push(`/dashboard/interview/${interview.id}`);
+                          router.push(`/dashboard/interview/${interview.id}?studyId=${encodeURIComponent(studyId)}`);
                         }}
                       >
                         <Eye size={20} />
@@ -651,7 +752,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                     aria-checked={study.config.linksEnabled ?? true}
                     aria-describedby="participant-access-status"
                     onClick={handleToggleLinksEnabled}
-                    disabled={isTogglingLinks}
+                    disabled={operationPending || isTogglingLinks}
                     className={`flex h-7 w-14 shrink-0 items-center rounded-full px-1 transition-colors ${
                       (study.config.linksEnabled ?? true)
                         ? 'bg-green-600'
@@ -756,7 +857,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                             <button
                               type="button"
                               onClick={() => void handleRevokeLink(link)}
-                              disabled={!canRevoke || revokingLinkId === link.id}
+                              disabled={operationPending || !canRevoke || revokingLinkId === link.id}
                               className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-900/60 px-3 py-2 text-sm text-red-300 hover:bg-red-950/40 disabled:cursor-not-allowed disabled:opacity-40"
                               aria-label={`Revoke participant link created ${formatDate(link.createdAt)}`}
                             >
@@ -784,7 +885,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                   {/* Generate Button */}
                   <button
                     onClick={handleGenerateLink}
-                    disabled={generatingLink || !(study.config.linksEnabled ?? true)}
+                    disabled={operationPending || generatingLink || !(study.config.linksEnabled ?? true)}
                     className="px-4 py-2 bg-stone-600 hover:bg-stone-500 text-white rounded-lg disabled:opacity-50 flex items-center gap-2"
                   >
                     {generatingLink ? <Loader2 size={16} className="animate-spin" /> : <LinkIcon size={16} />}

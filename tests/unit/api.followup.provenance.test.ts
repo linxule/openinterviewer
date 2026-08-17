@@ -7,6 +7,7 @@ import { ProviderFailure } from '@/lib/providerErrors';
 
 const contextMock = vi.hoisted(() => ({
   getRequestContext: vi.fn(),
+  getAuthorizedResearcherStudyContext: vi.fn(),
   providerKeysFromContext: vi.fn((context: Record<string, unknown>) => ({
     geminiApiKey: context.geminiApiKey,
     anthropicApiKey: context.anthropicApiKey,
@@ -75,9 +76,12 @@ beforeEach(() => {
       anthropicApiKey: null,
       openaiApiKey: null,
       openrouterApiKey: null,
-      researcherId: 'researcher-a',
     },
+    researcherId: 'researcher-a',
   });
+  contextMock.getAuthorizedResearcherStudyContext.mockImplementation(
+    () => contextMock.getRequestContext(),
+  );
   platformRateLimitMock.hostedAiRateLimitResponse.mockResolvedValue(null);
   receiptMock.verifyAggregateSynthesisReceipt.mockResolvedValue({
     aiProvider: 'gemini',

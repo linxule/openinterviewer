@@ -18,6 +18,7 @@ import {
   POST_ONBOARDING_RETURN_COOKIE_NAME,
   oauthRedirectUrl,
 } from '@/lib/hostedOAuth';
+import { createRequestId, logRequestFailure } from '@/lib/requestLog';
 
 export async function GET(request: Request) {
   if (!isHostedMode() || !isOAuthProviderConfigured('google')) {
@@ -109,7 +110,13 @@ export async function GET(request: Request) {
     }
     return NextResponse.redirect(new URL(result.redirectPath, baseUrl));
   } catch (error) {
-    console.error('Google OAuth callback error:', error);
+    logRequestFailure({
+      event: 'route.failure',
+      route: '/api/auth/oauth/google/callback',
+      method: 'GET',
+      status: 307,
+      requestId: createRequestId(request.headers.get('x-request-id')),
+    }, error);
     return NextResponse.redirect(oauthRedirectUrl('oauth_failed'));
   }
 }

@@ -6,7 +6,11 @@
 
 import { NextResponse } from 'next/server';
 import { getInterviewProvider } from '@/lib/providers';
-import { getParticipantRequestContext, providerKeysFromContext } from '@/lib/researcherContext';
+import {
+  providerKeysFromContext,
+  resolveParticipantOrPreviewContext,
+  selectedStudyIdFromParticipantBody,
+} from '@/lib/researcherContext';
 import { loadCanonicalStudy } from '@/lib/canonicalStudy';
 import { providerErrorResponse } from '@/lib/providerErrors';
 import { participantRateLimitResponse } from '@/lib/rateLimit';
@@ -14,6 +18,7 @@ import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
 import { verifyParticipantConsent } from '@/lib/participantConsent';
 import { readBoundedJsonObject } from '@/lib/requestBody';
 import { StudyConfig } from '@/types';
+import { createRequestId, logRequestFailure } from '@/lib/requestLog';
 
 // Legacy clients still send the complete study config. It is not authoritative,
 // but the cap must admit every valid 128 KiB study mutation plus its wrapper.
@@ -21,15 +26,6 @@ const GREETING_REQUEST_MAX_BYTES = 140_000;
 
 export async function POST(request: Request) {
   try {
-    // Verify participant token and resolve researcher context
-    const { valid, context, studyId, isAdmin, error, statusCode, linkId, participantSessionId } = await getParticipantRequestContext(request);
-    if (!valid || !context) {
-      return NextResponse.json(
-        { error: error || 'Valid participant token required' },
-        { status: statusCode ?? 401 }
-      );
-    }
-
     const parsedBody = await readBoundedJsonObject(request, GREETING_REQUEST_MAX_BYTES);
     if (!parsedBody.ok) {
       return NextResponse.json(
@@ -38,6 +34,18 @@ export async function POST(request: Request) {
       );
     }
     const body = parsedBody.value;
+
+    const { valid, context, studyId, isAdmin, error, statusCode, linkId, participantSessionId } =
+      await resolveParticipantOrPreviewContext(request, {
+        purpose: 'read',
+        selectedStudyId: selectedStudyIdFromParticipantBody(body),
+      });
+    if (!valid || !context) {
+      return NextResponse.json(
+        { error: error || 'Valid participant token required' },
+        { status: statusCode ?? 401 }
+      );
+    }
 
     // The body's studyConfig carries only a study id (admin preview); the
     // canonical saved study record is loaded server-side through the request's
@@ -115,7 +123,13 @@ export async function POST(request: Request) {
       return providerErrorResponse(providerError);
     }
   } catch (error) {
-    console.error('Greeting API error:', error);
+    logRequestFailure({
+      event: 'route.failure',
+      route: '/api/greeting',
+      method: 'POST',
+      status: 500,
+      requestId: createRequestId(request.headers.get('x-request-id')),
+    }, error);
     return NextResponse.json(
       { error: 'Failed to generate greeting' },
       { status: 500 }

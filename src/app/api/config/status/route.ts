@@ -8,6 +8,7 @@ import { getHostedResearcherIdentity, getRequestContext } from '@/lib/researcher
 import { isHostedMode } from '@/lib/mode';
 import { getResearcherByIdChecked, toResearcherProfile } from '@/lib/platformDb';
 import { isGatewayAuthConfigured, resolveAITransport } from '@/lib/aiTransport';
+import { logRequestFailure } from '@/lib/requestLog';
 
 export async function GET() {
   try {
@@ -65,7 +66,12 @@ export async function GET() {
 
     return NextResponse.json(status);
   } catch (error) {
-    console.error('Config status API error:', error);
+    logRequestFailure({
+      event: 'route.failure',
+      route: '/api/config/status',
+      method: 'GET',
+      status: 500,
+    }, error);
     return NextResponse.json(
       { error: 'Failed to check configuration status' },
       { status: 500 }
