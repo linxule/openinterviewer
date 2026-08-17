@@ -107,7 +107,7 @@ The participant sequence is link exchange -> HttpOnly participant session -> con
 | Participant/preview headers | `src/services/participantHeaders.ts`, `interviewApi.ts`, `storageService.ts`, `Consent.tsx` | `participantHeaders.test.ts` + `participantSessionHeaders.test.ts` + consent/isolation suites |
 | Researcher UI | components, services, page entry | paired component/API tests; inspect 375px when layout changes |
 
-Tests live in `tests/unit/` and mirror the security or product boundary they protect. Prefer a realistic regression at that boundary over snapshots of implementation detail.
+Tests live in two tiers. `tests/unit/` runs under the base vitest config (jsdom) and mirrors the security or product boundary it protects; prefer a realistic regression at that boundary over snapshots of implementation detail. `tests/integration/` runs under `vitest.integration.config.mts` (node environment) against a runner-owned disposable `redis-server` via `tests/helpers/disposableRedis.ts` — it must never connect to an inherited, shared, or production Redis. Use `npm run test:redis-crash` and `npm run test:adversarial` for these suites; they need a local `redis-server` binary (or the CI container) and are the only place real-wire crash-cut and cross-tenant claims are actually exercised.
 
 ## Canonical commands
 
@@ -119,6 +119,8 @@ npm run check
 npm run test:setup
 DEPLOYMENT_MODE=standalone npm run build
 npm run test:e2e
+npm run test:redis-crash
+npm run test:adversarial
 git diff --check
 ```
 
