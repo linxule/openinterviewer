@@ -34,6 +34,20 @@ describe('Consent server recording', () => {
     expect(document.body).not.toHaveTextContent(/API key|GEMINI_API_KEY|AIza/i);
   });
 
+  it('disables the primary consent button until the provider configuration is ready', () => {
+    useStore.getState().beginParticipantSession(
+      makeStudyConfig({ id: 'study-unconfigured', aiModel: '' }),
+      'participant-handle-unconfigured-123456'
+    );
+
+    render(<Consent />);
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'This interview is unavailable until the researcher reviews and saves its AI provider settings.'
+    );
+    expect(screen.getByRole('button', { name: /I consent — begin the interview/i })).toBeDisabled();
+  });
+
   it('discloses OpenRouter and its privacy-compatible upstream routing', () => {
     useStore.getState().beginParticipantSession(
       makeStudyConfig({
@@ -74,7 +88,7 @@ describe('Consent server recording', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     render(<Consent />);
-    fireEvent.click(screen.getByRole('button', { name: /I Consent - Begin Interview/i }));
+    fireEvent.click(screen.getByRole('button', { name: /I consent — begin the interview/i }));
 
     await waitFor(() => expect(navigation.push).toHaveBeenCalledWith('/interview'));
     expect(fetchMock).toHaveBeenCalledWith('/api/consent', expect.objectContaining({
@@ -102,7 +116,7 @@ describe('Consent server recording', () => {
     })));
 
     render(<Consent />);
-    fireEvent.click(screen.getByRole('button', { name: /I Consent - Begin Interview/i }));
+    fireEvent.click(screen.getByRole('button', { name: /I consent — begin the interview/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Consent storage is temporarily unavailable');
     expect(navigation.push).not.toHaveBeenCalled();

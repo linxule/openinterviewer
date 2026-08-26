@@ -37,7 +37,7 @@ function seedStore() {
   });
 }
 
-const input = () => screen.getByPlaceholderText('Type your response...') as HTMLInputElement;
+const input = () => screen.getByPlaceholderText('Take as much space as you need.') as HTMLTextAreaElement;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -59,13 +59,13 @@ describe('InterviewChat greeting lifecycle', () => {
     expect(useStore.getState().isAiThinking).toBe(false);
   });
 
-  it('gives the response input and icon-only send control accessible names', async () => {
+  it('gives the response textarea and the send control accessible names', async () => {
     interviewApiMock.getInterviewGreeting.mockResolvedValue('Welcome to the study!');
     render(<InterviewChat />);
 
     await screen.findByText('Welcome to the study!');
     expect(screen.getByRole('textbox', { name: 'Your response' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Send response' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument();
   });
 
   it('settles thinking and enables the input when the greeting rejects', async () => {
@@ -90,9 +90,10 @@ describe('InterviewChat greeting lifecycle', () => {
 
     render(<InterviewChat />);
 
-    // Delayed greeting (Edy's path): input must be locked and Thinking shown
+    // Delayed greeting (Edy's path): input must be locked and the composing
+    // indicator shown
     expect(input()).toBeDisabled();
-    expect(screen.getByText('Thinking...')).toBeInTheDocument();
+    expect(screen.getByText('Composing a follow-up…')).toBeInTheDocument();
 
     await act(async () => {
       resolveGreeting('Greeting arrives late');
@@ -100,7 +101,7 @@ describe('InterviewChat greeting lifecycle', () => {
 
     expect(await screen.findByText('Greeting arrives late')).toBeInTheDocument();
     await waitFor(() => expect(input()).toBeEnabled());
-    expect(screen.queryByText('Thinking...')).not.toBeInTheDocument();
+    expect(screen.queryByText('Composing a follow-up…')).not.toBeInTheDocument();
   });
 
   it('renders exactly one greeting message when the effect re-runs', async () => {
@@ -136,7 +137,7 @@ describe('InterviewChat greeting lifecycle', () => {
     );
 
     fireEvent.change(input(), { target: { value: 'A participant answer' } });
-    fireEvent.keyDown(input(), { key: 'Enter' });
+    fireEvent.keyDown(input(), { key: 'Enter', ctrlKey: true });
     await screen.findByText('Tell me more.');
 
     expect(interviewApiMock.generateInterviewResponse).toHaveBeenCalledWith(
@@ -164,7 +165,7 @@ describe('InterviewChat greeting lifecycle', () => {
     await screen.findByText('Welcome!');
 
     fireEvent.change(input(), { target: { value: 'I work in design.' } });
-    fireEvent.keyDown(input(), { key: 'Enter' });
+    fireEvent.keyDown(input(), { key: 'Enter', metaKey: true });
 
     expect(await screen.findByText('I work in design.')).toBeInTheDocument();
     expect(await screen.findByText('Tell me more about that.')).toBeInTheDocument();
@@ -212,5 +213,102 @@ describe('InterviewChat greeting lifecycle', () => {
     expect(screen.getByText('Preview conversation complete')).toBeInTheDocument();
     expect(screen.getByText(/will not be added to study data/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /continue preview/i })).toBeInTheDocument();
+  });
+});
+
+describe('InterviewChat composer and transcript', () => {
+  it('never sends on Enter alone, sends on Cmd/Ctrl+Enter, and sends via the Send button', async () => {
+    interviewApiMock.getInterviewGreeting.mockResolvedValue('Welcome!');
+    interviewApiMock.generateInterviewResponse.mockResolvedValue({
+      message: 'Reply one.',
+      questionAddressed: null,
+      phaseTransition: null,
+      profileUpdates: [],
+      shouldConclude: false,
+    });
+
+    render(<InterviewChat />);
+    await screen.findByText('Welcome!');
+
+    // Plain Enter inserts a newline; it must never send.
+    fireEvent.change(input(), { target: { value: 'First line' } });
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    expect(interviewApiMock.generateInterviewResponse).not.toHaveBeenCalled();
+    expect(useStore.getState().interviewHistory).toHaveLength(1); // greeting only
+
+    // Cmd/Ctrl+Enter sends.
+    fireEvent.keyDown(input(), { key: 'Enter', ctrlKey: true });
+    await screen.findByText('Reply one.');
+    expect(interviewApiMock.generateInterviewResponse).toHaveBeenCalledTimes(1);
+
+    // The Send button also sends.
+    interviewApiMock.generateInterviewResponse.mockResolvedValueOnce({
+      message: 'Reply two.',
+      questionAddressed: null,
+      phaseTransition: null,
+      profileUpdates: [],
+      shouldConclude: false,
+    });
+    fireEvent.change(input(), { target: { value: 'Second message' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Reply two.');
+    expect(interviewApiMock.generateInterviewResponse).toHaveBeenCalledTimes(2);
+  });
+
+  it('disables the textarea while thinking and disables Send on empty input', async () => {
+    interviewApiMock.getInterviewGreeting.mockResolvedValue('Welcome!');
+    render(<InterviewChat />);
+    await screen.findByText('Welcome!');
+
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+
+    fireEvent.change(input(), { target: { value: 'Something' } });
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+
+    let resolveReply!: (value: unknown) => void;
+    interviewApiMock.generateInterviewResponse.mockReturnValue(
+      new Promise((resolve) => {
+        resolveReply = resolve;
+      })
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(input()).toBeDisabled();
+
+    await act(async () => {
+      resolveReply({
+        message: 'Reply.',
+        questionAddressed: null,
+        phaseTransition: null,
+        profileUpdates: [],
+        shouldConclude: false,
+      });
+    });
+    await waitFor(() => expect(input()).toBeEnabled());
+  });
+
+  it('renders the transcript as a live log with sr-only speaker prefixes', async () => {
+    interviewApiMock.getInterviewGreeting.mockResolvedValue('Welcome!');
+    interviewApiMock.generateInterviewResponse.mockResolvedValue({
+      message: 'Understood.',
+      questionAddressed: null,
+      phaseTransition: null,
+      profileUpdates: [],
+      shouldConclude: false,
+    });
+
+    render(<InterviewChat />);
+    await screen.findByText('Welcome!');
+
+    const log = screen.getByRole('log');
+    expect(log).toHaveAttribute('aria-live', 'polite');
+
+    fireEvent.change(input(), { target: { value: 'My answer' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Understood.');
+
+    const srOnlyLabels = Array.from(log.querySelectorAll('.sr-only'));
+    expect(srOnlyLabels.some((el) => el.textContent?.trim() === 'You:')).toBe(true);
+    expect(srOnlyLabels.some((el) => el.textContent?.trim() === 'Interviewer:')).toBe(true);
   });
 });

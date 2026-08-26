@@ -2,6 +2,44 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Verbatim design tokens — RGB triples for Tailwind's <alpha-value> pattern. */
+:root {
+  --paper-0: 247 243 234;   /* #F7F3EA page ground */
+  --paper-1: 251 248 241;   /* #FBF8F1 raised sheet */
+  --paper-2: 239 233 218;   /* #EFE9DA recessed well */
+  --paper-pop: 255 255 255; /* #FFFFFF rare index-card pop */
+  --ink-900: 32 29 23;      /* #201D17 headings/primary */
+  --ink-700: 59 54 43;      /* #3B362B body */
+  --ink-500: 116 108 88;    /* #746C58 secondary/meta */
+  --ink-300: 222 213 190;   /* #DED5BE hairlines */
+  --ink-200: 234 227 210;   /* #EAE3D2 faint dividers */
+  --action: 30 88 81;       /* #1E5851 teal: links, primary buttons, focus, active nav */
+  --success: 63 107 59;     /* #3F6B3B moss */
+  --error: 180 67 42;       /* #B4432A terracotta */
+  --evidence: 122 53 72;    /* #7A3548 wine — NOT exposed to Tailwind (see A3/A5) */
+  --disclosure: 150 99 28;  /* #96631C ochre — NOT exposed to Tailwind */
+  --disclosure-ink: 251 248 241;
+  --shadow-note: 0 1px 2px rgb(32 29 23 / 0.08);
+}
+[data-theme="night"] {
+  --paper-0: 26 24 21;      /* #1A1815 */
+  --paper-1: 34 31 26;      /* #221F1A */
+  --paper-2: 20 18 15;      /* #14120F */
+  --paper-pop: 34 31 26;
+  --ink-900: 236 230 214;   /* #ECE6D6 */
+  --ink-700: 207 199 180;   /* #CFC7B4 */
+  --ink-500: 167 158 136;   /* #A79E88 */
+  --ink-300: 55 51 42;      /* #37332A */
+  --ink-200: 45 42 35;      /* #2D2A23 */
+  --action: 95 168 158;     /* #5FA89E */
+  --success: 140 186 135;   /* #8CBA87 */
+  --error: 217 138 117;     /* #D98A75 */
+  --evidence: 201 122 139;  /* #C97A8B */
+  --disclosure: 217 168 76; /* #D9A84C */
+  --disclosure-ink: 26 24 21;
+  --shadow-note: 0 1px 2px rgb(0 0 0 / 0.4);
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
@@ -65,13 +103,83 @@
   margin-bottom: 0.5em;
 }
 
-/* Button focus states */
-button:focus-visible {
-  outline: 2px solid #78716c;
+/* Token focus ring */
+:is(input, textarea, select, button, [role="button"], a):focus-visible {
+  outline: 2px solid rgb(var(--action));
   outline-offset: 2px;
 }
 
-/* Input focus states */
-input:focus, textarea:focus {
-  outline: none;
+/* Citation note unfold — src/components/ui/Citation.tsx */
+.citation-note {
+  animation: citation-unfold 240ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+@keyframes citation-unfold {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .citation-note {
+    animation: none;
+  }
+}
+
+@layer components {
+  /* Auto-growing response textarea — src/components/InterviewChat.tsx */
+  .input-verbatim {
+    font-family: var(--font-serif), Georgia, serif;
+    field-sizing: content;
+    min-height: 76px;
+    max-height: 40vh;
+    overflow-y: auto;
+  }
+
+  /* Transcript markdown — token-based sibling of the legacy .prose block
+     above (kept as-is for the demo until Slice D). */
+  .prose-verbatim strong {
+    font-weight: 600;
+  }
+
+  .prose-verbatim ul {
+    list-style-type: disc;
+    padding-left: 1.5em;
+  }
+
+  .prose-verbatim ol {
+    list-style-type: decimal;
+    padding-left: 1.5em;
+  }
+
+  .prose-verbatim p {
+    margin-bottom: 0.5em;
+  }
+
+  /* Composing indicator — src/components/InterviewChat.tsx */
+  .composing-bar {
+    width: 0%;
+    animation: composing-grow 1.4s ease-out forwards;
+  }
+
+  @keyframes composing-grow {
+    from {
+      width: 0%;
+    }
+    to {
+      width: 100%;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .composing-bar {
+      width: 100%;
+      animation: none;
+    }
+  }
 }
