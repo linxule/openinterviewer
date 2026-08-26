@@ -1,9 +1,8 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Lock, Loader2, AlertCircle } from 'lucide-react';
+import { Button, Field, Label, Rule } from '@/components/ui';
 import OAuthLogin from './OAuthLogin';
 
 const Login: React.FC = () => {
@@ -101,26 +100,20 @@ const Login: React.FC = () => {
   // Loading state while checking mode
   if (!modeLoaded) {
     return (
-      <div className="min-h-screen bg-stone-900 flex items-center justify-center">
-        <Loader2 size={24} className="animate-spin text-stone-400" />
-      </div>
+      <main className="flex min-h-dvh items-center justify-center bg-paper-0">
+        <p className="font-sans text-[15px] text-ink-500">Loading…</p>
+      </main>
     );
   }
 
   return (
-    <div className="min-h-screen bg-stone-900 flex items-center justify-center p-8">
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="max-w-sm w-full"
-      >
-        <div className="bg-stone-800/50 rounded-xl border border-stone-700 p-8">
-          <div className="text-center mb-6">
-            <div className="w-12 h-12 rounded-full bg-stone-700 flex items-center justify-center mx-auto mb-4">
-              <Lock size={24} className="text-stone-300" />
-            </div>
-            <h1 className="text-xl font-bold text-white">Researcher Login</h1>
-            <p className="text-stone-400 text-sm mt-1">
+    <main className="flex min-h-dvh items-center justify-center bg-paper-0 px-4 py-12">
+      <div className="w-full max-w-sm">
+        <div className="border border-ink-300 bg-paper-1 p-6 md:p-8">
+          <div className="mb-6">
+            <Label>Researcher access</Label>
+            <h1 className="font-sans text-[24px] font-semibold leading-[32px] text-ink-900">Researcher Login</h1>
+            <p className="mt-1 font-sans text-[13px] text-ink-500">
               {mode === 'hosted'
                 ? 'Sign in to access your research dashboard'
                 : mode === 'standalone'
@@ -130,9 +123,11 @@ const Login: React.FC = () => {
           </div>
 
           {(error || (mode === 'hosted' && !configReady)) && (
-            <div className="flex items-center gap-2 p-3 mb-4 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
-              <AlertCircle size={16} className="flex-shrink-0" />
-              {error || 'This hosted instance is missing required configuration.'}
+            <div className="mb-4 border-l-2 border-error bg-paper-2 px-4 py-3">
+              <Label>Sign-in failed</Label>
+              <p className="mt-1 font-sans text-[13px] text-ink-700">
+                {error || 'This hosted instance is missing required configuration.'}
+              </p>
             </div>
           )}
 
@@ -140,55 +135,40 @@ const Login: React.FC = () => {
             configReady ? (
               <OAuthLogin loading={loading} providers={oauthProviders} returnTo={returnTo} />
             ) : (
-              <p className="text-sm text-stone-400 text-center">
+              <p className="font-sans text-[13px] text-ink-500">
                 Sign-in is disabled until the operator completes server configuration.
               </p>
             )
           ) : mode === 'standalone' ? (
             <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label htmlFor="password" className="block text-sm font-medium text-stone-300 mb-1">
-                  Password
-                </label>
+              <Field label="Password" htmlFor="password">
                 <input
-                  id="password"
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Enter admin password"
-                  className="w-full px-4 py-3 rounded-xl bg-stone-800 border border-stone-600 text-stone-100 placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-stone-500 focus:border-stone-500"
                   autoFocus
+                  className="w-full"
                 />
-              </div>
+              </Field>
 
-              <button
-                type="submit"
-                disabled={!password.trim() || loading}
-                className="w-full py-3 bg-stone-600 hover:bg-stone-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-colors flex items-center justify-center gap-2"
-              >
-                {loading ? (
-                  <>
-                    <Loader2 size={18} className="animate-spin" />
-                    Logging in...
-                  </>
-                ) : (
-                  'Login'
-                )}
-              </button>
+              <Button type="submit" variant="primary" disabled={!password.trim() || loading} className="w-full">
+                {loading ? 'Logging in...' : 'Login'}
+              </Button>
             </form>
           ) : null}
 
-          <div className="mt-6 pt-6 border-t border-stone-700 text-center">
-            <button
-              onClick={() => router.push('/')}
-              className="text-sm text-stone-400 hover:text-stone-300 transition-colors"
-            >
-              Back home
-            </button>
-          </div>
+          <Rule className="mt-6" />
+          <button
+            type="button"
+            onClick={() => router.push('/')}
+            className="mt-6 block min-h-11 font-sans text-[13px] text-ink-500 hover:text-ink-900"
+          >
+            Back home
+          </button>
         </div>
-      </motion.div>
-    </div>
+      </div>
+    </main>
   );
 };
 

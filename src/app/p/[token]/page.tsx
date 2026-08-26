@@ -8,7 +8,7 @@ import Consent from '@/components/Consent';
 import InterviewChat from '@/components/InterviewChat';
 import Synthesis from '@/components/Synthesis';
 import Export from '@/components/Export';
-import { Loader2 } from 'lucide-react';
+import { Verbatim } from '@/components/ui';
 import type { AITransport } from '@/lib/aiTransport';
 
 export default function ParticipantPage() {
@@ -74,39 +74,39 @@ export default function ParticipantPage() {
   // Loading state
   if (loading) {
     return (
-      <div className="min-h-screen bg-stone-900 flex items-center justify-center">
-        <div className="text-center">
-          <Loader2 size={48} className="animate-spin text-stone-400 mx-auto mb-4" />
-          <p className="text-stone-400">Loading interview...</p>
+      <main className="flex min-h-dvh items-center justify-center bg-paper-0 px-4 py-12">
+        <div className="w-full max-w-measure">
+          <p className="font-sans text-[15px] text-ink-500">Loading interview...</p>
         </div>
-      </div>
+      </main>
     );
   }
 
   // Error state
   if (error) {
     return (
-      <div className="min-h-screen bg-stone-900 flex items-center justify-center p-8">
-        <div className="max-w-md text-center">
-          <div className="w-16 h-16 rounded-full bg-stone-800 flex items-center justify-center mx-auto mb-4">
-            <span className="text-2xl">⚠️</span>
-          </div>
-          <h1 className="text-xl font-semibold text-white mb-2">Unable to Load Interview</h1>
-          <p className="text-stone-400 mb-6">{error}</p>
-          <p className="text-stone-500 text-sm">
+      <main className="flex min-h-dvh items-center justify-center bg-paper-0 px-4 py-12">
+        <div className="w-full max-w-measure">
+          <Verbatim as="h1" className="text-[28px] font-normal leading-[36px] text-ink-900">
+            Unable to Load Interview
+          </Verbatim>
+          <p className="mt-4 font-sans text-[15px] text-ink-700">{error}</p>
+          <p className="mt-2 font-sans text-[13px] text-ink-500">
             Please check that you have the correct link or contact the researcher.
           </p>
         </div>
-      </div>
+      </main>
     );
   }
 
   // No study config loaded
   if (!studyConfig) {
     return (
-      <div className="min-h-screen bg-stone-900 flex items-center justify-center">
-        <p className="text-stone-400">Study configuration not found.</p>
-      </div>
+      <main className="flex min-h-dvh items-center justify-center bg-paper-0 px-4 py-12">
+        <div className="w-full max-w-measure">
+          <p className="font-sans text-[15px] text-ink-500">Study configuration not found.</p>
+        </div>
+      </main>
     );
   }
 

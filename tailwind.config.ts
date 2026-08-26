@@ -14,9 +14,6 @@ const config: Config = {
         mono: ['var(--font-mono)', 'ui-monospace', 'monospace'],
       },
       colors: {
-        stone: {
-          850: '#1c1917',
-        },
         paper: {
           0: 'rgb(var(--paper-0) / <alpha-value>)',
           1: 'rgb(var(--paper-1) / <alpha-value>)',

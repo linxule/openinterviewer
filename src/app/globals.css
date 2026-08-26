@@ -40,25 +40,6 @@
   --shadow-note: 0 1px 2px rgb(0 0 0 / 0.4);
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-::-webkit-scrollbar-track {
-  background: #1c1917;
-}
-
-::-webkit-scrollbar-thumb {
-  background: #57534e;
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #78716c;
-}
-
 /* Token focus ring */
 :is(input, textarea, select, button, [role="button"], a):focus-visible {
   outline: 2px solid rgb(var(--action));

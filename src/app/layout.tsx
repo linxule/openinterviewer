@@ -40,7 +40,7 @@ export default function RootLayout({
       lang="en"
       className={`${sourceSerif4.variable} ${publicSans.variable} ${ibmPlexMono.variable}`}
     >
-      <body className="min-h-screen bg-stone-900 font-sans antialiased">
+      <body className="min-h-dvh bg-paper-0 font-sans text-ink-700 antialiased">
         <PreviewBanner />
         {children}
       </body>

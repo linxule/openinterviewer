@@ -1,20 +1,6 @@
 import { defineConfig, globalIgnores } from 'eslint/config';
 import nextCoreWebVitals from 'eslint-config-next/core-web-vitals';
 
-// Verbatim migration ratchet — remove each file from this list as its slice migrates it.
-const legacyDesignAllowlist = [
-  'src/components/Export.tsx',
-  'src/components/Login.tsx',
-  'src/components/OAuthLogin.tsx',
-  'src/app/layout.tsx',
-  'src/app/self-host/page.tsx',
-  // Not one of the 16 named screens, but a page.tsx the Hard Constraints forbid
-  // touching, and it carries the same legacy stone-* loading/error markup as
-  // self-host/page.tsx — the spec's allowlist omitted it.
-  'src/app/**/setup/page.tsx',
-  'src/app/p/\\[token\\]/page.tsx',
-];
-
 // Design-law patterns banned outside src/components/ui/**. Each regex is matched
 // against both plain string literals and template-literal chunks.
 const designLawPatterns = [
@@ -24,17 +10,33 @@ const designLawPatterns = [
       'Tailwind stone-* utilities are legacy. Use the paper/ink token scale — see docs/design/DIRECTION-final.md.',
   },
   {
-    regex: 'font-serif',
+    regex: '(amber|blue|cyan|emerald|fuchsia|gray|green|indigo|lime|neutral|orange|pink|purple|red|rose|sky|slate|teal|violet|yellow|zinc)-(50|[1-9]00|950)',
+    message:
+      'Tailwind default-palette utilities are banned. Use paper/ink/action/success/error — see docs/design/DIRECTION-final.md §2.',
+  },
+  {
+    regex: '(text|bg|border|fill|stroke|placeholder|divide|ring|from|via|to)-(white|black)',
+    message:
+      'Absolute white/black is not in the palette. Use paper-*/ink-* — see docs/design/DIRECTION-final.md §2.',
+  },
+  {
+    // Negative lookbehind excludes the `--font-serif` CSS custom-property name
+    // (src/app/layout.tsx's next/font/google `variable` option, untouched by
+    // G2) while still catching the raw Tailwind utility class.
+    regex: '(?<!-)font-serif',
+    primitivesOnly: true,
     message:
       'Raw font-serif is reserved for src/components/ui primitives — see docs/design/DIRECTION-final.md.',
   },
   {
     regex: 'var\\(--evidence',
+    primitivesOnly: true,
     message:
       '--evidence is scoped to src/components/ui primitives, not general-purpose use — see docs/design/DIRECTION-final.md.',
   },
   {
     regex: 'var\\(--disclosure',
+    primitivesOnly: true,
     message:
       '--disclosure is scoped to src/components/ui primitives, not general-purpose use — see docs/design/DIRECTION-final.md.',
   },
@@ -60,21 +62,29 @@ export default defineConfig([
     },
   },
   {
-    // Verbatim migration ratchet — remove each file from this list as its slice migrates it.
+    // Verbatim design law — DIRECTION-final.md §2 and §3. Every file under src/ is
+    // covered; there is no exemption list. Exempting a file again means arguing for
+    // it in a diff, not appending a line.
     files: ['src/**/*.{ts,tsx}'],
-    ignores: legacyDesignAllowlist,
     rules: {
       'no-restricted-syntax': ['error', ...restrictedSyntaxRules(designLawPatterns)],
+      'no-restricted-imports': ['error', {
+        paths: [{
+          name: 'framer-motion',
+          message: 'Motion is two named gestures in CSS (settle, the trace) — see docs/design/DIRECTION-final.md §5.',
+        }],
+      }],
     },
   },
   {
     // The primitives are exactly where the scoped evidence/disclosure vars and
-    // raw font-serif utility are meant to live; only stone-* stays banned here.
+    // raw font-serif utility are meant to live; only stone-* and the general
+    // palette bans stay enforced here.
     files: ['src/components/ui/**'],
     rules: {
       'no-restricted-syntax': [
         'error',
-        ...restrictedSyntaxRules(designLawPatterns.filter((p) => p.regex === 'stone-')),
+        ...restrictedSyntaxRules(designLawPatterns.filter((p) => !p.primitivesOnly)),
       ],
     },
   },

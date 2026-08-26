@@ -2,18 +2,8 @@
 
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { motion } from 'framer-motion';
 import { useStore } from '@/store';
-import {
-  Download,
-  FileJson,
-  FileText,
-  RotateCcw,
-  CheckCircle,
-  Copy,
-  User,
-  Check
-} from 'lucide-react';
+import { Button, Coordinate, Label, Page, Rule, Verbatim } from '@/components/ui';
 
 const Export: React.FC = () => {
   const router = useRouter();
@@ -208,222 +198,160 @@ const Export: React.FC = () => {
 
   if (viewMode === 'participant') {
     return (
-      <div className="min-h-screen bg-stone-900 p-4 sm:p-8 flex items-center justify-center">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="w-full max-w-lg rounded-xl border border-stone-700 bg-stone-800/50 p-6 text-center sm:p-8"
-        >
-          <h1 className="text-2xl font-bold text-white mb-3">Return to interview completion</h1>
-          <p className="text-stone-400 mb-6">
+      <main className="min-h-dvh bg-paper-0 px-4 py-12 sm:px-8 sm:py-20">
+        <div className="mx-auto max-w-measure space-y-6">
+          <Verbatim as="h1" className="text-[28px] font-normal leading-[36px] text-ink-900">
+            Return to interview completion
+          </Verbatim>
+          <p className="font-sans text-[15px] leading-[24px] text-ink-700">
             Submission status is shown on the previous screen. This page does not provide researcher export controls.
           </p>
-          <button
-            type="button"
-            onClick={handleReturnToSynthesis}
-            className="w-full py-3 bg-stone-600 hover:bg-stone-500 text-white font-semibold rounded-xl transition-colors"
-          >
+          <Button variant="primary" onClick={handleReturnToSynthesis} className="w-full">
             Return to completion status
-          </button>
-        </motion.div>
-      </div>
+          </Button>
+        </div>
+      </main>
     );
   }
 
   return (
-    <div className="min-h-screen bg-stone-900 p-4 sm:p-8">
-      <div className="max-w-2xl mx-auto">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="mb-8 text-center"
-        >
-          <div className="w-16 h-16 rounded-full bg-stone-700 flex items-center justify-center mx-auto mb-4">
-            <CheckCircle className="text-stone-300" size={32} />
-          </div>
-          <h1 className="text-3xl font-bold text-white mb-2">
+    <main className="min-h-dvh bg-paper-0">
+      <Page className="py-10 md:py-14">
+        <div>
+          <Label>Session complete</Label>
+          <h1 className="font-sans text-[24px] font-semibold leading-[32px] text-ink-900">
             {viewMode === 'preview' ? 'Preview complete' : 'Interview Complete'}
           </h1>
-          <p className="text-stone-400">
+          <p className="font-sans text-[15px] leading-[24px] text-ink-700 max-w-measure">
             {viewMode === 'preview'
               ? 'Review or export this local preview. It was not added to study data.'
               : 'Export your data and start a new session'}
           </p>
-        </motion.div>
+        </div>
 
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="bg-stone-800/50 rounded-xl border border-stone-700 p-5 space-y-6 sm:p-8"
-        >
-          {/* Stats */}
-          <div className="grid grid-cols-2 gap-3 text-center sm:grid-cols-4">
-            <div className="bg-stone-800 rounded-xl p-4">
-              <div className="text-2xl font-bold text-white">
-                {interviewHistory.length}
-              </div>
-              <div className="text-xs text-stone-500">Messages</div>
-            </div>
-            <div className="bg-stone-800 rounded-xl p-4">
-              <div className="text-2xl font-bold text-white">
-                {questionProgress.questionsAsked.length}/{studyConfig?.coreQuestions.length || 0}
-              </div>
-              <div className="text-xs text-stone-500">Questions</div>
-            </div>
-            <div className="bg-stone-800 rounded-xl p-4">
-              <div className="text-2xl font-bold text-white">
-                {extractedFields.length}/{totalFields}
-              </div>
-              <div className="text-xs text-stone-500">Profile</div>
-            </div>
-            <div className="bg-stone-800 rounded-xl p-4">
-              <div className="text-2xl font-bold text-white">
-                {synthesis?.themes.length || 0}
-              </div>
-              <div className="text-xs text-stone-500">Themes</div>
-            </div>
+        <Rule className="my-8" />
+
+        {/* Stats */}
+        <dl role="group" aria-label="Session summary" className="grid grid-cols-2 gap-x-6 sm:grid-cols-4">
+          <div className="border-t border-ink-300 py-4">
+            <Coordinate className="block text-[28px] leading-[36px] text-ink-900">
+              {interviewHistory.length}
+            </Coordinate>
+            <Label className="mt-1 block">Messages</Label>
           </div>
+          <div className="border-t border-ink-300 py-4">
+            <Coordinate className="block text-[28px] leading-[36px] text-ink-900">
+              {questionProgress.questionsAsked.length}/{studyConfig?.coreQuestions.length || 0}
+            </Coordinate>
+            <Label className="mt-1 block">Questions</Label>
+          </div>
+          <div className="border-t border-ink-300 py-4">
+            <Coordinate className="block text-[28px] leading-[36px] text-ink-900">
+              {extractedFields.length}/{totalFields}
+            </Coordinate>
+            <Label className="mt-1 block">Profile</Label>
+          </div>
+          <div className="border-t border-ink-300 py-4">
+            <Coordinate className="block text-[28px] leading-[36px] text-ink-900">
+              {synthesis?.themes.length || 0}
+            </Coordinate>
+            <Label className="mt-1 block">Themes</Label>
+          </div>
+        </dl>
 
-          {/* Participant Profile Summary */}
-          {participantProfile && extractedFields.length > 0 && (
-            <div className="bg-stone-800 rounded-xl p-4 space-y-3">
-              <h3 className="font-semibold text-white flex items-center gap-2">
-                <User size={16} className="text-stone-400" />
-                Participant Profile
-              </h3>
-              <div className="grid grid-cols-2 gap-2 text-sm">
-                {participantProfile.fields.map(f => {
-                  const schema = studyConfig?.profileSchema.find(s => s.id === f.fieldId);
-                  return (
-                    <div key={f.fieldId} className="flex justify-between items-center py-1">
-                      <span className="text-stone-400">{schema?.label || f.fieldId}</span>
-                      <span className={`${
-                        f.status === 'extracted' ? 'text-stone-200' :
-                        f.status === 'refused' ? 'text-stone-500 italic' :
-                        'text-stone-500'
-                      }`}>
-                        {f.status === 'extracted' ? f.value :
-                         f.status === 'refused' ? 'Declined' :
-                         f.status === 'vague' ? 'Unclear' : '—'}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+        {/* Participant Profile Summary */}
+        {participantProfile && extractedFields.length > 0 && (
+          <div className="mt-8">
+            <Label>Participant Profile</Label>
+            <dl>
+              {participantProfile.fields.map(f => {
+                const schema = studyConfig?.profileSchema.find(s => s.id === f.fieldId);
+                return (
+                  <div key={f.fieldId} className="flex items-baseline justify-between gap-4 border-t border-ink-300 py-2">
+                    <dt className="font-sans text-[13px] text-ink-500">{schema?.label || f.fieldId}</dt>
+                    <dd className={`font-sans text-[13px] ${
+                      f.status === 'extracted' ? 'text-ink-900' :
+                      f.status === 'refused' ? 'text-ink-500 italic' :
+                      'text-ink-500'
+                    }`}>
+                      {f.status === 'extracted' ? f.value :
+                       f.status === 'refused' ? 'Declined' :
+                       f.status === 'vague' ? 'Unclear' : '—'}
+                    </dd>
+                  </div>
+                );
+              })}
+            </dl>
+          </div>
+        )}
+
+        {/* Export Options */}
+        <div className="mt-8">
+          <h2 className="font-sans text-[15px] font-semibold text-ink-900">Export Data</h2>
+
+          <button
+            type="button"
+            onClick={handleDownloadJSON}
+            className="group block w-full border-t border-ink-300 py-4 text-left"
+          >
+            <span className="block font-sans text-[15px] font-medium text-ink-900 group-hover:text-action">Download JSON</span>
+            <span className="block font-sans text-[13px] text-ink-500">
+              Full structured data with profile + transcript
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleDownloadTranscript}
+            className="group block w-full border-t border-ink-300 py-4 text-left"
+          >
+            <span className="block font-sans text-[15px] font-medium text-ink-900 group-hover:text-action">Download Transcript</span>
+            <span className="block font-sans text-[13px] text-ink-500">
+              Markdown transcript with profile summary
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleCopyJSON}
+            className="group block w-full border-t border-ink-300 py-4 text-left"
+          >
+            <span className={`block font-sans text-[15px] font-medium group-hover:text-action ${jsonCopied ? 'text-success' : 'text-ink-900'}`}>
+              {jsonCopied ? 'Copied!' : 'Copy to Clipboard'}
+            </span>
+            <span className="block font-sans text-[13px] text-ink-500">
+              Copy JSON data to clipboard
+            </span>
+          </button>
+        </div>
+
+        {/* Next Actions */}
+        <Rule className="my-8" />
+        <div className="space-y-3">
+          <h2 className="font-sans text-[15px] font-semibold text-ink-900">What&apos;s Next?</h2>
+
+          {viewMode === 'preview' ? (
+            <>
+              <Button variant="primary" onClick={handleRunPreviewAgain} className="w-full">
+                Run preview again
+              </Button>
+              <Button variant="quiet" onClick={handleReturnToStudySetup} className="w-full">
+                Return to study setup
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="primary" onClick={handleNewParticipant} className="w-full">
+                New Participant (Same Study)
+              </Button>
+              <Button variant="quiet" onClick={handleNewStudy} className="w-full">
+                Create New Study
+              </Button>
+            </>
           )}
-
-          {/* Export Options */}
-          <div className="space-y-3">
-            <h2 className="font-semibold text-white">Export Data</h2>
-
-            <button
-              onClick={handleDownloadJSON}
-              className="w-full flex items-center gap-3 p-4 border border-stone-600 rounded-xl hover:bg-stone-700 transition-colors text-left"
-            >
-              <div className="w-10 h-10 rounded-lg bg-stone-700 flex items-center justify-center">
-                <FileJson size={20} className="text-stone-300" />
-              </div>
-              <div className="flex-1">
-                <div className="font-medium text-white">Download JSON</div>
-                <div className="text-sm text-stone-400">
-                  Full structured data with profile + transcript
-                </div>
-              </div>
-              <Download size={18} className="text-stone-500" />
-            </button>
-
-            <button
-              onClick={handleDownloadTranscript}
-              className="w-full flex items-center gap-3 p-4 border border-stone-600 rounded-xl hover:bg-stone-700 transition-colors text-left"
-            >
-              <div className="w-10 h-10 rounded-lg bg-stone-700 flex items-center justify-center">
-                <FileText size={20} className="text-stone-300" />
-              </div>
-              <div className="flex-1">
-                <div className="font-medium text-white">Download Transcript</div>
-                <div className="text-sm text-stone-400">
-                  Markdown transcript with profile summary
-                </div>
-              </div>
-              <Download size={18} className="text-stone-500" />
-            </button>
-
-            <button
-              onClick={handleCopyJSON}
-              className={`w-full flex items-center gap-3 p-4 border rounded-xl transition-colors text-left ${
-                jsonCopied
-                  ? 'border-green-700 bg-green-900/30'
-                  : 'border-stone-600 hover:bg-stone-700'
-              }`}
-            >
-              <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                jsonCopied ? 'bg-green-700' : 'bg-stone-700'
-              }`}>
-                {jsonCopied ? (
-                  <Check size={20} className="text-green-300" />
-                ) : (
-                  <Copy size={20} className="text-stone-300" />
-                )}
-              </div>
-              <div className="flex-1">
-                <div className={`font-medium ${jsonCopied ? 'text-green-300' : 'text-white'}`}>
-                  {jsonCopied ? 'Copied!' : 'Copy to Clipboard'}
-                </div>
-                <div className="text-sm text-stone-400">
-                  Copy JSON data to clipboard
-                </div>
-              </div>
-              {jsonCopied ? (
-                <Check size={18} className="text-green-400" />
-              ) : (
-                <Copy size={18} className="text-stone-500" />
-              )}
-            </button>
-          </div>
-
-          {/* Next Actions */}
-          <div className="pt-4 border-t border-stone-700 space-y-3">
-            <h2 className="font-semibold text-white">What&apos;s Next?</h2>
-
-            {viewMode === 'preview' ? (
-              <>
-                <button
-                  onClick={handleRunPreviewAgain}
-                  className="w-full py-3 bg-stone-600 hover:bg-stone-500 text-white font-semibold rounded-xl transition-colors flex items-center justify-center gap-2"
-                >
-                  <RotateCcw size={18} />
-                  Run preview again
-                </button>
-                <button
-                  onClick={handleReturnToStudySetup}
-                  className="w-full py-3 border border-stone-600 text-stone-400 rounded-xl hover:bg-stone-700 transition-colors"
-                >
-                  Return to study setup
-                </button>
-              </>
-            ) : (
-              <>
-                <button
-                  onClick={handleNewParticipant}
-                  className="w-full py-3 bg-stone-600 hover:bg-stone-500 text-white font-semibold rounded-xl transition-colors flex items-center justify-center gap-2"
-                >
-                  <RotateCcw size={18} />
-                  New Participant (Same Study)
-                </button>
-                <button
-                  onClick={handleNewStudy}
-                  className="w-full py-3 border border-stone-600 text-stone-400 rounded-xl hover:bg-stone-700 transition-colors"
-                >
-                  Create New Study
-                </button>
-              </>
-            )}
-          </div>
-        </motion.div>
-      </div>
-    </div>
+        </div>
+      </Page>
+    </main>
   );
 };
 
