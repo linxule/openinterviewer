@@ -1,24 +1,12 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { motion } from 'framer-motion';
 import { useRouter } from 'next/navigation';
 import { StoredInterview } from '@/types';
 import { getInterview, StudyOperationPendingError } from '@/services/storageService';
 import ReactMarkdown from 'react-markdown';
-import {
-  Loader2,
-  ArrowLeft,
-  Download,
-  Clock,
-  MessageSquare,
-  User,
-  Bot,
-  Target,
-  TrendingUp,
-  Lightbulb,
-  AlertTriangle
-} from 'lucide-react';
+import { Button, Coordinate, Label, Rule, Turn, Verbatim } from '@/components/ui';
+import { useSetTrailingCrumb } from '@/components/shell/breadcrumb';
 
 interface InterviewDetailProps {
   interviewId: string;
@@ -31,6 +19,8 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId 
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'transcript' | 'analysis'>('transcript');
   const [operationPending, setOperationPending] = useState(false);
+
+  useSetTrailingCrumb(interview?.studyName ?? null);
 
   const loadInterview = useCallback(async () => {
     setLoading(true);
@@ -117,309 +107,237 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId 
   };
 
   if (loading) {
-    return (
-      <div className="min-h-screen bg-stone-900 flex items-center justify-center">
-        <Loader2 size={48} className="animate-spin text-stone-400" />
-      </div>
-    );
+    return <p className="py-16 font-sans text-[15px] text-ink-500">Loading…</p>;
   }
 
   if (!interview) {
     return (
-      <div className="min-h-screen bg-stone-900 flex items-center justify-center p-8">
-        <div className="text-center">
-          <h1 className="text-xl font-semibold text-white mb-2">
-            {operationPending ? 'Study change pending' : 'Interview Not Found'}
-          </h1>
-          <p className="text-stone-400 mb-4">
-            {operationPending
-              ? 'A study operation is already in progress.'
-              : 'This interview may have been deleted.'}
-          </p>
-          <button
-            onClick={() => router.push('/dashboard')}
-            className="px-4 py-2 bg-stone-600 text-white rounded-xl"
-          >
-            Back to Dashboard
-          </button>
-        </div>
+      <div className="max-w-measure">
+        <h1 className="font-sans text-[24px] font-semibold leading-[32px] text-ink-900">
+          {operationPending ? 'Study change pending' : 'Interview Not Found'}
+        </h1>
+        <p className="mt-2 font-sans text-[15px] text-ink-700">
+          {operationPending
+            ? 'A study operation is already in progress.'
+            : 'This interview may have been deleted.'}
+        </p>
+        <Button variant="quiet" onClick={() => router.push('/dashboard')} className="mt-4">
+          Back to Dashboard
+        </Button>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-stone-900 p-8">
-      <div className="max-w-4xl mx-auto">
-        {/* Header */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="mb-8"
-        >
-          <button
-            onClick={() => router.push('/dashboard')}
-            className="flex items-center gap-2 text-stone-400 hover:text-stone-300 mb-4 transition-colors"
-          >
-            <ArrowLeft size={18} />
-            Back to Dashboard
-          </button>
-
-          <div className="flex items-start justify-between">
-            <div>
-              <h1 className="text-2xl font-bold text-white mb-2">{interview.studyName}</h1>
-              <div className="flex items-center gap-4 text-sm text-stone-400">
-                <div className="flex items-center gap-1">
-                  <Clock size={14} />
-                  {formatDuration(interview.createdAt, interview.completedAt)}
-                </div>
-                <div className="flex items-center gap-1">
-                  <MessageSquare size={14} />
-                  {interview.transcript.length} messages
-                </div>
-                <div>
-                  {new Date(interview.createdAt).toLocaleDateString('en-US', {
-                    month: 'short',
-                    day: 'numeric',
-                    year: 'numeric'
-                  })}
-                </div>
-              </div>
-            </div>
-
-            <div className="flex gap-2">
-              <button
-                onClick={handleDownloadTranscript}
-                className="px-4 py-2 text-sm bg-stone-700 hover:bg-stone-600 text-stone-300 rounded-xl transition-colors flex items-center gap-2"
-              >
-                <Download size={16} />
-                Transcript
-              </button>
-              <button
-                onClick={handleDownloadJSON}
-                className="px-4 py-2 text-sm bg-stone-700 hover:bg-stone-600 text-stone-300 rounded-xl transition-colors flex items-center gap-2"
-              >
-                <Download size={16} />
-                JSON
-              </button>
-            </div>
-          </div>
-        </motion.div>
-
-        {/* Participant Profile */}
-        {interview.participantProfile && interview.participantProfile.fields.length > 0 && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-            className="bg-stone-800/50 rounded-xl border border-stone-700 p-4 mb-6"
-          >
-            <h3 className="font-semibold text-white flex items-center gap-2 mb-3">
-              <User size={16} className="text-stone-400" />
-              Participant Profile
-            </h3>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
-              {interview.participantProfile.fields
-                .filter(f => f.status === 'extracted' && f.value)
-                .map(f => (
-                  <div key={f.fieldId}>
-                    <span className="text-stone-500">{f.fieldId}:</span>{' '}
-                    <span className="text-stone-200">{f.value}</span>
-                  </div>
-                ))}
-            </div>
-          </motion.div>
-        )}
-
-        {/* Tabs */}
-        <div className="flex gap-2 mb-6">
-          <button
-            onClick={() => setActiveTab('transcript')}
-            className={`px-4 py-2 rounded-lg transition-colors ${
-              activeTab === 'transcript'
-                ? 'bg-stone-700 text-white'
-                : 'text-stone-400 hover:text-stone-300'
-            }`}
-          >
-            Transcript
-          </button>
-          <button
-            onClick={() => setActiveTab('analysis')}
-            className={`px-4 py-2 rounded-lg transition-colors ${
-              activeTab === 'analysis'
-                ? 'bg-stone-700 text-white'
-                : 'text-stone-400 hover:text-stone-300'
-            }`}
-          >
-            Analysis
-          </button>
+    <div>
+      {/* Header */}
+      <div className="mb-8">
+        <h1 className="font-sans text-[24px] font-semibold leading-[32px] text-ink-900">{interview.studyName}</h1>
+        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
+          <Coordinate>{formatDuration(interview.createdAt, interview.completedAt)}</Coordinate>
+          <span className="font-sans text-[13px] text-ink-500">{interview.transcript.length} messages</span>
+          <Coordinate>
+            {new Date(interview.createdAt).toLocaleDateString('en-US', {
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric'
+            })}
+          </Coordinate>
         </div>
+        <div className="mt-4 flex gap-2">
+          <Button variant="quiet" className="text-[13px]" onClick={handleDownloadTranscript}>
+            Download transcript
+          </Button>
+          <Button variant="quiet" className="text-[13px]" onClick={handleDownloadJSON}>
+            Download JSON
+          </Button>
+        </div>
+      </div>
 
-        {/* Tab Content */}
-        {activeTab === 'transcript' ? (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="bg-stone-800/50 rounded-xl border border-stone-700 p-6"
-          >
-            <div className="space-y-4">
-              {interview.transcript.map((msg, i) => (
-                <div
-                  key={i}
-                  className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div
-                    className={`max-w-[80%] rounded-2xl p-4 ${
-                      msg.role === 'user'
-                        ? 'bg-stone-700 text-white rounded-br-md'
-                        : 'bg-stone-800 border border-stone-700 text-stone-100 rounded-bl-md'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 mb-2 text-xs text-stone-500">
-                      {msg.role === 'ai' ? (
-                        <>
-                          <Bot size={14} />
-                          Interviewer
-                        </>
-                      ) : (
-                        <>
-                          <User size={14} />
-                          Participant
-                        </>
-                      )}
-                      <span className="ml-auto">
-                        {new Date(msg.timestamp).toLocaleTimeString()}
-                      </span>
-                    </div>
-                    <div className="prose prose-sm max-w-none prose-invert">
-                      <ReactMarkdown>{msg.content}</ReactMarkdown>
-                    </div>
-                  </div>
+      {/* Participant Profile */}
+      {interview.participantProfile && interview.participantProfile.fields.length > 0 && (
+        <div className="mb-8 border-t border-ink-300 pt-4">
+          <Label>Participant profile</Label>
+          <div className="mt-2 grid grid-cols-2 gap-3 text-[13px] md:grid-cols-3">
+            {interview.participantProfile.fields
+              .filter(f => f.status === 'extracted' && f.value)
+              .map(f => (
+                <div key={f.fieldId}>
+                  <span className="text-ink-500">{f.fieldId}:</span>{' '}
+                  <span className="text-ink-900">{f.value}</span>
                 </div>
               ))}
-            </div>
-          </motion.div>
-        ) : (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="space-y-6"
-          >
-            {interview.synthesis ? (
-              <>
-                {/* Key Insight */}
-                <div className="bg-stone-700 text-white rounded-xl p-6">
-                  <div className="flex items-center gap-2 mb-2 text-stone-400">
-                    <Target size={18} />
-                    <span className="text-sm font-medium uppercase tracking-wider">
-                      Key Insight
-                    </span>
-                  </div>
-                  <p className="text-xl font-medium">{interview.synthesis.bottomLine}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Tabs */}
+      <div className="mb-8 grid grid-cols-2 border-b border-ink-300">
+        <button
+          type="button"
+          onClick={() => setActiveTab('transcript')}
+          className={`min-h-11 border-b-2 px-2 py-3 text-center font-sans text-[15px] font-medium ${
+            activeTab === 'transcript'
+              ? 'border-action text-action'
+              : 'border-transparent text-ink-500 hover:text-ink-900'
+          }`}
+        >
+          Transcript
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('analysis')}
+          className={`min-h-11 border-b-2 px-2 py-3 text-center font-sans text-[15px] font-medium ${
+            activeTab === 'analysis'
+              ? 'border-action text-action'
+              : 'border-transparent text-ink-500 hover:text-ink-900'
+          }`}
+        >
+          Analysis
+        </button>
+      </div>
+
+      {/* Tab Content */}
+      {activeTab === 'transcript' ? (
+        <ol className="space-y-8">
+          {interview.transcript.map((msg, i) => (
+            <li key={i}>
+              <div className="flex items-baseline justify-between gap-3">
+                <Label>{msg.role === 'ai' ? 'Interviewer' : 'Participant'}</Label>
+                <Coordinate>{new Date(msg.timestamp).toLocaleTimeString()}</Coordinate>
+              </div>
+              <Turn
+                speaker={msg.role === 'ai' ? 'interviewer' : 'participant'}
+                turnIndex={i + 1}
+                showCoordinate
+                className="mt-1"
+              >
+                <div className="prose-verbatim">
+                  <ReactMarkdown>{msg.content}</ReactMarkdown>
                 </div>
+              </Turn>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <div>
+          {interview.synthesis ? (
+            <div className="space-y-6">
+              {/* Bottom line */}
+              <section>
+                <Label className="block">Bottom line</Label>
+                <Verbatim
+                  as="p"
+                  className="mt-3 max-w-measure text-[24px] font-normal leading-[36px] text-ink-900 md:text-[28px] md:leading-[40px]"
+                >
+                  {interview.synthesis.bottomLine}
+                </Verbatim>
+              </section>
+              <Rule className="mt-8" />
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {/* Stated vs Revealed */}
-                  <div className="bg-stone-800/50 rounded-xl border border-stone-700 p-6">
-                    <h3 className="font-semibold text-white mb-4 flex items-center gap-2">
-                      <TrendingUp size={18} className="text-stone-400" />
-                      Stated vs Revealed
-                    </h3>
-
-                    <div className="space-y-4">
-                      <div>
-                        <div className="text-xs font-medium text-stone-500 uppercase mb-2">
-                          What they said
-                        </div>
-                        <div className="space-y-1">
-                          {interview.synthesis.statedPreferences.map((item, i) => (
-                            <div
-                              key={i}
-                              className="text-sm bg-stone-800 text-stone-300 px-3 py-1.5 rounded-lg"
-                            >
-                              {item}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div>
-                        <div className="text-xs font-medium text-stone-500 uppercase mb-2">
-                          What behavior revealed
-                        </div>
-                        <div className="space-y-1">
-                          {interview.synthesis.revealedPreferences.map((item, i) => (
-                            <div
-                              key={i}
-                              className="text-sm bg-stone-700 text-stone-200 px-3 py-1.5 rounded-lg"
-                            >
-                              {item}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Themes */}
-                  <div className="bg-stone-800/50 rounded-xl border border-stone-700 p-6">
-                    <h3 className="font-semibold text-white mb-4 flex items-center gap-2">
-                      <Lightbulb size={18} className="text-stone-400" />
-                      Key Themes
-                    </h3>
-
-                    <div className="space-y-3">
-                      {interview.synthesis.themes.map((theme, i) => (
-                        <div key={i} className="border-b border-stone-700 pb-3 last:border-0">
-                          <div className="font-medium text-stone-100">{theme.theme}</div>
-                          <div className="text-sm text-stone-400 mt-1">{theme.evidence}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Contradictions */}
-                {interview.synthesis.contradictions.length > 0 && (
-                  <div className="bg-stone-800 border border-stone-600 rounded-xl p-6">
-                    <h3 className="font-semibold text-stone-200 mb-3 flex items-center gap-2">
-                      <AlertTriangle size={18} className="text-stone-400" />
-                      Potential Contradictions
-                    </h3>
-                    <ul className="space-y-2">
-                      {interview.synthesis.contradictions.map((c, i) => (
-                        <li key={i} className="text-stone-300 text-sm">
-                          {c}
+              {/* Stated vs Revealed */}
+              <section>
+                <h3 className="font-sans text-[15px] font-semibold text-ink-900">Stated vs Revealed</h3>
+                <div className="mt-4 md:grid md:grid-cols-2 md:gap-10">
+                  <div>
+                    <Label>What they said</Label>
+                    <ul>
+                      {interview.synthesis.statedPreferences.map((item, i) => (
+                        <li
+                          key={i}
+                          className="border-t border-ink-300 py-2 font-sans text-[15px] leading-[24px] text-ink-700"
+                        >
+                          {item}
                         </li>
                       ))}
                     </ul>
                   </div>
-                )}
+                  <div className="mt-6 md:mt-0">
+                    <Label>What behavior revealed</Label>
+                    <ul>
+                      {interview.synthesis.revealedPreferences.map((item, i) => (
+                        <li
+                          key={i}
+                          className="border-t border-ink-300 py-2 font-sans text-[15px] leading-[24px] text-ink-700"
+                        >
+                          {item}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </section>
+              <Rule className="mt-8" />
 
-                {/* Key Insights */}
-                <div className="bg-stone-800/50 rounded-xl border border-stone-700 p-6">
-                  <h3 className="font-semibold text-white mb-4">
-                    Additional Insights
-                  </h3>
-                  <ul className="space-y-2">
-                    {interview.synthesis.keyInsights.map((insight, i) => (
-                      <li key={i} className="flex items-start gap-2 text-stone-300">
-                        <span className="text-stone-500 mt-1">-</span>
-                        {insight}
+              {/* Key Themes */}
+              <section>
+                <h3 className="font-sans text-[15px] font-semibold text-ink-900">Key Themes</h3>
+                <ul className="mt-4">
+                  {interview.synthesis.themes.map((theme, i) => (
+                    <li key={i} className="border-t border-ink-300 py-4">
+                      <p className="font-sans text-[15px] font-medium text-ink-900">{theme.theme}</p>
+                      <Verbatim
+                        as="p"
+                        className="mt-2 max-w-measure border-l border-ink-300 pl-4 text-[17px] leading-[28px] text-ink-700"
+                      >
+                        {theme.evidence}
+                      </Verbatim>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+
+              {/* Contradictions */}
+              {interview.synthesis.contradictions.length > 0 && (
+                <section className="border-t border-ink-300 pt-5">
+                  <h3 className="font-sans text-[15px] font-semibold text-ink-900">Potential Contradictions</h3>
+                  <ul className="mt-3 space-y-2">
+                    {interview.synthesis.contradictions.map((c, i) => (
+                      <li key={i} className="max-w-measure font-sans text-[15px] leading-[24px] text-ink-700">
+                        {c}
                       </li>
                     ))}
                   </ul>
-                </div>
-              </>
-            ) : (
-              <div className="bg-stone-800/50 rounded-xl border border-stone-700 p-12 text-center">
-                <p className="text-stone-400">
-                  No analysis available for this interview.
-                </p>
-              </div>
-            )}
-          </motion.div>
-        )}
-      </div>
+                </section>
+              )}
+
+              {/* Additional Insights */}
+              <section>
+                <h3 className="font-sans text-[15px] font-semibold text-ink-900">Additional Insights</h3>
+                <ul className="mt-4">
+                  {interview.synthesis.keyInsights.map((insight, i) => (
+                    <li
+                      key={i}
+                      className="border-t border-ink-300 py-2 font-sans text-[15px] leading-[24px] text-ink-700"
+                    >
+                      {insight}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+
+              {/* Provenance footer */}
+              <footer className="mt-10 border-t border-ink-300 pt-4">
+                <Coordinate className="block">
+                  {`Synthesized by ${interview.aiModel ?? 'unrecorded model'} · study rev ${
+                    interview.studyRevision ?? '—'
+                  } · ${new Date(interview.completedAt).toLocaleDateString('en-US', {
+                    month: 'short',
+                    day: 'numeric',
+                    year: 'numeric'
+                  })} · receipt ${
+                    interview.synthesis._receipt ? interview.synthesis._receipt.slice(0, 12) : 'unsigned'
+                  }`}
+                </Coordinate>
+              </footer>
+            </div>
+          ) : (
+            <p className="font-sans text-[15px] text-ink-500">
+              No analysis available for this interview.
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 };

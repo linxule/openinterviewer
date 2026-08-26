@@ -2,7 +2,7 @@
 
 import { useStore } from '@/store';
 import { useRouter, usePathname } from 'next/navigation';
-import { Eye, ArrowLeft } from 'lucide-react';
+import { Disclosure } from '@/components/ui';
 
 export default function PreviewBanner() {
   const { viewMode, setViewMode, setStep, resetParticipant } = useStore();
@@ -25,18 +25,17 @@ export default function PreviewBanner() {
   };
 
   return (
-    <div className="preview-banner sticky top-0 z-50 px-4 py-2 flex items-center justify-between">
-      <div className="flex items-center gap-2 text-stone-300">
-        <Eye size={16} className="preview-banner-pulse" />
-        <span className="text-sm font-medium">Preview Mode - Participant View</span>
-      </div>
+    <Disclosure
+      title="Preview Mode - Participant View"
+      className="sticky top-0 z-50 flex items-center justify-between gap-3"
+    >
       <button
+        type="button"
         onClick={handleExit}
-        className="flex items-center gap-1 px-3 py-1.5 text-sm text-stone-400 hover:text-stone-100 bg-stone-700/50 hover:bg-stone-700 rounded-lg transition-colors"
+        className="min-h-11 shrink-0 font-sans text-[13px] font-medium underline underline-offset-4"
       >
-        <ArrowLeft size={14} />
         Exit Preview
       </button>
-    </div>
+    </Disclosure>
   );
 }

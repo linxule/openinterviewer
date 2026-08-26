@@ -59,50 +59,6 @@
   background: #78716c;
 }
 
-/* Preview mode banner */
-.preview-banner {
-  background: linear-gradient(90deg, #44403c 0%, #292524 50%, #44403c 100%);
-  background-size: 200% 100%;
-  animation: shimmer 3s infinite;
-}
-
-.preview-banner-pulse {
-  animation: pulse 2s infinite;
-}
-
-@keyframes shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
-}
-
-/* Prose styling for markdown */
-.prose {
-  color: #e7e5e4;
-}
-
-.prose strong {
-  color: #fafaf9;
-}
-
-.prose ul {
-  list-style-type: disc;
-  padding-left: 1.5em;
-}
-
-.prose ol {
-  list-style-type: decimal;
-  padding-left: 1.5em;
-}
-
-.prose p {
-  margin-bottom: 0.5em;
-}
-
 /* Token focus ring */
 :is(input, textarea, select, button, [role="button"], a):focus-visible {
   outline: 2px solid rgb(var(--action));
@@ -147,8 +103,7 @@
     overflow-y: auto;
   }
 
-  /* Transcript markdown — token-based sibling of the legacy .prose block
-     above (kept as-is for the demo until Slice D). */
+  /* Transcript markdown — src/components/InterviewChat.tsx, src/components/InterviewDetail.tsx */
   .prose-verbatim strong {
     font-weight: 600;
   }

@@ -3,13 +3,9 @@ import nextCoreWebVitals from 'eslint-config-next/core-web-vitals';
 
 // Verbatim migration ratchet — remove each file from this list as its slice migrates it.
 const legacyDesignAllowlist = [
-  'src/components/Synthesis.tsx',
-  'src/components/InterviewDetail.tsx',
-  'src/components/StudyDetail.tsx',
   'src/components/Export.tsx',
   'src/components/Login.tsx',
   'src/components/OAuthLogin.tsx',
-  'src/components/PreviewBanner.tsx',
   'src/app/layout.tsx',
   'src/app/self-host/page.tsx',
   // Not one of the 16 named screens, but a page.tsx the Hard Constraints forbid

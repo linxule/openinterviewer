@@ -2,6 +2,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeStoredInterview, makeStoredStudy, makeStudyConfig } from '../fixtures/models';
 import StudyDetail from '@/components/StudyDetail';
+// StudyDetail wires useSetTrailingCrumb, which requires a BreadcrumbProvider ancestor.
+import { BreadcrumbProvider } from '@/components/shell/breadcrumb';
 
 const router = { push: vi.fn() };
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
@@ -11,6 +13,14 @@ const storageMock = vi.hoisted(() => ({
   getStudyInterviews: vi.fn(),
 }));
 vi.mock('@/services/storageService', () => storageMock);
+
+function renderStudyDetail(studyId: string) {
+  return render(
+    <BreadcrumbProvider>
+      <StudyDetail studyId={studyId} />
+    </BreadcrumbProvider>
+  );
+}
 
 const linkId = 'a'.repeat(64);
 const createdAt = new Date('2026-08-14T12:00:00Z').getTime();
@@ -53,7 +63,7 @@ describe('StudyDetail participant-link management', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<StudyDetail studyId="study-a" />);
+    renderStudyDetail('study-a');
     const settingsLabel = await screen.findByText('Study settings');
     fireEvent.click(settingsLabel.closest('button') as HTMLButtonElement);
 
@@ -84,10 +94,11 @@ describe('StudyDetail participant-link management', () => {
       throw new Error(`Unexpected fetch: ${String(input)}`);
     }));
 
-    render(<StudyDetail studyId="study-a" />);
+    renderStudyDetail('study-a');
 
     const heading = await screen.findByRole('heading', { name: 'Managed Links Study' });
-    expect(heading.closest('.min-h-screen')).toHaveClass('p-4', 'sm:p-8');
+    expect(heading.closest('.min-h-screen')).toBeNull();
+    expect(heading.closest('.min-h-dvh')).toBeNull();
     expect(screen.getByRole('tablist', { name: 'Study sections' })).toHaveClass('grid-cols-3');
     expect(screen.getByRole('group', { name: 'Study summary' })).toHaveClass('grid-cols-1', 'sm:grid-cols-3');
 
