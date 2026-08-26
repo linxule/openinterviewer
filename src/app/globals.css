@@ -132,6 +132,12 @@
 }
 
 @layer components {
+  /* Evidence trace ring — src/components/DemoSimulation.tsx */
+  .trace-ring {
+    --tw-ring-color: rgb(var(--evidence));
+    --tw-ring-offset-color: rgb(var(--paper-0));
+  }
+
   /* Auto-growing response textarea — src/components/InterviewChat.tsx */
   .input-verbatim {
     font-family: var(--font-serif), Georgia, serif;

@@ -2,18 +2,8 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import {
-  ArrowRight,
-  BookOpen,
-  Bot,
-  Lightbulb,
-  Quote,
-  RotateCcw,
-  Search,
-  ShieldCheck,
-  Target,
-  User,
-} from 'lucide-react';
+import { cn } from '@/lib/cn';
+import { Button, Citation, Coordinate, Disclosure, Label, Page, Rule, Turn, Verbatim } from '@/components/ui';
 
 type DemoPath = 'project' | 'recommendation' | 'curiosity';
 type DemoView = 'intro' | 'interview' | 'insight';
@@ -217,6 +207,7 @@ const DemoSimulation: React.FC = () => {
   const [answers, setAnswers] = useState<string[]>([]);
   const [highlightEvidence, setHighlightEvidence] = useState(false);
   const [hasSeenInsight, setHasSeenInsight] = useState(false);
+  const [traceOpen, setTraceOpen] = useState(true);
   const choiceGroupRef = useRef<HTMLFieldSetElement>(null);
   const completionButtonRef = useRef<HTMLButtonElement>(null);
   const insightHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -278,303 +269,256 @@ const DemoSimulation: React.FC = () => {
   };
 
   return (
-    <div className="min-h-dvh bg-stone-900 text-stone-100">
-      <aside
-        aria-label="Demo disclosure"
-        className="border-b border-amber-700/40 bg-amber-950/40"
-      >
-        <div className="mx-auto flex max-w-5xl flex-col gap-3 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex items-start gap-3">
-            <ShieldCheck aria-hidden="true" className="mt-0.5 shrink-0 text-amber-200" size={20} />
-            <div>
-              <p className="font-semibold text-amber-100">Scripted demo</p>
-              <p className="text-sm text-amber-100/85">
-                Maya is fictional. Every response, follow-up, and insight is pre-written. No demo response leaves this page or survives a refresh.
-              </p>
-            </div>
-          </div>
-          <nav aria-label="Demo links" className="flex flex-wrap gap-x-4 gap-y-2 text-sm">
-            <Link href="/login" className="text-amber-100 underline underline-offset-4 hover:text-white">
-              Configured workspace
-            </Link>
-            <Link href="/self-host" className="text-amber-100 underline underline-offset-4 hover:text-white">
-              Self-host setup
-            </Link>
+    <div className="min-h-dvh bg-paper-0 text-ink-700">
+      <aside aria-label="Demo disclosure">
+        <Disclosure title="Scripted demo">
+          <span className="block">
+            Maya is fictional. Every response, follow-up, and insight is pre-written. No demo response leaves this page or survives a refresh.
+          </span>
+          <nav aria-label="Demo links" className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+            <Link href="/login" className="underline underline-offset-4">Configured workspace</Link>
+            <Link href="/self-host" className="underline underline-offset-4">Self-host setup</Link>
           </nav>
-        </div>
+        </Disclosure>
       </aside>
 
-      <main className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 sm:py-12">
-        {view === 'intro' && (
-          <div className="space-y-8">
-            <div className="grid items-start gap-8 lg:grid-cols-[1.15fr_0.85fr]">
-              <div className="space-y-5">
-                <p className="text-sm font-semibold uppercase tracking-[0.18em] text-stone-400">
-                  Participant view → researcher view
-                </p>
-                <h1 className="text-4xl font-bold tracking-tight text-white sm:text-5xl">
-                  See an interview become an insight.
-                </h1>
-                <p className="max-w-2xl text-lg leading-8 text-stone-300">
-                  Choose Maya’s fictional replies in a two-minute walkthrough. Watch the interviewer follow her thread, then inspect the evidence behind the researcher note.
-                </p>
-                <button
-                  type="button"
-                  data-testid="demo-start"
-                  onClick={() => setView('interview')}
-                  className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-stone-100 px-5 py-3 font-semibold text-stone-900 transition-colors hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 focus-visible:ring-offset-2 focus-visible:ring-offset-stone-900"
-                >
-                  Begin scripted interview
-                  <ArrowRight aria-hidden="true" size={18} />
-                </button>
-              </div>
-
-              <section aria-labelledby="demo-study-heading" className="rounded-2xl border border-stone-700 bg-stone-800/70 p-5 sm:p-6">
-                <div className="mb-4 flex items-center gap-2 text-stone-300">
-                  <BookOpen aria-hidden="true" size={18} />
-                  <span className="text-xs font-semibold uppercase tracking-[0.16em]">Synthetic study</span>
+      <main>
+        <Page className="py-10 md:py-14">
+          {view === 'intro' && (
+            <div className="space-y-10">
+              <div className="md:grid md:grid-cols-[1.15fr_0.85fr] md:items-start md:gap-10">
+                <div className="space-y-5">
+                  <Label>Participant view → researcher view</Label>
+                  <Verbatim as="h1" className="text-[32px] font-normal leading-[38px] text-ink-900 md:text-[40px] md:leading-[44px]">
+                    See an interview become an insight.
+                  </Verbatim>
+                  <p className="max-w-measure font-sans text-[17px] leading-[28px] text-ink-700">
+                    Choose Maya’s fictional replies in a two-minute walkthrough. Watch the interviewer follow her thread, then inspect the evidence behind the researcher note.
+                  </p>
+                  <Button
+                    variant="primary"
+                    data-testid="demo-start"
+                    className="min-h-11"
+                    onClick={() => setView('interview')}
+                  >
+                    Begin scripted interview
+                  </Button>
                 </div>
-                <h2 id="demo-study-heading" className="text-xl font-semibold text-white">{STUDY_NAME}</h2>
-                <p className="mt-4 text-xs font-semibold uppercase tracking-[0.14em] text-stone-400">Research question</p>
-                <p className="mt-2 leading-7 text-stone-200">{RESEARCH_QUESTION}</p>
-              </section>
-            </div>
 
-            <ol aria-label="Demo workflow" className="grid gap-3 sm:grid-cols-3">
-              {[
-                ['1', 'Recall a moment', 'Begin with a concrete experience, not an abstract opinion.'],
-                ['2', 'Follow the thread', 'Probe what the participant means instead of reading the next fixed question.'],
-                ['3', 'Trace the insight', 'Keep interpretation beside the exact transcript evidence that supports it.'],
-              ].map(([number, title, description]) => (
-                <li key={number} className="rounded-2xl border border-stone-800 bg-stone-850 p-5">
-                  <span className="text-sm font-semibold text-amber-200">{number}</span>
-                  <h3 className="mt-2 font-semibold text-white">{title}</h3>
-                  <p className="mt-2 text-sm leading-6 text-stone-400">{description}</p>
-                </li>
-              ))}
-            </ol>
-          </div>
-        )}
-
-        {view === 'interview' && (
-          <div className="space-y-6">
-            <header className="space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <p className="text-sm font-semibold uppercase tracking-[0.16em] text-stone-400">Synthetic study</p>
-                <button
-                  type="button"
-                  onClick={() => resetTo('intro')}
-                  className="text-sm text-stone-300 underline underline-offset-4 hover:text-white"
+                <section
+                  aria-labelledby="demo-study-heading"
+                  className="mt-8 border border-ink-300 bg-paper-1 p-5 md:mt-0 md:p-6"
                 >
-                  Back to overview
-                </button>
+                  <Label>Synthetic study</Label>
+                  <h2 id="demo-study-heading" className="mt-2 font-sans text-[18px] font-semibold text-ink-900">
+                    {STUDY_NAME}
+                  </h2>
+                  <Label className="mt-5 block">Research question</Label>
+                  <p className="mt-2 font-sans text-[15px] leading-[24px] text-ink-700">{RESEARCH_QUESTION}</p>
+                </section>
               </div>
-              <h1 className="text-3xl font-bold text-white sm:text-4xl">{STUDY_NAME}</h1>
-              <p className="max-w-3xl text-stone-300">
-                <span className="font-medium text-stone-100">Research question:</span> {RESEARCH_QUESTION}
-              </p>
-            </header>
 
-            <div
-              role="status"
-              data-testid="demo-progress"
-              className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-stone-700 bg-stone-800/60 px-4 py-3 text-sm"
-            >
-              <span className="font-medium text-stone-200">
-                {interviewComplete ? 'Interview complete' : `Question ${answers.length + 1} of 3`}
-              </span>
-              <span className="text-stone-400">
-                {branch ? `Scripted branch: ${branch.label}` : 'Choose the opening path'}
-              </span>
-            </div>
-
-            <section aria-labelledby="transcript-heading" className="rounded-2xl border border-stone-700 bg-stone-850 p-4 sm:p-6">
-              <h2 id="transcript-heading" className="sr-only">Scripted interview transcript</h2>
-              <div role="log" aria-live="polite" aria-relevant="additions">
-                <ol className="space-y-4">
-                  {transcript.map((message) => (
-                  <li
-                    key={message.id}
-                    ref={message.evidence ? evidenceRef : undefined}
-                    tabIndex={message.evidence ? -1 : undefined}
-                    data-testid={message.evidence ? 'demo-evidence-turn' : message.role === 'interviewer' ? 'demo-message-ai' : undefined}
-                    className={`flex ${message.role === 'participant' ? 'justify-end' : 'justify-start'} rounded-xl focus:outline-none ${
-                      message.evidence && highlightEvidence ? 'ring-2 ring-amber-300 ring-offset-4 ring-offset-stone-900' : ''
-                    }`}
-                  >
-                    <div
-                      className={`max-w-[92%] rounded-2xl p-4 sm:max-w-[78%] ${
-                        message.role === 'participant'
-                          ? 'rounded-br-md bg-stone-700 text-white'
-                          : 'rounded-bl-md border border-stone-700 bg-stone-800 text-stone-100'
-                      }`}
-                    >
-                      <div className={`mb-2 flex items-center gap-2 text-xs font-medium ${message.role === 'participant' ? 'justify-end text-stone-200' : 'text-stone-400'}`}>
-                        {message.role === 'interviewer' ? (
-                          <>
-                            <Bot aria-hidden="true" size={14} />
-                            Scripted interviewer
-                          </>
-                        ) : (
-                          <>
-                            Maya · fictional participant
-                            <User aria-hidden="true" size={14} />
-                          </>
-                        )}
-                      </div>
-                      <p className="leading-7">{message.content}</p>
+              <ol aria-label="Demo workflow">
+                {[
+                  ['1', 'Recall a moment', 'Begin with a concrete experience, not an abstract opinion.'],
+                  ['2', 'Follow the thread', 'Probe what the participant means instead of reading the next fixed question.'],
+                  ['3', 'Trace the insight', 'Keep interpretation beside the exact transcript evidence that supports it.'],
+                ].map(([number, title, description]) => (
+                  <li key={number} className="grid grid-cols-[3rem_1fr] gap-4 border-t border-ink-300 py-5">
+                    <Coordinate>{number}</Coordinate>
+                    <div>
+                      <h3 className="font-sans text-[15px] font-semibold text-ink-900">{title}</h3>
+                      <p className="mt-1 max-w-measure font-sans text-[15px] leading-[24px] text-ink-700">{description}</p>
                     </div>
-                    </li>
-                  ))}
-                </ol>
-              </div>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
 
-              {!interviewComplete && (
-                <fieldset
-                  ref={choiceGroupRef}
-                  tabIndex={-1}
-                  className="mt-6 border-t border-stone-700 pt-5 focus:outline-none"
-                >
-                  <legend className="px-1 text-base font-semibold text-white">Choose Maya’s response</legend>
-                  <p className="mb-3 mt-1 text-sm text-stone-400">Every option is fictional and pre-written.</p>
-                  <div className="grid gap-3">
-                    {choices.map((choice) => (
-                      <button
-                        key={choice.id}
-                        type="button"
-                        data-testid={`demo-choice-${choice.id}`}
-                        onClick={() => handleChoice(choice)}
-                        className="min-h-11 w-full rounded-xl border border-stone-600 bg-stone-800 px-4 py-3 text-left leading-6 text-stone-100 transition-colors hover:border-stone-400 hover:bg-stone-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 focus-visible:ring-offset-2 focus-visible:ring-offset-stone-850"
-                      >
-                        {choice.text}
-                      </button>
-                    ))}
-                  </div>
-                </fieldset>
-              )}
-
-              {interviewComplete && (
-                <div className="mt-6 border-t border-stone-700 pt-5">
+          {view === 'interview' && (
+            <div className="space-y-8">
+              <header className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <Label>Synthetic study</Label>
                   <button
-                    ref={completionButtonRef}
                     type="button"
-                    data-testid="demo-view-insight"
-                    onClick={showInsight}
-                    className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-stone-100 px-5 py-3 font-semibold text-stone-900 transition-colors hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 focus-visible:ring-offset-2 focus-visible:ring-offset-stone-900 sm:w-auto"
+                    onClick={() => resetTo('intro')}
+                    className="min-h-11 font-sans text-[13px] text-ink-500 underline underline-offset-2 hover:text-ink-900"
                   >
-                    {hasSeenInsight ? 'Return to researcher note' : 'See researcher view'}
-                    <ArrowRight aria-hidden="true" size={18} />
+                    Back to overview
                   </button>
                 </div>
-              )}
-            </section>
-          </div>
-        )}
+                <h1 className="font-sans text-[24px] font-semibold leading-[32px] text-ink-900">{STUDY_NAME}</h1>
+                <p className="font-sans text-[15px] leading-[24px] text-ink-700">
+                  <span className="font-medium text-ink-900">Research question:</span> {RESEARCH_QUESTION}
+                </p>
+              </header>
 
-        {view === 'insight' && branch && (
-          <div data-testid="demo-insight" className="space-y-6">
-            <header className="space-y-3">
-              <p className="text-sm font-semibold uppercase tracking-[0.16em] text-stone-400">Researcher view</p>
-              <h1 ref={insightHeadingRef} tabIndex={-1} className="text-3xl font-bold text-white outline-none sm:text-4xl">
-                Illustrative synthesis
-              </h1>
-              <p className="max-w-3xl text-lg text-stone-300">
-                Based on one fictional interview. This is an interpretation, not a research finding.
-              </p>
-            </header>
-
-            <div
-              data-testid="demo-insight-disclosure"
-              className="flex items-start gap-3 rounded-xl border border-amber-700/50 bg-amber-950/30 p-4 text-sm text-amber-100"
-            >
-              <ShieldCheck aria-hidden="true" className="mt-0.5 shrink-0" size={18} />
-              <p>
-                This note was authored in advance for the <strong>{branch.label}</strong> path. No model analyzed Maya or generated these claims.
-              </p>
-            </div>
-
-            <section aria-labelledby="bottom-line-heading" className="rounded-2xl bg-stone-700 p-5 text-white sm:p-6">
-              <div className="mb-3 flex items-center gap-2 text-stone-200">
-                <Target aria-hidden="true" size={18} />
-                <h2 id="bottom-line-heading" className="text-sm font-semibold uppercase tracking-[0.14em]">Bottom line</h2>
+              <div
+                role="status"
+                data-testid="demo-progress"
+                className="flex flex-wrap items-center justify-between gap-3 border-y border-ink-300 py-2"
+              >
+                <span className="font-sans text-[13px] font-medium text-ink-900">
+                  {interviewComplete ? 'Interview complete' : `Question ${answers.length + 1} of 3`}
+                </span>
+                <Coordinate>{branch ? `Scripted branch: ${branch.label}` : 'Choose the opening path'}</Coordinate>
               </div>
-              <p className="text-xl font-medium leading-8 sm:text-2xl">{branch.bottomLine}</p>
-            </section>
 
-            <div className="grid gap-6 lg:grid-cols-[1.25fr_0.75fr]">
-              <section aria-labelledby="evidence-heading" className="rounded-2xl border border-stone-700 bg-stone-800/70 p-5 sm:p-6">
-                <div className="mb-5 flex items-center gap-2">
-                  <Search aria-hidden="true" className="text-stone-400" size={18} />
-                  <h2 id="evidence-heading" className="font-semibold text-white">Evidence trail</h2>
+              <section aria-labelledby="transcript-heading" className="relative mt-8">
+                <h2 id="transcript-heading" className="sr-only">Scripted interview transcript</h2>
+                <div role="log" aria-live="polite" aria-relevant="additions">
+                  <ol className="space-y-8">
+                    {transcript.map((message, index) => (
+                      <li
+                        key={message.id}
+                        ref={message.evidence ? evidenceRef : undefined}
+                        tabIndex={message.evidence ? -1 : undefined}
+                        data-testid={message.evidence ? 'demo-evidence-turn' : message.role === 'interviewer' ? 'demo-message-ai' : undefined}
+                        className={cn(
+                          'focus:outline-none',
+                          message.evidence && highlightEvidence && 'ring-2 trace-ring ring-offset-4 ring-offset-paper-0'
+                        )}
+                      >
+                        <Label className={cn('block', message.role === 'participant' && 'md:pl-[3.75rem]')}>
+                          {message.role === 'interviewer' ? 'Scripted interviewer' : 'Maya · fictional participant'}
+                        </Label>
+                        <Turn speaker={message.role} turnIndex={index + 1} showCoordinate className="mt-1">
+                          {message.content}
+                        </Turn>
+                      </li>
+                    ))}
+                  </ol>
                 </div>
-                <dl className="space-y-5">
+
+                {!interviewComplete && (
+                  <fieldset
+                    ref={choiceGroupRef}
+                    tabIndex={-1}
+                    className="mt-8 border-0 border-t border-ink-300 pt-6 focus:outline-none"
+                  >
+                    <legend className="px-1 font-sans text-[15px] font-semibold text-ink-900">Choose Maya’s response</legend>
+                    <p className="mb-4 mt-1 font-sans text-[13px] text-ink-500">Every option is fictional and pre-written.</p>
+                    <div className="grid gap-3">
+                      {choices.map((choice) => (
+                        <Button
+                          variant="quiet"
+                          key={choice.id}
+                          data-testid={`demo-choice-${choice.id}`}
+                          onClick={() => handleChoice(choice)}
+                          className="min-h-11 w-full text-left leading-[24px]"
+                        >
+                          {choice.text}
+                        </Button>
+                      ))}
+                    </div>
+                  </fieldset>
+                )}
+
+                {interviewComplete && (
+                  <div className="mt-8 border-t border-ink-300 pt-6">
+                    <Button
+                      ref={completionButtonRef}
+                      variant="primary"
+                      data-testid="demo-view-insight"
+                      onClick={showInsight}
+                      className="min-h-11 w-full sm:w-auto"
+                    >
+                      {hasSeenInsight ? 'Return to researcher note' : 'See researcher view'}
+                    </Button>
+                  </div>
+                )}
+              </section>
+            </div>
+          )}
+
+          {view === 'insight' && branch && (
+            <div data-testid="demo-insight" className="space-y-8">
+              <header className="space-y-3">
+                <Label>Researcher view</Label>
+                <h1
+                  ref={insightHeadingRef}
+                  tabIndex={-1}
+                  className="font-sans text-[24px] font-semibold leading-[32px] text-ink-900 outline-none"
+                >
+                  Illustrative synthesis
+                </h1>
+                <p className="font-sans text-[15px] leading-[24px] text-ink-700">
+                  Based on one fictional interview. This is an interpretation, not a research finding.
+                </p>
+              </header>
+
+              <Disclosure data-testid="demo-insight-disclosure">
+                This note was authored in advance for the <strong>{branch.label}</strong> path. No model analyzed Maya or generated these claims.
+              </Disclosure>
+
+              <section aria-labelledby="bottom-line-heading">
+                <h2 id="bottom-line-heading" className="font-sans text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500">
+                  Bottom line
+                </h2>
+                <Verbatim as="p" className="mt-3 max-w-measure text-[24px] font-normal leading-[36px] text-ink-900 md:text-[28px] md:leading-[40px]">
+                  {branch.bottomLine}
+                </Verbatim>
+                <Rule className="mt-8" />
+              </section>
+
+              <section aria-labelledby="evidence-heading">
+                <h2 id="evidence-heading" className="font-sans text-[15px] font-semibold text-ink-900">Evidence trail</h2>
+                <dl className="mt-5 space-y-5">
                   <div>
-                    <dt className="text-xs font-semibold uppercase tracking-[0.14em] text-stone-400">Emerging theme</dt>
-                    <dd className="mt-2 font-medium text-stone-100">{branch.theme}</dd>
+                    <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500">Emerging theme</dt>
+                    <dd className="mt-2 font-sans text-[15px] font-medium text-ink-900">{branch.theme}</dd>
                   </div>
                   <div>
-                    <dt className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-stone-400">
-                      <Quote aria-hidden="true" size={14} /> Evidence quote
-                    </dt>
-                    <dd className="mt-2 border-l-2 border-amber-300 pl-4 leading-7 text-stone-200">“{answers[1]}”</dd>
-                    <dd className="mt-2 text-xs text-stone-400">Maya · participant response · turn 4</dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs font-semibold uppercase tracking-[0.14em] text-stone-400">Interpretation</dt>
-                    <dd className="mt-2 leading-7 text-stone-200">{branch.interpretation}</dd>
+                    <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500">Interpretation</dt>
+                    <dd className="mt-2">
+                      <Verbatim as="p" className="max-w-measure text-[17px] leading-[28px] text-ink-700">
+                        {branch.interpretation}{' '}
+                        <Citation label="t.4" open={traceOpen} onOpenChange={setTraceOpen}>
+                          <span className="block text-[19px] leading-[31px] text-ink-900">“{answers[1]}”</span>
+                          <Coordinate className="mt-2 block">Maya · participant response · turn 4</Coordinate>
+                        </Citation>
+                      </Verbatim>
+                    </dd>
                   </div>
                 </dl>
               </section>
 
-              <div className="space-y-4">
-                <section aria-labelledby="hypothesis-heading" className="rounded-2xl border border-stone-700 bg-stone-800/70 p-5">
-                  <div className="mb-3 flex items-center gap-2">
-                    <Lightbulb aria-hidden="true" className="text-stone-400" size={18} />
-                    <h2 id="hypothesis-heading" className="font-semibold text-white">Hypothesis to test</h2>
-                  </div>
-                  <p className="text-sm leading-6 text-stone-300">{branch.hypothesis}</p>
-                </section>
-                <section aria-labelledby="nuance-heading" className="rounded-2xl border border-stone-700 bg-stone-850 p-5">
-                  <h2 id="nuance-heading" className="font-semibold text-white">Nuance worth preserving</h2>
-                  <p className="mt-2 text-sm leading-6 text-stone-300">{branch.nuance}</p>
-                </section>
+              <section aria-labelledby="hypothesis-heading" className="border-t border-ink-300 pt-5">
+                <h2 id="hypothesis-heading" className="font-sans text-[15px] font-semibold text-ink-900">Hypothesis to test</h2>
+                <p className="mt-2 max-w-measure font-sans text-[15px] leading-[24px] text-ink-700">{branch.hypothesis}</p>
+              </section>
+
+              <section aria-labelledby="nuance-heading" className="border-t border-ink-300 pt-5">
+                <h2 id="nuance-heading" className="font-sans text-[15px] font-semibold text-ink-900">Nuance worth preserving</h2>
+                <p className="mt-2 max-w-measure font-sans text-[15px] leading-[24px] text-ink-700">{branch.nuance}</p>
+              </section>
+
+              <section aria-labelledby="real-product-heading" className="border-t border-ink-300 pt-5">
+                <h2 id="real-product-heading" className="font-sans text-[15px] font-semibold text-ink-900">What changes in a real study?</h2>
+                <p className="mt-2 max-w-measure font-sans text-[15px] leading-[24px] text-ink-700">
+                  A configured AI interviewer generates follow-ups from each participant’s words. Researchers then synthesize across interviews while retaining transcripts and evidence provenance. This demo replaces both steps with fixed branches and a pre-written note.
+                </p>
+              </section>
+
+              <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+                <Button variant="quiet" onClick={traceEvidence} className="min-h-11">
+                  Trace this insight in the transcript
+                </Button>
+                <Button variant="quiet" onClick={() => resetTo('interview')} className="min-h-11">
+                  Replay another path
+                </Button>
+                <Link
+                  href="/self-host"
+                  className="inline-flex min-h-11 items-center justify-center rounded bg-action px-4 py-2 font-sans text-[15px] font-medium text-paper-1 hover:bg-action/90"
+                >
+                  Set up your own instance
+                </Link>
               </div>
             </div>
-
-            <section aria-labelledby="real-product-heading" className="rounded-2xl border border-stone-700 bg-stone-850 p-5 sm:p-6">
-              <h2 id="real-product-heading" className="font-semibold text-white">What changes in a real study?</h2>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-stone-300">
-                A configured AI interviewer generates follow-ups from each participant’s words. Researchers then synthesize across interviews while retaining transcripts and evidence provenance. This demo replaces both steps with fixed branches and a pre-written note.
-              </p>
-            </section>
-
-            <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-              <button
-                type="button"
-                onClick={traceEvidence}
-                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-stone-600 px-5 py-3 font-semibold text-stone-100 hover:bg-stone-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
-              >
-                <Quote aria-hidden="true" size={18} />
-                Trace this insight in the transcript
-              </button>
-              <button
-                type="button"
-                onClick={() => resetTo('interview')}
-                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-stone-600 px-5 py-3 font-semibold text-stone-100 hover:bg-stone-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
-              >
-                <RotateCcw aria-hidden="true" size={18} />
-                Replay another path
-              </button>
-              <Link
-                href="/self-host"
-                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-stone-100 px-5 py-3 font-semibold text-stone-900 hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
-              >
-                Set up your own instance
-                <ArrowRight aria-hidden="true" size={18} />
-              </Link>
-            </div>
-          </div>
-        )}
+          )}
+        </Page>
       </main>
     </div>
   );

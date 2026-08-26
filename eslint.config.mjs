@@ -3,8 +3,6 @@ import nextCoreWebVitals from 'eslint-config-next/core-web-vitals';
 
 // Verbatim migration ratchet — remove each file from this list as its slice migrates it.
 const legacyDesignAllowlist = [
-  'src/components/Landing.tsx',
-  'src/components/DemoSimulation.tsx',
   'src/components/Synthesis.tsx',
   'src/components/InterviewDetail.tsx',
   'src/components/StudyDetail.tsx',

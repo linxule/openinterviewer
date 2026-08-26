@@ -1,128 +1,138 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
-import { ArrowRight, Beaker, BookOpen, GitBranch, LogIn, Quote, Server } from 'lucide-react';
+import { Citation, Coordinate, Disclosure, Label, Page, Verbatim } from '@/components/ui';
+
+// Excerpt from the scripted demo's "project" branch (see DemoSimulation.tsx).
+// Kept in sync by hand; see the deferred item in D9.
+const SPECIMEN = {
+  quote:
+    'I had forgotten which project it was for, so opening it felt like work before the reading even started.',
+  coordinate: 'Scripted demo · Maya · turn 4',
+  interpretation:
+    'Reconstructing purpose becomes part of the cost of reading, so the saved item feels like unfinished administrative work.',
+} as const;
 
 const Landing: React.FC = () => {
+  const [specimenOpen, setSpecimenOpen] = useState(true);
+
   return (
-    <main className="min-h-dvh bg-stone-900 px-4 py-10 text-stone-100 sm:px-8 sm:py-16">
-      <div className="mx-auto max-w-5xl space-y-14">
-        <section aria-labelledby="landing-heading" className="grid items-end gap-8 lg:grid-cols-[1.2fr_0.8fr]">
-          <div className="space-y-6">
-            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-stone-400">
-              OpenInterviewer · Open source
-            </p>
-            <h1 id="landing-heading" className="max-w-3xl text-4xl font-bold tracking-tight text-white sm:text-6xl sm:leading-[1.05]">
-              Follow the answer, not just the script.
-            </h1>
-            <p className="max-w-2xl text-lg leading-8 text-stone-300 sm:text-xl">
+    <main className="min-h-dvh bg-paper-0">
+      <Page className="py-12 md:py-20">
+        <div className="space-y-16">
+          <section aria-labelledby="landing-heading" className="space-y-8">
+            <Label>OpenInterviewer · Open source</Label>
+
+            <div>
+              <Label>From the scripted demo</Label>
+              <Verbatim as="p" className="mt-2 max-w-measure text-[19px] leading-[31px] text-ink-900">
+                {SPECIMEN.interpretation}{' '}
+                <Citation label="t.4" open={specimenOpen} onOpenChange={setSpecimenOpen}>
+                  <span className="block text-[24px] leading-[36px] text-ink-900 md:text-[28px] md:leading-[40px]">
+                    “{SPECIMEN.quote}”
+                  </span>
+                  <Coordinate className="mt-3 block">{SPECIMEN.coordinate}</Coordinate>
+                </Citation>
+              </Verbatim>
+            </div>
+
+            <div id="landing-heading">
+              <Verbatim as="h1" className="max-w-[24ch] text-[40px] font-normal leading-[44px] text-ink-900 md:text-[56px] md:leading-[58px]">
+                Follow the answer, not just the script.
+              </Verbatim>
+            </div>
+
+            <p className="max-w-measure font-sans text-[17px] leading-[28px] text-ink-700">
               Turn a research guide into an adaptive interview. Participants get thoughtful follow-ups; researchers get interpretations linked back to transcript evidence.
             </p>
+
             <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
               <Link
                 href="/demo"
-                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-stone-100 px-5 py-3 font-semibold text-stone-900 transition-colors hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 focus-visible:ring-offset-2 focus-visible:ring-offset-stone-900"
+                className="inline-flex min-h-11 items-center justify-center rounded bg-action px-4 py-2 font-sans text-[15px] font-medium text-paper-1 hover:bg-action/90"
               >
                 Try the scripted demo · 2 min
-                <ArrowRight aria-hidden="true" size={18} />
               </Link>
               <Link
                 href="/self-host"
-                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-stone-600 px-5 py-3 font-semibold text-stone-100 transition-colors hover:bg-stone-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+                className="inline-flex min-h-11 items-center justify-center rounded border border-ink-300 bg-transparent px-4 py-2 font-sans text-[15px] font-medium text-ink-900 hover:bg-paper-2"
               >
-                <Server aria-hidden="true" size={18} />
                 Self-host your own
               </Link>
             </div>
-          </div>
 
-          <div className="rounded-2xl border border-amber-700/40 bg-amber-950/30 p-5">
-            <div className="flex items-start gap-3">
-              <Beaker aria-hidden="true" className="mt-0.5 shrink-0 text-amber-200" size={20} />
-              <div>
-                <h2 className="font-semibold text-amber-100">Safe to try immediately</h2>
-                <p className="mt-2 text-sm leading-6 text-amber-100/80">
-                  Fictional participant, fixed branches, no account, API key, live AI, interview API call, or saved data.
-                </p>
-              </div>
+            <Disclosure title="Safe to try immediately">
+              Fictional participant, fixed branches, no account, API key, live AI, interview API call, or saved data.
+            </Disclosure>
+          </section>
+
+          <section aria-labelledby="workflow-heading" className="space-y-5">
+            <div>
+              <Label>The research loop</Label>
+              <h2 id="workflow-heading" className="mt-2 font-sans text-[24px] font-semibold leading-[32px] text-ink-900">
+                From a question to evidence you can inspect.
+              </h2>
             </div>
-          </div>
-        </section>
+            <ol>
+              {[
+                {
+                  step: '01',
+                  title: 'Frame the study',
+                  description: 'Define a research question, topic guide, and the context you need from participants.',
+                },
+                {
+                  step: '02',
+                  title: 'Follow the thread',
+                  description: 'Probe what a participant means instead of mechanically asking the next prepared question.',
+                },
+                {
+                  step: '03',
+                  title: 'Trace the insight',
+                  description: 'Review interpretations, nuances, and hypotheses alongside their transcript evidence.',
+                },
+              ].map(({ step, title, description }) => (
+                <li key={step} className="grid grid-cols-[3rem_1fr] gap-4 border-t border-ink-300 py-5">
+                  <Coordinate>{step}</Coordinate>
+                  <div>
+                    <h3 className="font-sans text-[15px] font-semibold text-ink-900">{title}</h3>
+                    <p className="mt-1 max-w-measure font-sans text-[15px] leading-[24px] text-ink-700">{description}</p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </section>
 
-        <section aria-labelledby="workflow-heading" className="space-y-5">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.16em] text-stone-400">The research loop</p>
-            <h2 id="workflow-heading" className="mt-2 text-2xl font-semibold text-white sm:text-3xl">
-              From a question to evidence you can inspect.
-            </h2>
-          </div>
-          <ol className="grid gap-4 md:grid-cols-3">
-            {[
-              {
-                icon: BookOpen,
-                step: '01',
-                title: 'Frame the study',
-                description: 'Define a research question, topic guide, and the context you need from participants.',
-              },
-              {
-                icon: GitBranch,
-                step: '02',
-                title: 'Follow the thread',
-                description: 'Probe what a participant means instead of mechanically asking the next prepared question.',
-              },
-              {
-                icon: Quote,
-                step: '03',
-                title: 'Trace the insight',
-                description: 'Review interpretations, nuances, and hypotheses alongside their transcript evidence.',
-              },
-            ].map(({ icon: Icon, step, title, description }) => (
-              <li key={step} className="rounded-2xl border border-stone-700 bg-stone-800/60 p-5 sm:p-6">
-                <div className="flex items-center justify-between">
-                  <Icon aria-hidden="true" className="text-stone-300" size={21} />
-                  <span className="text-xs font-semibold tracking-[0.16em] text-stone-400">{step}</span>
-                </div>
-                <h3 className="mt-6 text-lg font-semibold text-white">{title}</h3>
-                <p className="mt-2 text-sm leading-6 text-stone-400">{description}</p>
-              </li>
-            ))}
-          </ol>
-        </section>
-
-        <section aria-label="Ways to run OpenInterviewer" className="grid gap-4 border-t border-stone-800 pt-8 sm:grid-cols-2">
-          <Link
-            href="/login"
-            className="group rounded-2xl border border-stone-800 p-5 transition-colors hover:border-stone-600 hover:bg-stone-850"
+          <section
+            aria-label="Ways to run OpenInterviewer"
+            className="divide-y divide-ink-300 border-t border-ink-300 md:grid md:grid-cols-2 md:gap-10 md:divide-y-0"
           >
-            <div className="flex items-center gap-3">
-              <LogIn aria-hidden="true" className="text-stone-400" size={19} />
-              <h2 className="font-semibold text-white">Configured researcher workspace</h2>
-            </div>
-            <p className="mt-2 text-sm leading-6 text-stone-400">
-              Sign in to your workspace. Hosted mode guides you through connecting your own provider and storage; standalone uses the operator&apos;s configuration.
-            </p>
-            <span className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-stone-200 group-hover:text-white">
-              Researcher sign in <ArrowRight aria-hidden="true" size={16} />
-            </span>
-          </Link>
+            <Link href="/login" className="group block py-6">
+              <h2 className="font-sans text-[15px] font-semibold text-ink-900 group-hover:text-action">
+                Configured researcher workspace
+              </h2>
+              <p className="mt-2 max-w-measure font-sans text-[15px] leading-[24px] text-ink-700">
+                Sign in to your workspace. Hosted mode guides you through connecting your own provider and storage; standalone uses the operator&apos;s configuration.
+              </p>
+              <span className="mt-3 inline-block font-sans text-[13px] font-medium text-action">
+                Researcher sign in
+              </span>
+            </Link>
 
-          <Link
-            href="/self-host"
-            className="group rounded-2xl border border-stone-800 p-5 transition-colors hover:border-stone-600 hover:bg-stone-850"
-          >
-            <div className="flex items-center gap-3">
-              <Server aria-hidden="true" className="text-stone-400" size={19} />
-              <h2 className="font-semibold text-white">Self-host</h2>
-            </div>
-            <p className="mt-2 text-sm leading-6 text-stone-400">
-              Deploy the MIT-licensed application with your own provider keys and Upstash database.
-            </p>
-            <span className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-stone-200 group-hover:text-white">
-              View deployment guide <ArrowRight aria-hidden="true" size={16} />
-            </span>
-          </Link>
-        </section>
-      </div>
+            <Link href="/self-host" className="group block py-6">
+              <h2 className="font-sans text-[15px] font-semibold text-ink-900 group-hover:text-action">
+                Self-host
+              </h2>
+              <p className="mt-2 max-w-measure font-sans text-[15px] leading-[24px] text-ink-700">
+                Deploy the MIT-licensed application with your own provider keys and Upstash database.
+              </p>
+              <span className="mt-3 inline-block font-sans text-[13px] font-medium text-action">
+                View deployment guide
+              </span>
+            </Link>
+          </section>
+        </div>
+      </Page>
     </main>
   );
 };
