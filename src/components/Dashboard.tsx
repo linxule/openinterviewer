@@ -1,7 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
-import { motion } from 'framer-motion';
+import { useEffect, useState, type KeyboardEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { isPendingStudyStub, StoredInterview, StudyWorkspaceItem } from '@/types';
 import {
@@ -13,25 +12,10 @@ import {
   ResearcherStorageUnavailableError,
   StudyOperationPendingError,
 } from '@/services/storageService';
-import {
-  Loader2,
-  FileText,
-  Download,
-  Eye,
-  Clock,
-  MessageSquare,
-  Lightbulb,
-  ArrowLeft,
-  FolderOpen,
-  LogOut,
-  Filter,
-  BookOpen,
-  Settings,
-  RefreshCw,
-  AlertTriangle
-} from 'lucide-react';
+import { Button, Coordinate, Field, Label, Measure, Rule } from '@/components/ui';
+import { useSetTrailingCrumb } from '@/components/shell/breadcrumb';
 
-const Dashboard: React.FC = () => {
+export default function Dashboard() {
   const router = useRouter();
   const [interviews, setInterviews] = useState<StoredInterview[]>([]);
   const [studies, setStudies] = useState<StudyWorkspaceItem[]>([]);
@@ -41,6 +25,11 @@ const Dashboard: React.FC = () => {
   const [warning, setWarning] = useState<string | null>(null);
   const [operationPending, setOperationPending] = useState(false);
   const [isReconciling, setIsReconciling] = useState(false);
+
+  const selectedStudy = selectedStudyId ? studies.find((study) => study.id === selectedStudyId) : null;
+  useSetTrailingCrumb(
+    selectedStudy && !isPendingStudyStub(selectedStudy) ? selectedStudy.config.name : null
+  );
 
   // Load studies on mount
   useEffect(() => {
@@ -152,15 +141,6 @@ const Dashboard: React.FC = () => {
     router.push(`/dashboard/interview/${id}?studyId=${encodeURIComponent(studyId)}`);
   };
 
-  const handleLogout = async () => {
-    try {
-      await fetch('/api/auth', { method: 'DELETE' });
-      router.push('/login');
-    } catch (error) {
-      console.error('Logout error:', error);
-    }
-  };
-
   const formatDuration = (start: number, end: number) => {
     const minutes = Math.round((end - start) / 1000 / 60);
     return `${minutes} min`;
@@ -176,114 +156,48 @@ const Dashboard: React.FC = () => {
     });
   };
 
+  const handleTbodyKeyDown = (event: KeyboardEvent<HTMLTableSectionElement>) => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    const buttons = Array.from(
+      event.currentTarget.querySelectorAll<HTMLButtonElement>('[data-row-primary]')
+    );
+    const currentIndex = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    if (currentIndex === -1) return;
+    const nextIndex = event.key === 'ArrowDown' ? currentIndex + 1 : currentIndex - 1;
+    if (nextIndex < 0 || nextIndex >= buttons.length) return;
+    event.preventDefault();
+    buttons[nextIndex]?.focus();
+  };
+
   return (
-    <div className="min-h-screen bg-stone-900 p-4 sm:p-8">
-      <div className="max-w-5xl mx-auto">
-        {/* Header */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="mb-8"
-        >
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-stone-700 flex items-center justify-center">
-                <FolderOpen className="text-stone-300" size={20} />
-              </div>
-              <div>
-                <h1 className="text-3xl font-bold text-white">Interview Dashboard</h1>
-                <p className="text-stone-400">
-                  {interviews.length} interview{interviews.length !== 1 ? 's' : ''} collected
-                </p>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap gap-3">
-              <button
-                onClick={() => router.push('/studies')}
-                className="px-4 py-2 text-sm bg-stone-700 hover:bg-stone-600 text-stone-300 rounded-xl transition-colors flex items-center gap-2"
-              >
-                <BookOpen size={16} />
-                My Studies
-              </button>
-              <button
-                onClick={() => router.push('/setup')}
-                className="px-4 py-2 text-sm bg-stone-700 hover:bg-stone-600 text-stone-300 rounded-xl transition-colors flex items-center gap-2"
-              >
-                <ArrowLeft size={16} />
-                Back to Setup
-              </button>
-              <button
-                onClick={() => router.push('/settings')}
-                className="px-4 py-2 text-sm bg-stone-700 hover:bg-stone-600 text-stone-300 rounded-xl transition-colors flex items-center gap-2"
-              >
-                <Settings size={16} />
-                Account & connections
-              </button>
-              {interviews.length > 0 && (
-                <button
-                  onClick={handleExportAll}
-                  disabled={exporting || operationPending}
-                  className="px-4 py-2 text-sm bg-stone-600 hover:bg-stone-500 text-white rounded-xl transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {exporting ? (
-                    <Loader2 size={16} className="animate-spin" />
-                  ) : (
-                    <Download size={16} />
-                  )}
-                  Export All
-                </button>
-              )}
-              <button
-                onClick={handleLogout}
-                className="px-4 py-2 text-sm border border-stone-600 text-stone-400 hover:bg-stone-700 rounded-xl transition-colors flex items-center gap-2"
-              >
-                <LogOut size={16} />
-                Logout
-              </button>
-            </div>
-          </div>
-        </motion.div>
-
-        {operationPending && (
-          <div className="mb-6 bg-amber-900/30 border border-amber-700/50 rounded-xl p-4 flex items-center gap-3">
-            <AlertTriangle size={20} className="text-amber-400 flex-shrink-0" />
-            <p className="text-sm text-amber-300">A study operation is already in progress.</p>
-            <button
-              type="button"
-              onClick={() => void runReconciliation()}
-              disabled={isReconciling}
-              className="ml-auto inline-flex items-center gap-2 rounded-lg border border-amber-700 px-3 py-2 text-sm text-amber-200 hover:bg-amber-900/40 disabled:opacity-50"
-            >
-              <RefreshCw size={14} className={isReconciling ? 'animate-spin' : ''} />
-              Reconcile
-            </button>
-          </div>
-        )}
-
-        {/* Warning */}
-        {warning && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="mb-6 p-4 bg-stone-800 border border-stone-600 rounded-xl text-stone-300 text-sm"
+    <div>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 className="font-sans text-[24px] leading-[32px] font-semibold text-ink-900">Interview Dashboard</h1>
+          <p className="text-[13px] text-ink-500">
+            {interviews.length} interview{interviews.length !== 1 ? 's' : ''} collected
+          </p>
+        </div>
+        {interviews.length > 0 && (
+          <Button
+            type="button"
+            variant="primary"
+            onClick={() => void handleExportAll()}
+            disabled={exporting || operationPending}
           >
-            {warning}
-          </motion.div>
+            Export All
+          </Button>
         )}
+      </div>
 
-        {/* Study Filter */}
-        {studies.length > 0 && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="mb-6 flex items-center gap-3"
-          >
-            <Filter size={16} className="text-stone-500" />
+      <Rule className="my-6" />
+
+      {studies.length > 0 && (
+        <div className="mb-6 flex flex-wrap items-end gap-3">
+          <Field label="Study" htmlFor="dashboard-study-filter">
             <select
               value={selectedStudyId || ''}
               onChange={(e) => setSelectedStudyId(e.target.value || null)}
-              className="px-4 py-2 bg-stone-800 border border-stone-700 rounded-xl text-stone-300 focus:outline-none focus:ring-2 focus:ring-stone-500"
             >
               <option value="">All Studies</option>
               {studies.map((study) => (
@@ -294,134 +208,175 @@ const Dashboard: React.FC = () => {
                 </option>
               ))}
             </select>
-            {selectedStudyId && (
-              <button
-                onClick={() => setSelectedStudyId(null)}
-                className="text-sm text-stone-500 hover:text-stone-400"
-              >
-                Clear filter
-              </button>
-            )}
-          </motion.div>
-        )}
+          </Field>
+          {selectedStudyId && (
+            <button
+              type="button"
+              onClick={() => setSelectedStudyId(null)}
+              className="text-[13px] text-ink-500 hover:text-ink-900"
+            >
+              Clear filter
+            </button>
+          )}
+        </div>
+      )}
 
-        {/* Content */}
-        {loading ? (
-          <div className="flex items-center justify-center py-20">
-            <Loader2 size={48} className="animate-spin text-stone-400" />
-          </div>
-        ) : interviews.length === 0 ? (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="bg-stone-800/50 rounded-2xl border border-stone-700 p-12 text-center"
+      {operationPending && (
+        <div role="status" className="mb-6 border-l-2 border-error bg-paper-2 px-4 py-3">
+          <Label>Pending reconciliation</Label>
+          <p className="mt-1 text-[13px] text-ink-700">A study operation is already in progress.</p>
+          <Button
+            type="button"
+            variant="quiet"
+            onClick={() => void runReconciliation()}
+            disabled={isReconciling}
+            className="mt-2"
           >
-            <div className="w-16 h-16 rounded-full bg-stone-800 flex items-center justify-center mx-auto mb-4">
-              <FileText size={32} className="text-stone-500" />
-            </div>
-            {operationPending ? (
-              <>
-                <h2 className="text-xl font-semibold text-white mb-2">Study change pending</h2>
-                <p className="text-stone-400 mb-6">
-                  Interview export and collection reads will resume after reconciliation.
-                </p>
-              </>
-            ) : warning ? (
-              <>
-                <h2 className="text-xl font-semibold text-white mb-2">Workspace unavailable</h2>
-                <p className="text-stone-400 mb-6">{warning}</p>
-              </>
-            ) : (
-              <>
-                <h2 className="text-xl font-semibold text-white mb-2">No Interviews Yet</h2>
-                <p className="text-stone-400 mb-6">
-                  Completed interviews will appear here. Share participant links to start collecting data.
-                </p>
-                <button
-                  onClick={() => router.push('/setup')}
-                  className="px-6 py-3 bg-stone-600 hover:bg-stone-500 text-white rounded-xl transition-colors"
+            Reconcile
+          </Button>
+        </div>
+      )}
+
+      {warning && (
+        <div className="mb-6 border-l-2 border-error bg-paper-2 px-4 py-3">
+          <Label>Workspace</Label>
+          <p className="mt-1 text-[13px] text-ink-700">{warning}</p>
+        </div>
+      )}
+
+      {loading ? (
+        <p className="text-[13px] text-ink-500">Loading interviews…</p>
+      ) : interviews.length === 0 ? (
+        <Measure>
+          {operationPending ? (
+            <>
+              <h2 className="font-sans text-[18px] font-semibold text-ink-900">Study change pending</h2>
+              <p className="mt-2 text-[15px] text-ink-700">
+                Interview export and collection reads will resume after reconciliation.
+              </p>
+            </>
+          ) : warning ? (
+            <>
+              <h2 className="font-sans text-[18px] font-semibold text-ink-900">Workspace unavailable</h2>
+              <p className="mt-2 text-[15px] text-ink-700">{warning}</p>
+            </>
+          ) : (
+            <>
+              <h2 className="font-sans text-[18px] font-semibold text-ink-900">No Interviews Yet</h2>
+              <p className="mt-2 text-[15px] text-ink-700">
+                Completed interviews will appear here. Share participant links to start collecting data.
+              </p>
+              <Button type="button" variant="primary" onClick={() => router.push('/setup')} className="mt-4">
+                Create Study Link
+              </Button>
+            </>
+          )}
+        </Measure>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-left">
+            <thead>
+              <tr className="border-b border-ink-300">
+                <th scope="col" className="px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500">
+                  ID
+                </th>
+                <th scope="col" className="px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500">
+                  Study
+                </th>
+                <th
+                  scope="col"
+                  className="hidden px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500 md:table-cell"
                 >
-                  Create Study Link
-                </button>
-              </>
-            )}
-          </motion.div>
-        ) : (
-          <div className="space-y-4">
-            {interviews.map((interview, index) => (
-              <motion.div
-                key={interview.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.05 }}
-                className="bg-stone-800/50 rounded-xl border border-stone-700 p-6 hover:border-stone-600 transition-colors cursor-pointer"
-                onClick={() => handleViewInterview(interview.id, interview.studyId)}
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-3 mb-2">
-                      <h3 className="font-semibold text-white">{interview.studyName}</h3>
-                      <span className={`px-2 py-0.5 text-xs rounded-full ${
-                        interview.status === 'completed'
-                          ? 'bg-stone-700 text-stone-300'
-                          : 'bg-stone-600 text-stone-200'
-                      }`}>
+                  Participant
+                </th>
+                <th
+                  scope="col"
+                  className="hidden px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500 sm:table-cell"
+                >
+                  Started
+                </th>
+                <th
+                  scope="col"
+                  className="hidden px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500 md:table-cell"
+                >
+                  Duration
+                </th>
+                <th
+                  scope="col"
+                  className="hidden px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500 md:table-cell"
+                >
+                  Turns
+                </th>
+                <th
+                  scope="col"
+                  className="hidden px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500 lg:table-cell"
+                >
+                  Model
+                </th>
+                <th scope="col" className="px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500">
+                  Status
+                </th>
+              </tr>
+            </thead>
+            <tbody onKeyDown={handleTbodyKeyDown}>
+              {interviews.map((interview) => {
+                const extractedFields = (interview.participantProfile?.fields ?? [])
+                  .filter((f) => f.status === 'extracted' && f.value)
+                  .slice(0, 3)
+                  .map((f) => f.value)
+                  .join(' • ');
+                return (
+                  <tr
+                    key={interview.id}
+                    className="border-b border-ink-200 hover:bg-paper-1"
+                    onClick={() => handleViewInterview(interview.id, interview.studyId)}
+                  >
+                    <td className="px-3 py-3 align-top text-[13px] text-ink-700">
+                      <Coordinate>{interview.id.slice(0, 8)}</Coordinate>
+                    </td>
+                    <td className="px-3 py-3 align-top text-[13px] text-ink-700">
+                      <button
+                        type="button"
+                        data-row-primary
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleViewInterview(interview.id, interview.studyId);
+                        }}
+                        className="text-left font-sans text-[14px] font-medium text-ink-900 underline-offset-2 hover:text-action hover:underline"
+                      >
+                        {interview.studyName}
+                      </button>
+                      {interview.synthesis?.bottomLine && (
+                        <p className="line-clamp-1 text-[13px] text-ink-500">{interview.synthesis.bottomLine}</p>
+                      )}
+                    </td>
+                    <td className="hidden px-3 py-3 align-top text-[13px] text-ink-700 md:table-cell">
+                      {extractedFields || '—'}
+                    </td>
+                    <td className="hidden px-3 py-3 align-top text-[13px] text-ink-700 sm:table-cell">
+                      <Coordinate>{formatDate(interview.createdAt)}</Coordinate>
+                    </td>
+                    <td className="hidden px-3 py-3 align-top text-[13px] text-ink-700 md:table-cell">
+                      <Coordinate>{formatDuration(interview.createdAt, interview.completedAt)}</Coordinate>
+                    </td>
+                    <td className="hidden px-3 py-3 align-top text-[13px] text-ink-700 md:table-cell">
+                      <Coordinate>{interview.transcript.length}</Coordinate>
+                    </td>
+                    <td className="hidden px-3 py-3 align-top text-[13px] text-ink-700 lg:table-cell">
+                      <Coordinate>{interview.aiModel ?? '—'}</Coordinate>
+                    </td>
+                    <td className="px-3 py-3 align-top text-[13px] text-ink-700">
+                      <span className={interview.status === 'completed' ? 'text-ink-500' : 'text-ink-900'}>
                         {interview.status}
                       </span>
-                    </div>
-
-                    {/* Participant info */}
-                    {interview.participantProfile && interview.participantProfile.fields.length > 0 && (
-                      <div className="text-sm text-stone-400 mb-3">
-                        {interview.participantProfile.fields
-                          .filter(f => f.status === 'extracted' && f.value)
-                          .slice(0, 3)
-                          .map(f => f.value)
-                          .join(' • ')}
-                      </div>
-                    )}
-
-                    {/* Key insight */}
-                    {interview.synthesis?.bottomLine && (
-                      <div className="flex items-start gap-2 text-sm text-stone-300 bg-stone-800 rounded-lg p-3 mb-3">
-                        <Lightbulb size={16} className="text-stone-400 flex-shrink-0 mt-0.5" />
-                        <span className="line-clamp-2">{interview.synthesis.bottomLine}</span>
-                      </div>
-                    )}
-
-                    {/* Stats */}
-                    <div className="flex items-center gap-4 text-xs text-stone-500">
-                      <div className="flex items-center gap-1">
-                        <Clock size={12} />
-                        {formatDuration(interview.createdAt, interview.completedAt)}
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <MessageSquare size={12} />
-                        {interview.transcript.length} messages
-                      </div>
-                      <div>
-                        {formatDate(interview.createdAt)}
-                      </div>
-                    </div>
-                  </div>
-
-                  <button
-                    className="p-2 text-stone-400 hover:text-stone-300 transition-colors"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleViewInterview(interview.id, interview.studyId);
-                    }}
-                  >
-                    <Eye size={20} />
-                  </button>
-                </div>
-              </motion.div>
-            ))}
-          </div>
-        )}
-      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
-};
-
-export default Dashboard;
+}
