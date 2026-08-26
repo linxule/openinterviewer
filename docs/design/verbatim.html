@@ -1,0 +1,441 @@
+<title>Verbatim</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=Public+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --paper-0: #F7F3EA;
+    --paper-1: #FBF8F1;
+    --paper-2: #EFE9DA;
+    --ink-900: #201D17;
+    --ink-700: #3B362B;
+    --ink-500: #746C58;
+    --ink-300: #DED5BE;
+    --evidence: #7A3548;
+    --evidence-wash: #F0E2E4;
+    --disclosure: #96631C;
+    --disclosure-ink: #FBF8F1;
+    --action: #1E5851;
+    --error: #B4432A;
+    --success: #3F6B3B;
+    --shadow: 0 1px 2px rgb(32 29 23 / 0.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper-0: #1A1815;
+      --paper-1: #221F1A;
+      --paper-2: #14120F;
+      --ink-900: #ECE6D6;
+      --ink-700: #CFC7B4;
+      --ink-500: #A79E88;
+      --ink-300: #37332A;
+      --evidence: #C97A8B;
+      --evidence-wash: #332226;
+      --disclosure: #D9A84C;
+      --disclosure-ink: #1A1815;
+      --action: #5FA89E;
+      --error: #D98A75;
+      --success: #8CBA87;
+      --shadow: 0 1px 2px rgb(0 0 0 / 0.4);
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper-0: #1A1815;
+    --paper-1: #221F1A;
+    --paper-2: #14120F;
+    --ink-900: #ECE6D6;
+    --ink-700: #CFC7B4;
+    --ink-500: #A79E88;
+    --ink-300: #37332A;
+    --evidence: #C97A8B;
+    --evidence-wash: #332226;
+    --disclosure: #D9A84C;
+    --disclosure-ink: #1A1815;
+    --action: #5FA89E;
+    --error: #D98A75;
+    --success: #8CBA87;
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.4);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--paper-0);
+    color: var(--ink-700);
+    font-family: "Public Sans", "Helvetica Neue", Arial, sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    margin: 0;
+    -webkit-font-smoothing: antialiased;
+  }
+  .sheet { max-width: 66rem; margin: 0 auto; padding: 0 1.25rem 6rem; }
+  @media (min-width: 700px) { .sheet { padding: 0 3rem 6rem; } }
+
+  .serif { font-family: "Source Serif 4", Georgia, "Times New Roman", serif; }
+  .mono  { font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace; font-size: 12px; letter-spacing: 0; }
+
+  h1, h2, h3 { color: var(--ink-900); text-wrap: balance; }
+  a { color: var(--action); }
+
+  .label {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--ink-500);
+  }
+  .label--evidence { color: var(--evidence); }
+
+  .rule { border: 0; border-top: 1px solid var(--ink-300); margin: 0; }
+
+  /* ---- masthead ---- */
+  header.masthead { padding-top: 4rem; }
+  .masthead h1 {
+    font-family: "Source Serif 4", Georgia, serif;
+    font-weight: 400; font-size: clamp(3rem, 8vw, 4.5rem);
+    line-height: 1.05; letter-spacing: -0.01em; margin: 0.75rem 0 1rem;
+  }
+  .masthead .thesis {
+    font-family: "Source Serif 4", Georgia, serif;
+    font-size: 19px; line-height: 1.65; color: var(--ink-700);
+    max-width: 42rem; margin: 0 0 2.5rem;
+  }
+  .provenance {
+    display: flex; flex-wrap: wrap; gap: 0.4rem 1.5rem;
+    color: var(--ink-500); padding: 0.9rem 0 2.5rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---- specimen hero ---- */
+  .specimen {
+    display: grid; gap: 1.25rem; padding: 2.5rem 0;
+    border-top: 1px solid var(--ink-300); border-bottom: 1px solid var(--ink-300);
+    margin-bottom: 3.5rem;
+  }
+  @media (min-width: 900px) {
+    .specimen { grid-template-columns: minmax(0, 34rem) 1fr; gap: 3rem; align-items: start; }
+  }
+  .specimen blockquote {
+    font-family: "Source Serif 4", Georgia, serif;
+    font-size: clamp(22px, 3.2vw, 28px); line-height: 1.45;
+    color: var(--ink-900); margin: 0;
+  }
+  .specimen .note { border-left: 2px solid var(--evidence); padding-left: 1rem; }
+  .specimen .note p { margin: 0.35rem 0 0; color: var(--ink-500); font-size: 14px; }
+
+  /* ---- sections ---- */
+  section { margin: 0 0 3.5rem; }
+  .sec-head { display: flex; align-items: baseline; gap: 1rem; margin-bottom: 1.5rem; }
+  .sec-head h2 {
+    font-family: "Source Serif 4", Georgia, serif;
+    font-weight: 400; font-size: 28px; margin: 0; white-space: nowrap;
+  }
+  .sec-head::after { content: ""; flex: 1; border-top: 1px solid var(--ink-300); transform: translateY(-6px); }
+  .measure { max-width: 42rem; }
+  .measure p { margin: 0 0 1rem; }
+
+  /* ---- register tables ---- */
+  .register-wrap { overflow-x: auto; }
+  table.register { width: 100%; border-collapse: collapse; font-size: 14px; }
+  table.register th {
+    text-align: left; font-size: 11px; font-weight: 600; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--ink-500);
+    padding: 0.5rem 1rem 0.5rem 0; border-bottom: 1px solid var(--ink-300); white-space: nowrap;
+  }
+  table.register td {
+    padding: 0.6rem 1rem 0.6rem 0; border-bottom: 1px solid var(--ink-300);
+    vertical-align: top; color: var(--ink-700);
+  }
+  table.register td:first-child { color: var(--ink-900); font-weight: 500; white-space: nowrap; }
+
+  /* ---- palette ---- */
+  .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 1px; background: var(--ink-300); border: 1px solid var(--ink-300); }
+  .swatch { background: var(--paper-1); padding: 0.75rem; }
+  .swatch .chip { height: 44px; margin-bottom: 0.6rem; border: 1px solid var(--ink-300); }
+  .swatch .tk { color: var(--ink-900); font-weight: 500; display: block; }
+  .swatch .role { color: var(--ink-500); font-size: 12px; line-height: 1.45; display: block; margin-top: 2px; }
+
+  /* ---- type specimens ---- */
+  .typeline { display: grid; gap: 0.35rem; padding: 1.25rem 0; border-bottom: 1px solid var(--ink-300); }
+  .typeline:last-child { border-bottom: 0; }
+  .typeline .ex { color: var(--ink-900); }
+
+  /* ---- trace demo ---- */
+  .trace-demo { background: var(--paper-1); border: 1px solid var(--ink-300); padding: 2rem 1.5rem; }
+  @media (min-width: 900px) {
+    .trace-demo { display: grid; grid-template-columns: minmax(0, 34rem) 1fr; gap: 3rem; padding: 2.5rem; }
+  }
+  .trace-demo .claim {
+    font-family: "Source Serif 4", Georgia, serif;
+    font-size: 18px; line-height: 1.7; color: var(--ink-900); margin: 0;
+  }
+  .cite {
+    font-family: "IBM Plex Mono", monospace; font-size: 11px;
+    color: var(--evidence); background: none; border: 1px solid var(--evidence);
+    border-radius: 2px; padding: 0 0.35em; margin-left: 0.25em;
+    cursor: pointer; vertical-align: super; line-height: 1.5;
+  }
+  .cite[aria-expanded="true"] { background: var(--evidence); color: var(--paper-1); }
+  .cite:focus-visible, button:focus-visible { outline: 2px solid var(--action); outline-offset: 2px; }
+  .apparatus { margin-top: 1.5rem; }
+  @media (min-width: 900px) { .apparatus { margin-top: 0; } }
+  .apparatus-note {
+    display: none; background: var(--paper-1); border-left: 2px solid var(--evidence);
+    box-shadow: var(--shadow); padding: 1.1rem 1.25rem;
+  }
+  .apparatus-note.open { display: block; animation: unfold 240ms cubic-bezier(0.2, 0, 0, 1); }
+  @keyframes unfold { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .apparatus-note.open { animation: none; } }
+  .apparatus-note q {
+    font-family: "Source Serif 4", Georgia, serif; font-size: 17px; line-height: 1.55;
+    color: var(--ink-900); quotes: "\201C" "\201D";
+  }
+  .apparatus-note .coord { margin-top: 0.75rem; color: var(--ink-500); }
+  .apparatus-hint { color: var(--ink-500); font-size: 13px; margin-top: 0.75rem; }
+
+  /* ---- disclosure band ---- */
+  .disclosure-band {
+    background: var(--disclosure); color: var(--disclosure-ink);
+    padding: 0.7rem 1.1rem; font-weight: 500; font-size: 14px;
+    display: flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; align-items: baseline;
+  }
+
+  /* ---- journeys ---- */
+  .journey { padding: 1.5rem 0; border-bottom: 1px solid var(--ink-300); }
+  .journey:last-child { border-bottom: 0; }
+  .journey h3 { font-size: 16px; font-weight: 600; margin: 0 0 0.5rem; }
+  .journey p { margin: 0.4rem 0; max-width: 46rem; }
+  .journey .amend { color: var(--ink-500); font-size: 13px; }
+
+  /* ---- initiatives ---- */
+  .initiative { border: 1px solid var(--ink-300); background: var(--paper-1); padding: 1.5rem; margin-bottom: 1rem; }
+  .initiative h3 { margin: 0.25rem 0 0.6rem; font-size: 17px; }
+  .initiative p { margin: 0.4rem 0; }
+  .gate { border-left: 2px solid var(--disclosure); padding-left: 1rem; margin-top: 0.9rem; font-size: 14px; color: var(--ink-700); }
+  .gate .label { color: var(--disclosure); }
+
+  /* ---- keep / kill ---- */
+  .twocol { display: grid; gap: 2rem; }
+  @media (min-width: 800px) { .twocol { grid-template-columns: 1fr 1fr; } }
+  .twocol ul { margin: 0.75rem 0 0; padding: 0; list-style: none; }
+  .twocol li { padding: 0.45rem 0; border-bottom: 1px solid var(--ink-300); font-size: 14px; }
+  .keep li::before { content: "· "; color: var(--success); font-weight: 700; }
+  .kill li { color: var(--ink-500); }
+  .kill li::before { content: "× "; color: var(--error); font-weight: 700; }
+
+  /* ---- amendments ---- */
+  details.amend-block { border: 1px solid var(--ink-300); background: var(--paper-1); margin-bottom: 0.5rem; }
+  details.amend-block summary { padding: 0.8rem 1.1rem; cursor: pointer; color: var(--ink-900); font-weight: 500; font-size: 14px; }
+  details.amend-block div { padding: 0 1.1rem 1rem; max-width: 46rem; font-size: 14px; }
+
+  footer.colophon {
+    border-top: 1px solid var(--ink-300); margin-top: 4rem; padding-top: 1.25rem;
+    color: var(--ink-500);
+  }
+</style>
+
+<div class="sheet">
+
+  <header class="masthead">
+    <span class="label">OpenInterviewer · design direction · v1.0</span>
+    <h1>Verbatim</h1>
+    <p class="thesis">The participant's exact words are the primary text. Everything the system or the researcher says about them is a visibly subordinate, traceable annotation — and the interface is the warm, light, typeset document that makes that hierarchy legible at a glance.</p>
+    <hr class="rule">
+    <div class="provenance mono">
+      <span>3 independent proposals</span>
+      <span>1 adversarial challenge</span>
+      <span>9 amendments adopted</span>
+      <span>decided 2026-08-26</span>
+    </div>
+  </header>
+
+  <!-- Specimen: the direction, demonstrated -->
+  <div class="specimen">
+    <blockquote>&ldquo;I had dozens of saved pieces, and nothing told me why this one had mattered.&rdquo;</blockquote>
+    <div class="note">
+      <span class="label label--evidence">Emerging theme</span>
+      <p>Saved curiosity becomes undifferentiated backlog.</p>
+      <p class="mono" style="margin-top:0.75rem">Maya · participant · turn 4</p>
+    </div>
+  </div>
+
+  <section>
+    <div class="sec-head"><h2>Decisions of record</h2></div>
+    <div class="register-wrap">
+      <table class="register">
+        <tr><th>Decision</th><th>Resolution</th></tr>
+        <tr><td>Scope</td><td>Full experience — identity and UX flows across all three journeys.</td></tr>
+        <tr><td>Genre</td><td>Annotated document with citation apparatus. Not chat, not dashboard SaaS. Transcript grammar replaces bubble grammar everywhere.</td></tr>
+        <tr><td>Participant theme</td><td><strong>Light only.</strong> One warm-paper palette, no toggle, no OS auto-switch. Dark ("Night") exists solely as a researcher-workspace toggle. <span class="mono">A6</span></td></tr>
+        <tr><td>Typefaces</td><td>Source Serif 4 · Public Sans · IBM Plex Mono. Three families, no display face — display is the serif at weight 400.</td></tr>
+        <tr><td>Accents</td><td>Three hues, one job each: wine = evidence, ochre = disclosure, teal = action. Moss and terracotta as status only, hue-distinct from wine so "cited" and "failed" never confuse.</td></tr>
+        <tr><td>Amendments</td><td>All nine challenge amendments adopted as a package.</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>Palette</h2></div>
+    <p class="measure">Tokens as CSS custom properties on <span class="mono">:root</span> / <span class="mono">[data-theme=night]</span>. Wine and ochre are <em>not</em> exposed in the general Tailwind scale — they live inside the Quote, Citation, and Disclosure primitives, and an ESLint rule in CI bans them (and raw <span class="mono">font-serif</span>, and any <span class="mono">stone-*</span> class) outside <span class="mono">src/components/ui/</span>. This page is rendered in the palette it documents; switch your theme to see Night.</p>
+    <div class="swatches">
+      <div class="swatch"><div class="chip" style="background:#F7F3EA"></div><span class="tk mono">--paper-0 · #F7F3EA</span><span class="role">page ground</span></div>
+      <div class="swatch"><div class="chip" style="background:#FBF8F1"></div><span class="tk mono">--paper-1 · #FBF8F1</span><span class="role">raised sheet</span></div>
+      <div class="swatch"><div class="chip" style="background:#EFE9DA"></div><span class="tk mono">--paper-2 · #EFE9DA</span><span class="role">recessed well — quotes, transcript, input</span></div>
+      <div class="swatch"><div class="chip" style="background:#201D17"></div><span class="tk mono">--ink-900 · #201D17</span><span class="role">headings, primary text</span></div>
+      <div class="swatch"><div class="chip" style="background:#746C58"></div><span class="tk mono">--ink-500 · #746C58</span><span class="role">secondary, meta</span></div>
+      <div class="swatch"><div class="chip" style="background:#7A3548"></div><span class="tk mono">--evidence · #7A3548</span><span class="role">wine — citation marks, trace rings, turn tags. Nothing else.</span></div>
+      <div class="swatch"><div class="chip" style="background:#96631C"></div><span class="tk mono">--disclosure · #96631C</span><span class="role">ochre — synthetic, preview, consent chrome. Nothing else.</span></div>
+      <div class="swatch"><div class="chip" style="background:#1E5851"></div><span class="tk mono">--action · #1E5851</span><span class="role">teal — links, primary buttons, focus, active nav</span></div>
+      <div class="swatch"><div class="chip" style="background:#3F6B3B"></div><span class="tk mono">--success · #3F6B3B</span><span class="role">saved, confirmed</span></div>
+      <div class="swatch"><div class="chip" style="background:#B4432A"></div><span class="tk mono">--error · #B4432A</span><span class="role">fail-closed errors</span></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>Typography</h2></div>
+    <p class="measure">Two laws, lint-enforced through primitives. Everything else is convention.</p>
+    <div class="typeline">
+      <span class="label">Law 1 · Source Serif 4 — verbatim human speech, consent text, interpretation prose</span>
+      <span class="ex serif" style="font-size:19px; line-height:1.65">&ldquo;The headline made me curious, but I was not ready to give it twenty minutes.&rdquo; If a serif appears anywhere that is not someone's words or a reading document, it is a bug.</span>
+    </div>
+    <div class="typeline">
+      <span class="label">Public Sans — all interface chrome</span>
+      <span class="ex" style="font-size:15px">Buttons, labels, navigation, interviewer questions, forms. A face designed for public digital services, for a product whose ethic is records, consent, and ownership. Not Inter.</span>
+    </div>
+    <div class="typeline">
+      <span class="label">IBM Plex Mono — machine-verifiable facts</span>
+      <span class="ex mono" style="font-size:13px">turn 12 · exploration · synthesized by claude-opus · study rev 3 · receipt a91f3c · tabular-nums</span>
+    </div>
+    <div class="typeline">
+      <span class="label">Scale</span>
+      <span class="ex" style="font-size:14px; color:var(--ink-500)">Display 56/58 serif 400 · bottom line 28/40 · page title 24/32 sans 600 · verbatim body 19/31 serif · UI 15/24 · meta 13/20 · coordinate 12/16 mono · labels 11px at 0.08em (never 0.18em).</span>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>The signature moment</h2></div>
+    <p class="measure">Click a claim's citation mark and the quoted turn unfolds beside it, baseline-aligned, with its coordinate. Reading position never jumps; checking provenance costs a glance — <em>a promise that is cheap to check is a promise people actually check.</em> Built once as the canonical trace primitive (A7), gated on the demo's accessibility suite and a 375&nbsp;px review. Try it:</p>
+    <div class="trace-demo">
+      <p class="claim">The participant does not need more resurfacing; they need the original spark restored, or permission for the item to disappear.<button class="cite" aria-expanded="false" aria-controls="ap-note-1" id="cite-1">t.4</button></p>
+      <div class="apparatus">
+        <div class="apparatus-note" id="ap-note-1" role="region" aria-labelledby="cite-1">
+          <q>I had dozens of saved pieces, and nothing told me why this one had mattered.</q>
+          <div class="coord mono">Maya · participant · turn 4 · exploration</div>
+        </div>
+        <p class="apparatus-hint" id="ap-hint-1">The citation mark is a real button — focusable, <span class="mono">aria-expanded</span>, in the tab order. On mobile the note unfolds inline beneath the paragraph, exactly as a footnote degrades in print.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>Disclosure stays loud</h2></div>
+    <p class="measure">Amendment A8: a disclosure that harmonizes with the page reads as decoration. Synthetic, preview, and consent chrome keep interruptive weight — a filled ochre band, never a tasteful hairline — and the scripted-demo label must be perceivable at arm's length on a phone.</p>
+    <div class="disclosure-band">
+      <strong>Scripted demo</strong>
+      <span>Maya is fictional. Every response is pre-written. No demo response leaves this page.</span>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>The journeys</h2></div>
+
+    <div class="journey">
+      <h3>Participant — the flagship</h3>
+      <p><strong>Two registers, one transcript model (A1).</strong> The live interview carries no visible apparatus — no turn numbers, no citation marks. One column: interviewer questions in muted sans, answers in full-ink serif, warm paper, phase as a humane sentence ("Part two of four · exploring what you said"), never dots.</p>
+      <p>The input becomes an auto-growing <strong>textarea</strong> set in the same serif the answer will be read in — the current single-line input that submits on Enter punishes exactly the behavior qualitative research exists to collect. Desktop: Enter is a newline, Cmd/Ctrl+Enter sends. Mobile: only the Send button sends. Placeholder: <em>"Take as much space as you need."</em> No character counter.</p>
+      <p>Consent is a signed document — serif at reading measure, provider disclosure as a mono fact block, the server's <span class="mono">acceptedAt</span> shown back. The interview ends in a receipt: turns contributed, elapsed time, consent timestamp, and <strong>Download your transcript</strong> — the words belong to the speaker.</p>
+      <p class="amend">Failure states: filled terracotta block, existing fail-closed copy verbatim. Never a plausible placeholder, never a skeleton.</p>
+    </div>
+
+    <div class="journey">
+      <h3>Researcher — the return surface</h3>
+      <p>A real app shell at last: persistent rail with Studies · Settings · account, current-study breadcrumb, a quiet mono footer — <span class="mono">your keys · your database</span>. Dashboards are ruled register tables — scannable, keyboard-navigable, dense; the reading measure applies to documents, never to tables (A2).</p>
+      <p>Synthesis is the signature surface: bottom line as one serif sentence, themed passages with wine citation marks, the margin-unfold trace, and a plain-language provenance footer — <span class="mono">synthesized by &lt;model&gt; · study rev N · timestamp · receipt hash</span> — data that exists today and is never shown. No user ever sees the words "colophon," "apparatus," or "marginalia" (A2).</p>
+      <p>Study setup becomes a revisable document — sections readable at measure with per-section inline editing, making <span class="mono">studyRevision</span> legible — instead of a 1,599-line mega-form.</p>
+    </div>
+
+    <div class="journey">
+      <h3>Demo &amp; landing</h3>
+      <p>The demo keeps its state machine and accessibility engineering wholesale — the a11y suite is a review gate on the redesign PR — and becomes the faithful miniature of the real trace. The landing leads with a specimen, not a description: a real quote, its margin note, its coordinate, above the fold, before any copy. The tagline becomes the caption to the demonstration.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>Three initiatives</h2></div>
+    <p class="measure">Amendment A5: this is three initiatives wearing one coat — so they get separate PR trains and separate gates. The visual revamp is never held hostage to schema migration.</p>
+
+    <div class="initiative">
+      <span class="label">Initiative 1 · shippable alone</span>
+      <h3>Design revamp</h3>
+      <p>Tokens → fonts via <span class="mono">next/font</span> (none exists today) → <span class="mono">cn()</span> and ~10 primitives (Page, Margin, Rule, Label, Coordinate, Turn, Citation, Disclosure, Button ×3, Field) → participant typography + textarea → app shell + register dashboard → demo reskin → study setup → landing. Mergeable with evidence still unlinked.</p>
+      <div class="gate"><span class="label">Gate · A9</span> — before the participant flagship completes: a five-participant moderated test probing for self-editing ("did you consider how your answer would look to the researcher?"), with the fallback agreed in writing — if transcript register chills disclosure, the participant view drops to a conversational layout and the document register stays researcher-side. Plus a researcher walkthrough scored on time-to-find-a-quote.</div>
+    </div>
+
+    <div class="initiative">
+      <span class="label">Initiative 2 · fast-follow</span>
+      <h3>Evidence traceability</h3>
+      <p><span class="mono">EvidenceRef { quote, turnIndex, interviewId }</span> replaces the free-text evidence string; synthesis prompt updated; validation by <strong>normalized matching</strong> — Unicode quote/dash canonicalization, whitespace collapse, ellipsis-aware containment — never naive substring, with a measured false-rejection budget, a researcher-visible repair path, and rejection telemetry from day one. Then the trace ships on real data.</p>
+      <div class="gate"><span class="label">Why it exists</span> — the provenance thesis is not in the data model today; the demo can only trace because its evidence is hardcoded. A fabricated quote rejects the synthesis: fail-closed, extended to interpretation itself.</div>
+    </div>
+
+    <div class="initiative">
+      <span class="label">Initiative 3 · own reviews</span>
+      <h3>Features</h3>
+      <p>Participant transcript download (through the privacy/consent review the README's boundaries require) · the merged transcript rail in interview detail and the aggregate concordance — both required to reuse the canonical trace primitive (A7) · typeset HTML/PDF export.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>Keep · Kill</h2></div>
+    <div class="twocol">
+      <div class="keep">
+        <span class="label" style="color:var(--success)">Keep, unconditionally</span>
+        <ul>
+          <li>Every word of the honesty copy</li>
+          <li>Fail-closed behavior — errors are errors</li>
+          <li>The demo's accessibility engineering, as a PR gate</li>
+          <li>Phase names — "Getting to know you," "Exploring further"</li>
+          <li>The tagline: "Follow the answer, not just the script"</li>
+          <li>The restraint — and go further: delete the last gradient and blur</li>
+          <li>MIT · self-host · your keys, your database</li>
+        </ul>
+      </div>
+      <div class="kill">
+        <span class="label" style="color:var(--error)">Kill, unconditionally</span>
+        <ul>
+          <li>Chat bubbles and their tails</li>
+          <li>Bot and User avatars; "Thinking…" spinner</li>
+          <li>Progress dots; decorative section icons</li>
+          <li>0.18em ALL-CAPS eyebrows; white pill CTAs</li>
+          <li>Dark-by-default; nested gray cards</li>
+          <li>Shimmer banner; fade-up-20px; skeletons</li>
+          <li>Inter-as-identity; genre vocabulary in UI copy</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>The nine amendments</h2></div>
+    <p class="measure">From the adversarial challenge (verdict: proceed amended). Per A3, three-model convergence is struck as evidence everywhere in this document — the direction stands on repo facts and the gates above, and every decision remains re-openable.</p>
+    <details class="amend-block"><summary>A1 — Two registers, one transcript model</summary><div>Participant live view renders transcript grammar without visible apparatus; coordinates and citation marks are researcher-side and receipt-side. Fallback to a conversational layout pre-agreed in writing if testing shows chilled disclosure. "Dignified" and "observed" are the same aesthetic read from different power positions.</div></details>
+    <details class="amend-block"><summary>A2 — Mechanics stay, genre vocabulary goes</summary><div>No user-facing "colophon / apparatus / marginalia." Provenance shown as plain facts. Triage density is a requirement: scannable rows, keyboard nav, no reading measure on tables. The trace is Dovetail's marketed differentiator wearing literary clothes — the mechanics are industry-standard value.</div></details>
+    <details class="amend-block"><summary>A3 — Void the unanimity argument</summary><div>"Three independent models converged" is not evidence — the brief steered the genre. The direction stands on the gap between the product's thesis and its UI, which is a repo fact no brief manufactured.</div></details>
+    <details class="amend-block"><summary>A4 — Enforce the law in components and lint</summary><div>Semantics scoped inside primitives; no free-floating serif or wine/ochre utilities; five-line ESLint guard in CI; the law cut to two rules. A convention rots by month three; a linted primitive does not.</div></details>
+    <details class="amend-block"><summary>A5 — Partition into three initiatives</summary><div>Design revamp ships without the trace. EvidenceRef uses normalized matching with a false-rejection budget and repair UX — naive substring validation would reject faithful syntheses in a product where failure is loud and no fallback is allowed.</div></details>
+    <details class="amend-block"><summary>A6 — Participant flow is light-only</summary><div>No OS auto-scheme lottery on the most trust-critical screen; one tested palette for a one-shot audience. Dark is a researcher toggle. Earn a participant dark mode later with evidence, not romance.</div></details>
+    <details class="amend-block"><summary>A7 — One canonical trace</summary><div>The margin-unfold is built once as a primitive, gated on the a11y suite and 375 px. The interview-detail rail and the aggregate concordance must reuse it — if they can't, the shared-vocabulary claim was false and the surfaces get rethought, not forked.</div></details>
+    <details class="amend-block"><summary>A8 — Disclosure keeps interruptive weight</summary><div>Filled band, not hairline. Beauty and salience compete on disclosure surfaces; salience wins. Arm's-length-on-a-phone prominence check for the synthetic label.</div></details>
+    <details class="amend-block"><summary>A9 — Human validation gate</summary><div>Five participants, four researchers, one week — after tokens and primitives, before the flagship commits. If the direction is right the gates cost a week; if it is wrong about participants they save the project.</div></details>
+  </section>
+
+  <footer class="colophon">
+    <div class="mono">Proposals: Kimi ("Marginalia") · Opus ("Apparatus") · grok-build ("Facing Pages") · challenge: Kimi · synthesis: Fable · decisions: project owner · 2026-08-26</div>
+  </footer>
+
+</div>
+
+<script>
+  document.querySelectorAll('.cite').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var note = document.getElementById(btn.getAttribute('aria-controls'));
+      var open = note.classList.toggle('open');
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+  });
+</script>
