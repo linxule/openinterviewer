@@ -27,7 +27,8 @@ import {
   InterviewMessage,
   BehaviorData
 } from '@/types';
-import { createRequestId, logRequestFailure } from '@/lib/requestLog';
+import { createRequestId, logRequestEvent, logRequestFailure } from '@/lib/requestLog';
+import { resolveEvidenceRef } from '@/lib/evidence';
 
 export async function POST(request: Request) {
   try {
@@ -166,6 +167,21 @@ export async function POST(request: Request) {
         behaviorData,
         synthesis: result.value,
       });
+      // Match-rate telemetry (ADR-003: counts only — never quote or turn text).
+      // Telemetry must never fail the synthesis response.
+      try {
+        const refs = result.value.themes.flatMap(theme => theme.evidenceRefs ?? []);
+        logRequestEvent({
+          event: 'synthesis.evidence',
+          requestId: createRequestId(request.headers.get('x-request-id')),
+          route: '/api/synthesis',
+          refsOffered: refs.length,
+          refsLocated: refs.filter(ref => resolveEvidenceRef(ref, history).status === 'verified').length,
+        });
+      } catch {
+        // Swallowed by design: the matcher never throws by contract, but a
+        // telemetry failure must never cost a participant their synthesis.
+      }
       return NextResponse.json({ ...result.value, _receipt: receipt });
     } catch (providerError) {
       return providerErrorResponse(providerError);

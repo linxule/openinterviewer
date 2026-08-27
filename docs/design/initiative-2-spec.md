@@ -660,6 +660,17 @@ Making them real requires the model to *select* from citations that already exis
 
 ---
 
+# Slice I2d — match-rate telemetry (added per Ruling 5)
+
+Files that may change: `src/lib/requestLog.ts`, `src/app/api/synthesis/route.ts`, `tests/unit/requestLog.test.ts`, and a synthesis-route test. Nothing else.
+
+- **D1** `REQUEST_LOG_EVENT_ALLOWLIST` gains `'synthesis.evidence'`; `REQUEST_LOG_ALLOWLIST` gains `'refsOffered'` and `'refsLocated'` (numeric counts). No other allowlist change; `REQUEST_LOG_REASON_ALLOWLIST` untouched.
+- **D2** `/api/synthesis`, on the success path only (after `createSynthesisReceipt`, before the response), computes over `result.value.themes`: `refsOffered` = total `evidenceRefs` entries across themes (0 for a legacy-shaped or ref-free synthesis), `refsLocated` = those whose `resolveEvidenceRef(ref, history)` returns `verified`. Logs one `logRequestEvent({ event: 'synthesis.evidence', requestId, route: '/api/synthesis', refsOffered, refsLocated })`. **Counts only — no quote text, no turn text, nothing derived from participant speech reaches a log line** (ADR-003). A telemetry failure must never fail the synthesis response: computation and log are wrapped so any throw is swallowed (the matcher never throws by contract, but the wrapper is cheap honesty).
+- **D3** The aggregate route is untouched (no refs exist there until I2c). The save path is untouched (it would double-count what synthesis already measured).
+- **D4** Tests: `requestLog.test.ts` gains cases pinning the new event and both fields pass sanitization and that a non-allowlisted field alongside them is dropped; a synthesis-route test asserts the emitted event carries the right counts for a mixed verified/unverified synthesis and that nothing resembling quote text appears in the logged line. Existing log-gate suites (`requestLog.test.ts`, `providerErrors.test.ts`, health/config contract tests) must keep passing — this is the AGENTS.md Structured-request-logs gate.
+
+---
+
 # Rulings (Fable, 2026-08-27 — posted to owner for veto)
 
 1. **Q1 — adopted, with one correction.** `AggregateTheme` lands in I2a, but `representativeQuotes` stays **required** in the type until I2c: `StudyDetail.tsx:518` maps it unguarded, and optionality would force an edit to a file I2a declares untouched. `quoteRefs?` is the only optional field. (A1 amended accordingly.)

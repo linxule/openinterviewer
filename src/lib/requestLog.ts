@@ -16,6 +16,8 @@ export const REQUEST_LOG_ALLOWLIST = [
   'retryable',
   'reason',
   'durationMs',
+  'refsOffered',
+  'refsLocated',
 ] as const;
 
 export const REQUEST_LOG_EVENT_ALLOWLIST = [
@@ -23,6 +25,7 @@ export const REQUEST_LOG_EVENT_ALLOWLIST = [
   'kv.unavailable',
   'platform.unavailable',
   'route.failure',
+  'synthesis.evidence',
 ] as const;
 
 export const REQUEST_LOG_REASON_ALLOWLIST = [
@@ -96,6 +99,10 @@ function sanitizeField(field: string, value: unknown): string | number | boolean
     return typeof value === 'string' && UUID_V4.test(value) ? value : undefined;
   }
   if (field === 'status' || field === 'durationMs' || field === 'ts') {
+    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+  }
+  if (field === 'refsOffered' || field === 'refsLocated') {
+    // Counts only, ever (ADR-003): a string here could carry participant speech.
     return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
   }
   return value;

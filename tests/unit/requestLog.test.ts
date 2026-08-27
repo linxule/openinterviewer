@@ -89,6 +89,43 @@ describe('logRequestEvent allowlist', () => {
     expect(serialized).not.toContain('AIzaSyLeak');
   });
 
+  it('passes synthesis.evidence with numeric ref counts and drops stowaway fields', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    logRequestEvent({
+      event: 'synthesis.evidence',
+      requestId: '550e8400-e29b-41d4-a716-446655440000',
+      route: '/api/synthesis',
+      refsOffered: 3,
+      refsLocated: 1,
+      // Never allowlisted: anything that could carry participant speech.
+      quote: 'the participant said something',
+      turnText: 'transcript content',
+    } as unknown as Parameters<typeof logRequestEvent>[0]);
+
+    const payload = parseLogged(spy);
+    expect(payload.event).toBe('synthesis.evidence');
+    expect(payload.refsOffered).toBe(3);
+    expect(payload.refsLocated).toBe(1);
+    expect(payload).not.toHaveProperty('quote');
+    expect(payload).not.toHaveProperty('turnText');
+    expect(JSON.stringify(spy.mock.calls)).not.toContain('participant said');
+  });
+
+  it('rejects non-numeric values in refsOffered/refsLocated (counts only, ever)', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    logRequestEvent({
+      event: 'synthesis.evidence',
+      refsOffered: 'a quote that leaked into a count field',
+      refsLocated: NaN,
+    } as unknown as Parameters<typeof logRequestEvent>[0]);
+
+    const payload = parseLogged(spy);
+    expect(payload.event).toBe('synthesis.evidence');
+    expect(payload).not.toHaveProperty('refsOffered');
+    expect(payload).not.toHaveProperty('refsLocated');
+    expect(JSON.stringify(spy.mock.calls)).not.toContain('leaked');
+  });
+
   it('rejects unknown event names and unknown reasons', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     logRequestEvent({ event: 'study.123@example.com', reason: 'please retry later' });
