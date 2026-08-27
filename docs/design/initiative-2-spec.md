@@ -673,6 +673,16 @@ Files that may change: `src/lib/requestLog.ts`, `src/app/api/synthesis/route.ts`
 
 ---
 
+# Slice I2e — sample-workspace showcase (added post-release, owner-approved)
+
+The authenticated sample workspace (`src/lib/demoData.ts`) seeds only legacy-shape syntheses, so a researcher exploring it never meets the trace UI. Files that may change: `src/lib/demoData.ts`, plus a new test. Nothing else — no component, no route logic, no public demo (`DemoSimulation.tsx` / `app/demo` are untouched; they are a different surface with their own hand-built trace).
+
+- **E1** Exactly ONE sample interview — Sarah's — converts its four themes to `evidenceRefs` (1–2 refs per theme, ≤3). Each `quote` must be a genuine substring-after-normalization of the cited turn in `SARAH_TRANSCRIPT`, and each cited turn must be a participant turn. Quotes are chosen from the transcript's existing text; the transcript itself is not edited. The legacy `evidence` strings for Sarah are deleted (exactly-one-of rule). Commentary that the old evidence strings carried (e.g. "- AI enables more strategic focus") is NOT smuggled into quotes; if it is worth keeping it is already expressed by the theme name.
+- **E2** Marcus and Priya stay legacy-shape deliberately: the sample workspace then shows both eras side by side, which is the truthful picture of a live deployment.
+- **E3** A new test (`tests/unit/demoData.evidence.test.ts`) resolves every ref in every seeded synthesis with `resolveEvidenceRef` against its own transcript and asserts status `verified` — so a future edit to the transcript or the refs cannot silently break the showcase. It also asserts Marcus/Priya remain legacy-shaped (the coexistence is intentional and pinned).
+- **E4** If the seeded records carry `_receipt` values, they are display fixtures, not signed receipts — leave whatever convention exists untouched.
+- **E5** Gates: `tests/unit/api.demo.seed.test.ts` and every existing demoData consumer test must keep passing; full ladder.
+
 # Rulings (Fable, 2026-08-27 — posted to owner for veto)
 
 1. **Q1 — adopted, with one correction.** `AggregateTheme` lands in I2a, but `representativeQuotes` stays **required** in the type until I2c: `StudyDetail.tsx:518` maps it unguarded, and optionality would force an edit to a file I2a declares untouched. `quoteRefs?` is the only optional field. (A1 amended accordingly.)

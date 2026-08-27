@@ -115,10 +115,37 @@ const SARAH_SYNTHESIS: SynthesisResult = {
     'Sees AI adoption as competitive differentiation'
   ],
   themes: [
-    { theme: 'Role Elevation', evidence: '"It\'s like I got promoted without changing jobs" - AI enables more strategic focus', frequency: 4 },
-    { theme: 'Skill Tension', evidence: 'Worries about writing feeling "rustier" - capability vs. skill maintenance', frequency: 2 },
-    { theme: 'Team Navigation', evidence: 'Careful not to make slower colleagues "feel slow" - social awareness', frequency: 2 },
-    { theme: 'Competitive Framing', evidence: 'Non-adopters "will get left behind" - AI as professional differentiator', frequency: 3 }
+    {
+      theme: 'Role Elevation',
+      frequency: 4,
+      evidenceRefs: [
+        { quote: "It's like I got promoted without changing jobs.", turnIndex: 8 },
+      ],
+    },
+    {
+      theme: 'Skill Tension',
+      frequency: 2,
+      evidenceRefs: [
+        { quote: "Sometimes I worry I'm losing some muscle.", turnIndex: 10 },
+        { quote: 'my writing used to be really sharp because I did so much of it', turnIndex: 10 },
+      ],
+    },
+    {
+      theme: 'Team Navigation',
+      frequency: 2,
+      evidenceRefs: [
+        { quote: "It creates this weird dynamic where I can turn around work so fast that others can't keep up", turnIndex: 12 },
+        { quote: 'I have to be careful not to make them feel slow.', turnIndex: 12 },
+      ],
+    },
+    {
+      theme: 'Competitive Framing',
+      frequency: 3,
+      evidenceRefs: [
+        { quote: "they'll get left behind", turnIndex: 14 },
+        { quote: 'AI-enabled PMs will just outperform.', turnIndex: 14 },
+      ],
+    },
   ],
   contradictions: [
     'Enthusiastic about AI\'s benefits while expressing concern about losing personal skills',
