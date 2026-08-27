@@ -5,8 +5,10 @@ import { useRouter } from 'next/navigation';
 import { StoredInterview } from '@/types';
 import { getInterview, StudyOperationPendingError } from '@/services/storageService';
 import ReactMarkdown from 'react-markdown';
-import { Button, Coordinate, Label, Rule, Turn, Verbatim } from '@/components/ui';
+import { Button, Citation, Coordinate, Label, Rule, Turn, Verbatim } from '@/components/ui';
 import { useSetTrailingCrumb } from '@/components/shell/breadcrumb';
+import { cn } from '@/lib/cn';
+import { resolveThemeEvidence } from '@/lib/evidence';
 
 interface InterviewDetailProps {
   interviewId: string;
@@ -19,8 +21,27 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId 
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'transcript' | 'analysis'>('transcript');
   const [operationPending, setOperationPending] = useState(false);
+  const [tracedTurn, setTracedTurn] = useState<number | null>(null);
+  const [openNotes, setOpenNotes] = useState<Record<string, boolean>>({});
 
   useSetTrailingCrumb(interview?.studyName ?? null);
+
+  const isNoteOpen = (themeIndex: number, refIndex: number) => openNotes[`${themeIndex}:${refIndex}`] ?? true;
+  const setNoteOpen = (themeIndex: number, refIndex: number, next: boolean) =>
+    setOpenNotes((prev) => ({ ...prev, [`${themeIndex}:${refIndex}`]: next }));
+
+  const switchTab = (tab: 'transcript' | 'analysis') => {
+    setTracedTurn(null);
+    setActiveTab(tab);
+  };
+
+  const traceToTurn = (turnIndex: number) => {
+    setActiveTab('transcript');
+    setTracedTurn(turnIndex);
+    requestAnimationFrame(() => {
+      document.getElementById(`turn-${turnIndex}`)?.focus();
+    });
+  };
 
   const loadInterview = useCallback(async () => {
     setLoading(true);
@@ -41,6 +62,13 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId 
   useEffect(() => {
     void loadInterview();
   }, [loadInterview]);
+
+  // A different interview must not inherit this one's note/trace state: the App
+  // Router reconciles param changes in place, so state does not reset by remount.
+  useEffect(() => {
+    setOpenNotes({});
+    setTracedTurn(null);
+  }, [interviewId]);
 
   const handleDownloadJSON = () => {
     if (!interview) return;
@@ -175,7 +203,7 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId 
       <div className="mb-8 grid grid-cols-2 border-b border-ink-300">
         <button
           type="button"
-          onClick={() => setActiveTab('transcript')}
+          onClick={() => switchTab('transcript')}
           className={`min-h-11 border-b-2 px-2 py-3 text-center font-sans text-[15px] font-medium ${
             activeTab === 'transcript'
               ? 'border-action text-action'
@@ -186,7 +214,7 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId 
         </button>
         <button
           type="button"
-          onClick={() => setActiveTab('analysis')}
+          onClick={() => switchTab('analysis')}
           className={`min-h-11 border-b-2 px-2 py-3 text-center font-sans text-[15px] font-medium ${
             activeTab === 'analysis'
               ? 'border-action text-action'
@@ -201,7 +229,15 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId 
       {activeTab === 'transcript' ? (
         <ol className="space-y-8">
           {interview.transcript.map((msg, i) => (
-            <li key={i}>
+            <li
+              key={i}
+              id={`turn-${i + 1}`}
+              tabIndex={-1}
+              className={cn(
+                'focus:outline-none',
+                tracedTurn === i + 1 && 'ring-2 trace-ring ring-offset-4 ring-offset-paper-0'
+              )}
+            >
               <div className="flex items-baseline justify-between gap-3">
                 <Label>{msg.role === 'ai' ? 'Interviewer' : 'Participant'}</Label>
                 <Coordinate>{new Date(msg.timestamp).toLocaleTimeString()}</Coordinate>
@@ -273,19 +309,64 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId 
               <section>
                 <h3 className="font-sans text-[15px] font-semibold text-ink-900">Key Themes</h3>
                 <ul className="mt-4">
-                  {interview.synthesis.themes.map((theme, i) => (
-                    <li key={i} className="border-t border-ink-300 py-4">
-                      <p className="font-sans text-[15px] font-medium text-ink-900">{theme.theme}</p>
-                      {theme.evidence ? (
-                        <Verbatim
-                          as="p"
-                          className="mt-2 max-w-measure border-l border-ink-300 pl-4 text-[17px] leading-[28px] text-ink-700"
-                        >
-                          {theme.evidence}
-                        </Verbatim>
-                      ) : null}
-                    </li>
-                  ))}
+                  {interview.synthesis.themes.map((theme, i) => {
+                    const view = resolveThemeEvidence(theme, interview.transcript);
+                    return (
+                      <li key={i} className="border-t border-ink-300 py-4">
+                        <p className="font-sans text-[15px] font-medium text-ink-900">
+                          {theme.theme}
+                          {view.kind === 'refs'
+                            ? view.entries.map((entry, j) =>
+                                entry.match.status === 'verified' ? (
+                                  <Citation
+                                    key={j}
+                                    label={`t.${entry.ref.turnIndex}`}
+                                    open={isNoteOpen(i, j)}
+                                    onOpenChange={(next) => setNoteOpen(i, j, next)}
+                                    className="ml-1"
+                                  >
+                                    <span className="block text-[19px] leading-[31px] text-ink-900">
+                                      {`“${entry.quotedFromRecord}”`}
+                                    </span>
+                                    <Coordinate className="mt-2 block">
+                                      {`Participant · turn ${entry.ref.turnIndex}`}
+                                    </Coordinate>
+                                    <button
+                                      type="button"
+                                      onClick={() => traceToTurn(entry.ref.turnIndex)}
+                                      className="mt-2 block font-sans text-[13px] text-action underline underline-offset-2"
+                                    >
+                                      Read in full transcript
+                                    </button>
+                                  </Citation>
+                                ) : null
+                              )
+                            : null}
+                        </p>
+                        {view.kind === 'legacy' ? (
+                          <Verbatim
+                            as="p"
+                            className="mt-2 max-w-measure border-l border-ink-300 pl-4 text-[17px] leading-[28px] text-ink-700"
+                          >
+                            {view.text}
+                          </Verbatim>
+                        ) : null}
+                        {view.kind === 'refs'
+                          ? view.entries
+                              .filter((entry) => entry.match.status !== 'verified')
+                              .map((entry, j) => (
+                                <Verbatim
+                                  key={j}
+                                  as="p"
+                                  className="mt-2 max-w-measure border-l border-ink-300 pl-4 text-[17px] leading-[28px] text-ink-700"
+                                >
+                                  {entry.ref.quote}
+                                </Verbatim>
+                              ))
+                          : null}
+                      </li>
+                    );
+                  })}
                 </ul>
               </section>
 

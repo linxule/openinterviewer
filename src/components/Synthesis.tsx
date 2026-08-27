@@ -5,7 +5,8 @@ import { useRouter } from 'next/navigation';
 import { useStore } from '@/store';
 import { synthesizeInterview } from '@/services/interviewApi';
 import { saveCompletedInterview } from '@/services/storageService';
-import { Button, Label, Page, Rule, Verbatim } from '@/components/ui';
+import { Button, Citation, Coordinate, Label, Page, Rule, Verbatim } from '@/components/ui';
+import { resolveThemeEvidence } from '@/lib/evidence';
 
 const Synthesis: React.FC = () => {
   const router = useRouter();
@@ -31,6 +32,12 @@ const Synthesis: React.FC = () => {
 
   // Counter to trigger re-analysis when retry is clicked
   const [retryTrigger, setRetryTrigger] = useState(0);
+
+  // Citation notes open on first paint; keyed `${themeIndex}:${refIndex}`.
+  const [openNotes, setOpenNotes] = useState<Record<string, boolean>>({});
+  const isNoteOpen = (themeIndex: number, refIndex: number) => openNotes[`${themeIndex}:${refIndex}`] ?? true;
+  const setNoteOpen = (themeIndex: number, refIndex: number, next: boolean) =>
+    setOpenNotes((prev) => ({ ...prev, [`${themeIndex}:${refIndex}`]: next }));
 
   // Extract save logic into a reusable function for retry
   const doSave = async (synthesisToSave: typeof synthesis) => {
@@ -327,19 +334,57 @@ const Synthesis: React.FC = () => {
             <section>
               <h3 className="font-sans text-[15px] font-semibold text-ink-900">Key Themes</h3>
               <ul className="mt-4">
-                {synthesis.themes.map((theme, i) => (
-                  <li key={i} className="border-t border-ink-300 py-4">
-                    <p className="font-sans text-[15px] font-medium text-ink-900">{theme.theme}</p>
-                    {theme.evidence ? (
-                      <Verbatim
-                        as="p"
-                        className="mt-2 max-w-measure border-l border-ink-300 pl-4 text-[17px] leading-[28px] text-ink-700"
-                      >
-                        {theme.evidence}
-                      </Verbatim>
-                    ) : null}
-                  </li>
-                ))}
+                {synthesis.themes.map((theme, i) => {
+                  const view = resolveThemeEvidence(theme, interviewHistory);
+                  return (
+                    <li key={i} className="border-t border-ink-300 py-4">
+                      <p className="font-sans text-[15px] font-medium text-ink-900">
+                        {theme.theme}
+                        {view.kind === 'refs'
+                          ? view.entries.map((entry, j) =>
+                              entry.match.status === 'verified' ? (
+                                <Citation
+                                  key={j}
+                                  label={`t.${entry.ref.turnIndex}`}
+                                  open={isNoteOpen(i, j)}
+                                  onOpenChange={(next) => setNoteOpen(i, j, next)}
+                                  className="ml-1"
+                                >
+                                  <span className="block text-[19px] leading-[31px] text-ink-900">
+                                    {`“${entry.quotedFromRecord}”`}
+                                  </span>
+                                  <Coordinate className="mt-2 block">
+                                    {`Participant · turn ${entry.ref.turnIndex}`}
+                                  </Coordinate>
+                                </Citation>
+                              ) : null
+                            )
+                          : null}
+                      </p>
+                      {view.kind === 'legacy' ? (
+                        <Verbatim
+                          as="p"
+                          className="mt-2 max-w-measure border-l border-ink-300 pl-4 text-[17px] leading-[28px] text-ink-700"
+                        >
+                          {view.text}
+                        </Verbatim>
+                      ) : null}
+                      {view.kind === 'refs'
+                        ? view.entries
+                            .filter((entry) => entry.match.status !== 'verified')
+                            .map((entry, j) => (
+                              <Verbatim
+                                key={j}
+                                as="p"
+                                className="mt-2 max-w-measure border-l border-ink-300 pl-4 text-[17px] leading-[28px] text-ink-700"
+                              >
+                                {entry.ref.quote}
+                              </Verbatim>
+                            ))
+                        : null}
+                    </li>
+                  );
+                })}
               </ul>
             </section>
 
