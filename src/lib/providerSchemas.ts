@@ -59,10 +59,22 @@ export const synthesisResponseSchema = {
         additionalProperties: false,
         properties: {
           theme: { type: 'string' },
-          evidence: { type: 'string' },
           frequency: { type: 'number', minimum: 0 },
+          evidenceRefs: {
+            type: 'array',
+            maxItems: 3,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                quote: { type: 'string', maxLength: 2000 },
+                turnIndex: { type: 'integer', minimum: 1 },
+              },
+              required: ['quote', 'turnIndex'],
+            },
+          },
         },
-        required: ['theme', 'evidence', 'frequency'],
+        required: ['theme', 'frequency', 'evidenceRefs'],
       },
     },
     contradictions: stringArray,

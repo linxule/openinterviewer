@@ -8,6 +8,8 @@ import {
   AIInterviewResponse,
   InterviewPhase,
   SynthesisResult,
+  SynthesisTheme,
+  EvidenceRef,
   AggregateSynthesisResult,
 } from '@/types';
 
@@ -27,6 +29,11 @@ const MAX_PROVIDER_LIST_ITEMS = 100;
 const MAX_PROFILE_UPDATES = 50;
 const MAX_FIELD_ID = 100;
 const MAX_PROFILE_VALUE = 4_000;
+// Matches synthesisResponseSchema's evidenceRefs.maxItems (providerSchemas.ts).
+// tests/unit/synthesisSchema.roundTrip.test.ts pins the two values equal.
+export const MAX_EVIDENCE_REFS = 3;
+const MAX_EVIDENCE_QUOTE = 2_000;
+const INTERVIEW_ID = /^[A-Za-z0-9_-]{1,120}$/;
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -43,6 +50,11 @@ function isFiniteNonNegativeNumber(value: unknown): value is number {
 // 0-based question index: whole numbers only.
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
+// 1-based turn index: whole numbers only.
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1;
 }
 
 function isStringArray(
@@ -146,23 +158,69 @@ export function validateSynthesisResult(input: unknown): SynthesisResult {
   if (input.themes.length > MAX_PROVIDER_LIST_ITEMS) {
     fail('synthesis', 'themes', `must contain at most ${MAX_PROVIDER_LIST_ITEMS} items`);
   }
-  const themes = input.themes.map((theme, i) => {
+  const themes: SynthesisTheme[] = input.themes.map((theme, i) => {
     if (!isRecord(theme)) {
       fail('synthesis', `themes[${i}]`, 'must be an object');
     }
     if (!isNonEmptyString(theme.theme)) {
       fail('synthesis', `themes[${i}].theme`, 'must be a non-empty string');
     }
-    if (!isNonEmptyString(theme.evidence)) {
-      fail('synthesis', `themes[${i}].evidence`, 'must be a non-empty string');
-    }
     if (!isFiniteNonNegativeNumber(theme.frequency)) {
       fail('synthesis', `themes[${i}].frequency`, 'must be a finite non-negative number');
     }
+
+    const hasLegacy = theme.evidence !== undefined;
+    const hasRefs = theme.evidenceRefs !== undefined;
+    if (hasLegacy === hasRefs) {
+      fail('synthesis', `themes[${i}]`, 'must carry exactly one of evidence or evidenceRefs');
+    }
+
+    if (hasLegacy) {
+      if (!isNonEmptyString(theme.evidence)) {
+        fail('synthesis', `themes[${i}].evidence`, 'must be a non-empty string');
+      }
+      return {
+        theme: theme.theme,
+        evidence: theme.evidence,
+        frequency: theme.frequency,
+      };
+    }
+
+    if (!Array.isArray(theme.evidenceRefs) || theme.evidenceRefs.length > MAX_EVIDENCE_REFS) {
+      fail('synthesis', `themes[${i}].evidenceRefs`, `must be an array of at most ${MAX_EVIDENCE_REFS} items`);
+    }
+    const evidenceRefs: EvidenceRef[] = theme.evidenceRefs.map((ref, j) => {
+      if (!isRecord(ref)) {
+        fail('synthesis', `themes[${i}].evidenceRefs[${j}]`, 'must be an object');
+      }
+      if (
+        typeof ref.quote !== 'string'
+        || ref.quote.length < 1
+        || ref.quote.length > MAX_EVIDENCE_QUOTE
+      ) {
+        fail('synthesis', `themes[${i}].evidenceRefs[${j}].quote`, `must be a string with length between 1 and ${MAX_EVIDENCE_QUOTE}`);
+      }
+      if (!isPositiveInteger(ref.turnIndex)) {
+        fail('synthesis', `themes[${i}].evidenceRefs[${j}].turnIndex`, 'must be an integer of at least 1');
+      }
+      if (ref.interviewId !== undefined && (typeof ref.interviewId !== 'string' || !INTERVIEW_ID.test(ref.interviewId))) {
+        fail('synthesis', `themes[${i}].evidenceRefs[${j}].interviewId`, 'must be a valid id');
+      }
+      const knownKeys = new Set(['quote', 'turnIndex', 'interviewId']);
+      if (Object.keys(ref).some((key) => !knownKeys.has(key))) {
+        fail('synthesis', `themes[${i}].evidenceRefs[${j}]`, 'must not carry unknown fields');
+      }
+      const turnIndex = ref.turnIndex;
+      return {
+        quote: ref.quote,
+        turnIndex,
+        ...(ref.interviewId !== undefined ? { interviewId: ref.interviewId as string } : {}),
+      };
+    });
     return {
       theme: theme.theme,
-      evidence: theme.evidence,
       frequency: theme.frequency,
+      evidenceRefs,
     };
   });
   if (!isStringArray(input.contradictions)) {

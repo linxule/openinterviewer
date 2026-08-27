@@ -276,12 +276,14 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId 
                   {interview.synthesis.themes.map((theme, i) => (
                     <li key={i} className="border-t border-ink-300 py-4">
                       <p className="font-sans text-[15px] font-medium text-ink-900">{theme.theme}</p>
-                      <Verbatim
-                        as="p"
-                        className="mt-2 max-w-measure border-l border-ink-300 pl-4 text-[17px] leading-[28px] text-ink-700"
-                      >
-                        {theme.evidence}
-                      </Verbatim>
+                      {theme.evidence ? (
+                        <Verbatim
+                          as="p"
+                          className="mt-2 max-w-measure border-l border-ink-300 pl-4 text-[17px] leading-[28px] text-ink-700"
+                        >
+                          {theme.evidence}
+                        </Verbatim>
+                      ) : null}
                     </li>
                   ))}
                 </ul>

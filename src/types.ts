@@ -165,10 +165,38 @@ export interface BehaviorData {
   contradictions: string[];
 }
 
+/**
+ * A citation: the model's excerpt plus the coordinate it claims the excerpt
+ * came from. `turnIndex` is 1-based over the interview's `transcript` array —
+ * the same number the researcher sees as `t. N` on the turn. `interviewId` is
+ * omitted for citations inside a single interview's synthesis (the containing
+ * record is the interview) and is set only on aggregate citations, where the
+ * server resolves it. A ref is a claim, not a verified fact: see
+ * src/lib/evidence.ts for how a claim is checked against the record.
+ */
+export interface EvidenceRef {
+  quote: string;
+  turnIndex: number;
+  interviewId?: string;
+}
+
+export interface SynthesisTheme {
+  theme: string;
+  frequency: number;
+  /**
+   * Free-text supporting passage. Written only by syntheses produced before
+   * Initiative 2. Never written by new syntheses; never rewritten on old
+   * records, which are receipt-signed and immutable.
+   */
+  evidence?: string;
+  /** Structured citations. Written by every synthesis produced after Initiative 2. */
+  evidenceRefs?: EvidenceRef[];
+}
+
 export interface SynthesisResult {
   statedPreferences: string[];
   revealedPreferences: string[];
-  themes: { theme: string; evidence: string; frequency: number }[];
+  themes: SynthesisTheme[];
   contradictions: string[];
   keyInsights: string[];
   bottomLine: string;
@@ -310,6 +338,19 @@ export function isPendingStudyStub(study: StudyWorkspaceItem): study is PendingS
 // Aggregate Synthesis (Cross-Interview)
 // ============================================
 
+export interface AggregateTheme {
+  theme: string;
+  frequency: number;
+  /**
+   * Free-text quotes. REQUIRED until I2c ships: `StudyDetail.tsx:518` maps this
+   * field unguarded, and I2a may not edit that file. I2c makes it optional and
+   * adds the guard in the same diff.
+   */
+  representativeQuotes: string[];
+  /** Structured citations, each carrying the interviewId the quote came from. Never populated before I2c. */
+  quoteRefs?: EvidenceRef[];
+}
+
 export interface AggregateSynthesisResult {
   studyId: string;
   studyRevision: number;
@@ -319,7 +360,7 @@ export interface AggregateSynthesisResult {
   aiModel: string;
   requestedAiModel?: string;
   routedProvider?: string;
-  commonThemes: { theme: string; frequency: number; representativeQuotes: string[] }[];
+  commonThemes: AggregateTheme[];
   divergentViews: { topic: string; viewA: string; viewB: string }[];
   keyFindings: string[];
   researchImplications: string[];

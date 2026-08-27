@@ -35,9 +35,11 @@ export const buildSynthesisPrompt = (
   behaviorData: BehaviorData,
   participantProfile: ParticipantProfile | null
 ): string => {
-  // Format transcript
+  // Format transcript. Numbering runs over every element of `history`, 1-based,
+  // regardless of role, because that is the array the researcher's `t. N`
+  // coordinate counts and the synthesis receipt binds.
   const interviewText = history
-    .map(m => `${m.role === 'user' ? 'PARTICIPANT' : 'INTERVIEWER'}: ${m.content}`)
+    .map((m, i) => `TURN ${i + 1} · ${m.role === 'user' ? 'PARTICIPANT' : 'INTERVIEWER'}: ${m.content}`)
     .join('\n\n');
 
   // Format profile data for synthesis
@@ -69,9 +71,20 @@ BEHAVIORAL DATA:
 Analyze for:
 1. What they explicitly stated as important
 2. What their behavior/emphasis revealed
-3. Key themes with evidence
+3. Key themes, each supported by direct citations from the transcript
 4. Any contradictions between stated and revealed preferences
-5. Key insights for the researcher`;
+5. Key insights for the researcher
+
+CITING EVIDENCE:
+For each theme, provide 1-3 citations in "evidenceRefs". Each citation has:
+- "quote": an excerpt copied character-for-character from a single PARTICIPANT
+  turn. Do not paraphrase, correct, translate, or tidy it. Do not join text
+  from two turns into one quote. If you shorten the middle of a passage, mark
+  the omission with an ellipsis (...); do not silently splice.
+- "turnIndex": the number printed as TURN N beside that participant turn.
+Quote only PARTICIPANT turns. If no single participant turn supports a theme,
+prefer leaving that theme out to citing a turn that does not say it. An empty
+"evidenceRefs" array is honest and acceptable; an inaccurate quote is not.`;
 };
 
 /**
@@ -91,7 +104,13 @@ Expected output structure:
   "statedPreferences": ["What participant said they value/want"],
   "revealedPreferences": ["What their behavior/emphasis revealed"],
   "themes": [
-    { "theme": "Theme name", "evidence": "Supporting quote/behavior", "frequency": 3 }
+    {
+      "theme": "Theme name",
+      "frequency": 3,
+      "evidenceRefs": [
+        { "quote": "Exact words from one participant turn", "turnIndex": 7 }
+      ]
+    }
   ],
   "contradictions": ["Any gaps between stated and revealed preferences"],
   "keyInsights": ["Actionable insights for the researcher"],

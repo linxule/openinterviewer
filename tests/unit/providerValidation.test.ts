@@ -19,7 +19,17 @@ const validInterviewResponse = {
 const validSynthesisResult = {
   statedPreferences: ['Speed'],
   revealedPreferences: ['Efficiency'],
-  themes: [{ theme: 'Speed', evidence: 'Mentioned speed three times', frequency: 3 }],
+  themes: [
+    { theme: 'Speed', evidence: 'Mentioned speed three times', frequency: 3 },
+    {
+      theme: 'Onboarding friction',
+      frequency: 2,
+      evidenceRefs: [
+        { quote: 'I started the flow and immediately got stuck.', turnIndex: 2 },
+        { quote: 'the settings page confused me', turnIndex: 4, interviewId: 'interview-abc123' },
+      ],
+    },
+  ],
   contradictions: ['Speed vs thoroughness'],
   keyInsights: ['Participants value speed most'],
   bottomLine: 'Participants consistently prioritize speed over thoroughness.',
@@ -184,6 +194,68 @@ describe('validateSynthesisResult', () => {
 
     input.themes = 'themes';
     expect(() => validateSynthesisResult(input)).toThrow(/themes/);
+  });
+
+  it('rejects a theme carrying both evidence and evidenceRefs', () => {
+    const input = clone(validSynthesisResult);
+    input.themes = [{
+      theme: 'Speed',
+      frequency: 3,
+      evidence: 'Mentioned speed three times',
+      evidenceRefs: [{ quote: 'Speed matters a lot to me', turnIndex: 1 }],
+    }];
+    expect(() => validateSynthesisResult(input)).toThrow(/themes\[0\]/);
+  });
+
+  it('rejects a theme carrying neither evidence nor evidenceRefs', () => {
+    const input = clone(validSynthesisResult);
+    input.themes = [{ theme: 'Speed', frequency: 3 }];
+    expect(() => validateSynthesisResult(input)).toThrow(/themes\[0\]/);
+  });
+
+  it('rejects a turnIndex of 0', () => {
+    const input = clone(validSynthesisResult);
+    input.themes = [{
+      theme: 'Speed',
+      frequency: 3,
+      evidenceRefs: [{ quote: 'Speed matters a lot to me', turnIndex: 0 }],
+    }];
+    expect(() => validateSynthesisResult(input)).toThrow(/turnIndex/);
+  });
+
+  it('rejects a string turnIndex', () => {
+    const input = clone(validSynthesisResult);
+    input.themes = [{
+      theme: 'Speed',
+      frequency: 3,
+      evidenceRefs: [{ quote: 'Speed matters a lot to me', turnIndex: '3' }],
+    }];
+    expect(() => validateSynthesisResult(input)).toThrow(/turnIndex/);
+  });
+
+  it('rejects a theme with four evidence refs', () => {
+    const input = clone(validSynthesisResult);
+    input.themes = [{
+      theme: 'Speed',
+      frequency: 3,
+      evidenceRefs: [
+        { quote: 'Speed matters a lot to me', turnIndex: 1 },
+        { quote: 'Speed matters a lot to me', turnIndex: 2 },
+        { quote: 'Speed matters a lot to me', turnIndex: 3 },
+        { quote: 'Speed matters a lot to me', turnIndex: 4 },
+      ],
+    }];
+    expect(() => validateSynthesisResult(input)).toThrow(/evidenceRefs/);
+  });
+
+  it('rejects an interviewId containing a slash', () => {
+    const input = clone(validSynthesisResult);
+    input.themes = [{
+      theme: 'Speed',
+      frequency: 3,
+      evidenceRefs: [{ quote: 'Speed matters a lot to me', turnIndex: 1, interviewId: 'interview/abc' }],
+    }];
+    expect(() => validateSynthesisResult(input)).toThrow(/interviewId/);
   });
 
   it('rejects missing or empty bottomLine instead of defaulting it', () => {

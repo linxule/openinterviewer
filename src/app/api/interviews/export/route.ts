@@ -66,7 +66,8 @@ function generateTranscript(interview: StoredInterview): string {
     if (interview.synthesis.themes.length > 0) {
       lines.push('**Themes:**');
       interview.synthesis.themes.forEach(t => {
-        lines.push(`- ${t.theme}: ${t.evidence}`);
+        const support = t.evidence ?? (t.evidenceRefs ?? []).map(r => `"${r.quote}" (turn ${r.turnIndex})`).join('; ');
+        lines.push(support ? `- ${t.theme}: ${support}` : `- ${t.theme}`);
       });
       lines.push('');
     }
