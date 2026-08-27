@@ -1,5 +1,7 @@
 # Initiative 2 — EvidenceRef: the implementation spec
 
+> **Status (2026-08-27):** I2a shipped (`ad0697d`), I2b shipped (`2b54c3e`), I2d shipped (`dff5312`). I2c (aggregate) deferred by Ruling 3 — specced below, unbuilt. The A9 researcher walkthrough of the trace UI is still owed.
+
 Implements `docs/design/initiative-2-brief.md`. Every "decision of record" in that brief is settled and is treated here as a requirement, not a question. Context: `docs/design/DIRECTION-final.md` §3 (the two laws), §7 (researcher workspace), §8 (Initiative 2), amendments A1, A5, A7; `docs/design/slice-D-spec.md` §D6 (the reference implementation of the trace grammar); `docs/design/slice-F-spec.md` §F2 (why no wine shipped in Slice F, and what has to arrive together with it).
 
 Three slices, strictly ordered: **I2a** (schema, prompt, validation) → **I2b** (trace UI) → **I2c** (aggregate, a candidate later phase). I2b cannot start before I2a is accepted; nothing in I2b is safe against a schema that is still moving.

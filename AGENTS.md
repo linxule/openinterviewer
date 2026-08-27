@@ -71,6 +71,7 @@ Hosted study create/delete is a durable cross-database operation. Preserve the o
 - Providers and prompts: `src/lib/providers/`, `src/lib/prompts/`, `src/lib/ai.ts`
 - Transport selection and Gateway model mapping: `src/lib/aiTransport.ts`, `src/lib/providers/gateway.ts`
 - Provider result validation/errors: `src/lib/providerValidation.ts`, `src/lib/providerErrors.ts`
+- Evidence citation matching (render-time classification; verdicts never stored): `src/lib/evidence.ts`
 - Participant and hosted platform limits: `src/lib/rateLimit.ts`, `src/lib/platformAiRateLimit.ts`
 - Browser API clients: `src/services/`
 - Session-scoped workflow state: `src/store.ts`
