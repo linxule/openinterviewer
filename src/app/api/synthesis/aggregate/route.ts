@@ -157,9 +157,8 @@ export async function POST(request: Request) {
       generatedAt: Date.now()
     };
 
-    // The provenance gate that createAggregateSynthesisReceipt used to apply
-    // as a side effect of signing. A record that does not name the provider
-    // and model that actually ran is not storable (AGENTS.md).
+    // A record that does not name the provider and model that actually ran
+    // is not storable (AGENTS.md).
     if (!aggregateProvenance(fullResult)) {
       return NextResponse.json(
         { error: 'Failed to generate aggregate synthesis' },

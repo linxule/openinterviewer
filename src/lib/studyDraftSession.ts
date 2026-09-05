@@ -4,7 +4,10 @@
 // original. Not to be confused with src/lib/createIdempotency.ts, which is
 // the server's create-idempotency mapping.
 
-export const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+import { UUID_V4 } from '@/lib/uuid';
+
+export { UUID_V4 };
+
 const IDEM_STATE_STORAGE = 'oi:create-idempotency-state';
 const AUTH_EPOCH_STORAGE = 'oi:create-authority-epoch';
 
