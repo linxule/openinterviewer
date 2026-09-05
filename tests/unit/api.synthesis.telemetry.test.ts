@@ -45,7 +45,10 @@ vi.mock('@/lib/providers', () => providersMock);
 const kvMock = vi.hoisted(() => ({ getStudy: vi.fn() }));
 vi.mock('@/lib/kv', () => kvMock);
 
-const rateLimitMock = vi.hoisted(() => ({ participantRateLimitResponse: vi.fn() }));
+const rateLimitMock = vi.hoisted(() => ({
+  participantRateLimitResponse: vi.fn(),
+  refundParticipantRateLimit: vi.fn(),
+}));
 vi.mock('@/lib/rateLimit', () => rateLimitMock);
 
 const platformRateLimitMock = vi.hoisted(() => ({ hostedAiRateLimitResponse: vi.fn() }));
@@ -128,6 +131,7 @@ beforeEach(() => {
   });
   kvMock.getStudy.mockResolvedValue(makeStoredStudy({ id: 'study-t', config: studyConfig }));
   rateLimitMock.participantRateLimitResponse.mockResolvedValue(null);
+  rateLimitMock.refundParticipantRateLimit.mockResolvedValue(undefined);
   platformRateLimitMock.hostedAiRateLimitResponse.mockResolvedValue(null);
   receiptMock.createSynthesisReceipt.mockResolvedValue('synthesis-receipt');
   consentMock.verifyParticipantConsent.mockResolvedValue({
@@ -196,5 +200,37 @@ describe('POST /api/synthesis evidence telemetry', () => {
     expect(events[0].refsOffered).toBe(0);
     expect(events[0].refsLocated).toBe(0);
     expect(JSON.stringify(spy.mock.calls)).not.toContain('Repeated concern');
+  });
+});
+
+describe('POST /api/synthesis participant rate-limit refund', () => {
+  it('refunds the participant synthesis budget when the provider call fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    providersMock.getInterviewProvider.mockReturnValue({
+      generateInterviewResponse: vi.fn(),
+      getInterviewGreeting: vi.fn(),
+      synthesizeInterview: vi.fn().mockRejectedValue(new Error('provider unavailable')),
+    });
+
+    const res = await synthesisPOST(makeRequest());
+    expect(res.status).toBeGreaterThanOrEqual(500);
+
+    expect(rateLimitMock.refundParticipantRateLimit).toHaveBeenCalledTimes(1);
+    const [, studyId, operation, , authority] = rateLimitMock.refundParticipantRateLimit.mock.calls[0];
+    expect(studyId).toBe('study-t');
+    expect(operation).toBe('synthesis');
+    expect(authority).toMatchObject({
+      sessionId: 'participant-session-t',
+      researcherId: 'researcher-t',
+    });
+  });
+
+  it('does not refund the participant synthesis budget when synthesis succeeds', async () => {
+    providersMock.getInterviewProvider.mockReturnValue(providerReturning([]));
+
+    const res = await synthesisPOST(makeRequest());
+    expect(res.status).toBe(200);
+
+    expect(rateLimitMock.refundParticipantRateLimit).not.toHaveBeenCalled();
   });
 });

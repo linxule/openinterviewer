@@ -26,6 +26,7 @@ export const REQUEST_LOG_EVENT_ALLOWLIST = [
   'platform.unavailable',
   'route.failure',
   'synthesis.evidence',
+  'rateLimit.refund',
 ] as const;
 
 export const REQUEST_LOG_REASON_ALLOWLIST = [

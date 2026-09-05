@@ -7,11 +7,23 @@ import { makeStudyConfig } from '../fixtures/models';
 
 const services = vi.hoisted(() => ({ synthesizeInterview: vi.fn(), saveCompletedInterview: vi.fn() }));
 const router = vi.hoisted(() => ({ push: vi.fn() }));
-vi.mock('@/services/interviewApi', () => ({ synthesizeInterview: services.synthesizeInterview }));
+vi.mock('@/services/interviewApi', () => ({
+  synthesizeInterview: services.synthesizeInterview,
+  ApiRequestError: class ApiRequestError extends Error {
+    status: number;
+    retryAfterSeconds: number | null;
+    constructor(status: number, retryAfterSeconds: number | null) {
+      super(`API error: ${status}`);
+      this.status = status;
+      this.retryAfterSeconds = retryAfterSeconds;
+    }
+  },
+}));
 vi.mock('@/services/storageService', () => ({ saveCompletedInterview: services.saveCompletedInterview }));
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
 
 import Synthesis from '@/components/Synthesis';
+import { ApiRequestError } from '@/services/interviewApi';
 
 const result: SynthesisResult = {
   statedPreferences: [], revealedPreferences: [], themes: [], contradictions: [], keyInsights: [],
@@ -225,6 +237,22 @@ describe('Synthesis signed submission lifecycle', () => {
     await screen.findByText('Interview submitted');
     expect(services.synthesizeInterview).toHaveBeenCalledTimes(3);
     expect(services.saveCompletedInterview).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a rate-limited retry prompt distinct from a generic failure', async () => {
+    services.synthesizeInterview.mockRejectedValueOnce(new ApiRequestError(429, 900));
+    render(<Synthesis />);
+    await screen.findByText('Too many finalization attempts');
+    expect(screen.getByText(/about 15 minutes/)).toBeInTheDocument();
+    expect(screen.queryByText("We couldn't finalize your interview")).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry finalization' })).toBeInTheDocument();
+  });
+
+  it('falls back to generic finalization-failed copy for a non-rate-limit error', async () => {
+    services.synthesizeInterview.mockRejectedValueOnce(new Error('Unavailable'));
+    render(<Synthesis />);
+    await screen.findByText("We couldn't finalize your interview");
+    expect(screen.queryByText('Too many finalization attempts')).not.toBeInTheDocument();
   });
 
   it('offers transcript export to preview users when analysis fails', async () => {
