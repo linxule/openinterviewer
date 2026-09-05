@@ -104,6 +104,8 @@ tokens + fonts (`next/font` — none exists today) + `cn()` (clsx+tailwind-merge
 
 > **Status (2026-08-27):** Initiative 1 shipped (PR #9, slices A–G). Initiative 2 shipped in the same PR as slices I2a (schema/prompt/matcher), I2b (trace UI), and I2d (rejection-rate telemetry, counts only) — see `docs/design/initiative-2-spec.md` and its rulings. Two deliberate divergences from the sketch above: per-interview refs omit `interviewId` (the id does not exist at synthesis time; it stays reserved for aggregate refs), and there is **no repair path** — an unlocatable quote renders as an honest unverified passage, because repairing or substituting citation text would break the "never substitute a plausible research response" invariant. Aggregate citations (I2c) are specced but deferred; the A9 human-validation gates remain owed for both initiatives.
 
+> **Status (2026-09-05):** Owner retired the A9 moderated-test gate as an unnecessary blocker — the direction ships on its own judgement; the written participant-layout fallback stays on record as the response to real feedback. Third train planned in `docs/design/initiative-3-brief.md`; margin unfold (A7's desktop placement) struck for that train.
+
 **Initiative 3 — Features (own reviews):**
 participant transcript download (privacy/consent review against README boundaries) · InterviewDetail transcript-rail + aggregate concordance (reusing the trace primitive) · typeset HTML/PDF export.
 
