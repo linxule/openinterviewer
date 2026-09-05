@@ -20,6 +20,7 @@ vi.mock('@/lib/researcherContext', () => contextMock);
 const kvMock = vi.hoisted(() => ({
   getStudyChecked: vi.fn(),
   getStudyInterviewsChecked: vi.fn(),
+  getStudyAggregateChecked: vi.fn(),
 }));
 vi.mock('@/lib/kv', () => kvMock);
 
@@ -36,7 +37,7 @@ vi.mock('@/lib/providers', async (importOriginal) => {
 const platformRateLimitMock = vi.hoisted(() => ({ hostedAiRateLimitResponse: vi.fn() }));
 vi.mock('@/lib/platformAiRateLimit', () => platformRateLimitMock);
 
-const receiptMock = vi.hoisted(() => ({ verifyAggregateSynthesisReceipt: vi.fn() }));
+const receiptMock = vi.hoisted(() => ({ aggregateProvenance: vi.fn() }));
 vi.mock('@/lib/synthesisReceipt', () => receiptMock);
 
 import { POST } from '@/app/api/studies/[id]/generate-followup/route';
@@ -54,15 +55,14 @@ const aggregate = {
   researchImplications: ['Study ownership'],
   bottomLine: 'Trust shapes adoption.',
   generatedAt: Date.now(),
-  _receipt: 'aggregate-receipt',
+  savedAt: Date.now(),
 };
 
 let parentStudy: StoredStudy;
 
-function request(synthesis: unknown) {
+function request() {
   return new Request('http://localhost/api/studies/study-followup/generate-followup', {
     method: 'POST',
-    body: JSON.stringify({ synthesis }),
   });
 }
 
@@ -83,7 +83,7 @@ beforeEach(() => {
     () => contextMock.getRequestContext(),
   );
   platformRateLimitMock.hostedAiRateLimitResponse.mockResolvedValue(null);
-  receiptMock.verifyAggregateSynthesisReceipt.mockResolvedValue({
+  receiptMock.aggregateProvenance.mockReturnValue({
     aiProvider: 'gemini',
     aiModel: GEMINI_SYNTHESIS_MODEL,
     requestedAiModel: GEMINI_SYNTHESIS_MODEL,
@@ -92,6 +92,7 @@ beforeEach(() => {
   parentStudy = makeStoredStudy({ id: 'study-followup', revision: 3 });
   parentStudy.config.id = parentStudy.id;
   kvMock.getStudyChecked.mockResolvedValue({ status: 'found', study: parentStudy });
+  kvMock.getStudyAggregateChecked.mockResolvedValue({ status: 'found', aggregate });
   kvMock.getStudyInterviewsChecked.mockResolvedValue({
     status: 'ok',
     items: [
@@ -120,7 +121,7 @@ afterEach(() => {
 
 describe('follow-up synthesis provenance', () => {
   it('accepts only current-revision interview provenance', async () => {
-    const response = await POST(request(aggregate), { params: Promise.resolve({ id: 'study-followup' }) });
+    const response = await POST(request(), { params: Promise.resolve({ id: 'study-followup' }) });
 
     expect(response.status).toBe(200);
     expect(generateFollowupStudy).toHaveBeenCalledWith(
@@ -146,31 +147,37 @@ describe('follow-up synthesis provenance', () => {
     });
   });
 
-  it('accepts a resolved aggregate whose refs carry a server-stamped interviewId (Slice L)', async () => {
-    const resolvedAggregate = {
-      ...aggregate,
-      commonThemes: [{
-        theme: 'Trust', frequency: 2,
-        quoteRefs: [{ quote: 'A trusted answer.', turnIndex: 2, interviewId: 'interview-a' }],
-      }],
-    };
+  it('accepts a stored aggregate whose refs carry a server-stamped interviewId (Slice L)', async () => {
+    kvMock.getStudyAggregateChecked.mockResolvedValue({
+      status: 'found',
+      aggregate: {
+        ...aggregate,
+        commonThemes: [{
+          theme: 'Trust', frequency: 2,
+          quoteRefs: [{ quote: 'A trusted answer.', turnIndex: 2, interviewId: 'interview-a' }],
+        }],
+      },
+    });
 
-    const response = await POST(request(resolvedAggregate), { params: Promise.resolve({ id: 'study-followup' }) });
+    const response = await POST(request(), { params: Promise.resolve({ id: 'study-followup' }) });
 
     expect(response.status).toBe(200);
     expect(generateFollowupStudy).toHaveBeenCalled();
   });
 
-  it('rejects an unresolved aggregate carrying interviewIndex instead of interviewId before calling a provider', async () => {
-    const unresolvedAggregate = {
-      ...aggregate,
-      commonThemes: [{
-        theme: 'Trust', frequency: 2,
-        quoteRefs: [{ quote: 'A trusted answer.', turnIndex: 2, interviewIndex: 1 }],
-      }],
-    };
+  it('rejects a stored aggregate carrying interviewIndex instead of interviewId before calling a provider', async () => {
+    kvMock.getStudyAggregateChecked.mockResolvedValue({
+      status: 'found',
+      aggregate: {
+        ...aggregate,
+        commonThemes: [{
+          theme: 'Trust', frequency: 2,
+          quoteRefs: [{ quote: 'A trusted answer.', turnIndex: 2, interviewIndex: 1 }],
+        }],
+      },
+    });
 
-    const response = await POST(request(unresolvedAggregate), { params: Promise.resolve({ id: 'study-followup' }) });
+    const response = await POST(request(), { params: Promise.resolve({ id: 'study-followup' }) });
 
     expect(response.status).toBe(400);
     expect(generateFollowupStudy).not.toHaveBeenCalled();
@@ -180,7 +187,7 @@ describe('follow-up synthesis provenance', () => {
     delete parentStudy.config.aiProvider;
     delete parentStudy.config.aiModel;
 
-    const response = await POST(request(aggregate), { params: Promise.resolve({ id: 'study-followup' }) });
+    const response = await POST(request(), { params: Promise.resolve({ id: 'study-followup' }) });
 
     expect(response.status).toBe(200);
     expect(generateFollowupStudy).toHaveBeenCalledWith(
@@ -193,24 +200,71 @@ describe('follow-up synthesis provenance', () => {
   });
 
   it('rejects stale or invented interview provenance before calling a provider', async () => {
-    const response = await POST(
-      request({ ...aggregate, interviewIds: ['interview-a', 'old'], interviewCount: 2 }),
-      { params: Promise.resolve({ id: 'study-followup' }) }
-    );
+    kvMock.getStudyAggregateChecked.mockResolvedValue({
+      status: 'found',
+      aggregate: { ...aggregate, interviewIds: ['interview-a', 'old'], interviewCount: 2 },
+    });
+
+    const response = await POST(request(), { params: Promise.resolve({ id: 'study-followup' }) });
 
     expect(response.status).toBe(409);
     expect(generateFollowupStudy).not.toHaveBeenCalled();
   });
 
-  it('rejects browser-tampered aggregate content before calling a provider', async () => {
-    receiptMock.verifyAggregateSynthesisReceipt.mockResolvedValueOnce(null);
+  it('returns 409 with no provider call when no stored aggregate exists', async () => {
+    kvMock.getStudyAggregateChecked.mockResolvedValue({ status: 'not-found' });
 
-    const response = await POST(request({ ...aggregate, bottomLine: 'Fabricated finding.' }), {
-      params: Promise.resolve({ id: 'study-followup' }),
+    const response = await POST(request(), { params: Promise.resolve({ id: 'study-followup' }) });
+
+    expect(response.status).toBe(409);
+    expect(generateFollowupStudy).not.toHaveBeenCalled();
+  });
+
+  it('returns 503 retryable with no provider call when the aggregate read is unavailable', async () => {
+    kvMock.getStudyAggregateChecked.mockResolvedValue({ status: 'unavailable' });
+
+    const response = await POST(request(), { params: Promise.resolve({ id: 'study-followup' }) });
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({ retryable: true });
+    expect(generateFollowupStudy).not.toHaveBeenCalled();
+  });
+
+  it('rejects a stored aggregate whose revision is behind the parent study before calling a provider', async () => {
+    kvMock.getStudyAggregateChecked.mockResolvedValue({
+      status: 'found',
+      aggregate: { ...aggregate, studyRevision: 2 },
     });
 
-    expect(response.status).toBe(403);
+    const response = await POST(request(), { params: Promise.resolve({ id: 'study-followup' }) });
+
+    expect(response.status).toBe(409);
     expect(generateFollowupStudy).not.toHaveBeenCalled();
+  });
+
+  it('rejects a stored aggregate whose provenance is incomplete before calling a provider', async () => {
+    receiptMock.aggregateProvenance.mockReturnValueOnce(null);
+
+    const response = await POST(request(), { params: Promise.resolve({ id: 'study-followup' }) });
+
+    expect(response.status).toBe(409);
+    expect(generateFollowupStudy).not.toHaveBeenCalled();
+  });
+
+  it('never reads browser-supplied content: a tampered POST body still uses the stored record', async () => {
+    const tamperedRequest = new Request('http://localhost/api/studies/study-followup/generate-followup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ synthesis: { ...aggregate, bottomLine: 'Fabricated finding.' } }),
+    });
+
+    const response = await POST(tamperedRequest, { params: Promise.resolve({ id: 'study-followup' }) });
+
+    expect(response.status).toBe(200);
+    expect(generateFollowupStudy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ bottomLine: aggregate.bottomLine }),
+    );
   });
 
   it('returns a safe provider configuration error instead of an internal error', async () => {
@@ -218,7 +272,7 @@ describe('follow-up synthesis provenance', () => {
       throw new Error('missing key');
     });
 
-    const response = await POST(request(aggregate), {
+    const response = await POST(request(), {
       params: Promise.resolve({ id: 'study-followup' }),
     });
 
@@ -233,7 +287,7 @@ describe('follow-up synthesis provenance', () => {
       new ProviderFailure('rate-limited', 'secret upstream response')
     );
 
-    const response = await POST(request(aggregate), {
+    const response = await POST(request(), {
       params: Promise.resolve({ id: 'study-followup' }),
     });
 

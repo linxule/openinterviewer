@@ -1,7 +1,7 @@
 // Storage Service - Client-side interface for interview storage
 // Calls API routes which interact with Upstash Redis
 
-import { isPendingStudyStub, PendingStudyStub, StoredInterview, StoredStudy, StudyConfig, StudyWorkspaceItem } from '@/types';
+import { AggregateSynthesisResult, isPendingStudyStub, PendingStudyStub, StoredInterview, StoredStudy, StudyConfig, StudyWorkspaceItem } from '@/types';
 import { logRequestEvent, logRequestFailure } from '@/lib/requestLog';
 import { buildParticipantOrPreviewHeaders } from '@/services/participantHeaders';
 export { isPendingStudyStub };
@@ -354,6 +354,27 @@ export async function getStudy(id: string): Promise<StoredStudy | null> {
     }
 
     return data.study || null;
+  } catch (error) {
+    if (error instanceof StudyOperationPendingError || error instanceof ResearcherStorageUnavailableError) {
+      throw error;
+    }
+    logRequestFailure({ event: 'route.failure' }, error);
+    return null;
+  }
+}
+
+// Get the stored aggregate synthesis for a study, or null if none exists yet.
+export async function getStudyAggregate(id: string): Promise<AggregateSynthesisResult | null> {
+  try {
+    const response = await fetch(`/api/studies/${encodeURIComponent(id)}/aggregate`, { cache: 'no-store' });
+    const data = await response.json().catch(() => ({})) as {
+      aggregate?: AggregateSynthesisResult | null;
+      code?: string;
+      error?: string;
+    };
+    throwIfTypedStorageFailure(response, data);
+    if (!response.ok) return null;
+    return data.aggregate ?? null;
   } catch (error) {
     if (error instanceof StudyOperationPendingError || error instanceof ResearcherStorageUnavailableError) {
       throw error;

@@ -12,7 +12,14 @@ const storageMock = vi.hoisted(() => ({
   getStudy: vi.fn(),
   getStudyInterviews: vi.fn(),
 }));
-vi.mock('@/services/storageService', () => storageMock);
+vi.mock('@/services/storageService', async (importOriginal) => {
+  const actual = (await importOriginal()) as typeof import('@/services/storageService');
+  return {
+    ...actual,
+    getStudy: storageMock.getStudy,
+    getStudyInterviews: storageMock.getStudyInterviews,
+  };
+});
 
 function renderStudyDetail(studyId: string) {
   return render(
@@ -59,6 +66,12 @@ describe('StudyDetail participant-link management', () => {
           truncated: false,
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
+      if (url.endsWith('/api/studies/study-a/aggregate')) {
+        return new Response(JSON.stringify({ aggregate: null }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
       throw new Error(`Unexpected fetch: ${url}`);
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -87,6 +100,12 @@ describe('StudyDetail participant-link management', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       if (String(input).endsWith('/api/studies/study-a/participant-links')) {
         return new Response(JSON.stringify({ links: [], truncated: false }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (String(input).endsWith('/api/studies/study-a/aggregate')) {
+        return new Response(JSON.stringify({ aggregate: null }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         });

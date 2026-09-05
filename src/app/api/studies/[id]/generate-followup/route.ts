@@ -10,14 +10,13 @@ import {
 } from '@/lib/providers';
 import { getAuthorizedResearcherStudyContext, providerKeysFromContext } from '@/lib/researcherContext';
 import { configurationRequiredResponse } from '@/lib/researcherAccess';
-import { getStudyChecked, getStudyInterviewsChecked } from '@/lib/kv';
+import { getStudyAggregateChecked, getStudyChecked, getStudyInterviewsChecked } from '@/lib/kv';
 import { mapCollectionLoad, mapStudyLoad } from '@/lib/ownedStudies';
 import { AggregateSynthesisResult, StudyConfig } from '@/types';
-import { readBoundedJsonObject } from '@/lib/requestBody';
 import { validateResolvedAggregateSynthesis } from '@/lib/providerValidation';
 import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
 import { providerErrorResponse } from '@/lib/providerErrors';
-import { verifyAggregateSynthesisReceipt } from '@/lib/synthesisReceipt';
+import { aggregateProvenance } from '@/lib/synthesisReceipt';
 import { createRequestId, logRequestFailure } from '@/lib/requestLog';
 
 export async function POST(
@@ -47,51 +46,43 @@ export async function POST(
     if (!studyMapped.ok) return NextResponse.json(studyMapped.body, { status: studyMapped.status });
     const parentStudy = studyMapped.study;
 
-    const parsedBody = await readBoundedJsonObject(request, 256_000);
-    if (!parsedBody.ok) {
+    const loadedAggregate = await getStudyAggregateChecked(parentStudy.id, gated.context.kvClient);
+    if (loadedAggregate.status === 'unavailable') {
       return NextResponse.json(
-        { error: parsedBody.status === 413 ? 'Synthesis payload is too large.' : 'Invalid synthesis payload.' },
-        { status: parsedBody.status }
+        { error: 'Analysis storage is temporarily unavailable.', retryable: true },
+        { status: 503 },
       );
     }
-    const rawSynthesis = parsedBody.value.synthesis;
-    if (!rawSynthesis || typeof rawSynthesis !== 'object' || Array.isArray(rawSynthesis)) {
+    if (loadedAggregate.status === 'not-found') {
       return NextResponse.json(
-        { error: 'Missing or invalid synthesis data' },
-        { status: 400 }
+        { error: 'Run the aggregate analysis for this study before generating a follow-up.' },
+        { status: 409 },
       );
     }
-    const metadata = rawSynthesis as Partial<AggregateSynthesisResult>;
-    const receipt = metadata._receipt;
-    if (typeof receipt !== 'string') {
-      return NextResponse.json({ error: 'Aggregate synthesis receipt is missing.' }, { status: 403 });
+    const stored = loadedAggregate.aggregate;
+
+    // Same three refusals as the receipt path enforced, now over a record the
+    // server wrote: revision binding, complete provenance, and shape.
+    if (stored.studyRevision !== parentStudy.revision) {
+      return NextResponse.json(
+        { error: 'Synthesis provenance does not match the current study.' },
+        { status: 409 },
+      );
     }
-    const { _receipt: _discardedReceipt, ...unsignedSynthesis } = rawSynthesis as AggregateSynthesisResult;
-    const signedProvenance = await verifyAggregateSynthesisReceipt({
-      receipt,
-      synthesis: unsignedSynthesis,
-    });
+    const signedProvenance = aggregateProvenance(stored);
     if (!signedProvenance) {
-      return NextResponse.json({ error: 'Aggregate synthesis receipt is invalid or expired.' }, { status: 403 });
+      return NextResponse.json(
+        { error: 'Stored analysis provenance is incomplete. Re-analyze this study.' },
+        { status: 409 },
+      );
     }
     let providerSynthesis;
     try {
-      providerSynthesis = validateResolvedAggregateSynthesis(rawSynthesis);
+      providerSynthesis = validateResolvedAggregateSynthesis(stored);
     } catch {
       return NextResponse.json({ error: 'Missing or invalid synthesis data' }, { status: 400 });
     }
-    const interviewIds = metadata.interviewIds;
-    if (
-      metadata.studyId !== parentStudy.id
-      || metadata.studyRevision !== parentStudy.revision
-      || !Array.isArray(interviewIds)
-      || interviewIds.length < 2
-      || interviewIds.length > 1_000
-      || !interviewIds.every(value => typeof value === 'string' && value.length <= 200)
-      || metadata.interviewCount !== interviewIds.length
-    ) {
-      return NextResponse.json({ error: 'Synthesis provenance does not match the current study.' }, { status: 409 });
-    }
+    const interviewIds = stored.interviewIds;
 
     const loadedInterviews = await getStudyInterviewsChecked(parentStudy.id, gated.context.kvClient, 1_000);
     const interviewsMapped = mapCollectionLoad(loadedInterviews, {
@@ -119,8 +110,8 @@ export async function POST(
       requestedAiModel: signedProvenance.requestedAiModel,
       aiModel: signedProvenance.aiModel,
       routedProvider: signedProvenance.routedProvider,
-      generatedAt: typeof metadata.generatedAt === 'number' && Number.isSafeInteger(metadata.generatedAt)
-        ? metadata.generatedAt
+      generatedAt: typeof stored.generatedAt === 'number' && Number.isSafeInteger(stored.generatedAt)
+        ? stored.generatedAt
         : Date.now(),
       ...providerSynthesis,
     };

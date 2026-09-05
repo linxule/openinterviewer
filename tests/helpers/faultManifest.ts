@@ -19,7 +19,7 @@ export const FAULT_CUTS = [
   // Standalone/hosted create (Phase 2)
   'S1', 'S2', 'S3', 'S4', 'W1', 'W2',
   // Delete (Phase 2/3)
-  'D1', 'D2', 'D3', 'D4',
+  'D1', 'D2', 'D3', 'D4', 'D5',
   // Persist guard (Phase 4)
   'F1', 'F2', 'F3', 'F4', 'F5',
   'persist-guard-cleanup',

@@ -13,6 +13,7 @@ import {
   encodeStorageBinding,
 } from '@/lib/platformDb';
 import { MemoryPlatformRedis } from '../helpers/memoryPlatformRedis';
+import JSZip from 'jszip';
 
 const cookiesMock = vi.hoisted(() => ({ cookies: vi.fn() }));
 vi.mock('next/headers', () => cookiesMock);
@@ -131,6 +132,7 @@ import { GET as interviewsGET } from '@/app/api/interviews/route';
 import { GET as interviewDetailGET } from '@/app/api/interviews/[id]/route';
 import { GET as exportGET } from '@/app/api/interviews/export/route';
 import { POST as aggregatePOST } from '@/app/api/synthesis/aggregate/route';
+import { GET as studyAggregateGET } from '@/app/api/studies/[id]/aggregate/route';
 import { POST as followupPOST } from '@/app/api/studies/[id]/generate-followup/route';
 import { GET as linksGET, DELETE as linksDELETE } from '@/app/api/studies/[id]/participant-links/route';
 import { GET as studiesGET } from '@/app/api/studies/route';
@@ -564,6 +566,10 @@ describe('hosted shared-BYOS researcher list/export/link adversarial matrix', ()
     const aggregate = await aggregatePOST(new Request('http://localhost/api/synthesis/aggregate', {
       method: 'POST', headers, body: JSON.stringify({ studyId: STUDY_A }),
     }));
+    const aggregateRead = await studyAggregateGET(
+      new Request(`http://localhost/api/studies/${STUDY_A}/aggregate`),
+      studyParams,
+    );
     const followup = await followupPOST(new Request(`http://localhost/api/studies/${STUDY_A}/generate-followup`, {
       method: 'POST', headers, body: JSON.stringify({ synthesis: { studyId: STUDY_A } }),
     }), studyParams);
@@ -580,11 +586,12 @@ describe('hosted shared-BYOS researcher list/export/link adversarial matrix', ()
       detail.status,
       studyDetail.status,
       aggregate.status,
+      aggregateRead.status,
       followup.status,
       mint.status,
       links.status,
       revoke.status,
-    ]).toEqual([403, 403, 403, 403, 403, 403, 403, 403]);
+    ]).toEqual([403, 403, 403, 403, 403, 403, 403, 403, 403]);
     expect(providersMock.getInterviewProvider).not.toHaveBeenCalled();
     expect(participantLinksMock.createParticipantLinkRecord).not.toHaveBeenCalled();
     expect(participantLinksMock.listParticipantLinksForStudy).not.toHaveBeenCalled();
@@ -624,6 +631,10 @@ describe('hosted shared-BYOS researcher list/export/link adversarial matrix', ()
     const aggregate = await aggregatePOST(new Request('http://localhost/api/synthesis/aggregate', {
       method: 'POST', headers, body: JSON.stringify({ studyId: STUDY_A }),
     }));
+    const aggregateRead = await studyAggregateGET(
+      new Request(`http://localhost/api/studies/${STUDY_A}/aggregate`),
+      studyParams,
+    );
     const followup = await followupPOST(new Request(`http://localhost/api/studies/${STUDY_A}/generate-followup`, {
       method: 'POST', headers, body: JSON.stringify({ synthesis: { studyId: STUDY_A } }),
     }), studyParams);
@@ -631,8 +642,9 @@ describe('hosted shared-BYOS researcher list/export/link adversarial matrix', ()
       method: 'POST', headers, body: JSON.stringify({ studyConfig: { id: STUDY_A } }),
     }));
     const links = await linksGET(new Request(`http://localhost/api/studies/${STUDY_A}/participant-links`), studyParams);
-    expect([detail.status, studyDetail.status, aggregate.status, followup.status, mint.status, links.status])
-      .toEqual([409, 409, 409, 409, 409, 409]);
+    expect([
+      detail.status, studyDetail.status, aggregate.status, aggregateRead.status, followup.status, mint.status, links.status,
+    ]).toEqual([409, 409, 409, 409, 409, 409, 409]);
     expect(kvMock.getInterviewChecked).not.toHaveBeenCalled();
     expect(providersMock.getInterviewProvider).not.toHaveBeenCalled();
   });
@@ -712,6 +724,39 @@ describe('hosted shared-BYOS researcher list/export/link adversarial matrix', ()
     expect(kvMock.getAllInterviewsChecked).not.toHaveBeenCalled();
     expect(kvMock.getStudyInterviewsChecked).toHaveBeenCalledWith(STUDY_B, expect.anything(), 500);
     expect(kvMock.getStudyInterviewsChecked).not.toHaveBeenCalledWith(STUDY_A, expect.anything(), expect.anything());
+  });
+
+  it('excludes another tenant’s aggregate from the export even though it sits in the shared database', async () => {
+    researcherSession(RESEARCHER_B);
+    // A's aggregate really exists in the same shared Redis; the fake BYOS
+    // client answers a GET for A's key with a real encoded record. Nothing in
+    // the export path may reach it because B's export never derives A's
+    // study id (N10: study ids come from B's own loaded interviews only).
+    const aggregateValueForA = `oi:aggregate:${JSON.stringify({
+      studyId: STUDY_A,
+      studyRevision: 1,
+      interviewIds: ['int-a'],
+      interviewCount: 1,
+      aiProvider: 'gemini',
+      aiModel: 'gemini-2.5-flash',
+      commonThemes: [],
+      divergentViews: [],
+      keyFindings: [],
+      researchImplications: [],
+      bottomLine: 'A leaked bottom line.',
+      generatedAt: NOW,
+      savedAt: NOW,
+    })}`;
+    kvClientMock.getResearcherClient.mockImplementation((_url: string, _token: string, meta: { researcherId: string }) => ({
+      kind: 'byos',
+      researcherId: meta.researcherId,
+      get: vi.fn(async (key: string) => (key === `study-aggregate:${STUDY_A}` ? aggregateValueForA : null)),
+    }));
+
+    const exported = await exportGET();
+    expect(exported.status).toBe(200);
+    const zip = await JSZip.loadAsync(await exported.arrayBuffer());
+    expect(zip.file(`aggregates/${STUDY_A}.json`)).toBeNull();
   });
 
   it('returns 404 for a cross-tagged interview whose studyId does not match the gated study', async () => {

@@ -4,7 +4,7 @@
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
-import { getAllInterviewsChecked } from '@/lib/kv';
+import { getAllInterviewsChecked, getStudyAggregateChecked } from '@/lib/kv';
 import { getHostedResearcherIdentity, getRequestContext } from '@/lib/researcherContext';
 import { configurationRequiredResponse } from '@/lib/researcherAccess';
 import { isHostedMode } from '@/lib/mode';
@@ -15,8 +15,9 @@ import {
 } from '@/lib/ownedStudies';
 import JSZip from 'jszip';
 import { csvCell } from '@/lib/csv';
-import { StoredInterview } from '@/types';
+import { StoredInterview, StoredAggregateSynthesis } from '@/types';
 import { logRequestFailure } from '@/lib/requestLog';
+import type { RedisPort } from '@/lib/redisPort';
 
 // Generate markdown transcript for an interview
 function generateTranscript(interview: StoredInterview): string {
@@ -82,6 +83,19 @@ function generateTranscript(interview: StoredInterview): string {
   return lines.join('\n');
 }
 
+async function loadStudyAggregates(
+  interviews: StoredInterview[],
+  kvClient: RedisPort,
+): Promise<Map<string, StoredAggregateSynthesis> | 'unavailable'> {
+  const aggregates = new Map<string, StoredAggregateSynthesis>();
+  for (const studyId of new Set(interviews.map(interview => interview.studyId))) {
+    const loaded = await getStudyAggregateChecked(studyId, kvClient);
+    if (loaded.status === 'unavailable') return 'unavailable';
+    if (loaded.status === 'found') aggregates.set(studyId, loaded.aggregate);
+  }
+  return aggregates;
+}
+
 function pendingExportResponse(): NextResponse {
   return NextResponse.json(
     {
@@ -93,7 +107,10 @@ function pendingExportResponse(): NextResponse {
   );
 }
 
-async function buildExportResponse(interviews: StoredInterview[]): Promise<Response> {
+async function buildExportResponse(
+  interviews: StoredInterview[],
+  aggregates: Map<string, StoredAggregateSynthesis>,
+): Promise<Response> {
   const zip = new JSZip();
 
   interviews.forEach((interview, index) => {
@@ -103,6 +120,10 @@ async function buildExportResponse(interviews: StoredInterview[]): Promise<Respo
     zip.file(`${baseName}.json`, JSON.stringify(interview, null, 2));
     zip.file(`${baseName}.md`, generateTranscript(interview));
   });
+
+  for (const [studyId, aggregate] of aggregates) {
+    zip.file(`aggregates/${studyId}.json`, JSON.stringify(aggregate, null, 2));
+  }
 
   const csvLines = [
     'Interview ID,Study,Date,Duration (min),Messages,Themes,Key Insight',
@@ -169,7 +190,14 @@ export async function GET() {
         if (inspection.pendingStudies.length > 0) return pendingExportResponse();
         return NextResponse.json({ error: 'No interviews to export' }, { status: 404 });
       }
-      return buildExportResponse(mapped.items);
+      const hostedAggregates = await loadStudyAggregates(mapped.items, access.context.kvClient);
+      if (hostedAggregates === 'unavailable') {
+        return NextResponse.json(
+          { error: 'Analysis storage is temporarily unavailable.', retryable: true },
+          { status: 503 },
+        );
+      }
+      return buildExportResponse(mapped.items, hostedAggregates);
     }
 
     const access = await getRequestContext();
@@ -188,7 +216,14 @@ export async function GET() {
     if (mapped.items.length === 0) {
       return NextResponse.json({ error: 'No interviews to export' }, { status: 404 });
     }
-    return buildExportResponse(mapped.items);
+    const standaloneAggregates = await loadStudyAggregates(mapped.items, context.kvClient);
+    if (standaloneAggregates === 'unavailable') {
+      return NextResponse.json(
+        { error: 'Analysis storage is temporarily unavailable.', retryable: true },
+        { status: 503 },
+      );
+    }
+    return buildExportResponse(mapped.items, standaloneAggregates);
   } catch (error) {
     logRequestFailure({
       event: 'route.failure',

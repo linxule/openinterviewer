@@ -10,12 +10,12 @@ import {
 } from '@/lib/providers';
 import { getAuthorizedResearcherStudyContext, providerKeysFromContext } from '@/lib/researcherContext';
 import { configurationRequiredResponse } from '@/lib/researcherAccess';
-import { getStudyChecked, getStudyInterviewsChecked } from '@/lib/kv';
+import { getStudyChecked, getStudyInterviewsChecked, saveStudyAggregate } from '@/lib/kv';
 import { mapCollectionLoad, mapStudyLoad } from '@/lib/ownedStudies';
 import { providerErrorResponse } from '@/lib/providerErrors';
-import { createAggregateSynthesisReceipt } from '@/lib/synthesisReceipt';
+import { aggregateProvenance } from '@/lib/synthesisReceipt';
 import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
-import { AggregateSynthesisResult, AggregateTheme, SynthesisResult } from '@/types';
+import { AggregateSynthesisResult, AggregateTheme, StoredAggregateSynthesis, SynthesisResult } from '@/types';
 import { readBoundedJsonObject } from '@/lib/requestBody';
 import { createRequestId, logRequestEvent, logRequestFailure } from '@/lib/requestLog';
 import { resolveEvidenceRef, withRecordBackedEvidence } from '@/lib/evidence';
@@ -157,7 +157,23 @@ export async function POST(request: Request) {
       generatedAt: Date.now()
     };
 
-    const receipt = await createAggregateSynthesisReceipt(fullResult);
+    // The provenance gate that createAggregateSynthesisReceipt used to apply
+    // as a side effect of signing. A record that does not name the provider
+    // and model that actually ran is not storable (AGENTS.md).
+    if (!aggregateProvenance(fullResult)) {
+      return NextResponse.json(
+        { error: 'Failed to generate aggregate synthesis' },
+        { status: 500 },
+      );
+    }
+
+    // Persist before responding, but never at the cost of the result: a write
+    // that fails returns the aggregate anyway, without `savedAt`, and the
+    // footer reads `not saved — regenerate to refresh`. The paid call is not
+    // thrown away because Redis blinked.
+    const savedAt = Date.now();
+    const stored: StoredAggregateSynthesis = { ...fullResult, savedAt };
+    const write = await saveStudyAggregate(stored, gated.context.kvClient);
 
     // Match-rate telemetry (ADR-003: counts only — never quote, turn, or
     // interview-id text). This is the only place the server runs the matcher
@@ -183,7 +199,7 @@ export async function POST(request: Request) {
       // aggregate call.
     }
 
-    return NextResponse.json({ synthesis: { ...fullResult, _receipt: receipt } });
+    return NextResponse.json({ synthesis: write === 'saved' ? stored : fullResult });
   } catch (error) {
     logRequestFailure({
       event: 'route.failure',

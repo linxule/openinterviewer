@@ -367,6 +367,7 @@ describe('atomic study mutations', () => {
       'study-operation-result:delete:study-delete:0',
       'study-mutation-guard:study-delete',
       'study-persisting:study-delete',
+      'study-aggregate:study-delete',
     ]);
   });
 
