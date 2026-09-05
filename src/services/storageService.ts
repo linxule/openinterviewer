@@ -99,7 +99,9 @@ export async function saveStudy(options: SaveStudyOptions): Promise<SaveStudyRes
 
 // Save completed interview
 export async function saveCompletedInterview(
-  interview: Omit<StoredInterview, 'completedAt' | 'status'>,
+  interview: Omit<StoredInterview, 'completedAt' | 'status' | 'participantProfile'> & {
+    participantProfile: StoredInterview['participantProfile'] | null;
+  },
   researcherPreview = false,
   participantSessionHandle?: string | null
 ): Promise<{ success: boolean; id: string; preview?: boolean }> {
