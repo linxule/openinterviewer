@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as jose from 'jose';
 import {
   createAggregateSynthesisReceipt,
@@ -38,6 +38,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.PARTICIPANT_TOKEN_SECRET;
+  vi.unstubAllEnvs();
 });
 
 describe('synthesis receipts', () => {
@@ -73,6 +74,33 @@ describe('synthesis receipts', () => {
       aiProvider: 'claude',
       aiModel: CLAUDE_SYNTHESIS_MODEL,
       requestedAiModel: CLAUDE_SYNTHESIS_MODEL,
+    });
+  });
+
+  it.each([
+    'claude-haiku-4.5',
+    'claude-sonnet-4.5',
+    'claude-opus-4.5',
+  ])('retains the Gateway Claude alias %s independently of the current transport', async (alias) => {
+    vi.stubEnv('AI_TRANSPORT', 'direct');
+    const provenance = {
+      aiProvider: 'claude' as const,
+      requestedAiModel: `anthropic/${alias}`,
+      aiModel: `${alias}-served`,
+      routedProvider: 'anthropic',
+    };
+    const receipt = await createSynthesisReceipt({ ...payload, ...provenance });
+
+    await expect(verifySynthesisReceipt({ ...payload, receipt })).resolves.toEqual(provenance);
+  });
+
+  it('continues accepting native receipts after switching to Gateway', async () => {
+    const receipt = await createSynthesisReceipt(payload);
+    vi.stubEnv('AI_TRANSPORT', 'gateway');
+
+    await expect(verifySynthesisReceipt({ ...payload, receipt })).resolves.toMatchObject({
+      requestedAiModel: GEMINI_SYNTHESIS_MODEL,
+      aiModel: GEMINI_SYNTHESIS_MODEL,
     });
   });
 
@@ -194,6 +222,59 @@ describe('aggregate synthesis receipts', () => {
     await expect(verifyAggregateSynthesisReceipt({
       receipt,
       synthesis: { ...aggregate, bottomLine: 'Tampered aggregate.' },
+    })).resolves.toBeNull();
+  });
+
+  it('preserves direct native provenance without a routed provider', async () => {
+    const direct = {
+      ...aggregate,
+      aiProvider: 'gemini' as const,
+      requestedAiModel: GEMINI_SYNTHESIS_MODEL,
+      aiModel: `${GEMINI_SYNTHESIS_MODEL}-served`,
+      routedProvider: undefined,
+    };
+    const receipt = await createAggregateSynthesisReceipt(direct);
+
+    await expect(verifyAggregateSynthesisReceipt({ receipt, synthesis: direct })).resolves.toEqual({
+      aiProvider: 'gemini',
+      requestedAiModel: GEMINI_SYNTHESIS_MODEL,
+      aiModel: direct.aiModel,
+    });
+  });
+
+  it.each([
+    { name: 'unknown Gateway model', requestedAiModel: 'openai/unknown', routedProvider: 'openai' },
+    { name: 'wrong model creator', requestedAiModel: `google/${OPENAI_SYNTHESIS_MODEL}`, routedProvider: 'openai' },
+    { name: 'wrong creator route', requestedAiModel: `openai/${OPENAI_SYNTHESIS_MODEL}`, routedProvider: 'anthropic' },
+    { name: 'missing Gateway route', requestedAiModel: `openai/${OPENAI_SYNTHESIS_MODEL}`, routedProvider: undefined },
+    { name: 'native model with a Gateway route', requestedAiModel: OPENAI_SYNTHESIS_MODEL, routedProvider: 'openai' },
+    { name: 'empty Gateway route', requestedAiModel: `openai/${OPENAI_SYNTHESIS_MODEL}`, routedProvider: '' },
+    { name: 'unbounded response model', requestedAiModel: `openai/${OPENAI_SYNTHESIS_MODEL}`, routedProvider: 'openai', aiModel: 'x'.repeat(201) },
+  ])('rejects $name in both receipt contracts', async ({ name: _name, ...invalid }) => {
+    const provenance = { aiProvider: 'openai' as const, aiModel: 'served-model', ...invalid };
+    // The signer is trusted, but verification must reject even signed malformed
+    // provenance, not only browser edits that invalidate the JWT signature.
+    const participantReceipt = await createSynthesisReceipt({ ...payload, ...provenance });
+    await expect(verifySynthesisReceipt({ ...payload, receipt: participantReceipt })).resolves.toBeNull();
+    await expect(createAggregateSynthesisReceipt({ ...aggregate, ...provenance }))
+      .rejects.toThrow('Aggregate synthesis provenance is incomplete');
+  });
+
+  it('rejects altered Gateway provenance without a valid signature', async () => {
+    const receipt = await createSynthesisReceipt({
+      ...payload,
+      aiProvider: 'openai',
+      requestedAiModel: `openai/${OPENAI_SYNTHESIS_MODEL}`,
+      aiModel: 'served-model',
+      routedProvider: 'openai',
+    });
+    const [header, , signature] = receipt.split('.');
+    const tampered = Buffer.from(JSON.stringify({
+      ...jose.decodeJwt(receipt), aiModel: 'fabricated-model',
+    })).toString('base64url');
+
+    await expect(verifySynthesisReceipt({
+      ...payload, receipt: `${header}.${tampered}.${signature}`,
     })).resolves.toBeNull();
   });
 });

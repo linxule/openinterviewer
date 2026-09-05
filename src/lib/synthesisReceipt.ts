@@ -2,7 +2,8 @@ import { createHash } from 'crypto';
 import * as jose from 'jose';
 import { getParticipantSigningSecret } from './auth';
 import type { AggregateSynthesisResult, AIProviderType } from '@/types';
-import { isKnownProviderModel } from './providerRegistry';
+import { isKnownProviderModel, PROVIDER_MODELS } from './providerRegistry';
+import { gatewayRouteForProvider, isGatewayProvider, toGatewayModelId } from './aiTransport';
 
 const ISSUER = 'openinterviewer';
 const AUDIENCE = 'openinterviewer:synthesis-receipt';
@@ -109,13 +110,9 @@ export async function verifySynthesisReceipt(options: {
         || payload.aiProvider === 'claude'
         || payload.aiProvider === 'openai'
         || payload.aiProvider === 'openrouter');
-    const validBoundedModel = (value: unknown): value is string => typeof value === 'string'
-      && value.trim().length > 0
-      && value.length <= 200;
-
     if (
       !validProvider
-      || !validBoundedModel(payload.aiModel)
+      || !validBoundedText(payload.aiModel)
     ) {
       return null;
     }
@@ -133,25 +130,12 @@ export async function verifySynthesisReceipt(options: {
       };
     }
 
-    if (!validBoundedModel(payload.requestedAiModel)
-      || !isKnownProviderModel(provider, payload.requestedAiModel)) {
-      return null;
-    }
-    if (provider === 'openrouter' && !validBoundedModel(payload.routedProvider)) {
-      return null;
-    }
-    if (provider !== 'openrouter' && payload.routedProvider !== undefined) {
-      return null;
-    }
-
-    return {
+    return validateProvenance({
       aiProvider: provider,
       requestedAiModel: payload.requestedAiModel,
       aiModel: payload.aiModel,
-      ...(typeof payload.routedProvider === 'string' && payload.routedProvider.trim()
-        ? { routedProvider: payload.routedProvider }
-        : {}),
-    };
+      routedProvider: payload.routedProvider,
+    });
   } catch {
     return null;
   }
@@ -161,31 +145,47 @@ function validBoundedText(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= 200;
 }
 
-function validateAggregateProvenance(
-  value: Pick<AggregateSynthesisResult, 'aiProvider' | 'aiModel' | 'requestedAiModel' | 'routedProvider'>,
-): SynthesisProvenance | null {
+function validateProvenance(value: {
+  aiProvider: AIProviderType;
+  aiModel: unknown;
+  requestedAiModel?: unknown;
+  routedProvider?: unknown;
+}): SynthesisProvenance | null {
   if (!validBoundedText(value.aiModel)
-    || !validBoundedText(value.requestedAiModel)
-    || !isKnownProviderModel(value.aiProvider, value.requestedAiModel)) {
+    || !validBoundedText(value.requestedAiModel)) {
     return null;
   }
   if (value.aiProvider === 'openrouter') {
-    if (!validBoundedText(value.routedProvider)) return null;
-  } else if (value.routedProvider !== undefined) {
+    if (!isKnownProviderModel(value.aiProvider, value.requestedAiModel)
+      || !validBoundedText(value.routedProvider)) return null;
+  } else if (isGatewayProvider(value.aiProvider)) {
+    if (value.routedProvider === undefined) {
+      if (!isKnownProviderModel(value.aiProvider, value.requestedAiModel)) return null;
+    } else {
+      // Receipts describe generation-time execution, regardless of the current
+      // transport setting. Gateway requests use mapped model IDs and one exact
+      // creator route; actual response model IDs remain provider-reported.
+      const provider = value.aiProvider;
+      if (value.routedProvider !== gatewayRouteForProvider(provider)
+        || !PROVIDER_MODELS[provider].some(
+          model => toGatewayModelId(provider, model.id) === value.requestedAiModel,
+        )) return null;
+    }
+  } else {
     return null;
   }
   return {
     aiProvider: value.aiProvider,
     aiModel: value.aiModel,
     requestedAiModel: value.requestedAiModel,
-    ...(value.routedProvider ? { routedProvider: value.routedProvider } : {}),
+    ...(typeof value.routedProvider === 'string' ? { routedProvider: value.routedProvider } : {}),
   };
 }
 
 export async function createAggregateSynthesisReceipt(
   synthesis: UnsignedAggregateSynthesis,
 ): Promise<string> {
-  const provenance = validateAggregateProvenance(synthesis);
+  const provenance = validateProvenance(synthesis);
   if (!provenance) throw new Error('Aggregate synthesis provenance is incomplete');
 
   return new jose.SignJWT({
@@ -237,7 +237,7 @@ export async function verifyAggregateSynthesisReceipt(options: {
       || payload.routedProvider !== options.synthesis.routedProvider) {
       return null;
     }
-    return validateAggregateProvenance(options.synthesis);
+    return validateProvenance(options.synthesis);
   } catch {
     return null;
   }
