@@ -12,6 +12,15 @@ const routerMock = vi.hoisted(() => ({ push: vi.fn() }));
 
 vi.mock('@/services/interviewApi', () => ({
   synthesizeInterview: serviceMocks.synthesizeInterview,
+  ApiRequestError: class ApiRequestError extends Error {
+    status: number;
+    retryAfterSeconds: number | null;
+    constructor(status: number, retryAfterSeconds: number | null) {
+      super(`API error: ${status}`);
+      this.status = status;
+      this.retryAfterSeconds = retryAfterSeconds;
+    }
+  },
 }));
 
 vi.mock('@/services/storageService', () => ({

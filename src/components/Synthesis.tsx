@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useStore } from '@/store';
-import { synthesizeInterview } from '@/services/interviewApi';
+import { ApiRequestError, synthesizeInterview } from '@/services/interviewApi';
 import { saveCompletedInterview } from '@/services/storageService';
 import { Button, Coordinate, Label, Notice, Page, Rule, Verbatim } from '@/components/ui';
 import { SynthesisReading } from '@/components/SynthesisReading';
@@ -49,7 +49,9 @@ const Synthesis: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'pending' | 'saved' | 'preview' | 'failed' | null>(null);
-  const [analysisError, setAnalysisError] = useState(false);
+  const [analysisError, setAnalysisError] = useState<
+    null | { kind: 'failed' } | { kind: 'rate-limited'; retryAfterSeconds: number | null }
+  >(null);
 
   const mounted = useRef(false);
   const activeAttempt = useRef<CompletionAttempt | null>(null);
@@ -117,7 +119,7 @@ const Synthesis: React.FC = () => {
   };
 
   const handleRetryAnalysis = () => {
-    setAnalysisError(false);
+    setAnalysisError(null);
     activeAttempt.current = null;
     setRetryTrigger(prev => prev + 1);
   };
@@ -135,7 +137,7 @@ const Synthesis: React.FC = () => {
     setIsAnalyzing(false);
     setIsSaving(false);
     setSaveStatus(null);
-    setAnalysisError(false);
+    setAnalysisError(null);
     if (!studyConfig || interviewHistory.length === 0) return;
 
     const attempt: CompletionAttempt = { inputs, result: existingSynthesis, saving: false };
@@ -164,7 +166,11 @@ const Synthesis: React.FC = () => {
       } catch (error) {
         if (isCurrentAttempt(attempt)) {
           console.error('Error synthesizing interview:', error);
-          setAnalysisError(true);
+          setAnalysisError(
+            error instanceof ApiRequestError && error.status === 429
+              ? { kind: 'rate-limited', retryAfterSeconds: error.retryAfterSeconds }
+              : { kind: 'failed' }
+          );
         }
       } finally {
         if (isCurrentAttempt(attempt)) setIsAnalyzing(false);
@@ -194,13 +200,15 @@ const Synthesis: React.FC = () => {
   }
 
   if (viewMode === 'participant') {
-    const participantState = analysisError
-      ? 'analysis-failed'
-      : saveStatus === 'failed' || saveStatus === 'preview'
-        ? 'save-failed'
-        : saveStatus === 'saved'
-          ? 'saved'
-          : 'finalizing';
+    const participantState = analysisError?.kind === 'rate-limited'
+      ? 'rate-limited'
+      : analysisError?.kind === 'failed'
+        ? 'analysis-failed'
+        : saveStatus === 'failed' || saveStatus === 'preview'
+          ? 'save-failed'
+          : saveStatus === 'saved'
+            ? 'saved'
+            : 'finalizing';
 
     const elapsedMs = transcriptElapsedMs(interviewHistory);
     const consentAccepted = formatConsentTimestamp(consentTimestamp);
@@ -250,6 +258,28 @@ const Synthesis: React.FC = () => {
               <Notice tone="error">
                 <p className="font-sans text-[15px] leading-[24px] text-ink-700" role="alert">
                   Your responses are still in this tab, but they have not been saved. Keep this tab open and try again.
+                </p>
+              </Notice>
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <Button variant="quiet" onClick={handleBack}>
+                  Back to interview
+                </Button>
+                <Button variant="primary" onClick={handleRetryAnalysis}>
+                  Retry finalization
+                </Button>
+              </div>
+            </>
+          ) : participantState === 'rate-limited' ? (
+            <>
+              <Verbatim as="h1" className="text-[28px] font-normal leading-[36px] text-ink-900">
+                Too many finalization attempts
+              </Verbatim>
+              <Notice tone="error">
+                <p className="font-sans text-[15px] leading-[24px] text-ink-700" role="alert">
+                  Your responses are safe in this tab.{' '}
+                  {analysisError?.kind === 'rate-limited' && analysisError.retryAfterSeconds != null
+                    ? `Wait about ${Math.max(1, Math.ceil(analysisError.retryAfterSeconds / 60))} minutes, then retry — keep this tab open.`
+                    : 'Wait a few minutes, then retry — keep this tab open.'}
                 </p>
               </Notice>
               <div className="flex flex-col gap-3 sm:flex-row">

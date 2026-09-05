@@ -15,7 +15,7 @@ import {
 } from '@/lib/researcherContext';
 import { loadCanonicalStudy } from '@/lib/canonicalStudy';
 import { providerErrorResponse } from '@/lib/providerErrors';
-import { participantRateLimitResponse } from '@/lib/rateLimit';
+import { participantRateLimitResponse, refundParticipantRateLimit } from '@/lib/rateLimit';
 import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
 import { validateBehavior, validateProfile, validateTranscript } from '@/lib/interviewSubmission';
 import { createSynthesisReceipt } from '@/lib/synthesisReceipt';
@@ -184,6 +184,19 @@ export async function POST(request: Request) {
       }
       return NextResponse.json({ ...result.value, _receipt: receipt });
     } catch (providerError) {
+      // The participant limiter already consumed a synthesis attempt for
+      // this request; a provider-side failure isn't the participant's fault,
+      // so refund it instead of letting a bad upstream response burn their
+      // retry budget for the day.
+      if (!isAdmin) {
+        await refundParticipantRateLimit(
+          request,
+          canonical.study.id,
+          'synthesis',
+          context.kvClient,
+          { sessionId: participantSessionId, linkId, researcherId: context.researcherId }
+        );
+      }
       return providerErrorResponse(providerError);
     }
   } catch (error) {

@@ -16,6 +16,26 @@ import { buildParticipantOrPreviewHeaders } from '@/services/participantHeaders'
 // Participant authority is a short-lived HttpOnly same-site cookie. Share-link
 // codes and session credentials are never exposed to this JavaScript service.
 
+// Thrown for any non-OK API response so callers can distinguish a rate limit
+// (429, with a server-provided Retry-After) from every other failure without
+// parsing the message string.
+export class ApiRequestError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly retryAfterSeconds: number | null
+  ) {
+    super(`API error: ${status}`);
+    this.name = 'ApiRequestError';
+  }
+}
+
+function retryAfterSecondsFromResponse(response: Response): number | null {
+  const header = response.headers.get('Retry-After');
+  if (!header) return null;
+  const seconds = Number.parseInt(header, 10);
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
+}
+
 // Generate AI interviewer response
 export const generateInterviewResponse = async (
   history: InterviewMessage[],
@@ -43,7 +63,7 @@ export const generateInterviewResponse = async (
     });
 
     if (!response.ok) {
-      throw new Error(`API error: ${response.status}`);
+      throw new ApiRequestError(response.status, retryAfterSecondsFromResponse(response));
     }
 
     return await response.json();
@@ -70,7 +90,7 @@ export const getInterviewGreeting = async (
     });
 
     if (!response.ok) {
-      throw new Error(`API error: ${response.status}`);
+      throw new ApiRequestError(response.status, retryAfterSecondsFromResponse(response));
     }
 
     const data = await response.json();
@@ -106,7 +126,7 @@ export const synthesizeInterview = async (
     });
 
     if (!response.ok) {
-      throw new Error(`API error: ${response.status}`);
+      throw new ApiRequestError(response.status, retryAfterSecondsFromResponse(response));
     }
 
     return await response.json();
