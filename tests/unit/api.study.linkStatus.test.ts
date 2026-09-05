@@ -17,7 +17,6 @@ const kvMock = vi.hoisted(() => ({
 }));
 vi.mock('@/lib/kv', () => kvMock);
 
-vi.mock('@/lib/platformDb', () => ({ deleteStudyOwnership: vi.fn() }));
 vi.mock('@/lib/mode', () => ({ isHostedMode: vi.fn().mockReturnValue(false) }));
 
 import { PUT } from '@/app/api/studies/[id]/route';

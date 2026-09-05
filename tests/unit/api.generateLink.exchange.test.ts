@@ -67,7 +67,6 @@ vi.mock('@/lib/researcherAccess', () => accessMock);
 vi.mock('@/lib/mode', () => ({ isHostedMode: vi.fn(() => false) }));
 vi.mock('@/lib/platformDb', () => ({
   consumePlatformRateLimit: vi.fn(),
-  getStudyOwnerChecked: vi.fn(),
 }));
 vi.mock('@/lib/appBaseUrl', () => ({ getAppBaseUrl: vi.fn(() => 'http://localhost') }));
 

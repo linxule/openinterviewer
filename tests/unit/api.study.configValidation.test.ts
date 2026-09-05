@@ -21,8 +21,6 @@ vi.mock('@/lib/kv', () => kvMock);
 
 vi.mock('@/lib/platformDb', () => ({
   consumePlatformRateLimit: vi.fn(),
-  deleteStudyOwnership: vi.fn(),
-  registerStudyOwnership: vi.fn(),
 }));
 vi.mock('@/lib/mode', () => ({ isHostedMode: vi.fn().mockReturnValue(false) }));
 

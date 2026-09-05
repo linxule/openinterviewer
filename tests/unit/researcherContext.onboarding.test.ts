@@ -12,7 +12,6 @@ vi.mock('@/lib/auth', () => authMock);
 
 const platformMock = vi.hoisted(() => ({
   getResearcherByIdChecked: vi.fn(),
-  getStudyOwnerChecked: vi.fn(),
 }));
 vi.mock('@/lib/platformDb', () => platformMock);
 

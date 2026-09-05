@@ -18,14 +18,11 @@ const kvMock = vi.hoisted(() => ({
 vi.mock('@/lib/kv', () => kvMock);
 
 const platformMock = vi.hoisted(() => ({
-  beginCreateStudyOperation: vi.fn(),
   beginCreateStudyOperationV2: vi.fn(),
-  beginDeleteStudyOperation: vi.fn(),
   beginDeleteStudyOperationV2: vi.fn(),
   consumePlatformRateLimit: vi.fn(),
   loadResearcherStorageBinding: vi.fn(),
   publishStudyOperationV2: vi.fn(),
-  resolveStudyOperation: vi.fn(),
   resolveStudyOperationV2: vi.fn(),
 }));
 vi.mock('@/lib/platformDb', () => platformMock);
@@ -96,7 +93,6 @@ describe('DELETE /api/studies/[id] standalone — no getStudy shortcut', () => {
       { name: 'standalone-kv' },
       `delete:${STUDY_ID}:0`,
     );
-    expect(platformMock.beginDeleteStudyOperation).not.toHaveBeenCalled();
     expect(platformMock.beginDeleteStudyOperationV2).not.toHaveBeenCalled();
     expect(platformMock.loadResearcherStorageBinding).not.toHaveBeenCalled();
     expect(response.status).toBe(200);

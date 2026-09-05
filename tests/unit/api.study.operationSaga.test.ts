@@ -22,13 +22,11 @@ const STORAGE_ID = 'a'.repeat(64);
 const DELETE_STUDY_ID = '11111111-1111-4111-8111-111111111111';
 const platformMock = vi.hoisted(() => ({
   beginCreateStudyOperationV2: vi.fn(),
-  beginDeleteStudyOperation: vi.fn(),
   beginDeleteStudyOperationV2: vi.fn(),
   consumePlatformRateLimit: vi.fn(),
   getResearcherByIdChecked: vi.fn(),
   loadResearcherStorageBinding: vi.fn(),
   publishStudyOperationV2: vi.fn(),
-  resolveStudyOperation: vi.fn(),
   resolveStudyOperationV2: vi.fn(),
 }));
 vi.mock('@/lib/platformDb', () => platformMock);
@@ -116,7 +114,6 @@ beforeEach(() => {
   kvMock.deleteStudy.mockResolvedValue({ success: true });
   kvMock.createStudyAtomic.mockResolvedValue('created');
   platformMock.beginDeleteStudyOperationV2.mockResolvedValue({ status: 'started', operation });
-  platformMock.resolveStudyOperation.mockResolvedValue('resolved');
   platformMock.consumePlatformRateLimit.mockResolvedValue({ status: 'allowed', remaining: 99 });
   platformMock.loadResearcherStorageBinding.mockResolvedValue({
     status: 'ok',
@@ -213,8 +210,6 @@ describe('hosted study deletion operation saga', () => {
         resolution: 'delete-complete',
       }),
     );
-    expect(platformMock.beginDeleteStudyOperation).not.toHaveBeenCalled();
-    expect(platformMock.resolveStudyOperation).not.toHaveBeenCalled();
   });
 
   it('does not begin when the expected storage binding is missing', async () => {

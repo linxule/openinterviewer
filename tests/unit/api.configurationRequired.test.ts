@@ -10,10 +10,6 @@ const kvMock = vi.hoisted(() => ({
 }));
 vi.mock('@/lib/kv', () => kvMock);
 
-vi.mock('@/lib/platformDb', () => ({
-  deleteStudyOwnership: vi.fn(),
-  registerStudyOwnership: vi.fn(),
-}));
 vi.mock('@/lib/mode', () => ({ isHostedMode: vi.fn().mockReturnValue(true) }));
 
 import { GET } from '@/app/api/studies/route';
