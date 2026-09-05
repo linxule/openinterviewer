@@ -60,18 +60,26 @@ beforeEach(() => {
 });
 
 describe('Synthesis completion states', () => {
-  it('shows participants a safe-to-close confirmation only after save succeeds', async () => {
+  it('shows participants a safe-to-close confirmation as soon as the save succeeds, with no synthesis call', async () => {
     seedStore('participant');
     serviceMocks.saveCompletedInterview.mockResolvedValue({ success: true, id: 'interview-1' });
 
     render(<Synthesis />);
 
     expect(screen.getByText('Finalizing your interview')).toBeInTheDocument();
-    expect(await screen.findByText('Interview submitted')).toBeInTheDocument();
+    expect(await screen.findByText('Thank you')).toBeInTheDocument();
     expect(screen.getByText(/it is now safe to close this tab/i)).toBeInTheDocument();
     expect(screen.queryByText('A bottom line')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /export/i })).not.toBeInTheDocument();
+    // The participant's completion is a save; the analysis is the server's
+    // problem entirely, never a model call the participant waits on.
+    expect(serviceMocks.synthesizeInterview).not.toHaveBeenCalled();
     expect(serviceMocks.saveCompletedInterview).toHaveBeenCalledTimes(1);
+    expect(serviceMocks.saveCompletedInterview).toHaveBeenCalledWith(
+      expect.objectContaining({ synthesis: null }),
+      false,
+      'session-handle',
+    );
   });
 
   it('keeps participant data in place and offers retry when save fails', async () => {
@@ -88,7 +96,7 @@ describe('Synthesis completion states', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /retry save/i }));
 
-    expect(await screen.findByText('Interview submitted')).toBeInTheDocument();
+    expect(await screen.findByText('Thank you')).toBeInTheDocument();
     await waitFor(() => expect(serviceMocks.saveCompletedInterview).toHaveBeenCalledTimes(2));
   });
 

@@ -12,7 +12,8 @@ export type HostedAiOperation =
   | 'interview'
   | 'synthesis'
   | 'aggregate'
-  | 'followup';
+  | 'followup'
+  | 'analysis';
 
 type ScopePolicy = {
   session: { maximum: number; windowSeconds: number };
@@ -47,6 +48,16 @@ export const HOSTED_AI_RATE_LIMIT_POLICY: Record<HostedAiOperation, ScopePolicy>
     session: { maximum: 20, windowSeconds: 3_600 },
     network: { maximum: 100, windowSeconds: 3_600 },
     researcher: { maximum: 100, windowSeconds: 86_400 },
+  },
+  // Researcher-triggered interview analysis (slice P). `session` at 100/hour
+  // admits a 25-interview batch four times an hour; `researcher` at 500/day
+  // bounds platform exposure. The deferred (`after()`) path keeps consuming
+  // `synthesis` with the participant session — one save, one analysis,
+  // inside the existing budget.
+  analysis: {
+    session: { maximum: 100, windowSeconds: 3_600 },
+    network: { maximum: 200, windowSeconds: 3_600 },
+    researcher: { maximum: 500, windowSeconds: 86_400 },
   },
 };
 

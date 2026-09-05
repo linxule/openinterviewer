@@ -8,6 +8,11 @@ import { makeStoredStudy, makeStudyConfig } from '../fixtures/models';
  * (refs offered vs refs located against the transcript) on the success path.
  * ADR-003: no quote text, turn text, or anything derived from participant
  * speech may reach a log line. All fixture content below is invented.
+ *
+ * Slice P: this route is researcher-preview-only now (P3.3) — every case
+ * here runs as `isAdmin`, and the participant-refund contract it used to
+ * pin is deleted along with the refund helper itself. What replaces it: a
+ * participant token gets a flat 403 before any provider call.
  */
 
 const contextMock = vi.hoisted(() => ({
@@ -45,20 +50,11 @@ vi.mock('@/lib/providers', () => providersMock);
 const kvMock = vi.hoisted(() => ({ getStudy: vi.fn() }));
 vi.mock('@/lib/kv', () => kvMock);
 
-const rateLimitMock = vi.hoisted(() => ({
-  participantRateLimitResponse: vi.fn(),
-  refundParticipantRateLimit: vi.fn(),
-}));
-vi.mock('@/lib/rateLimit', () => rateLimitMock);
-
 const platformRateLimitMock = vi.hoisted(() => ({ hostedAiRateLimitResponse: vi.fn() }));
 vi.mock('@/lib/platformAiRateLimit', () => platformRateLimitMock);
 
 const consentMock = vi.hoisted(() => ({ verifyParticipantConsent: vi.fn() }));
 vi.mock('@/lib/participantConsent', () => consentMock);
-
-const receiptMock = vi.hoisted(() => ({ createSynthesisReceipt: vi.fn() }));
-vi.mock('@/lib/synthesisReceipt', () => receiptMock);
 
 import { POST as synthesisPOST } from '@/app/api/synthesis/route';
 
@@ -126,14 +122,11 @@ beforeEach(() => {
       onboardingComplete: true,
     },
     studyId: 'study-t',
-    isAdmin: false,
-    participantSessionId: 'participant-session-t',
+    isAdmin: true,
+    participantSessionId: undefined,
   });
   kvMock.getStudy.mockResolvedValue(makeStoredStudy({ id: 'study-t', config: studyConfig }));
-  rateLimitMock.participantRateLimitResponse.mockResolvedValue(null);
-  rateLimitMock.refundParticipantRateLimit.mockResolvedValue(undefined);
   platformRateLimitMock.hostedAiRateLimitResponse.mockResolvedValue(null);
-  receiptMock.createSynthesisReceipt.mockResolvedValue('synthesis-receipt');
   consentMock.verifyParticipantConsent.mockResolvedValue({
     status: 'accepted',
     consent: {
@@ -147,7 +140,7 @@ beforeEach(() => {
   });
 });
 
-describe('POST /api/synthesis evidence telemetry', () => {
+describe('POST /api/synthesis evidence telemetry (researcher preview)', () => {
   it('emits counts-only synthesis.evidence with offered vs located refs, never quote text', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     providersMock.getInterviewProvider.mockReturnValue(
@@ -201,36 +194,42 @@ describe('POST /api/synthesis evidence telemetry', () => {
     expect(events[0].refsLocated).toBe(0);
     expect(JSON.stringify(spy.mock.calls)).not.toContain('Repeated concern');
   });
-});
 
-describe('POST /api/synthesis participant rate-limit refund', () => {
-  it('refunds the participant synthesis budget when the provider call fails', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    providersMock.getInterviewProvider.mockReturnValue({
-      generateInterviewResponse: vi.fn(),
-      getInterviewGreeting: vi.fn(),
-      synthesizeInterview: vi.fn().mockRejectedValue(new Error('provider unavailable')),
-    });
-
-    const res = await synthesisPOST(makeRequest());
-    expect(res.status).toBeGreaterThanOrEqual(500);
-
-    expect(rateLimitMock.refundParticipantRateLimit).toHaveBeenCalledTimes(1);
-    const [, studyId, operation, , authority] = rateLimitMock.refundParticipantRateLimit.mock.calls[0];
-    expect(studyId).toBe('study-t');
-    expect(operation).toBe('synthesis');
-    expect(authority).toMatchObject({
-      sessionId: 'participant-session-t',
-      researcherId: 'researcher-t',
-    });
-  });
-
-  it('does not refund the participant synthesis budget when synthesis succeeds', async () => {
+  it('returns the bare synthesis with no _receipt field', async () => {
     providersMock.getInterviewProvider.mockReturnValue(providerReturning([]));
 
     const res = await synthesisPOST(makeRequest());
-    expect(res.status).toBe(200);
+    const body = await res.json();
 
-    expect(rateLimitMock.refundParticipantRateLimit).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(body).not.toHaveProperty('_receipt');
+  });
+});
+
+describe('POST /api/synthesis — participant tokens are refused', () => {
+  it('returns 403 for a participant token, with no provider call', async () => {
+    contextMock.getParticipantRequestContext.mockResolvedValue({
+      valid: true,
+      context: {
+        kvClient: {} as never,
+        geminiApiKey: 'test-gemini-key',
+        anthropicApiKey: null,
+        openaiApiKey: null,
+        openrouterApiKey: null,
+        researcherId: null,
+        onboardingComplete: true,
+      },
+      studyId: 'study-t',
+      isAdmin: false,
+      participantSessionId: 'participant-session-t',
+    });
+    const provider = providerReturning([]);
+    providersMock.getInterviewProvider.mockReturnValue(provider);
+
+    const res = await synthesisPOST(makeRequest());
+
+    expect(res.status).toBe(403);
+    expect(provider.synthesizeInterview).not.toHaveBeenCalled();
+    expect(platformRateLimitMock.hostedAiRateLimitResponse).not.toHaveBeenCalled();
   });
 });

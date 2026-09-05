@@ -34,29 +34,23 @@ vi.mock('next/navigation', () => ({
 
 import Synthesis from '@/components/Synthesis';
 
-const synthesis = {
-  statedPreferences: ['A stated preference'],
-  revealedPreferences: ['A revealed preference'],
-  themes: [{ theme: 'A theme', evidence: 'Some evidence', frequency: 1 }],
-  contradictions: [],
-  keyInsights: ['An insight'],
-  bottomLine: 'A bottom line',
-  _receipt: 'test-receipt',
-};
-
 function seedStore(overrides: {
   interviewHistory: InterviewMessage[];
   consentTimestamp?: number | null;
-  synthesisValue?: typeof synthesis | null;
   researcherContact?: string;
+  thankYouText?: string;
 }) {
   useStore.setState(useStore.getInitialState(), true);
   useStore.setState({
     viewMode: 'participant',
-    studyConfig: makeStudyConfig({ id: 'study-receipt', researcherContact: overrides.researcherContact }),
+    studyConfig: makeStudyConfig({
+      id: 'study-receipt',
+      researcherContact: overrides.researcherContact,
+      thankYouText: overrides.thankYouText,
+    }),
     participantProfile: null,
     interviewHistory: overrides.interviewHistory,
-    synthesis: 'synthesisValue' in overrides ? overrides.synthesisValue ?? null : synthesis,
+    synthesis: null,
     participantSessionHandle: 'session-handle',
     consentTimestamp: overrides.consentTimestamp ?? null,
   });
@@ -79,7 +73,7 @@ describe('Synthesis receipt — saved state', () => {
 
     render(<Synthesis />);
 
-    await screen.findByText('Interview submitted');
+    await screen.findByText('Thank you');
 
     expect(screen.getByText('Turns contributed')).toBeInTheDocument();
     expect(screen.getByText('Elapsed')).toBeInTheDocument();
@@ -95,29 +89,64 @@ describe('Synthesis receipt — saved state', () => {
     void getAllByRole;
   });
 
-  it('renders a Researcher contact row, not in mono, when the study config carries one (M9.5)', async () => {
+  it('renders the default thank-you text, with no bracketed placeholder, when the study has none', async () => {
     seedStore({
-      interviewHistory: [
-        { id: 'm-1', role: 'user', content: 'First', timestamp: 1_700_000_000_000 - 252_000 },
-        { id: 'm-2', role: 'user', content: 'Second', timestamp: 1_700_000_000_000 },
-      ],
+      interviewHistory: [{ id: 'm-1', role: 'user', content: 'Only message', timestamp: Date.now() }],
       consentTimestamp: 1_700_000_000_000,
-      researcherContact: 'Dr. Amara Osei · research@university.edu',
     });
     serviceMocks.saveCompletedInterview.mockResolvedValue({ success: true, id: 'interview-1' });
 
     render(<Synthesis />);
 
-    await screen.findByText('Interview submitted');
+    await screen.findByText('Thank you');
+    expect(document.body.textContent).not.toContain('[');
+    expect(screen.getByText(/Your responses will be used in the study/)).toBeInTheDocument();
+  });
 
-    expect(screen.getByText('Researcher contact')).toBeInTheDocument();
-    const value = screen.getByText('Dr. Amara Osei · research@university.edu');
-    expect(value.tagName).toBe('SPAN');
-    expect(value.className).not.toMatch(/font-mono/);
+  it('renders the researcher-authored thank-you text verbatim, including line breaks, when the study has one', async () => {
+    const thankYouText = 'Line one of thanks.\n\nLine two of thanks.';
+    seedStore({
+      interviewHistory: [{ id: 'm-1', role: 'user', content: 'Only message', timestamp: Date.now() }],
+      consentTimestamp: 1_700_000_000_000,
+      thankYouText,
+    });
+    serviceMocks.saveCompletedInterview.mockResolvedValue({ success: true, id: 'interview-1' });
 
-    const dl = document.querySelector('dl');
-    expect(dl!.querySelectorAll('dt')).toHaveLength(4);
-    expect(dl!.querySelectorAll('dd')).toHaveLength(4);
+    render(<Synthesis />);
+
+    await screen.findByText('Thank you');
+    expect(screen.getByText((_, node) => node?.textContent === thankYouText)).toBeInTheDocument();
+  });
+
+  it('renders the contact sentence exactly once when a researcherContact is present, with no mailto link', async () => {
+    seedStore({
+      interviewHistory: [{ id: 'm-1', role: 'user', content: 'Only message', timestamp: Date.now() }],
+      consentTimestamp: 1_700_000_000_000,
+      researcherContact: 'Dr. Amara Osei · research@university.edu',
+    });
+    serviceMocks.saveCompletedInterview.mockResolvedValue({ success: true, id: 'interview-1' });
+
+    const { container } = render(<Synthesis />);
+
+    await screen.findByText('Thank you');
+    expect(screen.getAllByText(/Questions or concerns\? Contact:/)).toHaveLength(1);
+    expect(screen.getByText('Dr. Amara Osei · research@university.edu')).toBeInTheDocument();
+    expect(container.querySelector('a[href^="mailto:"]')).toBeNull();
+    // The <dl> is machine-verifiable facts only — no Researcher contact row.
+    expect(screen.queryByText('Researcher contact')).not.toBeInTheDocument();
+  });
+
+  it('renders no contact sentence when researcherContact is absent', async () => {
+    seedStore({
+      interviewHistory: [{ id: 'm-1', role: 'user', content: 'Only message', timestamp: Date.now() }],
+      consentTimestamp: 1_700_000_000_000,
+    });
+    serviceMocks.saveCompletedInterview.mockResolvedValue({ success: true, id: 'interview-1' });
+
+    render(<Synthesis />);
+
+    await screen.findByText('Thank you');
+    expect(screen.queryByText(/Questions or concerns\?/)).not.toBeInTheDocument();
   });
 
   it('omits Elapsed for a one-message transcript, and still shows Turns contributed', async () => {
@@ -129,7 +158,7 @@ describe('Synthesis receipt — saved state', () => {
 
     render(<Synthesis />);
 
-    await screen.findByText('Interview submitted');
+    await screen.findByText('Thank you');
 
     expect(screen.getByText('Turns contributed')).toBeInTheDocument();
     expect(screen.queryByText('Elapsed')).not.toBeInTheDocument();
@@ -147,13 +176,13 @@ describe('Synthesis receipt — saved state', () => {
 
     render(<Synthesis />);
 
-    await screen.findByText('Interview submitted');
+    await screen.findByText('Thank you');
 
     expect(screen.queryByText('Consent accepted')).not.toBeInTheDocument();
     expect(screen.queryByText(/unknown|not recorded|—/)).not.toBeInTheDocument();
   });
 
-  it('keeps the safe-to-close sentence carrying role="status", separate from the fact block', async () => {
+  it('keeps the safe-to-close sentence carrying role="status", as the first line under the heading', async () => {
     seedStore({
       interviewHistory: [
         { id: 'm-1', role: 'user', content: 'First', timestamp: 1000 },
@@ -168,9 +197,11 @@ describe('Synthesis receipt — saved state', () => {
     const status = await screen.findByRole('status');
     expect(status).toHaveTextContent('Your responses have been saved. It is now safe to close this tab.');
     expect(status.querySelector('dl')).toBeNull();
+    // Exactly once, per the keep list.
+    expect(screen.getAllByText('Your responses have been saved. It is now safe to close this tab.')).toHaveLength(1);
   });
 
-  it('renders no fact block in finalizing, save-failed, or analysis-failed states', async () => {
+  it('renders no fact block and no thank-you text in the finalizing state', async () => {
     seedStore({
       interviewHistory: [{ id: 'm-1', role: 'user', content: 'Only message', timestamp: Date.now() }],
     });
@@ -181,9 +212,10 @@ describe('Synthesis receipt — saved state', () => {
     expect(screen.getByText('Finalizing your interview')).toBeInTheDocument();
     expect(document.querySelector('dl')).toBeNull();
     expect(screen.queryByText('Turns contributed')).not.toBeInTheDocument();
+    expect(screen.queryByText('Thank you')).not.toBeInTheDocument();
   });
 
-  it('renders no fact block in the save-failed state', async () => {
+  it('renders no fact block and no thank-you text in the save-failed state', async () => {
     seedStore({
       interviewHistory: [{ id: 'm-1', role: 'user', content: 'Only message', timestamp: Date.now() }],
     });
@@ -194,20 +226,7 @@ describe('Synthesis receipt — saved state', () => {
     await screen.findByText("We couldn't save your interview");
     expect(document.querySelector('dl')).toBeNull();
     expect(screen.queryByText('Turns contributed')).not.toBeInTheDocument();
-  });
-
-  it('renders no fact block in the analysis-failed state', async () => {
-    seedStore({
-      interviewHistory: [{ id: 'm-1', role: 'user', content: 'Only message', timestamp: Date.now() }],
-      synthesisValue: null,
-    });
-    serviceMocks.synthesizeInterview.mockRejectedValue(new Error('synthesis unavailable'));
-
-    render(<Synthesis />);
-
-    await screen.findByText("We couldn't finalize your interview");
-    expect(document.querySelector('dl')).toBeNull();
-    expect(screen.queryByText('Turns contributed')).not.toBeInTheDocument();
+    expect(screen.queryByText('Thank you')).not.toBeInTheDocument();
   });
 
   it('renders no svg and no [role="note"] in the saved state', async () => {
@@ -222,7 +241,7 @@ describe('Synthesis receipt — saved state', () => {
 
     const { container } = render(<Synthesis />);
 
-    await screen.findByText('Interview submitted');
+    await screen.findByText('Thank you');
 
     expect(container.querySelectorAll('svg')).toHaveLength(0);
     expect(container.querySelector('[role="note"]')).toBeNull();

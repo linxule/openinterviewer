@@ -118,10 +118,16 @@ export interface ValidInterviewSubmission {
   transcript: InterviewMessage[];
   participantProfile: ParticipantProfile | null;
   behaviorData: BehaviorData;
-  synthesis: SynthesisResult & { _receipt: string };
+  synthesis: SynthesisResult | null;
   createdAt?: number;
 }
 
+// A participant's completed interview is durable the moment it saves; the
+// analysis is a separate, server-run act (slice-P). A body carrying no
+// synthesis (or an explicit null) is valid; a researcher-preview body may
+// still carry one so the preview save path can echo `{ preview: true }`
+// without a special client path — see save/route.ts, which discards it on
+// the participant path regardless of what a submission asserts here.
 export function validateInterviewSubmission(input: unknown): ValidInterviewSubmission {
   if (!record(input) || JSON.stringify(input).length > 512_000) {
     throw new Error('Interview submission is too large or malformed');
@@ -130,11 +136,9 @@ export function validateInterviewSubmission(input: unknown): ValidInterviewSubmi
   if (input.studyId !== undefined && (!boundedString(input.studyId, 120) || !ID.test(input.studyId))) {
     throw new Error('Invalid study id');
   }
-  if (!record(input.synthesis) || !boundedString(input.synthesis._receipt, 4_096)) {
-    throw new Error('Missing verified synthesis');
-  }
-  const synthesis = validateSynthesisResult(input.synthesis) as SynthesisResult & { _receipt: string };
-  synthesis._receipt = input.synthesis._receipt;
+  const synthesis = input.synthesis === undefined || input.synthesis === null
+    ? null
+    : validateSynthesisResult(input.synthesis);
 
   return {
     id: input.id,

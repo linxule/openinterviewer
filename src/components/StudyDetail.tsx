@@ -16,6 +16,7 @@ import { Button, Coordinate, Icon, Label, Notice, Rule, Tabs } from '@/component
 import { AggregateReading, ProvenanceFooter } from '@/components/SynthesisReading';
 import { shortInterviewId } from '@/lib/interviewId';
 import { buildAggregateInterviewIndex } from '@/lib/evidence';
+import { analysisStatus, isAwaitingAnalysis } from '@/lib/analysisState';
 import { useSetTrailingCrumb } from '@/components/shell/breadcrumb';
 
 interface StudyDetailProps {
@@ -23,6 +24,45 @@ interface StudyDetailProps {
 }
 
 type TabType = 'overview' | 'interviews' | 'settings';
+
+// The maximum interviews one press of the batch action analyzes. Beyond
+// that, the button analyzes the oldest 25 and the count updates (P8.2).
+const ANALYSIS_BATCH_LIMIT = 25;
+
+/**
+ * The reminder the owner asked about: "do they get to track what model was
+ * used for which interview?" Fires only when at least two DISTINCT recorded
+ * models appear — legacy interviews alone are not evidence of a switch. One
+ * component, reused verbatim on the Overview and Interviews tabs (Ruling 1).
+ */
+function ConductingModelsNotice({
+  conductingModels,
+  recordedModelCount,
+}: {
+  conductingModels: { provider?: string; model?: string; count: number }[];
+  recordedModelCount: number;
+}) {
+  if (recordedModelCount < 2) return null;
+  const countsLine = conductingModels
+    .map((entry) => `${entry.model ?? 'not recorded'} ×${entry.count}`)
+    .join(' · ');
+  return (
+    <Notice tone="neutral" eyebrow={`Conducted with ${recordedModelCount} models`} className="mb-6">
+      <Coordinate className="mt-1 block">{countsLine}</Coordinate>
+      <p className="mt-1 text-[13px] text-ink-700">
+        Switching models is recorded on each interview, not blocked. Keeping one model across a study
+        makes interviews easier to compare.
+      </p>
+    </Notice>
+  );
+}
+
+function analysisCellContent(interview: StoredInterview) {
+  const status = analysisStatus(interview);
+  if (status === 'complete') return <span className="text-ink-500">analyzed</span>;
+  if (status === 'failed') return <span className="text-error">analysis failed</span>;
+  return <span className="text-ink-900">awaiting analysis</span>;
+}
 
 function isStudyOperationPending(response: Response, data: { code?: string }) {
   return response.status === 409 && data.code === 'STUDY_OPERATION_PENDING';
@@ -64,6 +104,55 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
     () => (study ? interviews.filter(i => i.studyRevision === study.revision && i.synthesis).length : 0),
     [interviews, study],
   );
+
+  // Counts by (provider, model) pair — two providers could in principle
+  // expose the same model id, and the pair is what the record actually
+  // stores.
+  const conductingModels = useMemo(() => {
+    const counts = new Map<string, { provider?: string; model?: string; count: number }>();
+    for (const interview of interviews) {
+      const key = interview.conductedByModel
+        ? `${interview.conductedByProvider ?? ''} ${interview.conductedByModel}`
+        : ' ';
+      const entry = counts.get(key)
+        ?? { provider: interview.conductedByProvider, model: interview.conductedByModel, count: 0 };
+      entry.count += 1;
+      counts.set(key, entry);
+    }
+    return [...counts.values()].sort((a, b) => b.count - a.count
+      || Number(!a.model) - Number(!b.model)
+      || (a.model ?? '').localeCompare(b.model ?? ''));
+  }, [interviews]);
+  const recordedModelCount = conductingModels.filter(entry => entry.model).length;
+
+  const pendingAnalysisInterviews = useMemo(
+    () => interviews.filter(isAwaitingAnalysis).slice().sort((a, b) => a.createdAt - b.createdAt),
+    [interviews],
+  );
+  const [isBatchAnalyzing, setIsBatchAnalyzing] = useState(false);
+  const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
+
+  const handleAnalyzeBatch = async () => {
+    if (operationPending || isBatchAnalyzing) return;
+    const batch = pendingAnalysisInterviews.slice(0, ANALYSIS_BATCH_LIMIT);
+    if (batch.length === 0) return;
+    setIsBatchAnalyzing(true);
+    setBatchProgress({ done: 0, total: batch.length });
+    for (let i = 0; i < batch.length; i++) {
+      try {
+        await fetch(
+          `/api/interviews/${encodeURIComponent(batch[i].id)}/analyze?studyId=${encodeURIComponent(studyId)}`,
+          { method: 'POST' },
+        );
+      } catch (error) {
+        console.error('Error analyzing interview:', error);
+      }
+      setBatchProgress({ done: i + 1, total: batch.length });
+    }
+    setIsBatchAnalyzing(false);
+    setBatchProgress(null);
+    await loadStudyData();
+  };
 
   const loadParticipantLinks = useCallback(async () => {
     setLinksLoading(true);
@@ -251,8 +340,8 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
 
   const handleGenerateAggregateSynthesis = async () => {
     if (operationPending) return;
-    if (interviews.length < 2) {
-      alert('Need at least 2 interviews to generate aggregate synthesis');
+    if (eligibleInterviewCount < 2) {
+      alert('Need at least 2 analyzed interviews to generate aggregate analysis');
       return;
     }
 
@@ -420,7 +509,10 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
           {study.config.name}
         </h1>
         <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
-          <span className="font-sans text-[13px] text-ink-500">{study.interviewCount} interview{study.interviewCount !== 1 ? 's' : ''}</span>
+          <span className="font-sans text-[13px] text-ink-500">
+            {study.interviewCount} interview{study.interviewCount !== 1 ? 's' : ''}
+            {pendingAnalysisInterviews.length > 0 ? ` · ${pendingAnalysisInterviews.length} awaiting analysis` : ''}
+          </span>
           <Coordinate>Created {formatDate(study.createdAt)}</Coordinate>
           <span className={`font-sans text-[13px] ${study.isLocked ? 'text-ink-500' : 'text-success'}`}>
             {study.isLocked ? 'Locked' : 'Editable'}
@@ -479,13 +571,15 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
 
           <Rule className="my-8" />
 
+          <ConductingModelsNotice conductingModels={conductingModels} recordedModelCount={recordedModelCount} />
+
           <section>
             <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
               <h3 className="font-sans text-[15px] font-semibold text-ink-900">Aggregate Analysis</h3>
               <Button
                 variant="primary"
                 onClick={handleGenerateAggregateSynthesis}
-                disabled={operationPending || isGeneratingAggregate || interviews.length < 2}
+                disabled={operationPending || isGeneratingAggregate || eligibleInterviewCount < 2}
                 className="w-full sm:w-auto"
               >
                 {isGeneratingAggregate
@@ -532,9 +626,9 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                   note={aggregateNote}
                 />
               </div>
-            ) : interviews.length < 2 ? (
+            ) : eligibleInterviewCount < 2 ? (
               <p className="mt-3 text-[13px] text-ink-500">
-                Need at least 2 interviews to generate aggregate analysis.
+                Need at least 2 analyzed interviews to generate aggregate analysis.
               </p>
             ) : (
               <p className="mt-3 text-[13px] text-ink-500">
@@ -554,86 +648,132 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
             </p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-left">
-              <thead>
-                <tr className="border-b border-ink-300">
-                  <th scope="col" className="px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500">
-                    ID
-                  </th>
-                  <th scope="col" className="px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500">
-                    Participant
-                  </th>
-                  <th
-                    scope="col"
-                    className="hidden px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500 sm:table-cell"
-                  >
-                    Started
-                  </th>
-                  <th
-                    scope="col"
-                    className="hidden px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500 md:table-cell"
-                  >
-                    Duration
-                  </th>
-                  <th
-                    scope="col"
-                    className="hidden px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500 md:table-cell"
-                  >
-                    Turns
-                  </th>
-                </tr>
-              </thead>
-              <tbody onKeyDown={handleTbodyKeyDown}>
-                {interviews.map((interview, index) => {
-                  const extractedFields = (interview.participantProfile?.fields ?? [])
-                    .filter(f => f.status === 'extracted' && f.value)
-                    .slice(0, 3)
-                    .map(f => f.value)
-                    .join(' • ');
-                  // Stable under append (Ruling 2): the row's number is the
-                  // participant number, not the newest-first array position.
-                  const participantNumber = interviewIndex.get(interview.id)?.participantNumber ?? index + 1;
-                  return (
-                    <tr
-                      key={interview.id}
-                      className="border-b border-ink-200 hover:bg-paper-1"
-                      onClick={() => router.push(`/dashboard/interview/${interview.id}?studyId=${encodeURIComponent(studyId)}`)}
+          <div>
+            <ConductingModelsNotice conductingModels={conductingModels} recordedModelCount={recordedModelCount} />
+
+            {pendingAnalysisInterviews.length > 0 && (
+              <div className="mb-4">
+                <Button
+                  type="button"
+                  variant="primary"
+                  onClick={() => void handleAnalyzeBatch()}
+                  disabled={operationPending || isBatchAnalyzing}
+                >
+                  {isBatchAnalyzing && batchProgress
+                    ? `Analyzing ${batchProgress.done} of ${batchProgress.total}…`
+                    : `Analyze ${Math.min(pendingAnalysisInterviews.length, ANALYSIS_BATCH_LIMIT)} pending`}
+                </Button>
+              </div>
+            )}
+
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-left">
+                <thead>
+                  <tr className="border-b border-ink-300">
+                    <th scope="col" className="px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500">
+                      ID
+                    </th>
+                    <th scope="col" className="px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500">
+                      Participant
+                    </th>
+                    <th
+                      scope="col"
+                      className="hidden px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500 sm:table-cell"
                     >
-                      <td className="px-3 py-3 align-top text-[13px] text-ink-700">
-                        <Coordinate>{shortInterviewId(interview.id)}</Coordinate>
-                      </td>
-                      <td className="px-3 py-3 align-top text-[13px] text-ink-700">
-                        <button
-                          type="button"
-                          data-row-primary
-                          aria-label={`View interview ${participantNumber}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            router.push(`/dashboard/interview/${interview.id}?studyId=${encodeURIComponent(studyId)}`);
-                          }}
-                          className="text-left font-sans text-[14px] font-medium text-ink-900 underline-offset-2 hover:text-action hover:underline"
-                        >
-                          {extractedFields || `Interview ${participantNumber}`}
-                        </button>
-                        {interview.synthesis?.bottomLine && (
-                          <p className="line-clamp-1 text-[13px] text-ink-500">{interview.synthesis.bottomLine}</p>
-                        )}
-                      </td>
-                      <td className="hidden px-3 py-3 align-top text-[13px] text-ink-700 sm:table-cell">
-                        <Coordinate>{formatDate(interview.createdAt)}</Coordinate>
-                      </td>
-                      <td className="hidden px-3 py-3 align-top text-[13px] text-ink-700 md:table-cell">
-                        <Coordinate>{formatDuration(interview.createdAt, interview.completedAt)}</Coordinate>
-                      </td>
-                      <td className="hidden px-3 py-3 align-top text-[13px] text-ink-700 md:table-cell">
-                        <Coordinate>{interview.transcript.length}</Coordinate>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                      Started
+                    </th>
+                    <th
+                      scope="col"
+                      className="hidden px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500 md:table-cell"
+                    >
+                      Duration
+                    </th>
+                    <th
+                      scope="col"
+                      className="hidden px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500 md:table-cell"
+                    >
+                      Turns
+                    </th>
+                    <th
+                      scope="col"
+                      className="hidden px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500 md:table-cell"
+                    >
+                      Conducted
+                    </th>
+                    <th
+                      scope="col"
+                      className="hidden px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500 md:table-cell"
+                    >
+                      Synthesized
+                    </th>
+                    <th
+                      scope="col"
+                      className="hidden px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500 md:table-cell"
+                    >
+                      Analysis
+                    </th>
+                  </tr>
+                </thead>
+                <tbody onKeyDown={handleTbodyKeyDown}>
+                  {interviews.map((interview, index) => {
+                    const extractedFields = (interview.participantProfile?.fields ?? [])
+                      .filter(f => f.status === 'extracted' && f.value)
+                      .slice(0, 3)
+                      .map(f => f.value)
+                      .join(' • ');
+                    // Stable under append (Ruling 2): the row's number is the
+                    // participant number, not the newest-first array position.
+                    const participantNumber = interviewIndex.get(interview.id)?.participantNumber ?? index + 1;
+                    return (
+                      <tr
+                        key={interview.id}
+                        className="border-b border-ink-200 hover:bg-paper-1"
+                        onClick={() => router.push(`/dashboard/interview/${interview.id}?studyId=${encodeURIComponent(studyId)}`)}
+                      >
+                        <td className="px-3 py-3 align-top text-[13px] text-ink-700">
+                          <Coordinate>{shortInterviewId(interview.id)}</Coordinate>
+                        </td>
+                        <td className="px-3 py-3 align-top text-[13px] text-ink-700">
+                          <button
+                            type="button"
+                            data-row-primary
+                            aria-label={`View interview ${participantNumber}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              router.push(`/dashboard/interview/${interview.id}?studyId=${encodeURIComponent(studyId)}`);
+                            }}
+                            className="text-left font-sans text-[14px] font-medium text-ink-900 underline-offset-2 hover:text-action hover:underline"
+                          >
+                            {extractedFields || `Interview ${participantNumber}`}
+                          </button>
+                          {interview.synthesis?.bottomLine && (
+                            <p className="line-clamp-1 text-[13px] text-ink-500">{interview.synthesis.bottomLine}</p>
+                          )}
+                        </td>
+                        <td className="hidden px-3 py-3 align-top text-[13px] text-ink-700 sm:table-cell">
+                          <Coordinate>{formatDate(interview.createdAt)}</Coordinate>
+                        </td>
+                        <td className="hidden px-3 py-3 align-top text-[13px] text-ink-700 md:table-cell">
+                          <Coordinate>{formatDuration(interview.createdAt, interview.completedAt)}</Coordinate>
+                        </td>
+                        <td className="hidden px-3 py-3 align-top text-[13px] text-ink-700 md:table-cell">
+                          <Coordinate>{interview.transcript.length}</Coordinate>
+                        </td>
+                        <td className="hidden px-3 py-3 align-top text-[13px] text-ink-700 md:table-cell">
+                          <Coordinate>{interview.conductedByModel ?? 'not recorded'}</Coordinate>
+                        </td>
+                        <td className="hidden px-3 py-3 align-top text-[13px] text-ink-700 md:table-cell">
+                          <Coordinate>{interview.aiModel ?? 'not recorded'}</Coordinate>
+                        </td>
+                        <td className="hidden px-3 py-3 align-top text-[13px] text-ink-700 md:table-cell">
+                          {analysisCellContent(interview)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
         )
       )}

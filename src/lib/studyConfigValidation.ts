@@ -5,6 +5,7 @@ import {
 import { readBoundedJsonObject } from './requestBody';
 import { isKnownProviderModel } from './providerRegistry';
 import { CONSENT_TEXT_PLACEHOLDER, CONSENT_TEXT_PLACEHOLDER_ERROR } from './consentText';
+import { BRACKETED_PLACEHOLDER, THANK_YOU_TEXT_PLACEHOLDER_ERROR } from './thankYouText';
 
 export const STUDY_MUTATION_MAX_BYTES = 128 * 1024;
 
@@ -25,6 +26,7 @@ const MAX_PROFILE_OPTION_LENGTH = 500;
 const MAX_ID_LENGTH = 200;
 const MAX_MODEL_LENGTH = 200;
 const MAX_RESEARCHER_CONTACT_LENGTH = 200;
+const MAX_THANK_YOU_TEXT_LENGTH = 4_000;
 
 const STUDY_CONFIG_FIELDS = new Set([
   'id',
@@ -39,6 +41,7 @@ const STUDY_CONFIG_FIELDS = new Set([
   'aiModel',
   'consentText',
   'researcherContact',
+  'thankYouText',
   'createdAt',
   'parentStudyId',
   'parentStudyName',
@@ -198,6 +201,13 @@ export function validateStudyConfig(value: unknown): ValidationResult {
     && !isBoundedString(value.researcherContact, MAX_RESEARCHER_CONTACT_LENGTH, true)) {
     return { ok: false, error: 'Researcher contact must be 200 characters or fewer' };
   }
+  // Optional, and not placeholder-checked here: this function also runs on
+  // every participant request via loadCanonicalStudy, and a study saved
+  // before this field existed must keep serving participants (slice-P §P12.2).
+  if (value.thankYouText !== undefined
+    && !isBoundedString(value.thankYouText, MAX_THANK_YOU_TEXT_LENGTH, true)) {
+    return { ok: false, error: 'Thank-you screen must be 4000 characters or fewer' };
+  }
   if (value.linksEnabled !== undefined && typeof value.linksEnabled !== 'boolean') {
     return { ok: false, error: 'Invalid participant link status' };
   }
@@ -220,6 +230,10 @@ export function validateStudyConfigForCreate(
   const result = validateStudyConfig({ ...value, ...serverOwned });
   if (result.ok && CONSENT_TEXT_PLACEHOLDER.test(result.config.consentText)) {
     return { ok: false, error: CONSENT_TEXT_PLACEHOLDER_ERROR };
+  }
+  if (result.ok && result.config.thankYouText !== undefined
+    && BRACKETED_PLACEHOLDER.test(result.config.thankYouText)) {
+    return { ok: false, error: THANK_YOU_TEXT_PLACEHOLDER_ERROR };
   }
   return result;
 }
@@ -248,6 +262,10 @@ export function validateStudyConfigUpdate(
   });
   if (result.ok && CONSENT_TEXT_PLACEHOLDER.test(result.config.consentText)) {
     return { ok: false, error: CONSENT_TEXT_PLACEHOLDER_ERROR };
+  }
+  if (result.ok && result.config.thankYouText !== undefined
+    && BRACKETED_PLACEHOLDER.test(result.config.thankYouText)) {
+    return { ok: false, error: THANK_YOU_TEXT_PLACEHOLDER_ERROR };
   }
   return result;
 }

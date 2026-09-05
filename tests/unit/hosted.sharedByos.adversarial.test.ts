@@ -109,13 +109,6 @@ vi.mock('@/lib/rateLimit', () => ({
 vi.mock('@/lib/platformAiRateLimit', () => ({
   hostedAiRateLimitResponse: vi.fn(async () => null),
 }));
-vi.mock('@/lib/synthesisReceipt', () => ({
-  createSynthesisReceipt: vi.fn(async () => 'receipt'),
-  verifySynthesisReceipt: vi.fn(async () => ({
-    aiProvider: 'gemini',
-    aiModel: 'gemini-3.1-pro-preview',
-  })),
-}));
 
 import {
   getParticipantRequestContext,
@@ -450,7 +443,6 @@ describe('hosted shared-BYOS participant/preview adversarial matrix', () => {
         contradictions: [],
         keyInsights: ['k'],
         bottomLine: 'b',
-        _receipt: 'receipt',
       },
     });
     const headers = { 'Content-Type': 'application/json' };

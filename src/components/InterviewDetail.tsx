@@ -2,13 +2,37 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { StoredInterview } from '@/types';
+import { InterviewAnalysisFailureKind, StoredInterview } from '@/types';
 import { getInterview, StudyOperationPendingError } from '@/services/storageService';
 import ReactMarkdown from 'react-markdown';
-import { Button, Coordinate, Label, Tabs, Turn, type TabItem } from '@/components/ui';
+import { Button, Coordinate, Label, Notice, Tabs, Turn, type TabItem } from '@/components/ui';
 import { SynthesisReading, ProvenanceFooter } from '@/components/SynthesisReading';
+import { analysisStatus } from '@/lib/analysisState';
 import { useSetTrailingCrumb } from '@/components/shell/breadcrumb';
 import { cn } from '@/lib/cn';
+
+// Mirrors ANALYSIS_CLAIM_LEASE_MS in src/lib/kv.ts — duplicated rather than
+// imported because that module pulls in server-only Redis client code that
+// must never reach a 'use client' bundle.
+const ANALYSIS_CLAIM_LEASE_MS = 180_000;
+
+const FAILURE_COPY: Record<InterviewAnalysisFailureKind, string> = {
+  provider: 'The model provider did not return an analysis. This is not an analysis — run it again.',
+  'invalid-output': 'The model returned something this study could not read as an analysis. Run it again.',
+  'too-large': 'The analysis was too large to store. Run it again, or shorten the study’s topic areas.',
+  timeout: 'The analysis did not finish in time. Run it again.',
+  storage: 'The analysis could not be saved. Run it again.',
+};
+
+function relativeTimeFrom(ms: number, nowMs: number): string {
+  const elapsed = nowMs - ms;
+  const minutes = Math.round(elapsed / 60_000);
+  if (minutes < 1) return 'less than a minute ago';
+  if (minutes === 1) return '1 minute ago';
+  if (minutes < 60) return `${minutes} minutes ago`;
+  const hours = Math.round(minutes / 60);
+  return hours === 1 ? '1 hour ago' : `${hours} hours ago`;
+}
 
 interface InterviewDetailProps {
   interviewId: string;
@@ -29,8 +53,19 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId,
   const [operationPending, setOperationPending] = useState(false);
   const [tracedTurn, setTracedTurn] = useState<number | null>(null);
   const [openNotes, setOpenNotes] = useState<Record<string, boolean>>({});
+  const [isRunningAnalysis, setIsRunningAnalysis] = useState(false);
+  // `Date.now()` is impure and may not be called during render; a running
+  // analysis's lease elapsing is exactly the kind of clock-driven UI change
+  // that needs its own tick, polled while (and only while) a claim is live.
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   useSetTrailingCrumb(interview?.studyName ?? null);
+
+  useEffect(() => {
+    if (!interview || analysisStatus(interview) !== 'running') return;
+    const interval = setInterval(() => setNowMs(Date.now()), 5_000);
+    return () => clearInterval(interval);
+  }, [interview]);
 
   const setNoteOpen = (themeIndex: number, refIndex: number, next: boolean) =>
     setOpenNotes((prev) => ({ ...prev, [`${themeIndex}:${refIndex}`]: next }));
@@ -91,6 +126,24 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId,
     });
     return () => cancelAnimationFrame(frame);
   }, [interview, turn]);
+
+  const handleRunAnalysis = async () => {
+    if (!interview || !studyId || isRunningAnalysis) return;
+    setIsRunningAnalysis(true);
+    try {
+      const response = await fetch(
+        `/api/interviews/${encodeURIComponent(interview.id)}/analyze?studyId=${encodeURIComponent(studyId)}`,
+        { method: 'POST' },
+      );
+      if (response.ok) {
+        await loadInterview();
+      }
+    } catch (error) {
+      console.error('Error running analysis:', error);
+    } finally {
+      setIsRunningAnalysis(false);
+    }
+  };
 
   const handleDownloadJSON = () => {
     if (!interview) return;
@@ -263,27 +316,90 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId,
           </ol>
         ) : (
           <div>
-            {interview.synthesis ? (
-              <div className="space-y-6">
-                <SynthesisReading
-                  synthesis={interview.synthesis}
-                  transcript={interview.transcript}
-                  openNotes={openNotes}
-                  onNoteOpenChange={setNoteOpen}
-                  onTraceToTurn={traceToTurn}
-                />
-                <ProvenanceFooter
-                  model={interview.aiModel}
-                  studyRevision={interview.studyRevision}
-                  timestamp={savedAt}
-                  verb="saved"
-                />
-              </div>
-            ) : (
-              <p className="font-sans text-[15px] text-ink-500">
-                No analysis available for this interview.
-              </p>
-            )}
+            {(() => {
+              const status = analysisStatus(interview);
+              if (status === 'complete' && interview.synthesis) {
+                const analysisRevision = interview.analysis?.studyRevision;
+                const note = analysisRevision !== undefined && analysisRevision !== interview.studyRevision
+                  ? `analyzed at study rev ${analysisRevision}`
+                  : undefined;
+                return (
+                  <div className="space-y-6">
+                    <SynthesisReading
+                      synthesis={interview.synthesis}
+                      transcript={interview.transcript}
+                      openNotes={openNotes}
+                      onNoteOpenChange={setNoteOpen}
+                      onTraceToTurn={traceToTurn}
+                    />
+                    <ProvenanceFooter
+                      model={interview.aiModel}
+                      conductedBy={interview.conductedByModel ?? 'not recorded'}
+                      studyRevision={interview.studyRevision}
+                      timestamp={savedAt}
+                      verb="saved"
+                      note={note}
+                    />
+                  </div>
+                );
+              }
+              if (status === 'pending') {
+                return (
+                  <Notice tone="neutral" eyebrow="Analysis pending">
+                    <p className="mt-1 text-[13px] text-ink-700">
+                      This interview was saved. Its analysis has not run yet.
+                    </p>
+                    <Button
+                      variant="primary"
+                      className="mt-3 min-h-11"
+                      disabled={isRunningAnalysis}
+                      onClick={() => void handleRunAnalysis()}
+                    >
+                      {isRunningAnalysis ? 'Running…' : 'Run analysis'}
+                    </Button>
+                  </Notice>
+                );
+              }
+              if (status === 'running') {
+                const claimedAt = interview.analysis?.claimedAt;
+                const leaseElapsed = claimedAt !== undefined
+                  && nowMs - claimedAt >= ANALYSIS_CLAIM_LEASE_MS;
+                return (
+                  <Notice tone="neutral" eyebrow="Analysis running">
+                    <p className="mt-1 text-[13px] text-ink-700">
+                      {claimedAt !== undefined
+                        ? `An analysis started ${relativeTimeFrom(claimedAt, nowMs)}. Give it a moment, then reload.`
+                        : 'An analysis is running. Give it a moment, then reload.'}
+                    </p>
+                    <Button
+                      variant="primary"
+                      className="mt-3 min-h-11"
+                      disabled={!leaseElapsed || isRunningAnalysis}
+                      onClick={() => void handleRunAnalysis()}
+                    >
+                      {isRunningAnalysis ? 'Running…' : 'Run analysis'}
+                    </Button>
+                  </Notice>
+                );
+              }
+              // 'failed'
+              const failureKind = interview.analysis?.failureKind;
+              return (
+                <Notice tone="error" eyebrow="Analysis failed">
+                  <p className="mt-1 text-[13px] text-ink-700" role="alert">
+                    {failureKind ? FAILURE_COPY[failureKind] : 'This is not an analysis — run it again.'}
+                  </p>
+                  <Button
+                    variant="primary"
+                    className="mt-3 min-h-11"
+                    disabled={isRunningAnalysis}
+                    onClick={() => void handleRunAnalysis()}
+                  >
+                    {isRunningAnalysis ? 'Running…' : 'Run analysis'}
+                  </Button>
+                </Notice>
+              );
+            })()}
           </div>
         )}
       </Tabs>

@@ -28,7 +28,16 @@ export interface AggregateReadingProps {
 }
 
 export interface ProvenanceFooterProps {
+  /** The model that produced the reading above. Provider-reported. */
   model?: string
+  /**
+   * The model that conducted the conversation, when the record names one.
+   * Per-interview only — an aggregate spans interviews and has no single
+   * conducting model, so StudyDetail does not pass it and its footer is
+   * unchanged. Omitted (not `undefined`-defaulted) means "no such fact for
+   * this reading"; `'not recorded'` is rendered by the consumer, not here.
+   */
+  conductedBy?: string
   studyRevision?: number
   /** Preformatted by the consumer, which owns its screen's date format. */
   timestamp: string
@@ -355,8 +364,9 @@ export function AggregateReading({ synthesis, interviewIndex, openNotes, onNoteO
  * B1: honest provenance — the record's own facts, plainly labeled where a
  * field is missing. No cryptographic-token fragment is ever printed (see docs/design/slice-I-spec.md I3).
  */
-export function ProvenanceFooter({ model, studyRevision, timestamp, verb, note }: ProvenanceFooterProps) {
+export function ProvenanceFooter({ model, conductedBy, studyRevision, timestamp, verb, note }: ProvenanceFooterProps) {
   const line = [
+    ...(conductedBy ? [`Conducted by ${conductedBy}`] : []),
     `Synthesized by ${model || 'unrecorded model'}`,
     `study rev ${studyRevision ?? '—'}`,
     `${verb} ${timestamp}`,

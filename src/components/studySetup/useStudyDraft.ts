@@ -16,7 +16,7 @@ export interface StudyDraft {
   coreQuestions: string[]; topicAreas: string[]; profileSchema: ProfileField[];
   aiBehavior: AIBehavior; aiProvider: AIProviderType; aiModel: string;
   enableReasoning: boolean | undefined; linkExpiration: LinkExpirationOption;
-  consentText: string; researcherContact: string;
+  consentText: string; researcherContact: string; thankYouText: string;
 
   savedStudyId: string | null;
   parentStudyInfo: { id: string; name: string } | null;
@@ -32,6 +32,7 @@ export interface StudyDraft {
   setEnableReasoning(value: boolean | undefined): void;
   setLinkExpiration(value: LinkExpirationOption): void;
   setConsentText(value: string): void;
+  setThankYouText(value: string): void;
   addQuestion(): void; removeQuestion(index: number): void;
   updateQuestion(index: number, value: string): void;
   addTopic(): void; removeTopic(index: number): void;
@@ -79,6 +80,7 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
   );
   const [consentText, setConsentTextState] = useState(studyConfig?.consentText ?? '');
   const [researcherContact, setResearcherContactState] = useState(studyConfig?.researcherContact ?? '');
+  const [thankYouText, setThankYouTextState] = useState(studyConfig?.thankYouText ?? '');
 
   const [savedStudyId, setSavedStudyId] = useState<string | null>(null);
   const [parentStudyInfo, setParentStudyInfo] = useState<{ id: string; name: string } | null>(null);
@@ -100,6 +102,7 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
   const setEnableReasoning = (value: boolean | undefined) => { setEnableReasoningState(value); setIsDirty(true); };
   const setLinkExpiration = (value: LinkExpirationOption) => { setLinkExpirationState(value); setIsDirty(true); };
   const setConsentText = (value: string) => { setConsentTextState(value); setIsDirty(true); };
+  const setThankYouText = (value: string) => { setThankYouTextState(value); setIsDirty(true); };
 
   // Question management
   const addQuestion = () => { setCoreQuestions([...coreQuestions, '']); setIsDirty(true); };
@@ -187,6 +190,7 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
     if (config.linkExpiration) setLinkExpirationState(config.linkExpiration);
     if (config.consentText) setConsentTextState(config.consentText);
     if (config.researcherContact) setResearcherContactState(config.researcherContact);
+    if (config.thankYouText) setThankYouTextState(config.thankYouText);
   };
 
   const syncFromStudyConfig = (config: StudyConfig) => {
@@ -204,6 +208,7 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
     setLinkExpirationState(config.linkExpiration || 'never');
     setConsentTextState(config.consentText);
     setResearcherContactState(config.researcherContact ?? '');
+    setThankYouTextState(config.thankYouText ?? '');
   };
 
   const buildConfig = (): StudyConfig => ({
@@ -223,6 +228,11 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
     consentText: consentText.trim() || defaultConsentText(researchQuestion),
     createdAt: studyConfig?.createdAt || Date.now(),
     ...(researcherContact.trim() ? { researcherContact: researcherContact.trim() } : {}),
+    // Deliberately not defaulted here, unlike consentText one line up: the
+    // fallback text is applied at render time instead, not frozen into the
+    // record — no consent hash binds it, so improving the fallback improves
+    // every study that never overrode it (P12.3).
+    ...(thankYouText.trim() ? { thankYouText: thankYouText.trim() } : {}),
     // Include parent study info if this is a follow-up
     ...(parentStudyInfo && {
       parentStudyId: parentStudyInfo.id,
@@ -236,12 +246,13 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
     coreQuestions, topicAreas, profileSchema,
     aiBehavior, aiProvider, aiModel,
     enableReasoning, linkExpiration,
-    consentText, researcherContact,
+    consentText, researcherContact, thankYouText,
 
     savedStudyId, parentStudyInfo, isDirty,
 
     setName, setDescription, setResearchQuestion, setResearcherContact,
     selectProvider, setAiModel, setAiBehavior, setEnableReasoning, setLinkExpiration, setConsentText,
+    setThankYouText,
     addQuestion, removeQuestion, updateQuestion,
     addTopic, removeTopic, updateTopic,
     addProfileField, removeProfileField, updateProfileField, toggleFieldRequired,

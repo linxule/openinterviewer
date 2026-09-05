@@ -394,7 +394,7 @@ export function validateResolvedAggregateSynthesis(
 ): Omit<AggregateSynthesisResult,
   'studyId' | 'studyRevision' | 'interviewIds' | 'interviewCount'
   | 'aiProvider' | 'aiModel' | 'requestedAiModel' | 'routedProvider'
-  | 'generatedAt' | '_receipt'
+  | 'generatedAt'
 > {
   return validateAggregateCore<AggregateTheme>(input, (rawTheme, theme, frequency, i) => {
     const hasLegacy = rawTheme.representativeQuotes !== undefined;

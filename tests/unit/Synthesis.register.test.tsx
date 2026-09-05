@@ -85,7 +85,7 @@ describe('Synthesis register — participant states carry no apparatus', () => {
 
     const { container } = render(<Synthesis />);
 
-    await screen.findByRole('heading', { level: 1, name: 'Interview submitted' });
+    await screen.findByRole('heading', { level: 1, name: 'Thank you' });
     assertNoIconsOrLegacyClasses(container);
     expect(container.querySelector('[role="note"]')).toBeNull();
   });
@@ -97,17 +97,6 @@ describe('Synthesis register — participant states carry no apparatus', () => {
     const { container } = render(<Synthesis />);
 
     await screen.findByRole('heading', { level: 1, name: "We couldn't save your interview" });
-    assertNoIconsOrLegacyClasses(container);
-    expect(container.querySelector('[role="note"]')).toBeNull();
-  });
-
-  it('analysis-failed: h1 heading, no icons, no stone-* classes, no role="note"', async () => {
-    seedStore('participant', null);
-    serviceMocks.synthesizeInterview.mockRejectedValue(new Error('synthesis unavailable'));
-
-    const { container } = render(<Synthesis />);
-
-    await screen.findByRole('heading', { level: 1, name: "We couldn't finalize your interview" });
     assertNoIconsOrLegacyClasses(container);
     expect(container.querySelector('[role="note"]')).toBeNull();
   });

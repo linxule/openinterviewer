@@ -1,12 +1,11 @@
 import { createHash } from 'crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { makeStoredInterview, makeStudyConfig } from '../fixtures/models';
-import { resolveProviderType, resolveSynthesisModel } from '@/lib/providers';
+import { makeStoredInterview } from '../fixtures/models';
 
 // Fixture models standing in for whatever the study's researcher configured
-// for each provider; synthesis provenance must record exactly this value.
-const GEMINI_SYNTHESIS_MODEL = 'gemini-3.7-flash';
-const CLAUDE_SYNTHESIS_MODEL = 'claude-sonnet-5';
+// for each provider; the conducting model must record exactly this value.
+const GEMINI_MODEL = 'gemini-3.7-flash';
+const CLAUDE_MODEL = 'claude-sonnet-5';
 
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -30,6 +29,12 @@ function submissionFingerprint(value: unknown): string {
  * POST /api/interviews/save with the same interview id must be idempotent across
  * server instances. The storage primitive owns create-vs-duplicate detection;
  * completed records are never overwritten by the route.
+ *
+ * Slice P: a participant save carries no synthesis and no receipt — the
+ * transcript is durable the moment it saves, and the deferred analysis is
+ * scheduled via `after()`, which is mocked at the module boundary here. The
+ * deferred callback itself is not exercised in this file — see
+ * interviewAnalysis.idempotent.test.ts.
  */
 
 const contextMock = vi.hoisted(() => ({
@@ -46,6 +51,7 @@ const contextMock = vi.hoisted(() => ({
     }
     return undefined;
   }),
+  providerKeysFromContext: vi.fn(() => ({})),
 }));
 
 vi.mock('@/lib/researcherContext', () => contextMock);
@@ -55,9 +61,6 @@ const canonicalMock = vi.hoisted(() => ({
 }));
 
 vi.mock('@/lib/canonicalStudy', () => canonicalMock);
-
-const receiptMock = vi.hoisted(() => ({ verifySynthesisReceipt: vi.fn() }));
-vi.mock('@/lib/synthesisReceipt', () => receiptMock);
 
 const rateLimitMock = vi.hoisted(() => ({ getSavePersistRatePlan: vi.fn() }));
 vi.mock('@/lib/rateLimit', () => rateLimitMock);
@@ -72,6 +75,14 @@ const kvMock = vi.hoisted(() => ({
 }));
 
 vi.mock('@/lib/kv', () => kvMock);
+
+// The deferred analysis is scheduled through `after()`; mocked at the module
+// boundary so it never runs in this file (P16 §Rewritten 1).
+const afterMock = vi.hoisted(() => vi.fn());
+vi.mock('next/server', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('next/server')>();
+  return { ...actual, after: afterMock };
+});
 
 import { POST } from '@/app/api/interviews/save/route';
 
@@ -98,12 +109,9 @@ beforeEach(() => {
     ok: true,
     study: {
       id: 'study-a',
-      config: { name: 'Canonical Study' },
+      revision: 1,
+      config: { name: 'Canonical Study', aiProvider: 'gemini', aiModel: GEMINI_MODEL },
     },
-  });
-  receiptMock.verifySynthesisReceipt.mockResolvedValue({
-    aiProvider: 'gemini',
-    aiModel: GEMINI_SYNTHESIS_MODEL,
   });
   consentMock.verifyParticipantConsent.mockResolvedValue({
     status: 'accepted',
@@ -129,20 +137,13 @@ afterEach(() => {
 });
 
 describe('POST /api/interviews/save idempotency', () => {
-  it('fails closed before receipt verification or persistence when consent is missing', async () => {
+  it('fails closed before persistence when consent is missing', async () => {
     consentMock.verifyParticipantConsent.mockResolvedValue({ status: 'missing' });
     const interview = makeStoredInterview({ id: 'interview-x', studyId: 'study-a' });
 
-    const response = await POST(makeRequest({
-      ...interview,
-      synthesis: {
-        statedPreferences: [], revealedPreferences: [], themes: [], contradictions: [],
-        keyInsights: ['Insight'], bottomLine: 'Bottom line', _receipt: 'receipt',
-      },
-    }));
+    const response = await POST(makeRequest(interview));
 
     expect(response.status).toBe(428);
-    expect(receiptMock.verifySynthesisReceipt).not.toHaveBeenCalled();
     expect(kvMock.persistCompletedInterview).not.toHaveBeenCalled();
   });
 
@@ -155,10 +156,6 @@ describe('POST /api/interviews/save idempotency', () => {
       transcript: interview.transcript,
       participantProfile: interview.participantProfile,
       behaviorData: interview.behaviorData,
-      synthesis: {
-        statedPreferences: [], revealedPreferences: [], themes: [], contradictions: [],
-        keyInsights: ['Insight'], bottomLine: 'Bottom line', _receipt: 'receipt',
-      },
       createdAt: interview.createdAt,
     };
 
@@ -172,8 +169,10 @@ describe('POST /api/interviews/save idempotency', () => {
     expect(kvMock.persistCompletedInterview).toHaveBeenCalledTimes(2);
     expect(kvMock.persistCompletedInterview).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        aiProvider: 'gemini',
-        aiModel: GEMINI_SYNTHESIS_MODEL,
+        synthesis: null,
+        conductedByProvider: 'gemini',
+        conductedByModel: GEMINI_MODEL,
+        analysis: { status: 'pending', attempts: 0, lastAttemptAt: expect.any(Number) },
       }),
       expect.any(String),
       expect.objectContaining({
@@ -188,43 +187,47 @@ describe('POST /api/interviews/save idempotency', () => {
       }),
       expect.any(Object)
     );
+    // Never on `duplicate` — a retrying participant cannot schedule a second run.
+    expect(afterMock).toHaveBeenCalledTimes(1);
   });
 
-  it('stores signed generation-time provenance when provider resolution changes before save', async () => {
-    vi.stubEnv('AI_PROVIDER', 'claude');
-    const generationProvider = resolveProviderType();
-    const generationModel = resolveSynthesisModel(
-      makeStudyConfig({ aiProvider: generationProvider, aiModel: CLAUDE_SYNTHESIS_MODEL }),
-    );
-    receiptMock.verifySynthesisReceipt.mockResolvedValue({
-      aiProvider: generationProvider,
-      aiModel: generationModel,
-    });
+  it('schedules the deferred analysis only when persistence reports created', async () => {
+    kvMock.persistCompletedInterview.mockReset().mockResolvedValue({ status: 'duplicate' });
+    const interview = makeStoredInterview({ id: 'interview-dup', studyId: 'study-a' });
 
-    // The deployment default can change while a participant holds a valid
-    // receipt. Save must not recompute provenance from this later value.
-    vi.stubEnv('AI_PROVIDER', 'gemini');
-    expect(resolveProviderType()).toBe('gemini');
+    await POST(makeRequest(interview));
+
+    expect(afterMock).not.toHaveBeenCalled();
+  });
+
+  it('records the canonical study provider and model as conductedBy, not from the body', async () => {
+    canonicalMock.loadCanonicalStudy.mockResolvedValue({
+      ok: true,
+      study: {
+        id: 'study-a',
+        revision: 3,
+        config: { name: 'Canonical Study', aiProvider: 'claude', aiModel: CLAUDE_MODEL },
+      },
+    });
     const interview = makeStoredInterview({ id: 'interview-claude', studyId: 'study-a' });
 
+    // The adversarial case: attacker-controlled fields anywhere in the body
+    // must never reach the persisted record.
     const response = await POST(makeRequest({
       ...interview,
-      synthesis: {
-        statedPreferences: [], revealedPreferences: [], themes: [], contradictions: [],
-        keyInsights: ['Insight'], bottomLine: 'Bottom line', _receipt: 'receipt',
-      },
+      conductedByProvider: 'openai',
+      conductedByModel: 'attacker/model',
+      studyConfig: { aiModel: 'attacker/model' },
     }));
 
     expect(response.status).toBe(200);
-    expect(kvMock.persistCompletedInterview).toHaveBeenCalledWith(
-      expect.objectContaining({
-        aiProvider: 'claude',
-        aiModel: CLAUDE_SYNTHESIS_MODEL,
-      }),
-      expect.any(String),
-      expect.any(Object),
-      expect.any(Object)
-    );
+    const persisted = kvMock.persistCompletedInterview.mock.calls[0][0] as Record<string, unknown>;
+    expect(persisted).toMatchObject({
+      conductedByProvider: 'claude',
+      conductedByModel: CLAUDE_MODEL,
+    });
+    expect(JSON.stringify(persisted)).not.toContain('attacker/model');
+    expect(JSON.stringify(persisted)).not.toContain('"openai"');
   });
 
   it('delegates concurrent duplicate detection to the atomic storage primitive', async () => {
@@ -236,10 +239,6 @@ describe('POST /api/interviews/save idempotency', () => {
       transcript: interview.transcript,
       participantProfile: interview.participantProfile,
       behaviorData: interview.behaviorData,
-      synthesis: {
-        statedPreferences: [], revealedPreferences: [], themes: [], contradictions: [],
-        keyInsights: ['Insight'], bottomLine: 'Bottom line', _receipt: 'receipt',
-      },
     };
 
     kvMock.persistCompletedInterview
@@ -267,10 +266,6 @@ describe('POST /api/interviews/save idempotency', () => {
         transcript: [{ id: 'm1', role: 'user', content: 'hi', timestamp: 1 }],
         participantProfile: { id: 'p1', fields: [], rawContext: '', timestamp: 1 },
         behaviorData: { timePerTopic: {}, messagesPerTopic: {}, topicsExplored: [], contradictions: [] },
-        synthesis: {
-          statedPreferences: [], revealedPreferences: [], themes: [], contradictions: [],
-          keyInsights: ['Insight'], bottomLine: 'Bottom line', _receipt: 'receipt',
-        },
       })
     );
 
@@ -281,14 +276,7 @@ describe('POST /api/interviews/save idempotency', () => {
   it('rejects reuse of an interview id with different content', async () => {
     kvMock.persistCompletedInterview.mockReset().mockResolvedValue({ status: 'conflict' });
 
-    const interview = makeStoredInterview({
-      id: 'interview-x',
-      studyId: 'study-a',
-      synthesis: {
-        statedPreferences: [], revealedPreferences: [], themes: [], contradictions: [],
-        keyInsights: ['Insight'], bottomLine: 'Bottom line', _receipt: 'receipt',
-      },
-    });
+    const interview = makeStoredInterview({ id: 'interview-x', studyId: 'study-a' });
     const res = await POST(makeRequest(interview));
 
     expect(res.status).toBe(409);
@@ -304,10 +292,6 @@ describe('POST /api/interviews/save idempotency', () => {
       participantProfile: interview.participantProfile,
       behaviorData: interview.behaviorData,
       createdAt: 1_700_000_000_000,
-      synthesis: {
-        statedPreferences: [], revealedPreferences: [], themes: [], contradictions: [],
-        keyInsights: ['Insight'], bottomLine: 'Bottom line', _receipt: 'receipt',
-      },
     };
 
     vi.useFakeTimers();
@@ -332,14 +316,7 @@ describe('POST /api/interviews/save idempotency', () => {
 
   it('maps an atomic save quota rejection without persisting a partial interview', async () => {
     kvMock.persistCompletedInterview.mockReset().mockResolvedValue({ status: 'rate-limited' });
-    const interview = makeStoredInterview({
-      id: 'interview-limited',
-      studyId: 'study-a',
-      synthesis: {
-        statedPreferences: [], revealedPreferences: [], themes: [], contradictions: [],
-        keyInsights: ['Insight'], bottomLine: 'Bottom line', _receipt: 'receipt',
-      },
-    });
+    const interview = makeStoredInterview({ id: 'interview-limited', studyId: 'study-a' });
 
     const response = await POST(makeRequest(interview));
 
@@ -349,13 +326,7 @@ describe('POST /api/interviews/save idempotency', () => {
 
   it('asks participant context for new-persist so live create cannot start a save', async () => {
     const interview = makeStoredInterview({ id: 'interview-x', studyId: 'study-a' });
-    await POST(makeRequest({
-      ...interview,
-      synthesis: {
-        statedPreferences: [], revealedPreferences: [], themes: [], contradictions: [],
-        keyInsights: ['Insight'], bottomLine: 'Bottom line', _receipt: 'receipt',
-      },
-    }));
+    await POST(makeRequest(interview));
     expect(contextMock.getParticipantRequestContext).toHaveBeenCalledWith(
       expect.any(Request),
       expect.objectContaining({ purpose: 'new-persist', selectedStudyId: 'study-a' }),
@@ -371,17 +342,12 @@ describe('POST /api/interviews/save idempotency', () => {
     });
     const interview = makeStoredInterview({ id: 'interview-preview', studyId: 'study-a' });
 
-    const response = await POST(makeRequest({
-      ...interview,
-      synthesis: {
-        statedPreferences: [], revealedPreferences: [], themes: [], contradictions: [],
-        keyInsights: ['Insight'], bottomLine: 'Bottom line', _receipt: 'receipt',
-      },
-    }));
+    const response = await POST(makeRequest(interview));
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ success: true, preview: true, created: false });
     expect(kvMock.persistCompletedInterview).not.toHaveBeenCalled();
+    expect(afterMock).not.toHaveBeenCalled();
   });
 
   it('finishes persist-repair only when the stored guard matches identity and fingerprint', async () => {
@@ -397,28 +363,17 @@ describe('POST /api/interviews/save idempotency', () => {
       persistRepairOnly: true,
     });
     const interview = makeStoredInterview({ id: 'interview-x', studyId: 'study-a' });
-    const synthesis = {
-      statedPreferences: [],
-      revealedPreferences: [],
-      themes: [],
-      contradictions: [],
-      keyInsights: ['Insight'],
-      bottomLine: 'Bottom line',
-    };
     const fingerprint = submissionFingerprint({
       id: 'session-session-a',
       studyId: 'study-a',
       participantProfile: interview.participantProfile,
       transcript: interview.transcript,
-      synthesis,
       behaviorData: interview.behaviorData,
       createdAt: interview.createdAt ?? null,
       consentHash: 'a'.repeat(64),
       consentAcceptedAt: 1_700_000_000_000,
-      aiProvider: 'gemini',
-      aiModel: GEMINI_SYNTHESIS_MODEL,
-      requestedAiModel: undefined,
-      routedProvider: undefined,
+      conductedByProvider: 'gemini',
+      conductedByModel: GEMINI_MODEL,
     });
     kvMock.parsePersistingGuard.mockReturnValue({
       interviewId: 'session-session-a',
@@ -428,10 +383,7 @@ describe('POST /api/interviews/save idempotency', () => {
     });
     kvMock.persistCompletedInterview.mockReset().mockResolvedValue({ status: 'created' });
 
-    const response = await POST(makeRequest({
-      ...interview,
-      synthesis: { ...synthesis, _receipt: 'receipt' },
-    }));
+    const response = await POST(makeRequest(interview));
 
     expect(response.status).toBe(200);
     expect(get).toHaveBeenCalledWith('interview-persisting:session-session-a');
@@ -453,13 +405,7 @@ describe('POST /api/interviews/save idempotency', () => {
     kvMock.parsePersistingGuard.mockReturnValue(null);
     const interview = makeStoredInterview({ id: 'interview-x', studyId: 'study-a' });
 
-    const response = await POST(makeRequest({
-      ...interview,
-      synthesis: {
-        statedPreferences: [], revealedPreferences: [], themes: [], contradictions: [],
-        keyInsights: ['Insight'], bottomLine: 'Bottom line', _receipt: 'receipt',
-      },
-    }));
+    const response = await POST(makeRequest(interview));
 
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toEqual({ error: 'This study is no longer active.' });

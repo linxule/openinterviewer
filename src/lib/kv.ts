@@ -2,17 +2,25 @@
 // Supports both standalone (env-var singleton) and hosted (per-researcher dynamic) modes
 // All functions accept an optional Redis client parameter for multi-tenant support
 
+import { randomUUID } from 'crypto';
 import type { RedisPort } from './redisPort';
 import { RedisCommitAmbiguousError } from './redisPort';
 import { getKVClient } from './kvClient';
 import { resolveDeploymentMode } from './mode';
-import { StoredInterview, StoredStudy, StoredAggregateSynthesis } from '@/types';
+import {
+  StoredInterview,
+  StoredStudy,
+  StoredAggregateSynthesis,
+  SynthesisResult,
+  InterviewAnalysisFailureKind,
+} from '@/types';
 import { HEX64, MAX_STUDY_REVISION, ok, UNAVAILABLE, type WireResult } from './wire/types';
-import { parseFamilyWire, parsePersistResult, parsePrefixedJson } from './wire/parse';
+import { parseAnalysisResult, parseFamilyWire, parsePersistResult, parsePrefixedJson, type AnalysisWireOutcome } from './wire/parse';
 import { parseStudyCasResult } from './wire/studyCas';
 import type { PersistRatePlanRow } from './rateLimit';
 import { logRequestFailure } from './requestLog';
 import { STUDY_JSON_LUA } from './studyJsonLua';
+import type { SynthesisProvenance } from './synthesisReceipt';
 
 // Key prefixes for organizing data
 const INTERVIEW_PREFIX = 'interview:';
@@ -636,6 +644,275 @@ export async function persistCompletedInterview(
   }
 
   return persistCompletedInterviewFinish(frozen, client);
+}
+
+// ---------------------------------------------------------------------------
+// Slice P: the analysis writer. One new script, one key, one read and at most
+// one SET per call — there is no multi-write prefix here and therefore no new
+// fault cut. Two runs racing to analyze the same interview both call
+// claimInterviewAnalysis; the CAS inside the script guarantees exactly one
+// gets 'claimed' and the loser never reaches the provider.
+// ---------------------------------------------------------------------------
+
+const INTERVIEW_ID_TOKEN = /^[A-Za-z0-9_-]{1,120}$/;
+
+/** The serialized ceiling for one attached synthesis — the same number as
+ *  MAX_STORED_AGGREGATE_BYTES, checked before the client is resolved so an
+ *  oversized synthesis costs no Redis round trip. */
+export const MAX_ATTACHED_SYNTHESIS_BYTES = 256_000;
+/** How long one claim holds the record before another run may take over. */
+export const ANALYSIS_CLAIM_LEASE_MS = 180_000;
+
+export type ClaimAnalysisResult =
+  | { status: 'claimed'; claimId: string; attempts: number }
+  | { status: 'busy' | 'already-complete' | 'not-found' | 'unavailable' };
+
+export type AttachAnalysisResult =
+  { status: 'written' | 'already-complete' | 'stale' | 'too-large' | 'not-found' | 'unavailable' };
+
+/**
+ * KEYS[1] interview:<id>   ARGV[1] op 'claim'|'complete'|'fail'
+ * ARGV[2] interviewId      ARGV[3] nowMs   ARGV[4] leaseMs
+ * ARGV[5] claimId (claim: the new token; complete/fail: the token held)
+ * ARGV[6] the replacement `analysis` member as JSON text
+ * ARGV[7] complete only: the `synthesis` member as JSON text; '' otherwise
+ * ARGV[8] complete only: a flat JSON object of the provenance members
+ *   (aiProvider/aiModel/requestedAiModel/routedProvider) to patch alongside
+ *   `analysis` and `synthesis`, so a record never carries a synthesis
+ *   without the model that produced it; '{}' otherwise
+ */
+export const ATTACH_INTERVIEW_ANALYSIS_SCRIPT = `${STUDY_JSON_LUA}
+local function decode_interview(raw)
+  if type(raw) ~= 'string' or string.sub(raw, 1, 13) ~= 'oi:interview:' then return nil end
+  local payload = string.sub(raw, 14)
+  local ok, obj = pcall(cjson.decode, payload)
+  if not ok or type(obj) ~= 'table' then return nil end
+  return obj, payload
+end
+
+local interview, body = decode_interview(redis.call('GET', KEYS[1]))
+if not interview then return {'oi:analysis-notfound'} end
+if interview.status ~= 'completed' or interview.id ~= ARGV[2] then
+  return {'oi:analysis-notfound'}
+end
+
+local op = ARGV[1]
+local nowMs = tonumber(ARGV[3])
+local leaseMs = tonumber(ARGV[4])
+local claimId = ARGV[5]
+
+-- Effective state: the same derivation as the read-side analysisStatus(), so
+-- a legacy record (no analysis member) cannot be re-analyzed by accident.
+local analysisRaw = json_object_value(body, 'analysis')
+local state = nil
+if analysisRaw and analysisRaw ~= 'null' then
+  local dok, decoded = pcall(cjson.decode, analysisRaw)
+  if dok and type(decoded) == 'table' then state = decoded end
+end
+
+local effectiveStatus
+local effectiveClaimId
+local effectiveClaimedAt
+if state then
+  effectiveStatus = state.status
+  effectiveClaimId = state.claimId
+  effectiveClaimedAt = tonumber(state.claimedAt)
+else
+  local synthesisRaw = json_object_value(body, 'synthesis')
+  effectiveStatus = (synthesisRaw and synthesisRaw ~= 'null') and 'complete' or 'pending'
+end
+
+if op == 'claim' then
+  if effectiveStatus == 'complete' then return {'oi:analysis-done'} end
+  if effectiveStatus == 'running' and effectiveClaimedAt and (nowMs - effectiveClaimedAt) < leaseMs then
+    return {'oi:analysis-busy'}
+  end
+  local patched = patch_json_object(body, {{'analysis', ARGV[6]}})
+  redis.call('SET', KEYS[1], 'oi:interview:' .. patched)
+  return {'oi:analysis-claimed', claimId}
+end
+
+if effectiveStatus == 'complete' then return {'oi:analysis-done'} end
+if effectiveStatus ~= 'running' or effectiveClaimId ~= claimId then
+  return {'oi:analysis-stale'}
+end
+
+if op == 'complete' then
+  local updates = {{'analysis', ARGV[6]}, {'synthesis', ARGV[7]}}
+  for _, member in ipairs(json_object_members(ARGV[8])) do
+    updates[#updates + 1] = {member.key, member.value}
+  end
+  local patched = patch_json_object(body, updates)
+  redis.call('SET', KEYS[1], 'oi:interview:' .. patched)
+  return {'oi:analysis-written'}
+end
+
+if op == 'fail' then
+  local patched = patch_json_object(body, {{'analysis', ARGV[6]}})
+  redis.call('SET', KEYS[1], 'oi:interview:' .. patched)
+  return {'oi:analysis-recorded'}
+end
+
+return {'oi:analysis-unavailable'}
+`;
+
+async function evalAttachAnalysis(
+  op: 'claim' | 'complete' | 'fail',
+  interviewId: string,
+  claimId: string,
+  analysisMember: string,
+  synthesisMember: string,
+  provenanceMember: string,
+  client?: RedisPort,
+  nowMs: number = Date.now(),
+): Promise<AnalysisWireOutcome | null> {
+  const wire = await resolveClient(client).eval(
+    ATTACH_INTERVIEW_ANALYSIS_SCRIPT,
+    [`${INTERVIEW_PREFIX}${interviewId}`],
+    [op, interviewId, String(nowMs), String(ANALYSIS_CLAIM_LEASE_MS), claimId, analysisMember, synthesisMember, provenanceMember]
+  );
+  const parsed = parseAnalysisResult(wire);
+  return parsed.status === 'ok' ? parsed.value : null;
+}
+
+export async function claimInterviewAnalysis(
+  interviewId: string,
+  client?: RedisPort,
+  nowMs: number = Date.now(),
+): Promise<ClaimAnalysisResult> {
+  if (!INTERVIEW_ID_TOKEN.test(interviewId)) return { status: 'unavailable' };
+  const loaded = await getInterviewChecked(interviewId, client);
+  if (loaded.status === 'unavailable') return { status: 'unavailable' };
+  if (loaded.status === 'not-found') return { status: 'not-found' };
+
+  const priorAttempts = loaded.interview.analysis?.attempts ?? 0;
+  const claimId = randomUUID();
+  const analysisMember = JSON.stringify({
+    status: 'running',
+    attempts: priorAttempts + 1,
+    lastAttemptAt: nowMs,
+    claimId,
+    claimedAt: nowMs,
+  });
+
+  try {
+    const outcome = await evalAttachAnalysis('claim', interviewId, claimId, analysisMember, '', '{}', client, nowMs);
+    if (!outcome) return { status: 'unavailable' };
+    switch (outcome.outcome) {
+      case 'claimed':
+        return { status: 'claimed', claimId: outcome.value, attempts: priorAttempts + 1 };
+      case 'busy':
+        return { status: 'busy' };
+      case 'done':
+        return { status: 'already-complete' };
+      case 'notfound':
+        return { status: 'not-found' };
+      default:
+        return { status: 'unavailable' };
+    }
+  } catch (error) {
+    logRequestFailure({ event: 'kv.unavailable' }, error);
+    return { status: 'unavailable' };
+  }
+}
+
+export async function attachInterviewAnalysis(
+  input: {
+    interviewId: string;
+    claimId: string;
+    synthesis: SynthesisResult;
+    provenance: SynthesisProvenance;
+    studyRevision: number;
+  },
+  client?: RedisPort,
+): Promise<AttachAnalysisResult> {
+  if (!INTERVIEW_ID_TOKEN.test(input.interviewId)) return { status: 'unavailable' };
+  const nowMs = Date.now();
+  const synthesisMember = JSON.stringify(input.synthesis);
+  const synthesisBytes = new TextEncoder().encode(synthesisMember).byteLength;
+  if (synthesisBytes > MAX_ATTACHED_SYNTHESIS_BYTES) return { status: 'too-large' };
+  const provenanceMember = JSON.stringify({
+    aiProvider: input.provenance.aiProvider,
+    aiModel: input.provenance.aiModel,
+    requestedAiModel: input.provenance.requestedAiModel,
+    ...(input.provenance.routedProvider !== undefined
+      ? { routedProvider: input.provenance.routedProvider }
+      : {}),
+  });
+
+  try {
+    // Read-modify-write requires the current attempts count; a claim just
+    // ran so the record exists, but a vanished record between claim and
+    // attach is a legitimate 'not-found', not a crash.
+    const loaded = await getInterviewChecked(input.interviewId, client);
+    if (loaded.status === 'unavailable') return { status: 'unavailable' };
+    if (loaded.status === 'not-found') return { status: 'not-found' };
+    const attempts = loaded.interview.analysis?.attempts ?? 1;
+    const analysisMember = JSON.stringify({
+      status: 'complete',
+      attempts,
+      lastAttemptAt: nowMs,
+      studyRevision: input.studyRevision,
+    });
+    const outcome = await evalAttachAnalysis(
+      'complete', input.interviewId, input.claimId, analysisMember, synthesisMember, provenanceMember, client, nowMs,
+    );
+    if (!outcome) return { status: 'unavailable' };
+    switch (outcome.outcome) {
+      case 'written':
+        return { status: 'written' };
+      case 'done':
+        return { status: 'already-complete' };
+      case 'stale':
+        return { status: 'stale' };
+      case 'notfound':
+        return { status: 'not-found' };
+      default:
+        return { status: 'unavailable' };
+    }
+  } catch (error) {
+    logRequestFailure({ event: 'kv.unavailable' }, error);
+    return { status: 'unavailable' };
+  }
+}
+
+export async function recordInterviewAnalysisFailure(
+  interviewId: string,
+  claimId: string,
+  failureKind: InterviewAnalysisFailureKind,
+  client?: RedisPort,
+): Promise<AttachAnalysisResult> {
+  if (!INTERVIEW_ID_TOKEN.test(interviewId)) return { status: 'unavailable' };
+  const nowMs = Date.now();
+  try {
+    const loaded = await getInterviewChecked(interviewId, client);
+    if (loaded.status === 'unavailable') return { status: 'unavailable' };
+    if (loaded.status === 'not-found') return { status: 'not-found' };
+    const attempts = loaded.interview.analysis?.attempts ?? 1;
+    const analysisMember = JSON.stringify({
+      status: 'failed',
+      attempts,
+      lastAttemptAt: nowMs,
+      failureKind,
+    });
+    const outcome = await evalAttachAnalysis('fail', interviewId, claimId, analysisMember, '', '{}', client, nowMs);
+    if (!outcome) return { status: 'unavailable' };
+    switch (outcome.outcome) {
+      case 'recorded':
+        return { status: 'written' };
+      case 'done':
+        return { status: 'already-complete' };
+      case 'stale':
+        return { status: 'stale' };
+      case 'notfound':
+        return { status: 'not-found' };
+      default:
+        return { status: 'unavailable' };
+    }
+  } catch (error) {
+    logRequestFailure({ event: 'kv.unavailable' }, error);
+    return { status: 'unavailable' };
+  }
 }
 
 export type CollectionLoadResult<T> =

@@ -7,6 +7,7 @@ import {
   validateStudyConfigUpdate,
 } from '@/lib/studyConfigValidation';
 import { CONSENT_TEXT_PLACEHOLDER_ERROR } from '@/lib/consentText';
+import { THANK_YOU_TEXT_PLACEHOLDER_ERROR } from '@/lib/thankYouText';
 import { makeStudyConfig } from '../fixtures/models';
 
 describe('validateStudyConfig', () => {
@@ -221,6 +222,51 @@ describe('researcherContact (M9.2)', () => {
     const current = makeStudyConfig({ id: 'server-id', createdAt: 123 });
     delete current.researcherContact;
     expect(validateStudyConfigUpdate(current, {}, undefined)).toMatchObject({ ok: true });
+  });
+});
+
+describe('thankYouText (slice P §P12.2)', () => {
+  it('accepts a bounded thank-you text', () => {
+    const config = makeStudyConfig({ thankYouText: 'Thank you for taking part.' });
+    expect(validateStudyConfig(config)).toEqual({ ok: true, config });
+  });
+
+  it('rejects thank-you text over 4000 characters and accepts exactly 4000', () => {
+    const tooLong = makeStudyConfig({ thankYouText: 'x'.repeat(4_001) });
+    expect(validateStudyConfig(tooLong)).toMatchObject({
+      ok: false,
+      error: 'Thank-you screen must be 4000 characters or fewer',
+    });
+    const exact = makeStudyConfig({ thankYouText: 'x'.repeat(4_000) });
+    expect(validateStudyConfig(exact)).toMatchObject({ ok: true });
+  });
+
+  it('create and update both refuse a bracketed placeholder', () => {
+    const withPlaceholder = makeStudyConfig({ thankYouText: 'Thanks for joining [study name].' });
+    expect(validateStudyConfigForCreate(withPlaceholder, { id: 'server-id', createdAt: withPlaceholder.createdAt }))
+      .toMatchObject({ ok: false, error: THANK_YOU_TEXT_PLACEHOLDER_ERROR });
+
+    const current = makeStudyConfig({ id: 'server-id', createdAt: 123 });
+    expect(validateStudyConfigUpdate(current, { thankYouText: 'Thanks for joining [study name].' }, undefined))
+      .toMatchObject({ ok: false, error: THANK_YOU_TEXT_PLACEHOLDER_ERROR });
+  });
+
+  it('create and update both accept an absent thankYouText', () => {
+    const config = makeStudyConfig();
+    delete config.thankYouText;
+    expect(validateStudyConfigForCreate(config, { id: 'server-id', createdAt: config.createdAt }))
+      .toMatchObject({ ok: true });
+    const current = makeStudyConfig({ id: 'server-id', createdAt: 123 });
+    expect(validateStudyConfigUpdate(current, {}, undefined)).toMatchObject({ ok: true });
+  });
+
+  it('plain validateStudyConfig is placeholder-tolerant — a study saved before this slice must still serve participants', () => {
+    const config = makeStudyConfig();
+    delete config.thankYouText;
+    expect(validateStudyConfig(config)).toMatchObject({ ok: true });
+
+    const withPlaceholder = makeStudyConfig({ thankYouText: 'Thanks for joining [study name].' });
+    expect(validateStudyConfig(withPlaceholder)).toMatchObject({ ok: true });
   });
 });
 

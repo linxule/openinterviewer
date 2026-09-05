@@ -5,6 +5,19 @@ import { useStore } from '@/store';
 import type { SynthesisResult } from '@/types';
 import { makeStudyConfig } from '../fixtures/models';
 
+/**
+ * Slice P: a participant's completion is a save, never a model call. Every
+ * test in this file that used to race two `synthesizeInterview` calls now
+ * races two `saveCompletedInterview` calls instead — that is the only async
+ * operation left on the participant path, and it is where the submission-
+ * identity, StrictMode-replay, and stale-attempt discipline
+ * (`sameCompletionInputs`, `isCurrentAttempt`, `activeAttempt`) now lives.
+ * The two deleted participant states (`analysis-failed`, `rate-limited`) and
+ * their tests go with them (P3.1); the preview branch, which still calls
+ * `synthesizeInterview`, is untouched and covered where it uses
+ * `setViewMode('preview')` explicitly.
+ */
+
 const services = vi.hoisted(() => ({ synthesizeInterview: vi.fn(), saveCompletedInterview: vi.fn() }));
 const router = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock('@/services/interviewApi', () => ({
@@ -23,13 +36,11 @@ vi.mock('@/services/storageService', () => ({ saveCompletedInterview: services.s
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
 
 import Synthesis from '@/components/Synthesis';
-import { ApiRequestError } from '@/services/interviewApi';
 
 const result: SynthesisResult = {
   statedPreferences: [], revealedPreferences: [], themes: [], contradictions: [], keyInsights: [],
-  bottomLine: 'Session A analysis', _receipt: 'receipt-a',
+  bottomLine: 'Session A analysis',
 };
-const resultB: SynthesisResult = { ...result, bottomLine: 'Session B analysis', _receipt: 'receipt-b' };
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -51,25 +62,22 @@ beforeEach(() => {
   sessionStorage.clear();
   useStore.setState(useStore.getInitialState(), true);
   startSession('a');
-  services.synthesizeInterview.mockResolvedValue(result);
   services.saveCompletedInterview.mockResolvedValue({ success: true, id: 'interview-a' });
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
 describe('Synthesis signed submission lifecycle', () => {
-  it('saves the same null profile, transcript and behavior sent for synthesis', async () => {
+  it('saves the same null profile, transcript and behavior with no synthesis call', async () => {
     render(<Synthesis />);
-    await screen.findByText('Interview submitted');
+    await screen.findByText('Thank you');
 
-    const [history, , behavior, profile] = services.synthesizeInterview.mock.calls[0];
-    expect(profile).toBeNull();
+    expect(services.synthesizeInterview).not.toHaveBeenCalled();
     expect(services.saveCompletedInterview).toHaveBeenCalledWith(expect.objectContaining({
-      participantProfile: null, transcript: history, behaviorData: behavior, synthesis: result,
-      createdAt: 100,
+      participantProfile: null, synthesis: null, createdAt: 100,
     }), false, 'session-a');
     const [submission] = services.saveCompletedInterview.mock.calls[0];
-    expect(submission.transcript).toBe(history);
-    expect(submission.behaviorData).toBe(behavior);
+    expect(submission.transcript).toBe(useStore.getState().interviewHistory);
+    expect(submission.behaviorData).toBe(useStore.getState().behaviorData);
   });
 
   it('keeps a profile-less submission identical on save retry and page remount', async () => {
@@ -82,80 +90,75 @@ describe('Synthesis signed submission lifecycle', () => {
     vi.spyOn(Date, 'now').mockReturnValue(5_000);
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry save' }));
-    await screen.findByText('Interview submitted');
+    await screen.findByText('Thank you');
     expect(services.saveCompletedInterview.mock.calls[1][0]).toEqual(firstSubmission);
 
     page.unmount();
     await useStore.persist.rehydrate();
     render(<Synthesis />);
-    await screen.findByText('Interview submitted');
+    await screen.findByText('Thank you');
     expect(services.saveCompletedInterview.mock.calls[2][0]).toEqual(firstSubmission);
-    expect(services.synthesizeInterview).toHaveBeenCalledTimes(1);
+    expect(services.synthesizeInterview).not.toHaveBeenCalled();
   });
 
   it('preserves a valid zero profile timestamp instead of replacing it on save', async () => {
     useStore.setState({ participantProfile: { id: 'profile-a', timestamp: 0, fields: [], rawContext: '' } });
     render(<Synthesis />);
-    await screen.findByText('Interview submitted');
+    await screen.findByText('Thank you');
     expect(services.saveCompletedInterview.mock.calls[0][0]).toMatchObject({
-      id: 'profile-a', createdAt: 0, participantProfile: { timestamp: 0 },
+      id: 'profile-a', createdAt: 0, participantProfile: { timestamp: 0 }, synthesis: null,
     });
   });
 
-  it('does not apply or save a response after unmount and a new session', async () => {
-    const pending = deferred<SynthesisResult>();
-    services.synthesizeInterview.mockReturnValue(pending.promise);
+  it('does not apply a late save resolution after unmount and a new session', async () => {
+    const pending = deferred<{ success: boolean; id: string }>();
+    services.saveCompletedInterview.mockReturnValue(pending.promise);
     const page = render(<Synthesis />);
-    expect(services.synthesizeInterview).toHaveBeenCalledTimes(1);
+    expect(services.saveCompletedInterview).toHaveBeenCalledTimes(1);
 
     page.unmount();
     startSession('b');
-    await act(async () => { pending.resolve(result); });
+    await act(async () => { pending.resolve({ success: true, id: 'interview-a' }); });
 
-    expect(useStore.getState().synthesis).toBeNull();
     expect(useStore.getState().participantSessionHandle).toBe('session-b');
-    expect(services.saveCompletedInterview).not.toHaveBeenCalled();
+    // Unmounting stops further saves from that stale attempt; starting a new
+    // session alone (no remount) does not itself issue a second save.
+    expect(services.saveCompletedInterview).toHaveBeenCalledTimes(1);
   });
 
-  it('does not apply or save a response after unmount even if the session is unchanged', async () => {
-    const pending = deferred<SynthesisResult>();
-    services.synthesizeInterview.mockReturnValue(pending.promise);
+  it('does not crash on a late save resolution after unmount even if the session is unchanged', async () => {
+    const pending = deferred<{ success: boolean; id: string }>();
+    services.saveCompletedInterview.mockReturnValue(pending.promise);
     const page = render(<Synthesis />);
     page.unmount();
-    await act(async () => { pending.resolve(result); });
-    expect(useStore.getState().synthesis).toBeNull();
-    expect(services.saveCompletedInterview).not.toHaveBeenCalled();
+    await act(async () => { pending.resolve({ success: true, id: 'interview-a' }); });
+    expect(services.saveCompletedInterview).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['resolves', 'rejects'] as const)('finishes the new session when an earlier analysis %s on the same mount', async (outcome) => {
-    const a = deferred<SynthesisResult>();
-    const b = deferred<SynthesisResult>();
-    services.synthesizeInterview.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
+  it.each(['resolves', 'rejects'] as const)('finishes the new session when an earlier save %s on the same mount', async (outcome) => {
+    const a = deferred<{ success: boolean; id: string }>();
+    const b = deferred<{ success: boolean; id: string }>();
+    services.saveCompletedInterview.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
     render(<Synthesis />);
     act(() => startSession('b'));
-    expect(services.synthesizeInterview).toHaveBeenCalledTimes(2);
+    expect(services.saveCompletedInterview).toHaveBeenCalledTimes(2);
 
     await act(async () => {
-      if (outcome === 'resolves') a.resolve(result);
-      else a.reject(new Error('Old session failed'));
+      if (outcome === 'resolves') a.resolve({ success: true, id: 'interview-a' });
+      else a.reject(new Error('Old session save failed'));
     });
-    expect(useStore.getState().synthesis).toBeNull();
-    expect(services.saveCompletedInterview).not.toHaveBeenCalled();
+    // The stale attempt's resolution must not surface as the new session's state.
+    expect(screen.getByText('Finalizing your interview')).toBeInTheDocument();
 
-    await act(async () => { b.resolve(resultB); });
-    await screen.findByText('Interview submitted');
-    expect(useStore.getState().synthesis).toEqual(resultB);
-    expect(services.saveCompletedInterview).toHaveBeenCalledTimes(1);
-    expect(services.saveCompletedInterview).toHaveBeenCalledWith(expect.objectContaining({
-      studyId: 'study-b', synthesis: resultB,
-    }), false, 'session-b');
+    await act(async () => { b.resolve({ success: true, id: 'interview-b' }); });
+    await screen.findByText('Thank you');
   });
 
   it.each(['profile', 'behavior', 'transcript', 'study', 'selector', 'viewMode'] as const)(
-    'rejects the old response when %s changes without leaving the page', async (field) => {
-      const oldResponse = deferred<SynthesisResult>();
-      const newResponse = deferred<SynthesisResult>();
-      services.synthesizeInterview.mockReturnValueOnce(oldResponse.promise).mockReturnValueOnce(newResponse.promise);
+    'rejects the old submission when %s changes without leaving the page', async (field) => {
+      const oldSave = deferred<{ success: boolean; id: string }>();
+      const newSave = deferred<{ success: boolean; id: string }>();
+      services.saveCompletedInterview.mockReturnValueOnce(oldSave.promise).mockReturnValueOnce(newSave.promise);
       render(<Synthesis />);
       act(() => {
         const state = useStore.getState();
@@ -166,93 +169,39 @@ describe('Synthesis signed submission lifecycle', () => {
         if (field === 'selector') useStore.setState({ participantSessionHandle: 'session-new' });
         if (field === 'viewMode') state.setViewMode('preview');
       });
-      expect(services.synthesizeInterview).toHaveBeenCalledTimes(2);
-      await act(async () => { oldResponse.resolve(result); });
-      expect(useStore.getState().synthesis).toBeNull();
-      expect(services.saveCompletedInterview).not.toHaveBeenCalled();
-      await act(async () => { newResponse.resolve(resultB); });
-      await waitFor(() => expect(services.saveCompletedInterview).toHaveBeenCalledTimes(1));
-      expect(useStore.getState().synthesis).toEqual(resultB);
+      if (field === 'viewMode') {
+        // The preview branch renders a different screen entirely and does
+        // call the provider; the identity discipline under test here is
+        // participant-only for the other five fields.
+        return;
+      }
+      expect(services.saveCompletedInterview).toHaveBeenCalledTimes(2);
+      await act(async () => { oldSave.resolve({ success: true, id: 'interview-old' }); });
+      expect(screen.getByText('Finalizing your interview')).toBeInTheDocument();
+      await act(async () => { newSave.resolve({ success: true, id: 'interview-new' }); });
+      await waitFor(() => expect(screen.getByText('Thank you')).toBeInTheDocument());
     }
   );
 
-  it('does not display an old save acknowledgement as a new session submission', async () => {
-    const saveA = deferred<{ success: boolean; id: string }>();
-    const analysisB = deferred<SynthesisResult>();
-    services.saveCompletedInterview.mockReturnValueOnce(saveA.promise);
-    services.synthesizeInterview.mockResolvedValueOnce(result).mockReturnValueOnce(analysisB.promise);
-    render(<Synthesis />);
-    await waitFor(() => expect(services.saveCompletedInterview).toHaveBeenCalledTimes(1));
-    act(() => startSession('b'));
-    await act(async () => { saveA.resolve({ success: true, id: 'interview-a' }); });
-    expect(screen.getByText('Finalizing your interview')).toBeInTheDocument();
-    expect(screen.queryByText('Interview submitted')).not.toBeInTheDocument();
-    expect(useStore.getState().synthesis).toBeNull();
-    await act(async () => { analysisB.resolve(resultB); });
-    await screen.findByText('Interview submitted');
-  });
-
-  it('re-analyzes changed signed inputs instead of reusing an earlier synthesis receipt', async () => {
-    render(<Synthesis />);
-    await screen.findByText('Interview submitted');
-    services.synthesizeInterview.mockRejectedValueOnce(new Error('Unavailable'));
-    act(() => useStore.getState().setBehaviorData({
-      ...useStore.getState().behaviorData, topicsExplored: ['Changed after synthesis'],
-    }));
-    await screen.findByText("We couldn't finalize your interview");
-    expect(useStore.getState().synthesis).toBeNull();
-    expect(services.saveCompletedInterview).toHaveBeenCalledTimes(1);
-  });
-
-  it('finishes StrictMode effect replay with one provider request and one save', async () => {
-    const pending = deferred<SynthesisResult>();
-    services.synthesizeInterview.mockReturnValue(pending.promise);
+  it('finishes StrictMode effect replay with exactly one save and no provider call', async () => {
+    const pending = deferred<{ success: boolean; id: string }>();
+    services.saveCompletedInterview.mockReturnValue(pending.promise);
     render(<StrictMode><Synthesis /></StrictMode>);
-    expect(services.synthesizeInterview).toHaveBeenCalledTimes(1);
-    await act(async () => { pending.resolve(result); });
-    await screen.findByText('Interview submitted');
     expect(services.saveCompletedInterview).toHaveBeenCalledTimes(1);
+    await act(async () => { pending.resolve({ success: true, id: 'interview-a' }); });
+    await screen.findByText('Thank you');
+    expect(services.synthesizeInterview).not.toHaveBeenCalled();
   });
 
-  it('saves an existing synthesis once during StrictMode effect replay', async () => {
+  it('ignores a pre-existing synthesis in the store and still saves with synthesis: null', async () => {
     useStore.setState({ synthesis: result });
     render(<StrictMode><Synthesis /></StrictMode>);
-    await screen.findByText('Interview submitted');
+    await screen.findByText('Thank you');
     expect(services.synthesizeInterview).not.toHaveBeenCalled();
     expect(services.saveCompletedInterview).toHaveBeenCalledTimes(1);
-  });
-
-  it('allows manual analysis retry after failure, including a second failure', async () => {
-    services.synthesizeInterview
-      .mockRejectedValueOnce(new Error('Unavailable'))
-      .mockRejectedValueOnce(new Error('Still unavailable'))
-      .mockResolvedValueOnce(result);
-    render(<StrictMode><Synthesis /></StrictMode>);
-    await screen.findByText("We couldn't finalize your interview");
-    expect(services.synthesizeInterview).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Retry finalization' }));
-    await screen.findByText("We couldn't finalize your interview");
-    expect(services.synthesizeInterview).toHaveBeenCalledTimes(2);
-    fireEvent.click(screen.getByRole('button', { name: 'Retry finalization' }));
-    await screen.findByText('Interview submitted');
-    expect(services.synthesizeInterview).toHaveBeenCalledTimes(3);
-    expect(services.saveCompletedInterview).toHaveBeenCalledTimes(1);
-  });
-
-  it('shows a rate-limited retry prompt distinct from a generic failure', async () => {
-    services.synthesizeInterview.mockRejectedValueOnce(new ApiRequestError(429, 900));
-    render(<Synthesis />);
-    await screen.findByText('Too many finalization attempts');
-    expect(screen.getByText(/about 15 minutes/)).toBeInTheDocument();
-    expect(screen.queryByText("We couldn't finalize your interview")).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Retry finalization' })).toBeInTheDocument();
-  });
-
-  it('falls back to generic finalization-failed copy for a non-rate-limit error', async () => {
-    services.synthesizeInterview.mockRejectedValueOnce(new Error('Unavailable'));
-    render(<Synthesis />);
-    await screen.findByText("We couldn't finalize your interview");
-    expect(screen.queryByText('Too many finalization attempts')).not.toBeInTheDocument();
+    expect(services.saveCompletedInterview).toHaveBeenCalledWith(
+      expect.objectContaining({ synthesis: null }), false, 'session-a',
+    );
   });
 
   it('offers transcript export to preview users when analysis fails', async () => {
@@ -266,13 +215,5 @@ describe('Synthesis signed submission lifecycle', () => {
     expect(useStore.getState().currentStep).toBe('export');
     expect(useStore.getState().interviewHistory).toBe(transcript);
     expect(useStore.getState().synthesis).toBeNull();
-  });
-
-  it('does not offer participant export when analysis fails', async () => {
-    services.synthesizeInterview.mockRejectedValueOnce(new Error('Unavailable'));
-    render(<Synthesis />);
-    await screen.findByText("We couldn't finalize your interview");
-    expect(screen.queryByRole('button', { name: /export/i })).not.toBeInTheDocument();
-    expect(services.saveCompletedInterview).not.toHaveBeenCalled();
   });
 });

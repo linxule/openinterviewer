@@ -192,7 +192,15 @@ describe('StudyDetail register table', () => {
       makeStoredStudy({ id: 'study-single', config, revision: 1, interviewCount: 1 })
     );
     storageMock.getStudyInterviews.mockResolvedValue([
-      makeStoredInterview({ id: 'interview-single', studyId: 'study-single' }),
+      // Analyzed, so the header's "N awaiting analysis" clause (P11.4) does
+      // not append to the string this test is actually about: pluralization.
+      makeStoredInterview({
+        id: 'interview-single', studyId: 'study-single',
+        synthesis: {
+          statedPreferences: [], revealedPreferences: [], themes: [],
+          contradictions: [], keyInsights: [], bottomLine: 'Bottom line',
+        },
+      }),
     ]);
 
     renderStudyDetail('study-single');

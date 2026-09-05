@@ -87,12 +87,33 @@ describe('InterviewDetail reading surface', () => {
     const bottomLine = await screen.findByText('A verified bottom line');
     expect(bottomLine.closest('[class*="font-serif"]')).not.toBeNull();
 
-    const footer = screen.getByText(/^Synthesized by/);
-    expect(footer.textContent?.startsWith('Synthesized by gemini-2.5-flash · study rev 3 · saved ')).toBe(true);
+    const footer = screen.getByText(/^Conducted by/);
+    expect(footer.textContent?.startsWith('Conducted by not recorded · Synthesized by gemini-2.5-flash · study rev 3 · saved ')).toBe(true);
     expect(footer.textContent).not.toMatch(/receipt/i);
     expect(footer.textContent).not.toMatch(/unsigned/i);
 
     expect(container.querySelectorAll('svg').length).toBe(0);
+  });
+
+  it('names the conducting model in the footer alongside the synthesizing one, when the record carries one', async () => {
+    storageMock.getInterview.mockResolvedValue(makeStoredInterview({
+      ...interview,
+      id: 'interview-conducted',
+      conductedByProvider: 'gemini',
+      conductedByModel: 'gemini-3.7-flash',
+    }));
+
+    render(
+      <BreadcrumbProvider>
+        <InterviewDetail interviewId="interview-conducted" studyId="study-reading" />
+      </BreadcrumbProvider>
+    );
+
+    await screen.findByText('What brought you here today?');
+    fireEvent.click(screen.getByRole('tab', { name: 'Analysis' }));
+
+    const footer = await screen.findByText(/^Conducted by/);
+    expect(footer.textContent?.startsWith('Conducted by gemini-3.7-flash · Synthesized by gemini-2.5-flash')).toBe(true);
   });
 
   it('leaves the page frame to the shell', async () => {

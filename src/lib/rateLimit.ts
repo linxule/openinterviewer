@@ -3,7 +3,7 @@ import type { RedisPort } from './redisPort';
 import { NextResponse } from 'next/server';
 import { logRequestFailure } from './requestLog';
 
-type ParticipantOperation = 'greeting' | 'interview' | 'synthesis' | 'save';
+type ParticipantOperation = 'greeting' | 'interview' | 'save';
 
 type Limit = {
   scope: 'client' | 'session' | 'link' | 'study' | 'researcher';
@@ -37,15 +37,6 @@ const LIMITS: Record<ParticipantOperation, Limit[]> = {
     { scope: 'study', maximum: 5_000, windowSeconds: 86_400 },
     { scope: 'researcher', maximum: 10_000, windowSeconds: 86_400 },
   ],
-  synthesis: [
-    // 6: enough for a handful of legitimate retries after a provider failure,
-    // while still bounding runaway re-synthesis over a session.
-    { scope: 'session', maximum: 6, windowSeconds: 86_400 },
-    { scope: 'client', maximum: 10, windowSeconds: 3_600 },
-    { scope: 'link', maximum: 500, windowSeconds: 86_400 },
-    { scope: 'study', maximum: 1_000, windowSeconds: 86_400 },
-    { scope: 'researcher', maximum: 2_000, windowSeconds: 86_400 },
-  ],
   save: [
     { scope: 'session', maximum: 2, windowSeconds: 86_400 },
     { scope: 'client', maximum: 20, windowSeconds: 3_600 },
@@ -73,19 +64,6 @@ for i = 1, #KEYS do
 end
 
 return {1, 0, 0}
-`;
-
-// A provider failure (as opposed to a rejected/over-budget request) must not
-// cost the participant part of their retry budget. This never lowers a
-// counter below zero and never touches the key's TTL, so a refund can't
-// resurrect an expired window or extend one that's still running.
-const REFUND_LIMITS_SCRIPT = `
-for i = 1, #KEYS do
-  local count = tonumber(redis.call('GET', KEYS[i]) or '0')
-  if count > 0 then redis.call('DECR', KEYS[i]) end
-end
-
-return 1
 `;
 
 function rateLimitSalt(): string {
@@ -188,28 +166,6 @@ export async function participantRateLimitResponse(
       { error: 'Unable to verify request limits. Please try again later.', retryable: true },
       { status: 503 }
     );
-  }
-}
-
-// Undo a prior participantRateLimitResponse consumption. Called when the
-// request the limiter admitted went on to fail for a reason unrelated to the
-// participant (e.g. an upstream provider error) — the participant should not
-// lose a retry attempt for a failure that wasn't theirs. Best-effort: this
-// must never throw or surface a new failure to the caller.
-export async function refundParticipantRateLimit(
-  request: Request,
-  studyId: string,
-  operation: ParticipantOperation,
-  client: RedisPort,
-  authority: { sessionId?: string; linkId?: string; researcherId?: string | null } = {}
-): Promise<void> {
-  try {
-    const counters = getParticipantRateLimitCounters(request, studyId, operation, authority);
-    if (!counters) return;
-    const keys = counters.map(counter => counter.key);
-    await client.eval(REFUND_LIMITS_SCRIPT, keys, []);
-  } catch (error) {
-    logRequestFailure({ event: 'rateLimit.refund', operation }, error);
   }
 }
 
