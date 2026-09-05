@@ -104,11 +104,14 @@ The participant sequence is link exchange -> HttpOnly participant session -> con
 | Auth/participant authority | `auth.ts`, `proxy.ts`, `researcherContext.ts`, participant libraries | matching auth/consent/link tests + `npm run check` |
 | Storage/tenancy | `kv.ts`, `kvClient.ts`, `platformDb.ts`, reconciler | atomicity/tenancy/saga tests + `npm run check` |
 | Providers/provenance | `aiTransport.ts`, `providers/`, `prompts/`, interview/synthesis routes | transport/provider/provenance tests + direct/Gateway build contracts + `npm run check` |
+| Completion and export | `Synthesis.tsx`, `synthesisReceipt.ts`, save/export routes, `storageService.ts` | receipt/lifecycle/save tests + `npm run test:e2e` through researcher and participant workflows |
 | Structured request logs | `src/lib/requestLog.ts`, `providerErrors.ts`, API catch sites | `requestLog.test.ts` + `providerErrors.test.ts` + health/config contract tests |
 | Participant/preview headers | `src/services/participantHeaders.ts`, `interviewApi.ts`, `storageService.ts`, `Consent.tsx` | `participantHeaders.test.ts` + `participantSessionHeaders.test.ts` + consent/isolation suites |
 | Researcher UI | components, services, page entry | paired component/API tests; inspect 375px when layout changes |
 
-Tests live in two tiers. `tests/unit/` runs under the base vitest config (jsdom) and mirrors the security or product boundary it protects; prefer a realistic regression at that boundary over snapshots of implementation detail. `tests/integration/` runs under `vitest.integration.config.mts` (node environment) against a runner-owned disposable `redis-server` via `tests/helpers/disposableRedis.ts` — it must never connect to an inherited, shared, or production Redis. Use `npm run test:redis-crash` and `npm run test:adversarial` for these suites; they need a local `redis-server` binary (or the CI container) and are the only place real-wire crash-cut and cross-tenant claims are actually exercised.
+Vitest tests live in two tiers. `tests/unit/` runs under the base vitest config (jsdom) and mirrors the security or product boundary it protects; prefer a realistic regression at that boundary over snapshots of implementation detail. `tests/integration/` runs under `vitest.integration.config.mts` (node environment) against a runner-owned disposable `redis-server` via `tests/helpers/disposableRedis.ts` — it must never connect to an inherited, shared, or production Redis. Use `npm run test:redis-crash` and `npm run test:adversarial` for these suites; they need a local `redis-server` binary (or the CI container) and are the only place real-wire crash-cut and cross-tenant claims are actually exercised.
+
+`tests/e2e/` runs the browser journeys with real application API handlers and disposable Redis; only external provider HTTP responses are synthetic. Keep the Next test proxy confined to its test-only server launcher. Do not mock internal synthesis/save APIs in the successful completion regression: it must exercise receipt creation and verification across that boundary. The keyless demo regression still requires no API or external requests.
 
 ## Canonical commands
 

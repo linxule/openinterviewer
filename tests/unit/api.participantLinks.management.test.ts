@@ -31,9 +31,6 @@ vi.mock('@/lib/kv', () => kvMock);
 const modeMock = vi.hoisted(() => ({ isHostedMode: vi.fn() }));
 vi.mock('@/lib/mode', () => modeMock);
 
-const platformMock = vi.hoisted(() => ({ getStudyOwnerChecked: vi.fn() }));
-vi.mock('@/lib/platformDb', () => platformMock);
-
 const linksMock = vi.hoisted(() => ({
   listParticipantLinksForStudy: vi.fn(),
   revokeParticipantLink: vi.fn(),
@@ -76,9 +73,6 @@ beforeEach(() => {
   );
   modeMock.isHostedMode.mockReturnValue(true);
   kvMock.getStudyChecked.mockResolvedValue({ status: 'found', study: { id: 'study-a' } });
-  platformMock.getStudyOwnerChecked.mockResolvedValue({
-    status: 'found', researcherId: 'researcher-a',
-  });
 });
 
 describe('researcher participant-link management API', () => {
@@ -136,7 +130,6 @@ describe('researcher participant-link management API', () => {
     );
 
     expect(response.status).toBe(404);
-    expect(platformMock.getStudyOwnerChecked).not.toHaveBeenCalled();
     expect(linksMock.listParticipantLinksForStudy).not.toHaveBeenCalled();
   });
 

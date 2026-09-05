@@ -20,6 +20,19 @@ const phaseLabels: Record<InterviewPhase, string> = {
   'wrap-up': 'Wrapping up'
 };
 
+// Primitive props keep completed turns from reparsing Markdown when the
+// composer changes or another message arrives.
+const InterviewTurn = React.memo(function InterviewTurn({ role, content }: Pick<InterviewMessage, 'role' | 'content'>) {
+  return (
+    <Turn speaker={role === 'ai' ? 'interviewer' : 'participant'}>
+      <span className="sr-only">{role === 'ai' ? 'Interviewer:' : 'You:'} </span>
+      <div className="prose-verbatim">
+        <ReactMarkdown>{content}</ReactMarkdown>
+      </div>
+    </Turn>
+  );
+});
+
 const InterviewChat: React.FC = () => {
   const router = useRouter();
   const {
@@ -318,12 +331,7 @@ const InterviewChat: React.FC = () => {
       <div role="log" aria-live="polite" className="relative min-h-0 flex-1 overflow-y-auto bg-paper-0">
         <div className="mx-auto max-w-measure space-y-8 px-4 py-8">
           {interviewHistory.map((msg) => (
-            <Turn key={msg.id} speaker={msg.role === 'ai' ? 'interviewer' : 'participant'}>
-              <span className="sr-only">{msg.role === 'ai' ? 'Interviewer:' : 'You:'} </span>
-              <div className="prose-verbatim">
-                <ReactMarkdown>{msg.content}</ReactMarkdown>
-              </div>
-            </Turn>
+            <InterviewTurn key={msg.id} role={msg.role} content={msg.content} />
           ))}
 
           {isAiThinking && (

@@ -28,12 +28,18 @@ import {
   createStudyAtomic,
   deleteStudy,
   encodeMutationGuard,
+  persistCompletedInterview,
   persistCompletedInterviewFinish,
   persistCompletedInterviewP1,
+  replaceStudyConfigAtomic,
+  setStudyLinksEnabled,
+  STUDY_VALUE_PREFIX,
   type PersistingGuard,
 } from '@/lib/kv';
 import { BEGIN_STUDY_OPERATION_SCRIPT } from '@/lib/platformDb.operations';
-import { makeStoredInterview, makeStoredStudy } from '../fixtures/models';
+import { makeStoredInterview, makeStoredStudy, makeStudyConfig } from '../fixtures/models';
+import { loadCanonicalStudy } from '@/lib/canonicalStudy';
+import { validateStudyConfig } from '@/lib/studyConfigValidation';
 import {
   startDisposableRedis,
   type DisposableRedis,
@@ -43,7 +49,7 @@ import {
   coverFaultCut,
   type FaultCutId,
 } from '../helpers/faultManifest';
-import type { ResearcherAccount } from '@/types';
+import type { ResearcherAccount, StoredStudy } from '@/types';
 
 process.env.PLATFORM_KEY_PREFIX = '';
 process.env.DEPLOYMENT_MODE = 'standalone';
@@ -645,6 +651,121 @@ describe('persist F1–F5 + transitions', () => {
     };
     expect(await persistCompletedInterviewFinish(mismatched, redis)).toEqual({ status: 'conflict' });
     coverFaultCut('persist-conflict');
+  });
+});
+
+describe('study JSON preservation on owned Redis', () => {
+  const escapedText = 'Quotes " and backslashes \\ with ],},: and 雪\nnext line';
+  const metadata = {
+    emptyArray: [],
+    emptyObject: {},
+    nested: [[], {}, { 'escaped"key\\': [escapedText, [], { value: null }] }],
+    precise: 0.12345678901234568,
+    integer: Number.MAX_SAFE_INTEGER,
+  };
+
+  async function readStored(studyId: string, prefixed: boolean) {
+    const raw = await redis.get<string>(`study:${studyId}`);
+    if (typeof raw !== 'string') throw new Error('Stored study JSON is missing');
+    expect(raw.startsWith(STUDY_VALUE_PREFIX)).toBe(prefixed);
+    const body = prefixed ? raw.slice(STUDY_VALUE_PREFIX.length) : raw;
+    const study = JSON.parse(body) as StoredStudy & { metadata: typeof metadata };
+    expect(study.metadata).toEqual(metadata);
+    return study;
+  }
+
+  it.each([true, false])('keeps participant saves valid across duplicate retries and a second participant (prefixed=%s)', async (prefixed) => {
+    for (const profileSchema of [[], [{
+      id: 'role', label: 'Role', extractionHint: escapedText, required: false, options: [],
+    }]]) {
+      const studyId = uuid();
+      const config = makeStudyConfig({ id: studyId, topicAreas: [], profileSchema, description: escapedText });
+      const study = { ...makeStoredStudy({ id: studyId, config }), metadata };
+      expect(validateStudyConfig(config).ok).toBe(true);
+      expect(await createStudyAtomic(study, redis)).toBe('created');
+      if (!prefixed) await redis.set(`study:${studyId}`, JSON.stringify(study, null, 2));
+      const first = makeStoredInterview({ id: `interview-${uuid()}`, studyId });
+      const options = {
+        expectedStudyRevision: 1,
+        identity: { participantSessionId: `session-${uuid()}`, linkId: `link-${uuid()}` },
+      };
+
+      expect(await persistCompletedInterview(first, FP, options, redis)).toEqual({ status: 'created' });
+      const afterFirst = await readStored(studyId, prefixed);
+      expect(afterFirst.config).toEqual(config);
+      expect(validateStudyConfig(afterFirst.config).ok).toBe(true);
+      expect(afterFirst).toMatchObject({ interviewCount: 1, isLocked: true, revision: 1 });
+      if (prefixed) {
+        expect((await loadCanonicalStudy({ kvClient: redis, tokenStudyId: studyId })).ok).toBe(true);
+      }
+      expect(await persistCompletedInterview(first, FP, options, redis)).toEqual({ status: 'duplicate' });
+      expect(await readStored(studyId, prefixed)).toEqual(afterFirst);
+
+      const second = makeStoredInterview({ id: `interview-${uuid()}`, studyId });
+      expect(await persistCompletedInterview(second, 'cd'.repeat(32), {
+        ...options,
+        identity: { ...options.identity, participantSessionId: `session-${uuid()}` },
+      }, redis)).toEqual({ status: 'created' });
+      const afterSecond = await readStored(studyId, prefixed);
+      expect(afterSecond.config).toEqual(config);
+      expect(validateStudyConfig(afterSecond.config).ok).toBe(true);
+      expect(afterSecond).toMatchObject({ interviewCount: 2, isLocked: true, revision: 1 });
+      expect(await redis.scard(`study-interviews:${studyId}`)).toBe(2);
+    }
+  });
+
+  it.each([true, false])('preserves JSON in link/config mutations and their response payloads (prefixed=%s)', async (prefixed) => {
+    const studyId = uuid();
+    const config = makeStudyConfig({ id: studyId, topicAreas: [], profileSchema: [], description: escapedText });
+    const study = { ...makeStoredStudy({ id: studyId, config }), metadata };
+    // Escaped property names and whitespace are valid JSON too.
+    const body = JSON.stringify(study, null, 2).replace('"config":', '"confi\\u0067":');
+    await redis.set(`study:${studyId}`, (prefixed ? STUDY_VALUE_PREFIX : '') + body);
+
+    const disabled = await setStudyLinksEnabled(studyId, false, redis);
+    expect(disabled.status).toBe('updated');
+    if (disabled.status !== 'updated') throw new Error('Link toggle failed');
+    expect(disabled.study.config).toEqual({ ...config, linksEnabled: false });
+    expect(disabled.study.revision).toBe(2);
+    expect(await readStored(studyId, prefixed)).toEqual(disabled.study);
+
+    const replacement = {
+      ...config,
+      topicAreas: [escapedText],
+      profileSchema: [
+        { id: 'role', label: 'Role', extractionHint: escapedText, required: false, options: [] },
+        { id: 'choice', label: 'Choice', extractionHint: 'Pick one', required: true, options: ['one', escapedText] },
+      ],
+    };
+    const replaced = await replaceStudyConfigAtomic(studyId, 2, replacement, redis);
+    expect(replaced.status).toBe('updated');
+    if (replaced.status !== 'updated') throw new Error('Config replacement failed');
+    expect(replaced.study.config).toEqual(replacement);
+    expect(replaced.study.revision).toBe(3);
+    expect(validateStudyConfig(replaced.study.config).ok).toBe(true);
+    expect(await readStored(studyId, prefixed)).toEqual(replaced.study);
+
+    const enabled = await setStudyLinksEnabled(studyId, true, redis);
+    expect(enabled.status).toBe('updated');
+    if (enabled.status !== 'updated') throw new Error('Link toggle failed');
+    expect(enabled.study.config).toEqual({ ...replacement, linksEnabled: true });
+    expect(enabled.study.revision).toBe(4);
+    expect(validateStudyConfig(enabled.study.config).ok).toBe(true);
+    expect(await readStored(studyId, prefixed)).toEqual(enabled.study);
+  });
+
+  it('leaves malformed stored objects invalid instead of converting them into arrays', async () => {
+    const studyId = uuid();
+    const config = { ...makeStudyConfig({ id: studyId }), topicAreas: {} };
+    await redis.set(`study:${studyId}`, STUDY_VALUE_PREFIX + JSON.stringify({
+      ...makeStoredStudy({ id: studyId }), config, metadata,
+    }));
+    const result = await setStudyLinksEnabled(studyId, false, redis);
+    expect(result.status).toBe('updated');
+    const stored = await readStored(studyId, true);
+    expect(stored.config.topicAreas).toEqual({});
+    expect(validateStudyConfig(stored.config).ok).toBe(false);
+    expect((await loadCanonicalStudy({ kvClient: redis, tokenStudyId: studyId })).ok).toBe(false);
   });
 });
 

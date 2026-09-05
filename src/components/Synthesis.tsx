@@ -1,12 +1,34 @@
 'use client';
 
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useCallback, useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useStore } from '@/store';
 import { synthesizeInterview } from '@/services/interviewApi';
 import { saveCompletedInterview } from '@/services/storageService';
 import { Button, Citation, Coordinate, Label, Page, Rule, Verbatim } from '@/components/ui';
 import { resolveThemeEvidence } from '@/lib/evidence';
+import type { SynthesisResult } from '@/types';
+
+type CompletionInputs = Pick<ReturnType<typeof useStore.getState>,
+  'studyConfig' | 'participantProfile' | 'interviewHistory' | 'behaviorData' | 'viewMode' | 'participantSessionHandle'
+>;
+
+type CompletionAttempt = {
+  inputs: CompletionInputs;
+  result: SynthesisResult | null;
+  saving: boolean;
+};
+
+// These store values are immutable. A new reference invalidates the analysis
+// and its receipt even if the participant remains on the synthesis page.
+function sameCompletionInputs(left: CompletionInputs, right: CompletionInputs) {
+  return left.studyConfig === right.studyConfig
+    && left.participantProfile === right.participantProfile
+    && left.interviewHistory === right.interviewHistory
+    && left.behaviorData === right.behaviorData
+    && left.viewMode === right.viewMode
+    && left.participantSessionHandle === right.participantSessionHandle;
+}
 
 const Synthesis: React.FC = () => {
   const router = useRouter();
@@ -27,8 +49,21 @@ const Synthesis: React.FC = () => {
   const [saveStatus, setSaveStatus] = useState<'pending' | 'saved' | 'preview' | 'failed' | null>(null);
   const [analysisError, setAnalysisError] = useState(false);
 
-  // Track if analysis has been attempted to prevent re-running
-  const hasAttemptedAnalysis = useRef(false);
+  const mounted = useRef(false);
+  const activeAttempt = useRef<CompletionAttempt | null>(null);
+
+  // Keep the attempt across StrictMode's cleanup/setup replay, while preventing
+  // an actual unmount from applying a late response or starting a save.
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+
+  const isCurrentAttempt = useCallback((attempt: CompletionAttempt) => (
+    mounted.current
+    && activeAttempt.current === attempt
+    && sameCompletionInputs(attempt.inputs, useStore.getState())
+  ), []);
 
   // Counter to trigger re-analysis when retry is clicked
   const [retryTrigger, setRetryTrigger] = useState(0);
@@ -39,100 +74,105 @@ const Synthesis: React.FC = () => {
   const setNoteOpen = (themeIndex: number, refIndex: number, next: boolean) =>
     setOpenNotes((prev) => ({ ...prev, [`${themeIndex}:${refIndex}`]: next }));
 
-  // Extract save logic into a reusable function for retry
-  const doSave = async (synthesisToSave: typeof synthesis) => {
-    if (!studyConfig || !synthesisToSave) return;
+  const doSave = useCallback(async (attempt: CompletionAttempt) => {
+    const { studyConfig, participantProfile, interviewHistory, behaviorData, viewMode, participantSessionHandle } = attempt.inputs;
+    if (!isCurrentAttempt(attempt) || attempt.saving || !studyConfig || !attempt.result) return;
 
+    attempt.saving = true;
     setIsSaving(true);
     setSaveStatus('pending');
     try {
-      const interviewId = participantProfile?.id || `interview-${Date.now()}`;
+      // The first message is persisted with the transcript, so a missing profile
+      // still produces the same submission identity/time after retry or refresh.
+      const firstMessage = interviewHistory[0];
       const saveResult = await saveCompletedInterview({
-        id: interviewId,
+        id: participantProfile?.id ?? `interview-${firstMessage.id.slice(0, 110)}`,
         studyId: studyConfig.id,
         studyName: studyConfig.name,
-        participantProfile: participantProfile || {
-          id: interviewId,
-          fields: [],
-          rawContext: '',
-          timestamp: Date.now()
-        },
+        participantProfile,
         transcript: interviewHistory,
-        synthesis: synthesisToSave,
-        behaviorData: behaviorData,
-        createdAt: participantProfile?.timestamp || Date.now()
+        synthesis: attempt.result,
+        behaviorData,
+        createdAt: participantProfile?.timestamp ?? firstMessage.timestamp
       }, viewMode === 'preview', participantSessionHandle);
 
-      setSaveStatus(saveResult.preview ? 'preview' : saveResult.success ? 'saved' : 'failed');
+      if (isCurrentAttempt(attempt)) {
+        setSaveStatus(saveResult.preview ? 'preview' : saveResult.success ? 'saved' : 'failed');
+      }
     } catch (error) {
-      console.error('Error saving interview:', error);
-      setSaveStatus('failed');
+      if (isCurrentAttempt(attempt)) {
+        console.error('Error saving interview:', error);
+        setSaveStatus('failed');
+      }
     } finally {
-      setIsSaving(false);
+      attempt.saving = false;
+      if (isCurrentAttempt(attempt)) setIsSaving(false);
     }
-  };
+  }, [isCurrentAttempt]);
 
-  // Retry save handler
   const handleRetrySave = () => {
-    if (synthesis) {
-      doSave(synthesis);
-    }
+    const attempt = activeAttempt.current;
+    if (attempt) void doSave(attempt);
   };
 
-  // Retry analysis handler (for when synthesis itself fails)
   const handleRetryAnalysis = () => {
     setAnalysisError(false);
-    hasAttemptedAnalysis.current = false;
-    setRetryTrigger(prev => prev + 1);  // Trigger effect re-run
+    activeAttempt.current = null;
+    setRetryTrigger(prev => prev + 1);
   };
 
   useEffect(() => {
+    const inputs = { studyConfig, participantProfile, interviewHistory, behaviorData, viewMode, participantSessionHandle };
+    const previousAttempt = activeAttempt.current;
+    if (previousAttempt && sameCompletionInputs(previousAttempt.inputs, inputs)) return;
+
+    // A synthesis generated for earlier inputs cannot authorize the new save.
+    const existingSynthesis = previousAttempt && synthesis === previousAttempt.result ? null : synthesis;
+    if (synthesis && !existingSynthesis) useStore.setState({ synthesis: null });
+
+    activeAttempt.current = null;
+    setIsAnalyzing(false);
+    setIsSaving(false);
+    setSaveStatus(null);
+    setAnalysisError(false);
+    if (!studyConfig || interviewHistory.length === 0) return;
+
+    const attempt: CompletionAttempt = { inputs, result: existingSynthesis, saving: false };
+    activeAttempt.current = attempt;
+
+    if (existingSynthesis) {
+      void doSave(attempt);
+      return;
+    }
+
     const analyzeAndSave = async () => {
-      if (!studyConfig || interviewHistory.length === 0) return;
-
-      // If we already have synthesis, try to save if not already saved
-      if (synthesis) {
-        if (saveStatus === null && !hasAttemptedAnalysis.current) {
-          // Page was refreshed with synthesis in store but save never attempted
-          hasAttemptedAnalysis.current = true;
-          doSave(synthesis);
-        }
-        return;
-      }
-
-      // Prevent re-running analysis if already attempted
-      if (hasAttemptedAnalysis.current) return;
-      hasAttemptedAnalysis.current = true;
-
       setIsAnalyzing(true);
       try {
         const result = await synthesizeInterview(
-          interviewHistory,
+          inputs.interviewHistory,
           studyConfig,
-          behaviorData,
-          participantProfile,
-          viewMode === 'preview',
-          participantSessionHandle
+          inputs.behaviorData,
+          inputs.participantProfile,
+          inputs.viewMode === 'preview',
+          inputs.participantSessionHandle
         );
+        if (!isCurrentAttempt(attempt)) return;
+        attempt.result = result;
         setSynthesis(result);
-
-        // Save the interview to Upstash Redis after synthesis completes.
-        await doSave(result);
+        await doSave(attempt);
       } catch (error) {
-        console.error('Error synthesizing interview:', error);
-        setAnalysisError(true);
-        hasAttemptedAnalysis.current = false;  // Allow retry
+        if (isCurrentAttempt(attempt)) {
+          console.error('Error synthesizing interview:', error);
+          setAnalysisError(true);
+        }
       } finally {
-        setIsAnalyzing(false);
+        if (isCurrentAttempt(attempt)) setIsAnalyzing(false);
       }
     };
 
-    analyzeAndSave();
-    // Note: behaviorData and participantProfile are intentionally
-    // not in deps - we only want to analyze once when the page loads, not on updates
-    // retryTrigger is included to allow manual retry after failure
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [studyConfig, interviewHistory, synthesis, saveStatus, setSynthesis, retryTrigger]);
+    void analyzeAndSave();
+  }, [studyConfig, participantProfile, interviewHistory, behaviorData, viewMode, participantSessionHandle,
+    synthesis, setSynthesis, retryTrigger, doSave, isCurrentAttempt]);
 
   const handleBack = () => {
     setStep('interview');
@@ -433,13 +473,18 @@ const Synthesis: React.FC = () => {
             <p className="mt-2 font-sans text-[15px] text-ink-700">
               There was an error analyzing the interview. Please try again.
             </p>
-            <div className="mt-6 flex gap-3">
+            <div className="mt-6 flex flex-col gap-3 sm:flex-row">
               <Button variant="quiet" onClick={handleBack}>
                 Back to Interview
               </Button>
               <Button variant="primary" onClick={handleRetryAnalysis}>
                 Retry Analysis
               </Button>
+              {viewMode === 'preview' && (
+                <Button variant="quiet" onClick={handleExport}>
+                  Export transcript
+                </Button>
+              )}
             </div>
           </div>
         ) : (

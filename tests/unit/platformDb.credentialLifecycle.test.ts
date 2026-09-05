@@ -11,15 +11,9 @@ vi.mock('@/lib/kvClient', async (importOriginal) => {
 vi.mock('@/lib/email', () => ({ normalizeEmail: (value: string) => value.toLowerCase() }));
 
 import {
-  beginCreateStudyOperation,
-  beginDeleteStudyOperation,
   consumePlatformRateLimit,
   consumePlatformRateLimits,
   deleteResearcherAccount,
-  deleteStudyOwnership,
-  getPendingStudyOperations,
-  registerStudyOwnership,
-  resolveStudyOperation,
   UPDATE_RESEARCHER_CREDENTIALS_SCRIPT,
   updateResearcherCredentialsAtomic,
 } from '@/lib/platformDb';
@@ -248,148 +242,6 @@ describe('platform credential lifecycle scripts', () => {
       evict: { disposition: 'none' },
     });
     expect(platformClient.eval.mock.calls[0][2][5]).toBe('clear');
-  });
-
-  it('removes study ownership only for the expected researcher', async () => {
-    platformClient.eval.mockResolvedValueOnce(-1);
-    await expect(deleteStudyOwnership('study-a', 'researcher-a'))
-      .resolves.toBe('owner-conflict');
-
-    const [script, keys, args] = platformClient.eval.mock.calls[0];
-    expect(script).toContain("owner ~= ARGV[1]");
-    expect(keys).toEqual(['study-owner:study-a']);
-    expect(args).toEqual(['researcher-a', 'researcher-studies:', 'study-a']);
-
-    platformClient.eval.mockResolvedValueOnce(1);
-    await expect(deleteStudyOwnership('study-a', 'researcher-a'))
-      .resolves.toBe('deleted');
-  });
-
-  it('atomically enforces the hosted study ownership quota', async () => {
-    platformClient.eval.mockResolvedValueOnce(-2);
-    await expect(registerStudyOwnership('study-a', 'researcher-a'))
-      .resolves.toBe('quota-exceeded');
-
-    const [script, keys, args] = platformClient.eval.mock.calls[0];
-    expect(script).toContain("SCARD', KEYS[2]");
-    expect(keys).toEqual(['study-owner:study-a', 'researcher-studies:researcher-a']);
-    expect(args).toEqual(['researcher-a', 'study-a', '1000']);
-  });
-
-  it('atomically reserves ownership and a bounded create operation', async () => {
-    platformClient.eval.mockResolvedValueOnce(1);
-
-    const result = await beginCreateStudyOperation('study-a', 'researcher-a');
-
-    expect(result.status).toBe('started');
-    const [script, keys, args] = platformClient.eval.mock.calls[0];
-    expect(script).toContain("redis.call('SET', KEYS[1], ARGV[1])");
-    expect(script).toContain("redis.call('SET', KEYS[3], ARGV[6])");
-    expect(script).toContain("redis.call('SCARD', KEYS[2])");
-    expect(script).toContain("redis.call('SCARD', KEYS[4])");
-    expect(keys).toEqual([
-      'study-owner:study-a',
-      'researcher-studies:researcher-a',
-      'study-operation:create:study-a',
-      'study-operations:researcher-a',
-      'study-operation-lock:study-a',
-      'researcher:researcher-a',
-    ]);
-    expect(args.slice(0, 5)).toEqual([
-      'researcher-a',
-      'study-a',
-      'create:study-a',
-      '1000',
-      '100',
-    ]);
-  });
-
-  it('records delete intent without removing routing authority', async () => {
-    platformClient.eval.mockResolvedValueOnce(1);
-
-    const result = await beginDeleteStudyOperation('study-a', 'researcher-a');
-
-    expect(result.status).toBe('started');
-    const [script, keys, args] = platformClient.eval.mock.calls[0];
-    expect(script).toContain("if owner ~= ARGV[1] then return -2 end");
-    expect(script).not.toContain("redis.call('DEL', KEYS[1])");
-    expect(keys).toEqual([
-      'study-owner:study-a',
-      'study-operation:delete:study-a',
-      'study-operations:researcher-a',
-      'study-operation-lock:study-a',
-      'researcher-studies:researcher-a',
-      'researcher:researcher-a',
-    ]);
-    expect(args.slice(0, 4)).toEqual([
-      'researcher-a',
-      'study-a',
-      'delete:study-a',
-      '100',
-    ]);
-  });
-
-  it('resolves a terminal operation only after comparing operation and owner identity', async () => {
-    platformClient.eval.mockResolvedValueOnce(1);
-    const operation = {
-      version: 1 as const,
-      id: 'delete:study-a',
-      kind: 'delete' as const,
-      researcherId: 'researcher-a',
-      studyId: 'study-a',
-      createdAt: 1,
-      updatedAt: 1,
-    };
-
-    await expect(resolveStudyOperation(operation, 'delete-complete')).resolves.toBe('resolved');
-
-    const [script, keys, args] = platformClient.eval.mock.calls[0];
-    expect(script).toContain("parsed.researcherId ~= ARGV[1]");
-    expect(script).toContain("owner and owner ~= ARGV[1]");
-    expect(script).toContain("redis.call('DEL', KEYS[1])");
-    expect(keys).toEqual([
-      'study-owner:study-a',
-      'researcher-studies:researcher-a',
-      'study-operation:delete:study-a',
-      'study-operations:researcher-a',
-      'study-operation-lock:study-a',
-    ]);
-    expect(args).toEqual([
-      'researcher-a',
-      'study-a',
-      'delete:study-a',
-      'delete',
-      'delete-complete',
-    ]);
-  });
-
-  it('loads only a bounded, owner-matching set of pending operations', async () => {
-    platformClient.eval.mockResolvedValueOnce([
-      'create:study-a',
-      'malformed',
-      'delete:study-b',
-    ]);
-    platformClient.get
-      .mockResolvedValueOnce({
-        version: 1, id: 'create:study-a', kind: 'create', researcherId: 'researcher-a',
-        studyId: 'study-a', createdAt: 1, updatedAt: 1,
-      })
-      .mockResolvedValueOnce({
-        version: 1, id: 'delete:study-b', kind: 'delete', researcherId: 'researcher-b',
-        studyId: 'study-b', createdAt: 1, updatedAt: 1,
-      });
-
-    await expect(getPendingStudyOperations('researcher-a', 2)).resolves.toEqual({
-      status: 'ok',
-      operations: [expect.objectContaining({ id: 'create:study-a' })],
-      invalidCount: 2,
-    });
-    expect(platformClient.eval).toHaveBeenCalledWith(
-      expect.stringContaining("redis.call('SRANDMEMBER'"),
-      ['study-operations:researcher-a'],
-      ['2', '100']
-    );
-    expect(platformClient.get).toHaveBeenCalledTimes(2);
   });
 
   it('does not claim terminal deletion on schema-hold', async () => {

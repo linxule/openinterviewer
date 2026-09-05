@@ -16,8 +16,19 @@ const interviewApiMock = vi.hoisted(() => ({
   generateInterviewResponse: vi.fn(),
 }));
 const routerMock = vi.hoisted(() => ({ push: vi.fn() }));
+const markdownRender = vi.hoisted(() => vi.fn());
 
 vi.mock('@/services/interviewApi', () => interviewApiMock);
+
+vi.mock('react-markdown', async () => {
+  const { default: Markdown } = await vi.importActual<typeof import('react-markdown')>('react-markdown');
+  return {
+    default: function ObservedMarkdown(props: Parameters<typeof Markdown>[0]) {
+      markdownRender(props.children);
+      return <Markdown {...props} />;
+    },
+  };
+});
 
 vi.mock('next/navigation', () => ({
   useRouter: () => routerMock,
@@ -217,6 +228,79 @@ describe('InterviewChat greeting lifecycle', () => {
 });
 
 describe('InterviewChat composer and transcript', () => {
+  it('parses only new turns while composing and receiving a reply', async () => {
+    useStore.setState({
+      interviewHistory: [
+        { id: 'existing-ai', role: 'ai', content: 'Tell me about **your work**.', timestamp: 1 },
+        { id: 'existing-user', role: 'user', content: 'A **previous** answer.', timestamp: 2 },
+      ],
+    });
+    let resolveReply!: (value: unknown) => void;
+    interviewApiMock.generateInterviewResponse.mockReturnValue(new Promise((resolve) => {
+      resolveReply = resolve;
+    }));
+
+    render(<InterviewChat />);
+    expect(screen.getByText('your work').tagName).toBe('STRONG');
+    expect(screen.getByText('previous').tagName).toBe('STRONG');
+    markdownRender.mockClear();
+
+    for (const value of ['I', 'I work', 'I work in', 'I work in **design**.']) {
+      fireEvent.change(input(), { target: { value } });
+    }
+    expect(markdownRender).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(input()).toBeDisabled();
+    expect(screen.getByText('design').tagName).toBe('STRONG');
+    expect(markdownRender.mock.calls.map(([content]) => content)).toEqual(['I work in **design**.']);
+
+    await act(async () => {
+      resolveReply({
+        message: 'What do you **enjoy** about it?',
+        questionAddressed: null,
+        phaseTransition: null,
+        profileUpdates: [],
+        shouldConclude: false,
+      });
+    });
+
+    expect(screen.getByText('enjoy').tagName).toBe('STRONG');
+    expect(input()).toBeEnabled();
+    expect(markdownRender.mock.calls.map(([content]) => content)).toEqual([
+      'I work in **design**.',
+      'What do you **enjoy** about it?',
+    ]);
+  });
+
+  it('keeps unchanged turn content cached and updates changed content and speaker', () => {
+    useStore.setState({
+      interviewHistory: [{ id: 'existing', role: 'ai', content: 'Original **question**.', timestamp: 1 }],
+    });
+    render(<InterviewChat />);
+    expect(screen.getByText('question').tagName).toBe('STRONG');
+    expect(screen.getByText('Interviewer:')).toBeInTheDocument();
+    markdownRender.mockClear();
+
+    act(() => {
+      useStore.setState(({ interviewHistory }) => ({
+        interviewHistory: interviewHistory.map((message) => ({ ...message })),
+      }));
+    });
+    expect(markdownRender).not.toHaveBeenCalled();
+
+    act(() => {
+      useStore.setState({
+        interviewHistory: [{ id: 'existing', role: 'user', content: 'Updated **answer**.', timestamp: 1 }],
+      });
+    });
+    expect(screen.queryByText('question')).not.toBeInTheDocument();
+    expect(screen.getByText('answer').tagName).toBe('STRONG');
+    expect(screen.getByText('You:')).toBeInTheDocument();
+    expect(screen.queryByText('Interviewer:')).not.toBeInTheDocument();
+    expect(markdownRender.mock.calls.map(([content]) => content)).toEqual(['Updated **answer**.']);
+  });
+
   it('never sends on Enter alone, sends on Cmd/Ctrl+Enter, and sends via the Send button', async () => {
     interviewApiMock.getInterviewGreeting.mockResolvedValue('Welcome!');
     interviewApiMock.generateInterviewResponse.mockResolvedValue({

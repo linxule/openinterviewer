@@ -138,8 +138,8 @@ describe('completed interview storage boundary', () => {
     expect(script).toContain('fault cut F5');
     expect(script).toContain("redis.call('SADD', KEYS[7], ARGV[2])");
     expect(script).toContain("redis.call('SADD', KEYS[12], ARGV[2])");
-    expect(script).toContain("study.interviewCount = redis.call('SCARD', KEYS[7])");
-    expect(script).toContain('study.isLocked = true');
+    expect(script).toContain("{'interviewCount', tostring(redis.call('SCARD', KEYS[7]))}");
+    expect(script).toContain("{'isLocked', 'true'}");
     expect(script).toContain("redis.call('ZADD', rateKey, 1, ARGV[2])");
     expect(script).toContain('window + 60');
     expect(script.indexOf("redis.call('DEL', KEYS[3])")).toBeGreaterThan(script.indexOf('fault cut F5'));
@@ -295,8 +295,7 @@ describe('atomic study mutations', () => {
     });
 
     const [script, keys] = evalMock.mock.calls[0] as [string, string[]];
-    expect(script).toContain('study.config.linksEnabled');
-    expect(script).toContain("return {'oi:updated', 'oi:json:' .. cjson.encode(study)}");
+    expect(script).toContain("return {'oi:updated', 'oi:json:' .. updatedJson}");
     expect(script).not.toContain('study.interviewCount =');
     expect(keys).toEqual([
       'study:study-links',
@@ -329,8 +328,7 @@ describe('atomic study mutations', () => {
     const [script, keys] = evalMock.mock.calls[0] as [string, string[]];
     expect(script).toContain('(tonumber(study.revision) or 1) ~= tonumber(ARGV[1])');
     expect(script).toContain('pcall(cjson.decode, ARGV[2])');
-    expect(script).toContain('study.config = config');
-    expect(script).toContain("return {'oi:updated', 'oi:json:' .. cjson.encode(study)}");
+    expect(script).toContain("return {'oi:updated', 'oi:json:' .. updatedJson}");
     expect(script).not.toContain('study.interviewCount =');
     expect(script).not.toContain('study.isLocked =');
     expect(keys).toEqual([
