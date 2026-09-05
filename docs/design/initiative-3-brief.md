@@ -1,6 +1,8 @@
 # Initiative 3 — "The document is real" (Verbatim, third train)
 
-Status: APPROVED with decisions of record, 2026-09-05 (v3). Orchestrator: Fable (Claude Code). Pipeline unchanged: brief → per-slice spec → Codex build → Fable + second-model review → visual pass at 1280 and 375 → accept → commit.
+Status: APPROVED with decisions of record, 2026-09-05 (v3).
+
+> **Status (2026-09-05, end of day):** the whole train shipped to `main` in one day — Slice H (PR #13), K (#14), I (#15), L (#16), M (#17) — each built by Codex from its `slice-*-spec.md`, reviewed and visually verified at 1280 and 375, and merged on green CI. Slice N was struck (decision 4). Still owed by the owner: the iOS Safari real-device pass on the participant composer (K7) and the researcher walkthrough of the trace UI on both surfaces. First item of the next Storage train: persist the aggregate synthesis (D8, decision 5). Known follow-ups recorded in the slice handbacks: the aggregate catalogue budget (40 000 chars, round-robin) on very large studies; `UUID_V4` duplicated across `studyDraftSession.ts` and `storageService.ts`; echoing `researcherContact` on the consent page. Orchestrator: Fable (Claude Code). Pipeline unchanged: brief → per-slice spec → Codex build → Fable + second-model review → visual pass at 1280 and 375 → accept → commit.
 
 Provenance: v1 written after walking every surface in the new browser suite (52 screenshots, 1280 + 375) and an independent Opus code audit against `DIRECTION-final.md`; v2 amended by an adversarial challenge lane (verdict: proceed amended, 10 amendments, all adopted and each re-verified against source before adoption).
 

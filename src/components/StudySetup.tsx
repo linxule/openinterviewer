@@ -16,6 +16,7 @@ import {
 } from '@/lib/providerRegistry';
 import { CONSENT_TEXT_PLACEHOLDER, CONSENT_TEXT_PLACEHOLDER_ERROR } from '@/lib/consentText';
 import { Button, Coordinate, Icon, Label, Notice, Rule } from '@/components/ui';
+import { useSetTrailingCrumb } from '@/components/shell/breadcrumb';
 import {
   UUID_V4,
   adoptCreateIdempotencyKey,
@@ -95,6 +96,8 @@ const StudySetup: React.FC = () => {
   const [openSections, setOpenSections] = useState<string[]>([]);
   const isEditing = (id: string) => !documentMode || openSections.includes(id);
   const openSection = (id: string) => setOpenSections((open) => (open.includes(id) ? open : [...open, id]));
+  // A saved study is a document with a name; the breadcrumb should say so rather than "New study".
+  useSetTrailingCrumb(documentMode && draft.name.trim() ? draft.name.trim() : null);
 
   // Config status (API keys)
   const [configStatus, setConfigStatus] = useState<ConfigStatus | null>(null);

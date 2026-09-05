@@ -22,19 +22,21 @@ export function BreadcrumbProvider({ children }: { children: ReactNode }) {
 function useBreadcrumbContext(): BreadcrumbContextValue {
   const ctx = useContext(BreadcrumbContext);
   if (!ctx) {
-    throw new Error('useSetTrailingCrumb must be used within a BreadcrumbProvider');
+    throw new Error('Breadcrumb must be used within a BreadcrumbProvider');
   }
   return ctx;
 }
 
 export function useSetTrailingCrumb(label: string | null) {
-  const { setTrailing } = useBreadcrumbContext();
+  // Tolerant of rendering outside the shell (unit tests mount screens bare):
+  // with no provider there is no breadcrumb to name, so this is a no-op.
+  const ctx = useContext(BreadcrumbContext);
+  const setTrailing = ctx?.setTrailing;
   useEffect(() => {
+    if (!setTrailing) return;
     setTrailing(label);
     return () => setTrailing(null);
-    // Re-run whenever the caller's label changes; setTrailing is stable.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [label]);
+  }, [label, setTrailing]);
 }
 
 interface CrumbItem {
@@ -64,7 +66,7 @@ function buildTrail(pathname: string, trailing: string | null): CrumbItem[] {
   if (pathname === '/setup') {
     return [
       { label: 'Studies', href: '/studies' },
-      { label: 'New study', href: null },
+      { label: trailing ?? 'New study', href: null },
     ];
   }
 

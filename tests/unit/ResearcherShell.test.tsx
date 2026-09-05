@@ -12,6 +12,7 @@ vi.mock('next/navigation', () => ({
 }));
 
 import ResearcherShell from '@/components/shell/ResearcherShell';
+import { useSetTrailingCrumb } from '@/components/shell/breadcrumb';
 
 beforeEach(() => {
   navigation.pathname = '/studies';
@@ -75,6 +76,23 @@ describe('ResearcherShell', () => {
     expect(within(breadcrumb).getByText('abc123')).toBeInTheDocument();
     expect(within(breadcrumb).queryByText('Studies')).not.toBeInTheDocument();
     expect(within(breadcrumb).getByRole('link', { name: 'Interviews' })).toHaveAttribute('href', '/dashboard');
+  });
+
+  it('names a saved study in the /setup breadcrumb, and says "New study" when nothing names it', () => {
+    navigation.pathname = '/setup';
+    function NamedDocument() {
+      useSetTrailingCrumb('Returning to saved research');
+      return <span>content</span>;
+    }
+    const { unmount } = render(<ResearcherShell><NamedDocument /></ResearcherShell>);
+    let breadcrumb = screen.getByRole('navigation', { name: 'Breadcrumb' });
+    expect(within(breadcrumb).getByText('Returning to saved research')).toBeInTheDocument();
+    expect(within(breadcrumb).queryByText('New study')).not.toBeInTheDocument();
+    unmount();
+
+    render(<ResearcherShell>content</ResearcherShell>);
+    breadcrumb = screen.getByRole('navigation', { name: 'Breadcrumb' });
+    expect(within(breadcrumb).getByText('New study')).toBeInTheDocument();
   });
 
   it('shows the "Your keys · your database" line', () => {
