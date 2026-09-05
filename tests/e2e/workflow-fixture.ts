@@ -12,8 +12,15 @@ const synthesis = {
   themes: [{ theme: 'Remembering context', frequency: 1, evidenceRefs: [{ quote: ANSWER, turnIndex: 2 }] }],
   contradictions: [], keyInsights: [INSIGHT], bottomLine: INSIGHT,
 };
+export const UNSAID = 'I never write anything down about a document.';
 const aggregate = {
-  commonThemes: [{ theme: 'Remembering context', frequency: 2, representativeQuotes: [ANSWER] }],
+  commonThemes: [{
+    theme: 'Remembering context', frequency: 2,
+    quoteRefs: [
+      { interviewIndex: 1, turnIndex: 2, quote: ANSWER },
+      { interviewIndex: 2, turnIndex: 2, quote: UNSAID },
+    ],
+  }],
   divergentViews: [], keyFindings: ['Both participants keep contextual notes.'],
   researchImplications: ['Investigate when notes are written.'], bottomLine: 'Context notes help both participants resume work.',
 };

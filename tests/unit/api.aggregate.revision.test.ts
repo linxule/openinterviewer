@@ -51,8 +51,15 @@ const synthesis = {
   bottomLine: 'Participants need clearer ownership.',
 };
 
+// The provider's post-validation return shape: quote *claims*, positioned by
+// interviewIndex into the route's own array — never a free-text quote and
+// never an interview id (Slice L). interviewIndex 1 is always resolvable
+// against these fixtures' two-or-more current-revision interviews.
 const aggregate = {
-  commonThemes: [{ theme: 'Trust', frequency: 2, representativeQuotes: ['A', 'B'] }],
+  commonThemes: [{
+    theme: 'Trust', frequency: 2,
+    quoteRefs: [{ interviewIndex: 1, turnIndex: 1, quote: 'A' }],
+  }],
   divergentViews: [],
   keyFindings: ['Trust is central'],
   researchImplications: ['Clarify ownership'],

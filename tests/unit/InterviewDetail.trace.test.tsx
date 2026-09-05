@@ -18,10 +18,10 @@ vi.mock('@/services/storageService', async (importOriginal) => {
 import { BreadcrumbProvider } from '@/components/shell/breadcrumb';
 import InterviewDetail from '@/components/InterviewDetail';
 
-function renderInterviewDetail() {
+function renderInterviewDetail(turn?: string) {
   return render(
     <BreadcrumbProvider>
-      <InterviewDetail interviewId="interview-trace" studyId="study-trace" />
+      <InterviewDetail interviewId="interview-trace" studyId="study-trace" turn={turn} />
     </BreadcrumbProvider>
   );
 }
@@ -197,5 +197,26 @@ describe('InterviewDetail trace surface', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Analysis' }));
     expect(container.querySelectorAll('svg').length).toBe(0);
+  });
+
+  it('rendering with turn="2" (L11) puts the Transcript tab in view, focuses turn 2, and rings it', async () => {
+    renderInterviewDetail('2');
+    await screen.findByText('What made you decide to open it today?');
+
+    await waitFor(() => {
+      expect(document.activeElement?.id).toBe('turn-2');
+    });
+    expect(document.activeElement?.classList.contains('ring-2')).toBe(true);
+  });
+
+  it('an out-of-range, non-numeric, or absent turn focuses nothing and sets no ring', async () => {
+    for (const turn of ['99', 'abc', undefined]) {
+      const { unmount } = renderInterviewDetail(turn);
+      await screen.findByText('What made you decide to open it today?');
+
+      expect(document.activeElement?.id ?? '').not.toMatch(/^turn-/);
+      expect(document.querySelector('.ring-2')).toBeNull();
+      unmount();
+    }
   });
 });

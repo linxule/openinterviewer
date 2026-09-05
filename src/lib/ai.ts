@@ -10,6 +10,7 @@ import {
   AIInterviewResponse,
   QuestionProgress,
   AggregateSynthesisResult,
+  AggregateSynthesisProviderPayload,
   AIProviderType,
 } from '@/types';
 import type { FollowupStudy } from './providerValidation';
@@ -45,10 +46,7 @@ export interface AIProvider {
     studyConfig: StudyConfig,
     syntheses: SynthesisResult[],
     interviewCount: number
-  ): Promise<ProviderResult<Omit<AggregateSynthesisResult,
-    'studyId' | 'studyRevision' | 'interviewIds' | 'interviewCount' | 'aiProvider' | 'aiModel' | 'generatedAt'
-    | 'requestedAiModel' | 'routedProvider'
-  >>>;
+  ): Promise<ProviderResult<AggregateSynthesisProviderPayload>>;
 
   generateFollowupStudy(
     parentConfig: StudyConfig,

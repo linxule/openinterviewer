@@ -146,6 +146,36 @@ describe('follow-up synthesis provenance', () => {
     });
   });
 
+  it('accepts a resolved aggregate whose refs carry a server-stamped interviewId (Slice L)', async () => {
+    const resolvedAggregate = {
+      ...aggregate,
+      commonThemes: [{
+        theme: 'Trust', frequency: 2,
+        quoteRefs: [{ quote: 'A trusted answer.', turnIndex: 2, interviewId: 'interview-a' }],
+      }],
+    };
+
+    const response = await POST(request(resolvedAggregate), { params: Promise.resolve({ id: 'study-followup' }) });
+
+    expect(response.status).toBe(200);
+    expect(generateFollowupStudy).toHaveBeenCalled();
+  });
+
+  it('rejects an unresolved aggregate carrying interviewIndex instead of interviewId before calling a provider', async () => {
+    const unresolvedAggregate = {
+      ...aggregate,
+      commonThemes: [{
+        theme: 'Trust', frequency: 2,
+        quoteRefs: [{ quote: 'A trusted answer.', turnIndex: 2, interviewIndex: 1 }],
+      }],
+    };
+
+    const response = await POST(request(unresolvedAggregate), { params: Promise.resolve({ id: 'study-followup' }) });
+
+    expect(response.status).toBe(400);
+    expect(generateFollowupStudy).not.toHaveBeenCalled();
+  });
+
   it('preserves signed aggregate provenance when a study has no explicit provider', async () => {
     delete parentStudy.config.aiProvider;
     delete parentStudy.config.aiModel;

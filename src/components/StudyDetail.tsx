@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { StoredStudy, StoredInterview, AggregateSynthesisResult } from '@/types';
 import type { ParticipantLinkMetadata } from '@/lib/participantLinks';
@@ -14,6 +14,7 @@ import {
 import { Button, Coordinate, Icon, Label, Notice, Rule, Tabs } from '@/components/ui';
 import { AggregateReading, ProvenanceFooter } from '@/components/SynthesisReading';
 import { shortInterviewId } from '@/lib/interviewId';
+import { buildAggregateInterviewIndex } from '@/lib/evidence';
 import { useSetTrailingCrumb } from '@/components/shell/breadcrumb';
 
 interface StudyDetailProps {
@@ -33,6 +34,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [aggregateSynthesis, setAggregateSynthesis] = useState<AggregateSynthesisResult | null>(null);
+  const [aggregateOpenNotes, setAggregateOpenNotes] = useState<Record<string, boolean>>({});
   const [isGeneratingAggregate, setIsGeneratingAggregate] = useState(false);
   const [isGeneratingFollowup, setIsGeneratingFollowup] = useState(false);
   const [isTogglingLinks, setIsTogglingLinks] = useState(false);
@@ -49,6 +51,11 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
   const [isReconciling, setIsReconciling] = useState(false);
 
   useSetTrailingCrumb(study?.config.name ?? null);
+
+  // Stable participant numbering (ascending createdAt, id tiebreak) — the
+  // record every aggregate citation is checked against, and per Ruling 2 the
+  // source of the register's row number below (not the newest-first index).
+  const interviewIndex = useMemo(() => buildAggregateInterviewIndex(interviews), [interviews]);
 
   const loadParticipantLinks = useCallback(async () => {
     setLinksLoading(true);
@@ -258,7 +265,10 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
       if (!response.ok) {
         throw new Error(data.error || 'Failed to generate synthesis');
       }
-      if (data.synthesis) setAggregateSynthesis(data.synthesis);
+      if (data.synthesis) {
+        setAggregateSynthesis(data.synthesis);
+        setAggregateOpenNotes({});
+      }
     } catch (error) {
       console.error('Error generating aggregate synthesis:', error);
       alert(error instanceof Error ? error.message : 'Failed to generate synthesis');
@@ -464,7 +474,14 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
               </p>
             ) : aggregateSynthesis ? (
               <div className="mt-6 space-y-6">
-                <AggregateReading synthesis={aggregateSynthesis} />
+                <AggregateReading
+                  synthesis={aggregateSynthesis}
+                  interviewIndex={interviewIndex}
+                  openNotes={aggregateOpenNotes}
+                  onNoteOpenChange={(themeIndex, refIndex, next) =>
+                    setAggregateOpenNotes((prev) => ({ ...prev, [`${themeIndex}:${refIndex}`]: next }))
+                  }
+                />
 
                 <div className="border-t border-ink-300 pt-4">
                   <Button
@@ -546,6 +563,9 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                     .slice(0, 3)
                     .map(f => f.value)
                     .join(' • ');
+                  // Stable under append (Ruling 2): the row's number is the
+                  // participant number, not the newest-first array position.
+                  const participantNumber = interviewIndex.get(interview.id)?.participantNumber ?? index + 1;
                   return (
                     <tr
                       key={interview.id}
@@ -559,14 +579,14 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                         <button
                           type="button"
                           data-row-primary
-                          aria-label={`View interview ${index + 1}`}
+                          aria-label={`View interview ${participantNumber}`}
                           onClick={(e) => {
                             e.stopPropagation();
                             router.push(`/dashboard/interview/${interview.id}?studyId=${encodeURIComponent(studyId)}`);
                           }}
                           className="text-left font-sans text-[14px] font-medium text-ink-900 underline-offset-2 hover:text-action hover:underline"
                         >
-                          {extractedFields || `Interview ${index + 1}`}
+                          {extractedFields || `Interview ${participantNumber}`}
                         </button>
                         {interview.synthesis?.bottomLine && (
                           <p className="line-clamp-1 text-[13px] text-ink-500">{interview.synthesis.bottomLine}</p>

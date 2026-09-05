@@ -23,6 +23,69 @@ import {
   SynthesisResult
 } from '@/types';
 
+// Aggregate citation catalogue (Slice L). The aggregate model is shown no
+// speech at all today; this catalogue is built from quotes a PREVIOUS
+// per-interview synthesis already tied to a turn, so the aggregate model can
+// only ever select a position in it, never compose a quote of its own.
+export const MAX_AGGREGATE_QUOTE_REFS = 3;    // == aggregateSynthesisResponseSchema maxItems
+const CATALOGUE_PASSES = 3;                   // at most 3 entries offered per interview
+const CATALOGUE_CHAR_BUDGET = 40_000;         // rendered characters, all interviews combined
+
+interface CatalogueEntry {
+  turnIndex: number;
+  quote: string;
+}
+
+function collectInterviewEntries(synthesis: SynthesisResult): CatalogueEntry[] {
+  const seen = new Set<string>();
+  const entries: CatalogueEntry[] = [];
+  for (const theme of synthesis.themes) {
+    for (const ref of theme.evidenceRefs ?? []) {
+      const key = `${ref.turnIndex} ${ref.quote}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      entries.push({ turnIndex: ref.turnIndex, quote: ref.quote });
+    }
+  }
+  return entries;
+}
+
+function renderCatalogueLine(interviewIndex: number, entry: CatalogueEntry): string {
+  return `[${interviewIndex}.${entry.turnIndex}] "${entry.quote}"`;
+}
+
+/**
+ * Round-robin over interviews, not a prefix of them: pass k appends each
+ * interview's k-th remaining entry, in interview order, so a study large
+ * enough to exhaust the budget still gives every interview its first quote
+ * before any interview gets its second (L4.1). Returns one rendered block
+ * per interview, aligned to `syntheses`' index.
+ */
+function buildCatalogueBlocks(syntheses: SynthesisResult[]): string[] {
+  const perInterview = syntheses.map(collectInterviewEntries);
+  const rendered: string[][] = perInterview.map(() => []);
+  let budgetUsed = 0;
+
+  passes:
+  for (let pass = 0; pass < CATALOGUE_PASSES; pass++) {
+    for (let i = 0; i < perInterview.length; i++) {
+      const entry = perInterview[i][pass];
+      if (!entry) continue;
+      const line = renderCatalogueLine(i + 1, entry);
+      const cost = line.length + 1; // +1 for the newline joining this line to the block
+      if (budgetUsed + cost > CATALOGUE_CHAR_BUDGET) break passes;
+      rendered[i].push(line);
+      budgetUsed += cost;
+    }
+  }
+
+  return rendered.map((lines) => (
+    lines.length > 0
+      ? `Citable quotes:\n${lines.join('\n')}`
+      : 'Citable quotes: none available for this interview.'
+  ));
+}
+
 /**
  * Build the synthesis/analysis prompt
  *
@@ -133,6 +196,7 @@ export const buildAggregateSynthesisPrompt = (
   interviewCount: number
 ): string => {
   // Format individual syntheses for aggregate analysis
+  const catalogueBlocks = buildCatalogueBlocks(syntheses);
   const synthesesText = syntheses.map((s, i) => `
 --- Interview ${i + 1} ---
 Key Themes: ${s.themes.map(t => t.theme).join(', ')}
@@ -141,6 +205,7 @@ Revealed Preferences: ${s.revealedPreferences.join('; ')}
 Contradictions: ${s.contradictions.join('; ') || 'None identified'}
 Key Insights: ${s.keyInsights.join('; ')}
 Bottom Line: ${s.bottomLine}
+${catalogueBlocks[i]}
 `).join('\n');
 
   return `Analyze ${interviewCount} research interviews to identify cross-participant patterns.
@@ -164,7 +229,20 @@ Look for:
 - Areas of consensus vs disagreement
 - Surprising or unexpected patterns
 - Connections between different themes
-- Evidence that supports or challenges the research question`;
+- Evidence that supports or challenges the research question
+
+CITING EVIDENCE:
+Every quote you attach to a common theme must be one of the CITABLE QUOTES
+listed above. For each common theme, provide 0-3 citations in "quoteRefs".
+Each citation has:
+- "interviewIndex": the first number in the [i.t] tag of the entry you chose.
+- "turnIndex": the second number in that tag.
+- "quote": the text of that entry, copied character-for-character, without the
+  surrounding quotation marks.
+Do not write a quote of your own. Do not merge two entries into one. Do not
+adjust wording, spelling, punctuation, or capitalization. If no listed quote
+supports a theme, return an empty "quoteRefs" array — that is honest; an
+invented quote is not.`;
 };
 
 /**
@@ -177,7 +255,9 @@ Expected output structure:
     {
       "theme": "Theme name",
       "frequency": 3,
-      "representativeQuotes": ["Example evidence from different interviews"]
+      "quoteRefs": [
+        { "interviewIndex": 1, "turnIndex": 7, "quote": "Exact text of a citable quote" }
+      ]
     }
   ],
   "divergentViews": [

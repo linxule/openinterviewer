@@ -14,7 +14,7 @@ import { getStudyChecked, getStudyInterviewsChecked } from '@/lib/kv';
 import { mapCollectionLoad, mapStudyLoad } from '@/lib/ownedStudies';
 import { AggregateSynthesisResult, StudyConfig } from '@/types';
 import { readBoundedJsonObject } from '@/lib/requestBody';
-import { validateAggregateSynthesisPayload } from '@/lib/providerValidation';
+import { validateResolvedAggregateSynthesis } from '@/lib/providerValidation';
 import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
 import { providerErrorResponse } from '@/lib/providerErrors';
 import { verifyAggregateSynthesisReceipt } from '@/lib/synthesisReceipt';
@@ -76,7 +76,7 @@ export async function POST(
     }
     let providerSynthesis;
     try {
-      providerSynthesis = validateAggregateSynthesisPayload(rawSynthesis);
+      providerSynthesis = validateResolvedAggregateSynthesis(rawSynthesis);
     } catch {
       return NextResponse.json({ error: 'Missing or invalid synthesis data' }, { status: 400 });
     }

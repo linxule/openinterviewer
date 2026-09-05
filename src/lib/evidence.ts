@@ -6,7 +6,7 @@
 // real record. Runs at render time, from the record, every time (A5.4); its
 // verdict is never stored.
 
-import { EvidenceRef, InterviewMessage, SynthesisTheme } from '@/types';
+import { AggregateTheme, EvidenceRef, InterviewMessage, SynthesisResult, SynthesisTheme } from '@/types';
 
 const MIN_QUOTE_CHARS = 4;
 const MAX_QUOTE_SEGMENTS = 6;
@@ -25,7 +25,8 @@ export type UnverifiedReason =
   | 'too-short'        // fewer than MIN_QUOTE_CHARS normalized characters
   | 'no-turn'          // turnIndex out of range for this transcript
   | 'wrong-speaker'    // the cited turn is not a participant turn
-  | 'not-found';       // the quote is not in the cited turn
+  | 'not-found'        // the quote is not in the cited turn
+  | 'no-record';       // aggregate only: interviewId names no loaded interview
 
 // ============================================
 // Normalization
@@ -307,6 +308,134 @@ export function resolveThemeEvidence(theme: SynthesisTheme, transcript: Intervie
       .map((span) => turn.content.slice(span.start, span.end))
       .join(' … ');
     return { ref, match, quotedFromRecord };
+  });
+
+  return { kind: 'refs', entries };
+}
+
+// ============================================
+// Aggregate citations (Slice L)
+// ============================================
+
+/**
+ * Returns a copy of `synthesis` in which every evidenceRef that does not
+ * locate in `transcript` is dropped, and every surviving ref's `quote` is
+ * replaced by the record's own characters. Legacy themes (those carrying
+ * `evidence`) are returned unchanged, by identity.
+ */
+export function withRecordBackedEvidence(
+  synthesis: SynthesisResult,
+  transcript: InterviewMessage[],
+): SynthesisResult {
+  const themes = synthesis.themes.map((theme) => {
+    if (theme.evidence !== undefined) {
+      return theme;
+    }
+
+    const refs = Array.isArray(theme.evidenceRefs) ? theme.evidenceRefs : [];
+    const evidenceRefs: EvidenceRef[] = [];
+    for (const ref of refs) {
+      const match = resolveEvidenceRef(ref, transcript);
+      if (match.status !== 'verified') continue;
+      const turn = transcript[ref.turnIndex - 1];
+      const quotedFromRecord = match.spans
+        .map((span) => turn.content.slice(span.start, span.end))
+        .join(' … ');
+      evidenceRefs.push({
+        quote: quotedFromRecord,
+        turnIndex: ref.turnIndex,
+        ...(ref.interviewId !== undefined ? { interviewId: ref.interviewId } : {}),
+      });
+    }
+
+    return { ...theme, evidenceRefs };
+  });
+
+  return { ...synthesis, themes };
+}
+
+export interface AggregateInterviewEntry {
+  participantNumber: number;
+  transcript: InterviewMessage[];
+}
+export type AggregateInterviewIndex = ReadonlyMap<string, AggregateInterviewEntry>;
+
+/** Stable 1-based participant numbering: ascending createdAt, ties broken by id. */
+export function buildAggregateInterviewIndex(
+  interviews: readonly { id: string; createdAt: number; transcript: InterviewMessage[] }[],
+): AggregateInterviewIndex {
+  const sorted = [...interviews].sort((a, b) => {
+    if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt;
+    if (a.id < b.id) return -1;
+    if (a.id > b.id) return 1;
+    return 0;
+  });
+
+  const index = new Map<string, AggregateInterviewEntry>();
+  sorted.forEach((interview, i) => {
+    index.set(interview.id, { participantNumber: i + 1, transcript: interview.transcript });
+  });
+  return index;
+}
+
+/** `P01`, `P02`, … `P100`. Two-digit minimum, never truncated. */
+export function participantLabel(participantNumber: number): string {
+  return `P${String(participantNumber).padStart(2, '0')}`;
+}
+
+export type AggregateEvidenceEntry = {
+  ref: EvidenceRef;
+  match: EvidenceMatch;
+  quotedFromRecord: string | null;
+  /** null when the ref's interviewId is not in the index. */
+  participantNumber: number | null;
+};
+
+export type AggregateThemeEvidenceView =
+  | { kind: 'legacy'; quotes: string[] }
+  | { kind: 'refs'; entries: AggregateEvidenceEntry[] }
+  | { kind: 'none' };
+
+/**
+ * Resolves an aggregate theme's citations against the study's loaded
+ * interviews. Never throws. If a malformed theme somehow carries both
+ * representativeQuotes and quoteRefs, legacy wins — fail closed toward "no
+ * citation" rather than risk rendering wine over an unverifiable claim.
+ */
+export function resolveAggregateThemeEvidence(
+  theme: AggregateTheme,
+  index: AggregateInterviewIndex,
+): AggregateThemeEvidenceView {
+  if (theme?.representativeQuotes !== undefined) {
+    return { kind: 'legacy', quotes: theme.representativeQuotes };
+  }
+
+  const refs = Array.isArray(theme?.quoteRefs) ? theme.quoteRefs : [];
+  if (refs.length === 0) {
+    return { kind: 'none' };
+  }
+
+  const entries: AggregateEvidenceEntry[] = refs.map((ref) => {
+    const entry = ref?.interviewId !== undefined ? index.get(ref.interviewId) : undefined;
+    if (!entry) {
+      return {
+        ref,
+        match: { status: 'unverified', reason: 'no-record' },
+        quotedFromRecord: null,
+        participantNumber: null,
+      };
+    }
+
+    const match = resolveEvidenceRef(ref, entry.transcript);
+    if (match.status !== 'verified') {
+      return { ref, match, quotedFromRecord: null, participantNumber: entry.participantNumber };
+    }
+
+    const turn = entry.transcript[ref.turnIndex - 1];
+    const quotedFromRecord = match.spans
+      .map((span) => turn.content.slice(span.start, span.end))
+      .join(' … ');
+    return { ref, match, quotedFromRecord, participantNumber: entry.participantNumber };
   });
 
   return { kind: 'refs', entries };
