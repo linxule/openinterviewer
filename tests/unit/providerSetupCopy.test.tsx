@@ -95,20 +95,21 @@ describe('provider setup guidance', () => {
     fireEvent.click(screen.getByRole('button', { name: /how to get an openrouter api key/i }));
 
     expect(screen.getByText(/pricing, free-tier availability, and rate limits vary/i)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'rate-limit documentation' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /^rate-limit documentation/ })).toHaveAttribute(
       'href',
       'https://ai.google.dev/gemini-api/docs/rate-limits',
     );
+    expect(screen.getByRole('link', { name: /^rate-limit documentation/ })).toHaveAccessibleName(/opens in a new tab/);
     expect(screen.getByText(/credits, billing requirements, pricing, and usage limits vary/i)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'current pricing documentation' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /^current pricing documentation/ })).toHaveAttribute(
       'href',
       'https://platform.claude.com/docs/en/about-claude/pricing',
     );
-    expect(screen.getByRole('link', { name: 'API pricing' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /^API pricing/ })).toHaveAttribute(
       'href',
       'https://developers.openai.com/api/docs/pricing',
     );
-    expect(screen.getByRole('link', { name: 'privacy and ZDR documentation' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /^privacy and ZDR documentation/ })).toHaveAttribute(
       'href',
       'https://openrouter.ai/docs/guides/features/zdr',
     );
@@ -129,7 +130,7 @@ describe('provider setup guidance', () => {
     fireEvent.click(screen.getByRole('button', { name: /how to set up upstash redis/i }));
 
     expect(screen.getByText(/plan availability, pricing, and limits vary/i)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Redis pricing' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /^Redis pricing/ })).toHaveAttribute(
       'href',
       'https://upstash.com/pricing/redis',
     );
@@ -146,26 +147,27 @@ describe('provider setup guidance', () => {
     fireEvent.click(screen.getByRole('button', { name: 'OpenRouter setup guide' }));
     fireEvent.click(screen.getByRole('button', { name: 'Setup guide' }));
 
-    expect(screen.getByRole('link', { name: 'rate-limit documentation' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /^rate-limit documentation/ })).toHaveAttribute(
       'href',
       'https://ai.google.dev/gemini-api/docs/rate-limits',
     );
-    expect(screen.getByRole('link', { name: 'current pricing documentation' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /^current pricing documentation/ })).toHaveAttribute(
       'href',
       'https://platform.claude.com/docs/en/about-claude/pricing',
     );
-    expect(screen.getByRole('link', { name: 'API pricing' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /^API pricing/ })).toHaveAttribute(
       'href',
       'https://developers.openai.com/api/docs/pricing',
     );
-    expect(screen.getByRole('link', { name: 'privacy and ZDR documentation' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /^privacy and ZDR documentation/ })).toHaveAttribute(
       'href',
       'https://openrouter.ai/docs/guides/features/zdr',
     );
-    expect(screen.getByRole('link', { name: 'Redis pricing' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /^Redis pricing/ })).toHaveAttribute(
       'href',
       'https://upstash.com/pricing/redis',
     );
+    expect(screen.getByRole('link', { name: /^Redis pricing/ })).toHaveAccessibleName(/opens in a new tab/);
     expect(document.body).not.toHaveTextContent(/10 req\/min|250 req\/day|\$5 free|15-100 interviews|256 MB|500K commands/i);
   });
 

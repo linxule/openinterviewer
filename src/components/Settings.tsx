@@ -3,129 +3,17 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import type { AIProviderType, ResearcherProfile } from '@/types';
-import { PROVIDER_OPTIONS } from '@/lib/providerRegistry';
-import { Button, Coordinate, Label, Rule } from '@/components/ui';
+import { Button, Coordinate, ExternalLink, Label, Notice, Rule } from '@/components/ui';
+import {
+  AI_PROVIDER_SETUP,
+  emptyValidationState,
+  initialProviderRecord,
+  providerInputId,
+  ValidationBadge,
+  type CredentialTarget,
+  type ValidationState,
+} from '@/components/providerSetup';
 import { cn } from '@/lib/cn';
-
-interface ValidationState {
-  loading: boolean;
-  valid: boolean | null;
-  error: string | null;
-}
-
-type ProviderProfileField = 'hasGeminiKey' | 'hasAnthropicKey' | 'hasOpenAiKey' | 'hasOpenRouterKey';
-type CredentialField = 'geminiApiKey' | 'anthropicApiKey' | 'openAiApiKey' | 'openRouterApiKey';
-type CredentialTarget = 'gemini' | 'anthropic' | 'openai' | 'openrouter';
-
-type ProviderSetup = {
-  id: AIProviderType;
-  label: string;
-  statusLabel: string;
-  inputId: string;
-  placeholder: string;
-  profileField: ProviderProfileField;
-  credentialField: CredentialField;
-  clearTarget: CredentialTarget;
-  keyUrl: string;
-  keyUrlLabel: string;
-  steps: string[];
-  guidance: React.ReactNode;
-};
-
-const providerLabel = (provider: AIProviderType) =>
-  PROVIDER_OPTIONS.find(option => option.id === provider)!.label;
-
-const AI_PROVIDER_SETUP: ProviderSetup[] = [
-  {
-    id: 'gemini',
-    label: providerLabel('gemini'),
-    statusLabel: 'Gemini Key',
-    inputId: 'settings-gemini-key',
-    placeholder: 'AIza...',
-    profileField: 'hasGeminiKey',
-    credentialField: 'geminiApiKey',
-    clearTarget: 'gemini',
-    keyUrl: 'https://aistudio.google.com/apikey',
-    keyUrlLabel: 'Google AI Studio',
-    steps: ['Sign in and create an API key', 'Copy the new key'],
-    guidance: (
-      <>
-        Pricing, free-tier availability, and rate limits vary by model and account. Check Google&apos;s current{' '}
-        <a href="https://ai.google.dev/gemini-api/docs/pricing" target="_blank" rel="noopener noreferrer" className="text-action underline underline-offset-2">pricing</a>
-        {' '}and{' '}
-        <a href="https://ai.google.dev/gemini-api/docs/rate-limits" target="_blank" rel="noopener noreferrer" className="text-action underline underline-offset-2">rate-limit documentation</a>.
-      </>
-    ),
-  },
-  {
-    id: 'claude',
-    label: providerLabel('claude'),
-    statusLabel: 'Claude Key',
-    inputId: 'settings-claude-key',
-    placeholder: 'sk-ant-...',
-    profileField: 'hasAnthropicKey',
-    credentialField: 'anthropicApiKey',
-    clearTarget: 'anthropic',
-    keyUrl: 'https://console.anthropic.com/settings/keys',
-    keyUrlLabel: 'Anthropic Console',
-    steps: ['Sign in or create an account', 'Create an API key', 'Copy the new key'],
-    guidance: (
-      <>
-        Credits, billing requirements, pricing, and usage limits vary. Check the Anthropic console and{' '}
-        <a href="https://platform.claude.com/docs/en/about-claude/pricing" target="_blank" rel="noopener noreferrer" className="text-action underline underline-offset-2">current pricing documentation</a>.
-      </>
-    ),
-  },
-  {
-    id: 'openai',
-    label: providerLabel('openai'),
-    statusLabel: 'OpenAI Key',
-    inputId: 'settings-openai-key',
-    placeholder: 'sk-...',
-    profileField: 'hasOpenAiKey',
-    credentialField: 'openAiApiKey',
-    clearTarget: 'openai',
-    keyUrl: 'https://platform.openai.com/api-keys',
-    keyUrlLabel: 'OpenAI Platform',
-    steps: ['Sign in or create an account', 'Create a new secret key', 'Copy the key before leaving the page'],
-    guidance: (
-      <>
-        API billing, model access, and usage limits depend on your account. Check OpenAI&apos;s current{' '}
-        <a href="https://developers.openai.com/api/docs/pricing" target="_blank" rel="noopener noreferrer" className="text-action underline underline-offset-2">API pricing</a>.
-      </>
-    ),
-  },
-  {
-    id: 'openrouter',
-    label: providerLabel('openrouter'),
-    statusLabel: 'OpenRouter Key',
-    inputId: 'settings-openrouter-key',
-    placeholder: 'sk-or-v1-...',
-    profileField: 'hasOpenRouterKey',
-    credentialField: 'openRouterApiKey',
-    clearTarget: 'openrouter',
-    keyUrl: 'https://openrouter.ai/settings/keys',
-    keyUrlLabel: 'OpenRouter Keys',
-    steps: ['Sign in or create an account', 'Create an API key', 'Copy the new key'],
-    guidance: (
-      <>
-        OpenRouter routes requests to upstream inference providers. OpenInterviewer requires compatible
-        zero-data-retention routes and denies provider data collection; requests fail if those restrictions cannot
-        be met. Review OpenRouter&apos;s{' '}
-        <a href="https://openrouter.ai/docs/guides/features/zdr" target="_blank" rel="noopener noreferrer" className="text-action underline underline-offset-2">privacy and ZDR documentation</a>.
-      </>
-    ),
-  },
-];
-
-const emptyValidationState = (): ValidationState => ({ loading: false, valid: null, error: null });
-
-const initialProviderRecord = <T,>(create: () => T): Record<AIProviderType, T> => ({
-  gemini: create(),
-  claude: create(),
-  openai: create(),
-  openrouter: create(),
-});
 
 const StatusIcon: React.FC<{ configured: boolean }> = ({ configured }) => (
   <span
@@ -135,23 +23,6 @@ const StatusIcon: React.FC<{ configured: boolean }> = ({ configured }) => (
     {configured ? 'Configured' : 'Not configured'}
   </span>
 );
-
-const ValidationBadge: React.FC<{ state: ValidationState; label: string }> = ({ state, label }) => {
-  if (state.loading) return (
-    <span role="status" aria-live="polite">
-      <span aria-hidden="true" className="font-sans text-[13px] text-ink-500">Testing…</span>
-      <span className="sr-only">Testing {label} key</span>
-    </span>
-  );
-  if (state.valid === true) return (
-    <span role="status" aria-live="polite">
-      <span aria-hidden="true" className="font-sans text-[13px] text-success">Valid</span>
-      <span className="sr-only">{label} key validated</span>
-    </span>
-  );
-  if (state.valid === false) return <span aria-hidden="true" className="font-sans text-[13px] text-error">Invalid</span>;
-  return null;
-};
 
 const Settings: React.FC = () => {
   const router = useRouter();
@@ -377,14 +248,12 @@ const Settings: React.FC = () => {
             <Button type="button" variant="quiet" onClick={() => router.push('/self-host')}>
               Open self-host guide
             </Button>
-            <a
+            <ExternalLink
               href="/api/health/ready"
-              target="_blank"
-              rel="noreferrer"
               className="rounded border border-ink-300 bg-transparent px-4 py-2 font-sans text-[15px] font-medium text-ink-900 transition-colors hover:bg-paper-2"
             >
               View readiness status
-            </a>
+            </ExternalLink>
           </div>
         </div>
       </div>
@@ -407,7 +276,7 @@ const Settings: React.FC = () => {
               <div key={provider.id} className="flex items-center gap-2">
                 <StatusIcon configured={Boolean(profile[provider.profileField])} />
                 <span className="font-sans text-[13px] text-ink-700">
-                  {provider.statusLabel}
+                  {`${provider.shortLabel} Key`}
                   <span className="sr-only">
                     {profile[provider.profileField] ? ': configured' : ': not configured'}
                   </span>
@@ -428,8 +297,7 @@ const Settings: React.FC = () => {
       )}
 
       {profile && !profile.onboardingComplete && (
-        <div className="mb-6 border-l-2 border-ink-500 bg-paper-2 px-4 py-3">
-          <Label>Setup incomplete</Label>
+        <Notice tone="neutral" eyebrow="Setup incomplete" className="mb-6">
           <p className="mt-1 text-[13px] text-ink-700">
             Storage and at least one valid AI key are required before studies can run.
           </p>
@@ -440,7 +308,7 @@ const Settings: React.FC = () => {
           >
             Finish setup
           </button>
-        </div>
+        </Notice>
       )}
 
       <div className="mb-6 bg-paper-2 p-5">
@@ -471,12 +339,13 @@ const Settings: React.FC = () => {
             const validation = providerValidation[provider.id];
             const configured = Boolean(profile?.[provider.profileField]);
             const guideOpen = providerGuideOpen[provider.id];
-            const errorId = `${provider.inputId}-error`;
+            const inputId = providerInputId('settings', provider);
+            const errorId = `${inputId}-error`;
             return (
               <div key={provider.id}>
                 <div className="mb-1 flex items-center justify-between">
                   <label
-                    htmlFor={provider.inputId}
+                    htmlFor={inputId}
                     className="font-sans text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500"
                   >
                     {provider.label} API Key
@@ -497,7 +366,7 @@ const Settings: React.FC = () => {
                 </div>
                 <div className="flex flex-col gap-2 sm:flex-row">
                   <input
-                    id={provider.inputId}
+                    id={inputId}
                     type="password"
                     value={providerKeys[provider.id]}
                     onChange={(event) => {
@@ -543,9 +412,9 @@ const Settings: React.FC = () => {
                       <ol className="list-inside list-decimal space-y-1 text-ink-700">
                         <li>
                           Open{' '}
-                          <a href={provider.keyUrl} target="_blank" rel="noopener noreferrer" className="text-action underline underline-offset-2">
+                          <ExternalLink href={provider.keyUrl} className="text-action underline underline-offset-2">
                             {provider.keyUrlLabel}
-                          </a>
+                          </ExternalLink>
                         </li>
                         {provider.steps.map(instruction => <li key={instruction}>{instruction}</li>)}
                       </ol>
@@ -643,7 +512,7 @@ const Settings: React.FC = () => {
             {redisGuideOpen && (
               <div className="mt-2 space-y-2 bg-paper-2 p-4 text-[13px]">
                 <ol className="list-inside list-decimal space-y-1 text-ink-700">
-                  <li>Go to <a href="https://console.upstash.com" target="_blank" rel="noopener noreferrer" className="text-action underline underline-offset-2">console.upstash.com</a> and sign in</li>
+                  <li>Go to <ExternalLink href="https://console.upstash.com" className="text-action underline underline-offset-2">console.upstash.com</ExternalLink> and sign in</li>
                   <li>Click &quot;+ Create Database&quot; and choose the plan that fits your expected usage</li>
                   <li>After creation, go to database details → REST API section</li>
                   <li>Copy REST URL (https://*.upstash.io) and REST Token</li>
@@ -654,7 +523,7 @@ const Settings: React.FC = () => {
                 </div>
                 <p className="text-ink-500">
                   Plan availability, pricing, and limits vary. Check Upstash&apos;s current{' '}
-                  <a href="https://upstash.com/pricing/redis" target="_blank" rel="noopener noreferrer" className="text-action underline underline-offset-2">Redis pricing</a>.
+                  <ExternalLink href="https://upstash.com/pricing/redis" className="text-action underline underline-offset-2">Redis pricing</ExternalLink>.
                 </p>
               </div>
             )}
@@ -664,11 +533,11 @@ const Settings: React.FC = () => {
 
       {/* Partial Redis warning */}
       {((redisUrl && !redisToken) || (!redisUrl && redisToken)) && (
-        <div className="mb-6 border-l-2 border-error bg-paper-2 px-4 py-3">
+        <Notice tone="error" className="mb-6">
           <p className="text-[13px] text-ink-700">
             Both Redis URL and token are required to update storage credentials.
           </p>
-        </div>
+        </Notice>
       )}
 
       <Rule />
@@ -692,7 +561,7 @@ const Settings: React.FC = () => {
       </div>
 
       {profile && (
-        <div id="account" className="mt-8 border-l-2 border-error bg-paper-2 px-4 py-4">
+        <Notice tone="error" id="account" className="mt-8 py-4">
           <h2 className="mb-2 font-sans text-[15px] font-semibold text-ink-900">Delete platform account</h2>
           <p className="mb-4 font-sans text-[13px] leading-[20px] text-ink-700">
             This removes your hosted account, encrypted credentials, and platform routing metadata.
@@ -723,7 +592,7 @@ const Settings: React.FC = () => {
               {lifecycleBusy === 'account' ? 'Deleting…' : 'Delete account'}
             </Button>
           </div>
-        </div>
+        </Notice>
       )}
     </div>
   );

@@ -58,6 +58,14 @@ describe('Onboarding step reskin', () => {
     fireEvent.click(screen.getByRole('button', { name: /get started/i }));
     expect(container.querySelectorAll('svg')).toHaveLength(0);
 
+    fireEvent.click(screen.getByRole('button', { name: /how to get an openai api key/i }));
+    const guideSvgs = Array.from(container.querySelectorAll('svg'));
+    expect(guideSvgs.length).toBeGreaterThan(0);
+    for (const svg of guideSvgs) {
+      expect(svg).toHaveAttribute('aria-hidden', 'true');
+      expect(svg.closest('a, button')).not.toBeNull();
+    }
+
     fireEvent.change(screen.getByLabelText(/OpenAI API Key/i), {
       target: { value: 'sk-openai-test' },
     });
@@ -78,5 +86,15 @@ describe('Onboarding step reskin', () => {
 
     await screen.findByText("You're all set!");
     expect(container.querySelectorAll('svg')).toHaveLength(0);
+  });
+
+  it('never wraps a step in a bordered bg-paper-1 card (rules over boxes)', () => {
+    const { container } = render(<Onboarding />);
+    container.querySelectorAll('*').forEach((el) => {
+      const className = typeof el.className === 'string' ? el.className : '';
+      if (className.includes('bg-paper-1')) {
+        expect(className).not.toMatch(/\bborder\b/);
+      }
+    });
   });
 });

@@ -89,7 +89,7 @@ beforeEach(() => {
 async function openAnalysisTab() {
   const view = renderInterviewDetail();
   await screen.findByText('What made you decide to open it today?');
-  fireEvent.click(screen.getByRole('button', { name: 'Analysis' }));
+  fireEvent.click(screen.getByRole('tab', { name: 'Analysis' }));
   return view;
 }
 
@@ -195,7 +195,7 @@ describe('InterviewDetail trace surface', () => {
     await screen.findByText('What made you decide to open it today?');
     expect(container.querySelectorAll('svg').length).toBe(0);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Analysis' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Analysis' }));
     expect(container.querySelectorAll('svg').length).toBe(0);
   });
 });

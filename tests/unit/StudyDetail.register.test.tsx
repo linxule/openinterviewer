@@ -164,4 +164,20 @@ describe('StudyDetail register table', () => {
     expect(toggle).toHaveAttribute('aria-checked', 'true');
     expect(toggle).toHaveTextContent('ENABLED');
   });
+
+  it('pluralizes a one-interview study header as "1 interview"', async () => {
+    const config = makeStudyConfig({ id: 'study-single', name: 'Single Interview Study' });
+    storageMock.getStudy.mockResolvedValue(
+      makeStoredStudy({ id: 'study-single', config, revision: 1, interviewCount: 1 })
+    );
+    storageMock.getStudyInterviews.mockResolvedValue([
+      makeStoredInterview({ id: 'interview-single', studyId: 'study-single' }),
+    ]);
+
+    renderStudyDetail('study-single');
+
+    await screen.findByRole('heading', { name: 'Single Interview Study' });
+    expect(screen.getByText('1 interview')).toBeInTheDocument();
+    expect(screen.queryByText('1 interviews')).not.toBeInTheDocument();
+  });
 });

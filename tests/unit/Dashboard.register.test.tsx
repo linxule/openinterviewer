@@ -60,6 +60,18 @@ beforeEach(() => {
 });
 
 describe('Dashboard register table', () => {
+  it('renders the "Interviews" heading, not "Interview Dashboard"', async () => {
+    storageMock.readAllInterviews.mockResolvedValue({
+      status: 'ok',
+      value: { interviews: [], pendingStudies: [] },
+    });
+
+    renderDashboard();
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'Interviews' })).toBeInTheDocument();
+    expect(screen.queryByText('Interview Dashboard')).not.toBeInTheDocument();
+  });
+
   it('renders the expected column headers', async () => {
     const interview = makeStoredInterview({ studyName: 'Study Alpha' });
     storageMock.readAllInterviews.mockResolvedValue({

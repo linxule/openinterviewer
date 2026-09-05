@@ -5,15 +5,20 @@ import { useRouter } from 'next/navigation';
 import { StoredInterview } from '@/types';
 import { getInterview, StudyOperationPendingError } from '@/services/storageService';
 import ReactMarkdown from 'react-markdown';
-import { Button, Citation, Coordinate, Label, Rule, Turn, Verbatim } from '@/components/ui';
+import { Button, Coordinate, Label, Tabs, Turn, type TabItem } from '@/components/ui';
+import { SynthesisReading, ProvenanceFooter } from '@/components/SynthesisReading';
 import { useSetTrailingCrumb } from '@/components/shell/breadcrumb';
 import { cn } from '@/lib/cn';
-import { resolveThemeEvidence } from '@/lib/evidence';
 
 interface InterviewDetailProps {
   interviewId: string;
   studyId?: string;
 }
+
+const INTERVIEW_TABS = [
+  { id: 'transcript', label: 'Transcript' },
+  { id: 'analysis', label: 'Analysis' },
+] as const satisfies readonly TabItem<'transcript' | 'analysis'>[];
 
 const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId }) => {
   const router = useRouter();
@@ -26,7 +31,6 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId 
 
   useSetTrailingCrumb(interview?.studyName ?? null);
 
-  const isNoteOpen = (themeIndex: number, refIndex: number) => openNotes[`${themeIndex}:${refIndex}`] ?? true;
   const setNoteOpen = (themeIndex: number, refIndex: number, next: boolean) =>
     setOpenNotes((prev) => ({ ...prev, [`${themeIndex}:${refIndex}`]: next }));
 
@@ -150,11 +154,15 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId 
             : 'This interview may have been deleted.'}
         </p>
         <Button variant="quiet" onClick={() => router.push('/dashboard')} className="mt-4">
-          Back to Dashboard
+          Back to Interviews
         </Button>
       </div>
     );
   }
+
+  const savedAt = Number.isFinite(interview.completedAt)
+    ? new Date(interview.completedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    : 'time unrecorded';
 
   return (
     <div>
@@ -163,7 +171,7 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId 
         <h1 className="font-sans text-[24px] font-semibold leading-[32px] text-ink-900">{interview.studyName}</h1>
         <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
           <Coordinate>{formatDuration(interview.createdAt, interview.completedAt)}</Coordinate>
-          <span className="font-sans text-[13px] text-ink-500">{interview.transcript.length} messages</span>
+          <span className="font-sans text-[13px] text-ink-500">{interview.transcript.length} message{interview.transcript.length !== 1 ? 's' : ''}</span>
           <Coordinate>
             {new Date(interview.createdAt).toLocaleDateString('en-US', {
               month: 'short',
@@ -199,228 +207,68 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId 
         </div>
       )}
 
-      {/* Tabs */}
-      <div className="mb-8 grid grid-cols-2 border-b border-ink-300">
-        <button
-          type="button"
-          onClick={() => switchTab('transcript')}
-          className={`min-h-11 border-b-2 px-2 py-3 text-center font-sans text-[15px] font-medium ${
-            activeTab === 'transcript'
-              ? 'border-action text-action'
-              : 'border-transparent text-ink-500 hover:text-ink-900'
-          }`}
-        >
-          Transcript
-        </button>
-        <button
-          type="button"
-          onClick={() => switchTab('analysis')}
-          className={`min-h-11 border-b-2 px-2 py-3 text-center font-sans text-[15px] font-medium ${
-            activeTab === 'analysis'
-              ? 'border-action text-action'
-              : 'border-transparent text-ink-500 hover:text-ink-900'
-          }`}
-        >
-          Analysis
-        </button>
-      </div>
-
-      {/* Tab Content */}
-      {activeTab === 'transcript' ? (
-        <ol className="space-y-8">
-          {interview.transcript.map((msg, i) => (
-            <li
-              key={i}
-              id={`turn-${i + 1}`}
-              tabIndex={-1}
-              className={cn(
-                'focus:outline-none',
-                tracedTurn === i + 1 && 'ring-2 trace-ring ring-offset-4 ring-offset-paper-0'
-              )}
-            >
-              <div className="flex items-baseline justify-between gap-3">
-                <Label>{msg.role === 'ai' ? 'Interviewer' : 'Participant'}</Label>
-                <Coordinate>{new Date(msg.timestamp).toLocaleTimeString()}</Coordinate>
-              </div>
-              <Turn
-                speaker={msg.role === 'ai' ? 'interviewer' : 'participant'}
-                turnIndex={i + 1}
-                showCoordinate
-                className="mt-1"
+      <Tabs
+        items={INTERVIEW_TABS}
+        value={activeTab}
+        onValueChange={switchTab}
+        label="Interview sections"
+        className="mb-8 grid-cols-2"
+      >
+        {activeTab === 'transcript' ? (
+          <ol className="space-y-8">
+            {interview.transcript.map((msg, i) => (
+              <li
+                key={i}
+                id={`turn-${i + 1}`}
+                tabIndex={-1}
+                className={cn(
+                  'focus:outline-none',
+                  tracedTurn === i + 1 && 'ring-2 trace-ring ring-offset-4 ring-offset-paper-0'
+                )}
               >
-                <div className="prose-verbatim">
-                  <ReactMarkdown>{msg.content}</ReactMarkdown>
+                <div className="flex items-baseline justify-between gap-3">
+                  <Label>{msg.role === 'ai' ? 'Interviewer' : 'Participant'}</Label>
+                  <Coordinate>{new Date(msg.timestamp).toLocaleTimeString()}</Coordinate>
                 </div>
-              </Turn>
-            </li>
-          ))}
-        </ol>
-      ) : (
-        <div>
-          {interview.synthesis ? (
-            <div className="space-y-6">
-              {/* Bottom line */}
-              <section>
-                <Label className="block">Bottom line</Label>
-                <Verbatim
-                  as="p"
-                  className="mt-3 max-w-measure text-[24px] font-normal leading-[36px] text-ink-900 md:text-[28px] md:leading-[40px]"
+                <Turn
+                  speaker={msg.role === 'ai' ? 'interviewer' : 'participant'}
+                  turnIndex={i + 1}
+                  showCoordinate
+                  className="mt-1"
                 >
-                  {interview.synthesis.bottomLine}
-                </Verbatim>
-              </section>
-              <Rule className="mt-8" />
-
-              {/* Stated vs Revealed */}
-              <section>
-                <h3 className="font-sans text-[15px] font-semibold text-ink-900">Stated vs Revealed</h3>
-                <div className="mt-4 md:grid md:grid-cols-2 md:gap-10">
-                  <div>
-                    <Label>What they said</Label>
-                    <ul>
-                      {interview.synthesis.statedPreferences.map((item, i) => (
-                        <li
-                          key={i}
-                          className="border-t border-ink-300 py-2 font-sans text-[15px] leading-[24px] text-ink-700"
-                        >
-                          {item}
-                        </li>
-                      ))}
-                    </ul>
+                  <div className="prose-verbatim">
+                    <ReactMarkdown>{msg.content}</ReactMarkdown>
                   </div>
-                  <div className="mt-6 md:mt-0">
-                    <Label>What behavior revealed</Label>
-                    <ul>
-                      {interview.synthesis.revealedPreferences.map((item, i) => (
-                        <li
-                          key={i}
-                          className="border-t border-ink-300 py-2 font-sans text-[15px] leading-[24px] text-ink-700"
-                        >
-                          {item}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
-              </section>
-              <Rule className="mt-8" />
-
-              {/* Key Themes */}
-              <section>
-                <h3 className="font-sans text-[15px] font-semibold text-ink-900">Key Themes</h3>
-                <ul className="mt-4">
-                  {interview.synthesis.themes.map((theme, i) => {
-                    const view = resolveThemeEvidence(theme, interview.transcript);
-                    return (
-                      <li key={i} className="border-t border-ink-300 py-4">
-                        <p className="font-sans text-[15px] font-medium text-ink-900">
-                          {theme.theme}
-                          {view.kind === 'refs'
-                            ? view.entries.map((entry, j) =>
-                                entry.match.status === 'verified' ? (
-                                  <Citation
-                                    key={j}
-                                    label={`t.${entry.ref.turnIndex}`}
-                                    open={isNoteOpen(i, j)}
-                                    onOpenChange={(next) => setNoteOpen(i, j, next)}
-                                    className="ml-1"
-                                  >
-                                    <span className="block text-[19px] leading-[31px] text-ink-900">
-                                      {`“${entry.quotedFromRecord}”`}
-                                    </span>
-                                    <Coordinate className="mt-2 block">
-                                      {`Participant · turn ${entry.ref.turnIndex}`}
-                                    </Coordinate>
-                                    <button
-                                      type="button"
-                                      onClick={() => traceToTurn(entry.ref.turnIndex)}
-                                      className="mt-2 block font-sans text-[13px] text-action underline underline-offset-2"
-                                    >
-                                      Read in full transcript
-                                    </button>
-                                  </Citation>
-                                ) : null
-                              )
-                            : null}
-                        </p>
-                        {view.kind === 'legacy' ? (
-                          <Verbatim
-                            as="p"
-                            className="mt-2 max-w-measure border-l border-ink-300 pl-4 text-[17px] leading-[28px] text-ink-700"
-                          >
-                            {view.text}
-                          </Verbatim>
-                        ) : null}
-                        {view.kind === 'refs'
-                          ? view.entries
-                              .filter((entry) => entry.match.status !== 'verified')
-                              .map((entry, j) => (
-                                <Verbatim
-                                  key={j}
-                                  as="p"
-                                  className="mt-2 max-w-measure border-l border-ink-300 pl-4 text-[17px] leading-[28px] text-ink-700"
-                                >
-                                  {entry.ref.quote}
-                                </Verbatim>
-                              ))
-                          : null}
-                      </li>
-                    );
-                  })}
-                </ul>
-              </section>
-
-              {/* Contradictions */}
-              {interview.synthesis.contradictions.length > 0 && (
-                <section className="border-t border-ink-300 pt-5">
-                  <h3 className="font-sans text-[15px] font-semibold text-ink-900">Potential Contradictions</h3>
-                  <ul className="mt-3 space-y-2">
-                    {interview.synthesis.contradictions.map((c, i) => (
-                      <li key={i} className="max-w-measure font-sans text-[15px] leading-[24px] text-ink-700">
-                        {c}
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              )}
-
-              {/* Additional Insights */}
-              <section>
-                <h3 className="font-sans text-[15px] font-semibold text-ink-900">Additional Insights</h3>
-                <ul className="mt-4">
-                  {interview.synthesis.keyInsights.map((insight, i) => (
-                    <li
-                      key={i}
-                      className="border-t border-ink-300 py-2 font-sans text-[15px] leading-[24px] text-ink-700"
-                    >
-                      {insight}
-                    </li>
-                  ))}
-                </ul>
-              </section>
-
-              {/* Provenance footer */}
-              <footer className="mt-10 border-t border-ink-300 pt-4">
-                <Coordinate className="block">
-                  {`Synthesized by ${interview.aiModel ?? 'unrecorded model'} · study rev ${
-                    interview.studyRevision ?? '—'
-                  } · ${new Date(interview.completedAt).toLocaleDateString('en-US', {
-                    month: 'short',
-                    day: 'numeric',
-                    year: 'numeric'
-                  })} · receipt ${
-                    interview.synthesis._receipt ? interview.synthesis._receipt.slice(0, 12) : 'unsigned'
-                  }`}
-                </Coordinate>
-              </footer>
-            </div>
-          ) : (
-            <p className="font-sans text-[15px] text-ink-500">
-              No analysis available for this interview.
-            </p>
-          )}
-        </div>
-      )}
+                </Turn>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <div>
+            {interview.synthesis ? (
+              <div className="space-y-6">
+                <SynthesisReading
+                  synthesis={interview.synthesis}
+                  transcript={interview.transcript}
+                  openNotes={openNotes}
+                  onNoteOpenChange={setNoteOpen}
+                  onTraceToTurn={traceToTurn}
+                />
+                <ProvenanceFooter
+                  model={interview.aiModel}
+                  studyRevision={interview.studyRevision}
+                  timestamp={savedAt}
+                  verb="saved"
+                />
+              </div>
+            ) : (
+              <p className="font-sans text-[15px] text-ink-500">
+                No analysis available for this interview.
+              </p>
+            )}
+          </div>
+        )}
+      </Tabs>
     </div>
   );
 };
