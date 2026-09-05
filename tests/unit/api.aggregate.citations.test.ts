@@ -24,6 +24,7 @@ const kvMock = vi.hoisted(() => ({
   getStudy: vi.fn(),
   getStudyChecked: vi.fn(),
   getStudyInterviewsChecked: vi.fn(),
+  saveStudyAggregate: vi.fn(),
 }));
 vi.mock('@/lib/kv', () => kvMock);
 
@@ -40,7 +41,14 @@ vi.mock('@/lib/providers', async (importOriginal) => {
 const platformRateLimitMock = vi.hoisted(() => ({ hostedAiRateLimitResponse: vi.fn() }));
 vi.mock('@/lib/platformAiRateLimit', () => platformRateLimitMock);
 
-const receiptMock = vi.hoisted(() => ({ createAggregateSynthesisReceipt: vi.fn() }));
+const receiptMock = vi.hoisted(() => ({
+  createAggregateSynthesisReceipt: vi.fn(),
+  aggregateProvenance: vi.fn(() => ({
+    aiProvider: 'gemini',
+    aiModel: GEMINI_SYNTHESIS_MODEL,
+    requestedAiModel: GEMINI_SYNTHESIS_MODEL,
+  })),
+}));
 vi.mock('@/lib/synthesisReceipt', () => receiptMock);
 
 import { POST } from '@/app/api/synthesis/aggregate/route';
@@ -101,6 +109,7 @@ beforeEach(() => {
   );
   platformRateLimitMock.hostedAiRateLimitResponse.mockResolvedValue(null);
   receiptMock.createAggregateSynthesisReceipt.mockResolvedValue('aggregate-receipt');
+  kvMock.saveStudyAggregate.mockResolvedValue('saved');
   kvMock.getStudyChecked.mockImplementation(async (id: string) => {
     const study = await kvMock.getStudy(id);
     return study ? { status: 'found', study } : { status: 'not-found' };
@@ -145,12 +154,16 @@ describe('POST /api/synthesis/aggregate — resolution and telemetry (Slice L)',
     expect(quoteRefs[0].interviewIndex).toBeUndefined();
     expect(body.synthesis.commonThemes[0].representativeQuotes).toBeUndefined();
 
-    expect(receiptMock.createAggregateSynthesisReceipt).toHaveBeenCalledWith(
+    // The route no longer signs a receipt (Slice N): the resolved record is
+    // persisted directly. This is the same assertion the receipt call used
+    // to pin, retargeted at the write that replaced it.
+    expect(kvMock.saveStudyAggregate).toHaveBeenCalledWith(
       expect.objectContaining({
         commonThemes: [expect.objectContaining({
           quoteRefs: [expect.objectContaining({ interviewId: 'interview-a' })],
         })],
       }),
+      expect.anything(),
     );
 
     // The provider saw a record-backed catalogue: A's drifted ref dropped and

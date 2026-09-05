@@ -397,8 +397,23 @@ export interface AggregateSynthesisResult {
   researchImplications: string[];
   bottomLine: string;           // One-paragraph summary of all interviews
   generatedAt: number;
+  /**
+   * Server clock at the moment this aggregate was written to the researcher's
+   * database. Present exactly when the record is stored: a response carrying
+   * no `savedAt` was generated and not saved, and the footer says so. Never
+   * client-supplied.
+   */
+  savedAt?: number;
   _receipt?: string;            // Server-signed aggregate content and provenance
 }
+
+/**
+ * The aggregate as it is stored: the verified facts, no receipt, plus the
+ * server's write timestamp. `save/route.ts:138` is the precedent — a signature
+ * whose job is discharged is not part of the record it secured.
+ */
+export type StoredAggregateSynthesis =
+  Omit<AggregateSynthesisResult, '_receipt'> & { savedAt: number };
 
 /** What an AIProvider returns for an aggregate: ids are not resolved yet. */
 export type AggregateSynthesisProviderPayload = Omit<

@@ -595,6 +595,7 @@ describe('standalone delete receipts and persist-guard', () => {
         `study-operation-result:delete:${STUDY_ID}:0`,
         `study-mutation-guard:${STUDY_ID}`,
         `study-persisting:${STUDY_ID}`,
+        `study-aggregate:${STUDY_ID}`,
       ]);
       expect(memory.lastKeys).not.toContain('all-studies');
       expect(memory.lastArgs[5]).toBe('hosted');

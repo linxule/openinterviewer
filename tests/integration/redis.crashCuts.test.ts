@@ -28,10 +28,12 @@ import {
   createStudyAtomic,
   deleteStudy,
   encodeMutationGuard,
+  getStudyAggregateChecked,
   persistCompletedInterview,
   persistCompletedInterviewFinish,
   persistCompletedInterviewP1,
   replaceStudyConfigAtomic,
+  saveStudyAggregate,
   setStudyLinksEnabled,
   STUDY_VALUE_PREFIX,
   type PersistingGuard,
@@ -530,6 +532,90 @@ describe('standalone create/delete W1/W2/S1–S4/D1–D4', () => {
     expect((await deleteStudy(d4.id, redis)).status).toBe('unavailable');
     coverFaultCut('D4');
     expect((await deleteStudy(d4.id, redis)).status).toBe('deleted');
+  });
+
+  function fixtureAggregate(studyId: string) {
+    return {
+      studyId,
+      studyRevision: 1,
+      interviewIds: ['interview-x'],
+      interviewCount: 1,
+      aiProvider: 'gemini' as const,
+      aiModel: 'gemini-2.5-flash',
+      commonThemes: [],
+      divergentViews: [],
+      keyFindings: ['A finding'],
+      researchImplications: ['An implication'],
+      bottomLine: 'A bottom line.',
+      generatedAt: NOW,
+      savedAt: NOW,
+    };
+  }
+
+  it('round-trips the aggregate and deletes it with the study', async () => {
+    const study = makeStoredStudy({ id: uuid(), createdAt: NOW, updatedAt: NOW });
+    expect(await createStudyAtomic(study, redis)).toBe('created');
+    const aggregate = fixtureAggregate(study.id);
+
+    expect(await saveStudyAggregate(aggregate, redis)).toBe('saved');
+    expect(await getStudyAggregateChecked(study.id, redis)).toEqual({ status: 'found', aggregate });
+    expect(await getStudyAggregateChecked(uuid(), redis)).toEqual({ status: 'not-found' });
+
+    expect((await deleteStudy(study.id, redis)).status).toBe('deleted');
+    expect(await redis.get(`study-aggregate:${study.id}`)).toBeNull();
+  });
+
+  it('D5 cuts after the aggregate DEL, leaving the study present and the aggregate gone', async () => {
+    const study = makeStoredStudy({ id: uuid(), createdAt: NOW, updatedAt: NOW });
+    expect(await createStudyAtomic(study, redis)).toBe('created');
+    const aggregate = fixtureAggregate(study.id);
+    expect(await saveStudyAggregate(aggregate, redis)).toBe('saved');
+
+    armCut('D5');
+    expect((await deleteStudy(study.id, redis)).status).toBe('unavailable');
+    expect(await redis.get(`study:${study.id}`)).toBeTruthy();
+    expect(await redis.get(`study-aggregate:${study.id}`)).toBeNull();
+    coverFaultCut('D5');
+
+    expect((await deleteStudy(study.id, redis)).status).toBe('deleted');
+  });
+
+  it('a refused delete (conflict) keeps the aggregate', async () => {
+    const study = makeStoredStudy({ id: uuid(), createdAt: NOW, updatedAt: NOW });
+    expect(await createStudyAtomic(study, redis)).toBe('created');
+    const aggregate = fixtureAggregate(study.id);
+    expect(await saveStudyAggregate(aggregate, redis)).toBe('saved');
+    await redis.sadd(`study-interviews:${study.id}`, 'interview-x');
+
+    const result = await deleteStudy(study.id, redis);
+    expect(result.status).toBe('conflict');
+    expect(await getStudyAggregateChecked(study.id, redis)).toEqual({ status: 'found', aggregate });
+  });
+
+  it('accepts the current six-key hosted arity and refuses the pre-slice five-key shape', async () => {
+    const study = makeStoredStudy({ id: uuid(), createdAt: NOW, updatedAt: NOW });
+    expect(await createStudyAtomic(study, redis)).toBe('created');
+
+    const previousMode = process.env.DEPLOYMENT_MODE;
+    process.env.DEPLOYMENT_MODE = 'hosted';
+    try {
+      expect((await deleteStudy(study.id, redis)).status).toBe('deleted');
+    } finally {
+      process.env.DEPLOYMENT_MODE = previousMode;
+    }
+
+    const wire = await redis.eval(
+      DELETE_EMPTY_STUDY_SCRIPT,
+      [
+        `study:${uuid()}`,
+        `study-interviews:${uuid()}`,
+        `study-operation-result:${uuid()}`,
+        `study-mutation-guard:${uuid()}`,
+        `study-persisting:${uuid()}`,
+      ],
+      ['stub-id', 'stub-marker', 'stub-receipt', 'stub-guard', '1', 'hosted'],
+    );
+    expect(wire).toEqual(['oi:byos-unavailable']);
   });
 });
 

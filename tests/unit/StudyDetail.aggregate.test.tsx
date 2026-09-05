@@ -57,6 +57,48 @@ const aggregateFixture = {
   generatedAt: new Date('2026-01-02T10:00:00Z').getTime(),
 };
 
+type FetchOverrides = {
+  getAggregate?: () => Response | Promise<Response>;
+  postAggregate?: () => Response | Promise<Response>;
+  postFollowup?: (init?: RequestInit) => Response | Promise<Response>;
+};
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+function stubFetch(overrides: FetchOverrides = {}) {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes('/api/synthesis/aggregate') && init?.method === 'POST') {
+      return overrides.postAggregate
+        ? overrides.postAggregate()
+        : jsonResponse({ synthesis: aggregateFixture });
+    }
+    if (url.includes('/generate-followup') && init?.method === 'POST') {
+      return overrides.postFollowup
+        ? overrides.postFollowup(init)
+        : jsonResponse({
+          followUpConfig: {},
+          generation: {},
+          parentStudy: { id: 'study-aggregate', name: 'Aggregate Study' },
+        });
+    }
+    if (url.includes('/aggregate')) {
+      return overrides.getAggregate ? overrides.getAggregate() : jsonResponse({ aggregate: null });
+    }
+    if (url.includes('/participant-links')) {
+      return jsonResponse({ links: [], truncated: false });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   const config = makeStudyConfig({ id: 'study-aggregate', name: 'Aggregate Study' });
@@ -80,22 +122,7 @@ beforeEach(() => {
       ],
     }),
   ]);
-  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    if (url.includes('/api/synthesis/aggregate') && init?.method === 'POST') {
-      return new Response(JSON.stringify({ synthesis: aggregateFixture }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-    if (url.includes('/participant-links')) {
-      return new Response(JSON.stringify({ links: [], truncated: false }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-    throw new Error(`Unexpected fetch: ${url}`);
-  }));
+  stubFetch();
 });
 
 async function generateAggregate() {
@@ -132,7 +159,7 @@ describe('StudyDetail aggregate reading', () => {
     expect(quote.className).toMatch(/font-serif/);
   });
 
-  it('prints the honest footer with no receipt clause', async () => {
+  it('prints "not saved" when the aggregate route responds with no savedAt', async () => {
     await generateAggregate();
 
     const footer = screen.getByText(/^Synthesized by/);
@@ -142,26 +169,109 @@ describe('StudyDetail aggregate reading', () => {
   });
 
   it('omits the Divergent Views heading when divergentViews is empty, while Research Implications still renders', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes('/api/synthesis/aggregate') && init?.method === 'POST') {
-        return new Response(JSON.stringify({ synthesis: { ...aggregateFixture, divergentViews: [] } }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      if (url.includes('/participant-links')) {
-        return new Response(JSON.stringify({ links: [], truncated: false }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      throw new Error(`Unexpected fetch: ${url}`);
-    }));
+    stubFetch({ postAggregate: () => jsonResponse({ synthesis: { ...aggregateFixture, divergentViews: [] } }) });
 
     await generateAggregate();
 
     expect(screen.queryByRole('heading', { name: 'Divergent Views' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Research Implications' })).toBeInTheDocument();
+  });
+
+  it('renders a stored aggregate on mount, with no click, and reads "saved"', async () => {
+    stubFetch({
+      getAggregate: () => jsonResponse({
+        aggregate: { ...aggregateFixture, savedAt: new Date('2026-01-02T11:00:00Z').getTime() },
+      }),
+    });
+
+    renderStudyDetail('study-aggregate');
+    await screen.findByText('The aggregate bottom line.');
+
+    const footer = screen.getByText(/^Synthesized by/);
+    expect(footer.textContent).toMatch(/^Synthesized by .+ · study rev 4 · saved .+$/);
+    expect(footer.textContent).not.toMatch(/receipt/i);
+    expect(footer.textContent).not.toMatch(/unsigned/i);
+    expect(footer.textContent).not.toMatch(/not saved/);
+    expect(screen.getByRole('button', { name: 'Re-analyze All Interviews' })).toBeInTheDocument();
+  });
+
+  it('appends "covers N of M interviews" when a stored aggregate covers fewer than the eligible set', async () => {
+    storageMock.getStudyInterviews.mockResolvedValue([
+      makeStoredInterview({ id: 'interview-a', studyId: 'study-aggregate', studyRevision: 4, synthesis: {
+        statedPreferences: [], revealedPreferences: [], themes: [], contradictions: [], keyInsights: [], bottomLine: 'x',
+      } }),
+      makeStoredInterview({ id: 'interview-b', studyId: 'study-aggregate', studyRevision: 4, synthesis: {
+        statedPreferences: [], revealedPreferences: [], themes: [], contradictions: [], keyInsights: [], bottomLine: 'x',
+      } }),
+      makeStoredInterview({ id: 'interview-c', studyId: 'study-aggregate', studyRevision: 4, synthesis: {
+        statedPreferences: [], revealedPreferences: [], themes: [], contradictions: [], keyInsights: [], bottomLine: 'x',
+      } }),
+    ]);
+    stubFetch({
+      getAggregate: () => jsonResponse({
+        aggregate: { ...aggregateFixture, interviewCount: 2, savedAt: Date.now() },
+      }),
+    });
+
+    renderStudyDetail('study-aggregate');
+    await screen.findByText('The aggregate bottom line.');
+
+    const footer = screen.getByText(/^Synthesized by/);
+    expect(footer.textContent).toContain('· covers 2 of 3 interviews');
+  });
+
+  it('appends "study is now rev N" and disables follow-up when a stored aggregate is stale', async () => {
+    stubFetch({
+      getAggregate: () => jsonResponse({
+        aggregate: { ...aggregateFixture, studyRevision: 3, savedAt: Date.now() },
+      }),
+    });
+
+    renderStudyDetail('study-aggregate');
+    await screen.findByText('The aggregate bottom line.');
+
+    const footer = screen.getByText(/^Synthesized by/);
+    expect(footer.textContent).toContain('· study is now rev 4');
+    const followupButton = screen.getByRole('button', { name: 'Create Follow-up Study' });
+    expect(followupButton).toBeDisabled();
+    expect(screen.getByText(/^Re-analyze first:/)).toBeInTheDocument();
+  });
+
+  it('renders a stored aggregate even with fewer than two interviews, and hides the two-interview prompt', async () => {
+    storageMock.getStudyInterviews.mockResolvedValue([
+      makeStoredInterview({ id: 'interview-a', studyId: 'study-aggregate' }),
+    ]);
+    stubFetch({
+      getAggregate: () => jsonResponse({
+        aggregate: { ...aggregateFixture, savedAt: Date.now() },
+      }),
+    });
+
+    renderStudyDetail('study-aggregate');
+    await screen.findByText('The aggregate bottom line.');
+
+    expect(screen.queryByText('Need at least 2 interviews to generate aggregate analysis.')).not.toBeInTheDocument();
+  });
+
+  it('issues a follow-up POST with no body when the aggregate is current', async () => {
+    const fetchMock = stubFetch({
+      getAggregate: () => jsonResponse({
+        aggregate: { ...aggregateFixture, savedAt: Date.now() },
+      }),
+    });
+
+    renderStudyDetail('study-aggregate');
+    await screen.findByText('The aggregate bottom line.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create Follow-up Study' }));
+
+    await vi.waitFor(() => {
+      const followupCall = fetchMock.mock.calls.find(([input]) => String(input).includes('/generate-followup'));
+      expect(followupCall).toBeDefined();
+    });
+    const followupCall = fetchMock.mock.calls.find(([input]) => String(input).includes('/generate-followup'));
+    const init = followupCall?.[1] as RequestInit | undefined;
+    expect(init?.method).toBe('POST');
+    expect(init && 'body' in init).toBe(false);
   });
 });

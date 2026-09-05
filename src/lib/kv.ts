@@ -6,7 +6,7 @@ import type { RedisPort } from './redisPort';
 import { RedisCommitAmbiguousError } from './redisPort';
 import { getKVClient } from './kvClient';
 import { resolveDeploymentMode } from './mode';
-import { StoredInterview, StoredStudy } from '@/types';
+import { StoredInterview, StoredStudy, StoredAggregateSynthesis } from '@/types';
 import { HEX64, MAX_STUDY_REVISION, ok, UNAVAILABLE, type WireResult } from './wire/types';
 import { parseFamilyWire, parsePersistResult, parsePrefixedJson } from './wire/parse';
 import { parseStudyCasResult } from './wire/studyCas';
@@ -20,6 +20,8 @@ const STUDY_INDEX_PREFIX = 'study-interviews:';
 const STUDY_PREFIX = 'study:';
 const ALL_STUDIES_KEY = 'all-studies';
 const ALL_INTERVIEWS_KEY = 'all-interviews';
+export const STUDY_AGGREGATE_PREFIX = 'study-aggregate:';
+export const AGGREGATE_VALUE_PREFIX = 'oi:aggregate:';
 export const INTERVIEW_VALUE_PREFIX = 'oi:interview:';
 export const STUDY_VALUE_PREFIX = 'oi:study:';
 export const FINGERPRINT_VALUE_PREFIX = 'oi:fp:';
@@ -1326,6 +1328,87 @@ export async function getStudy(id: string, client?: RedisPort): Promise<StoredSt
   return result.status === 'found' ? result.study : null;
 }
 
+export function encodeAggregateValue(aggregate: StoredAggregateSynthesis): string {
+  return `${AGGREGATE_VALUE_PREFIX}${JSON.stringify(aggregate)}`;
+}
+
+/**
+ * A stored aggregate that does not decode is absent. The `studyId` check is a
+ * key/value mixup guard; the `_receipt` check is a structural refusal — a
+ * receipt in the record means something other than this route wrote it.
+ */
+function decodeStoredAggregate(value: unknown, studyId: string): StoredAggregateSynthesis | null {
+  const parsed = parsePrefixedJson(value, AGGREGATE_VALUE_PREFIX);
+  if (!parsed.ok) return null;
+  const rec = parsed.payload;
+  if (rec.studyId !== studyId) return null;
+  if ('_receipt' in rec) return null;
+  if (!Number.isSafeInteger(rec.studyRevision) || (rec.studyRevision as number) < 0) return null;
+  if (!Number.isSafeInteger(rec.savedAt) || !Number.isSafeInteger(rec.generatedAt)) return null;
+  if (!Array.isArray(rec.interviewIds) || rec.interviewIds.length === 0) return null;
+  if (rec.interviewIds.some(id => typeof id !== 'string' || id.length === 0 || id.length > 200)) return null;
+  if (rec.interviewCount !== rec.interviewIds.length) return null;
+  if (!Array.isArray(rec.commonThemes) || !Array.isArray(rec.divergentViews)) return null;
+  if (!Array.isArray(rec.keyFindings) || !Array.isArray(rec.researchImplications)) return null;
+  if (typeof rec.bottomLine !== 'string') return null;
+  if (typeof rec.aiProvider !== 'string' || typeof rec.aiModel !== 'string') return null;
+  return parsed.payload as unknown as StoredAggregateSynthesis;
+}
+
+export type AggregateLoadResult =
+  | { status: 'found'; aggregate: StoredAggregateSynthesis }
+  | { status: 'not-found' }
+  | { status: 'unavailable' };
+
+// Read the stored aggregate synthesis for a study, distinguishing "no
+// analysis yet" from "storage could not be read". There is no unchecked twin:
+// every caller is a request handler and must fail closed on `unavailable`.
+export async function getStudyAggregateChecked(
+  studyId: string,
+  client?: RedisPort,
+): Promise<AggregateLoadResult> {
+  try {
+    const kv = resolveClient(client);
+    const raw = await kv.get(`${STUDY_AGGREGATE_PREFIX}${studyId}`);
+    const decoded = decodeStoredAggregate(raw, studyId);
+    return decoded ? { status: 'found', aggregate: decoded } : { status: 'not-found' };
+  } catch (error) {
+    logRequestFailure({ event: 'kv.unavailable' }, error);
+    return { status: 'unavailable' };
+  }
+}
+
+/**
+ * The serialized ceiling for one stored aggregate. The same number as
+ * generate-followup's request bound (route.ts:50) — the largest aggregate this
+ * deployment has ever been willing to move over a wire. Provider caps allow a
+ * valid aggregate several megabytes wide (MAX_PROVIDER_LIST_ITEMS ×
+ * MAX_PROVIDER_TEXT), so a byte ceiling is load-bearing, not belt-and-braces.
+ */
+export const MAX_STORED_AGGREGATE_BYTES = 256_000;
+
+export type SaveAggregateResult = 'saved' | 'too-large' | 'unavailable';
+
+// Persist the aggregate synthesis for a study. One SET, no options, no TTL,
+// no Lua: a single-key SET of one string cannot leave a torn value. Latest
+// replaces; there is no history and no CAS (see slice-N-spec.md N12).
+export async function saveStudyAggregate(
+  aggregate: StoredAggregateSynthesis,
+  client?: RedisPort,
+): Promise<SaveAggregateResult> {
+  if (!STUDY_ID_TOKEN.test(aggregate.studyId)) return 'unavailable';
+  const value = encodeAggregateValue(aggregate);
+  if (new TextEncoder().encode(value).byteLength > MAX_STORED_AGGREGATE_BYTES) return 'too-large';
+  try {
+    const kv = resolveClient(client);
+    await kv.set(`${STUDY_AGGREGATE_PREFIX}${aggregate.studyId}`, value);
+    return 'saved';
+  } catch (error) {
+    logRequestFailure({ event: 'kv.unavailable' }, error);
+    return 'unavailable';
+  }
+}
+
 // Get all studies
 export async function getAllStudies(client?: RedisPort): Promise<StoredStudy[]> {
   const result = await getAllStudiesChecked(client);
@@ -1381,11 +1464,18 @@ local mode = ARGV[6]
 if mode ~= 'standalone' and mode ~= 'hosted' then
   return {'oi:byos-unavailable'}
 end
-if mode == 'hosted' and #KEYS ~= 5 then
+if mode == 'hosted' and #KEYS ~= 6 then
   return {'oi:byos-unavailable'}
 end
-if mode == 'standalone' and #KEYS ~= 6 then
+if mode == 'standalone' and #KEYS ~= 7 then
   return {'oi:byos-unavailable'}
+end
+
+local aggregateKey
+if mode == 'hosted' then
+  aggregateKey = KEYS[6]
+else
+  aggregateKey = KEYS[7]
 end
 
 local function cleanup_this_generation()
@@ -1454,6 +1544,14 @@ end
 if redis.call('SCARD', KEYS[2]) > 0 then
   return {'oi:conflict', 'oi:revision:0'}
 end
+
+-- The aggregate is a cache of a paid model call. Deleting it here means a
+-- refused delete (the study still has interviews) never destroys it, and the
+-- study record is never removed while its aggregate survives. A crash at D5
+-- leaves a live study without its cached analysis, which the researcher can
+-- regenerate; the reverse order would leave a value no code path can reach.
+redis.call('DEL', aggregateKey)
+-- fault cut D5: aggregate cache removed, study record still present
 
 if redis.call('EXISTS', KEYS[1]) == 0 then
   if mode == 'standalone' then
@@ -1558,6 +1656,7 @@ export async function deleteStudy(
           receiptKey(markerId),
           mutationGuardKey(id),
           persistingKey(id),
+          `${STUDY_AGGREGATE_PREFIX}${id}`,
         ]
       : [
           `${STUDY_PREFIX}${id}`,
@@ -1566,6 +1665,7 @@ export async function deleteStudy(
           receiptKey(markerId),
           mutationGuardKey(id),
           persistingKey(id),
+          `${STUDY_AGGREGATE_PREFIX}${id}`,
         ];
     const wire = await kv.eval(
       DELETE_EMPTY_STUDY_SCRIPT,

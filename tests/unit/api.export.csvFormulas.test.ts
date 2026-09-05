@@ -23,6 +23,7 @@ vi.mock('@/lib/researcherContext', () => contextMock);
 
 const kvMock = vi.hoisted(() => ({
   getAllInterviewsChecked: vi.fn(),
+  getStudyAggregateChecked: vi.fn().mockResolvedValue({ status: 'not-found' }),
 }));
 
 vi.mock('@/lib/kv', () => kvMock);
@@ -71,6 +72,9 @@ beforeEach(() => {
     authorized: true,
     context: { kvClient: {} },
   });
+  // vitest.config.mts sets mockReset: true, which wipes a hoisted
+  // mockResolvedValue before every test — so the default lives here instead.
+  kvMock.getStudyAggregateChecked.mockResolvedValue({ status: 'not-found' });
 });
 
 describe('GET /api/interviews/export summary.csv formula neutralization', () => {

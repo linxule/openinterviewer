@@ -6,6 +6,7 @@ import { StoredStudy, StoredInterview, AggregateSynthesisResult } from '@/types'
 import type { ParticipantLinkMetadata } from '@/lib/participantLinks';
 import {
   getStudy,
+  getStudyAggregate,
   getStudyInterviews,
   reconcileStudyOperations,
   ResearcherStorageUnavailableError,
@@ -57,6 +58,13 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
   // source of the register's row number below (not the newest-first index).
   const interviewIndex = useMemo(() => buildAggregateInterviewIndex(interviews), [interviews]);
 
+  // The same predicate the route filters on (aggregate/route.ts:72-74), so the
+  // count in the footer is the count a re-analysis would actually cover.
+  const eligibleInterviewCount = useMemo(
+    () => (study ? interviews.filter(i => i.studyRevision === study.revision && i.synthesis).length : 0),
+    [interviews, study],
+  );
+
   const loadParticipantLinks = useCallback(async () => {
     setLinksLoading(true);
     setLinksError(null);
@@ -90,12 +98,15 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
   const loadStudyData = useCallback(async () => {
     setLoading(true);
     try {
-      const [studyData, interviewData] = await Promise.all([
+      const [studyData, interviewData, aggregateData] = await Promise.all([
         getStudy(studyId),
-        getStudyInterviews(studyId)
+        getStudyInterviews(studyId),
+        getStudyAggregate(studyId),
       ]);
       setStudy(studyData);
       setInterviews(interviewData);
+      setAggregateSynthesis(aggregateData);
+      setAggregateOpenNotes({});
       setStorageUnavailable(null);
     } catch (error) {
       if (error instanceof StudyOperationPendingError) {
@@ -287,8 +298,6 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
     try {
       const response = await fetch(`/api/studies/${studyId}/generate-followup`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ synthesis: aggregateSynthesis })
       });
 
       const data = await response.json().catch(() => ({})) as {
@@ -388,6 +397,21 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
     { id: 'settings', label: 'Study settings' }
   ];
 
+  const aggregateSaved = aggregateSynthesis?.savedAt !== undefined;
+  const aggregateIsStale = Boolean(
+    study && aggregateSynthesis && aggregateSynthesis.studyRevision !== study.revision,
+  );
+  const aggregateNote = (() => {
+    if (!aggregateSynthesis) return undefined;
+    if (!aggregateSaved) return 'not saved — regenerate to refresh';
+    const facts: string[] = [];
+    if (aggregateSynthesis.interviewCount < eligibleInterviewCount) {
+      facts.push(`covers ${aggregateSynthesis.interviewCount} of ${eligibleInterviewCount} interviews`);
+    }
+    if (aggregateIsStale) facts.push(`study is now rev ${study!.revision}`);
+    return facts.length > 0 ? facts.join(' · ') : undefined;
+  })();
+
   return (
     <div>
       {/* Header */}
@@ -464,15 +488,13 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                 disabled={operationPending || isGeneratingAggregate || interviews.length < 2}
                 className="w-full sm:w-auto"
               >
-                {isGeneratingAggregate ? 'Analyzing...' : 'Analyze All Interviews'}
+                {isGeneratingAggregate
+                  ? 'Analyzing...'
+                  : aggregateSynthesis ? 'Re-analyze All Interviews' : 'Analyze All Interviews'}
               </Button>
             </div>
 
-            {interviews.length < 2 ? (
-              <p className="mt-3 text-[13px] text-ink-500">
-                Need at least 2 interviews to generate aggregate analysis.
-              </p>
-            ) : aggregateSynthesis ? (
+            {aggregateSynthesis ? (
               <div className="mt-6 space-y-6">
                 <AggregateReading
                   synthesis={aggregateSynthesis}
@@ -487,12 +509,14 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                   <Button
                     variant="quiet"
                     onClick={handleGenerateFollowup}
-                    disabled={operationPending || isGeneratingFollowup}
+                    disabled={operationPending || isGeneratingFollowup || aggregateIsStale}
                   >
                     {isGeneratingFollowup ? 'Generating...' : 'Create Follow-up Study'}
                   </Button>
                   <p className="mt-2 text-[13px] text-ink-500">
-                    Generate a new study based on gaps and patterns found in this analysis.
+                    {aggregateIsStale
+                      ? `Re-analyze first: this analysis was made at study rev ${aggregateSynthesis.studyRevision} and the study is now at rev ${study!.revision}.`
+                      : 'Generate a new study based on gaps and patterns found in this analysis.'}
                   </p>
                 </div>
 
@@ -500,14 +524,18 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                   model={aggregateSynthesis.aiModel}
                   studyRevision={aggregateSynthesis.studyRevision}
                   timestamp={
-                    Number.isFinite(aggregateSynthesis.generatedAt)
-                      ? formatDate(aggregateSynthesis.generatedAt)
+                    Number.isFinite(aggregateSaved ? aggregateSynthesis.savedAt : aggregateSynthesis.generatedAt)
+                      ? formatDate((aggregateSaved ? aggregateSynthesis.savedAt : aggregateSynthesis.generatedAt)!)
                       : 'time unrecorded'
                   }
-                  verb="generated"
-                  note="not saved — regenerate to refresh"
+                  verb={aggregateSaved ? 'saved' : 'generated'}
+                  note={aggregateNote}
                 />
               </div>
+            ) : interviews.length < 2 ? (
+              <p className="mt-3 text-[13px] text-ink-500">
+                Need at least 2 interviews to generate aggregate analysis.
+              </p>
             ) : (
               <p className="mt-3 text-[13px] text-ink-500">
                 Click &quot;Analyze All Interviews&quot; to generate cross-interview insights.

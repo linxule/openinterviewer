@@ -119,7 +119,8 @@ test('researcher creates a study; participants finalize; researcher reads, downl
   await expect(traceLink).toHaveAttribute('href', /turn=2/);
   await expect(page.getByText(UNSAID)).toBeVisible();
 
-  await expect(page.getByText(/not saved — regenerate to refresh/)).toBeVisible();
+  await expect(page.getByText(/· saved /)).toBeVisible();
+  expect(await page.locator('body').innerText()).not.toMatch(/not saved/);
   expect(await page.locator('body').innerText()).not.toMatch(/receipt (eyJ|unsigned)/);
 
   await traceLink.click();
@@ -127,6 +128,14 @@ test('researcher creates a study; participants finalize; researcher reads, downl
   const tracedTurn = page.locator('#turn-2');
   await expect(tracedTurn).toBeFocused();
   await expect(tracedTurn).toHaveClass(/trace-ring/);
+
+  // The stored analysis survives a reload with no further provider call: the
+  // whole point of persistence (slice-N-spec.md N14).
+  await page.goto(studyUrl);
+  await expect(page.getByText('Context notes help both participants resume work.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 't.2', exact: true })).toBeVisible();
+  await expect(page.getByText(/· saved /)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Re-analyze All Interviews', exact: true })).toBeVisible();
 
   expect(workflow.calls.filter(call => call.operation === 'aggregate')).toHaveLength(1);
   expect(workflow.calls.filter(call => call.operation === 'synthesis')).toHaveLength(3);

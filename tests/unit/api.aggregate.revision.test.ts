@@ -21,6 +21,7 @@ const kvMock = vi.hoisted(() => ({
   getStudyChecked: vi.fn(),
   getStudyInterviewsChecked: vi.fn(),
   isKVAvailable: vi.fn(),
+  saveStudyAggregate: vi.fn(),
 }));
 vi.mock('@/lib/kv', () => kvMock);
 
@@ -37,7 +38,13 @@ vi.mock('@/lib/providers', async (importOriginal) => {
 const platformRateLimitMock = vi.hoisted(() => ({ hostedAiRateLimitResponse: vi.fn() }));
 vi.mock('@/lib/platformAiRateLimit', () => platformRateLimitMock);
 
-const receiptMock = vi.hoisted(() => ({ createAggregateSynthesisReceipt: vi.fn() }));
+const receiptMock = vi.hoisted(() => ({
+  aggregateProvenance: vi.fn(() => ({
+    aiProvider: 'gemini',
+    aiModel: 'gemini-served',
+    requestedAiModel: 'gemini-requested',
+  })),
+}));
 vi.mock('@/lib/synthesisReceipt', () => receiptMock);
 
 import { POST } from '@/app/api/synthesis/aggregate/route';
@@ -83,8 +90,8 @@ beforeEach(() => {
     () => contextMock.getRequestContext(),
   );
   platformRateLimitMock.hostedAiRateLimitResponse.mockResolvedValue(null);
-  receiptMock.createAggregateSynthesisReceipt.mockResolvedValue('aggregate-receipt');
   kvMock.isKVAvailable.mockResolvedValue(true);
+  kvMock.saveStudyAggregate.mockResolvedValue('saved');
   kvMock.getStudyChecked.mockImplementation(async (id: string) => {
     const study = await kvMock.getStudy(id);
     return study ? { status: 'found', study } : { status: 'not-found' };
@@ -133,11 +140,62 @@ describe('aggregate synthesis revision provenance', () => {
       aiProvider: 'gemini',
       requestedAiModel: GEMINI_SYNTHESIS_MODEL,
       aiModel: `${GEMINI_SYNTHESIS_MODEL}-served`,
-      _receipt: 'aggregate-receipt',
     });
-    expect(receiptMock.createAggregateSynthesisReceipt).toHaveBeenCalledWith(
-      expect.objectContaining({ studyId: study.id, studyRevision: 4 }),
-    );
+    expect(body.synthesis._receipt).toBeUndefined();
+    expect(kvMock.saveStudyAggregate).toHaveBeenCalledTimes(1);
+    const [savedAggregate] = kvMock.saveStudyAggregate.mock.calls[0];
+    expect(savedAggregate).toMatchObject({
+      studyId: study.id,
+      studyRevision: 4,
+      interviewIds: ['current-a', 'current-b'],
+      commonThemes: [expect.objectContaining({
+        quoteRefs: [expect.objectContaining({ interviewId: 'current-a' })],
+      })],
+    });
+    expect(Number.isSafeInteger(savedAggregate.savedAt)).toBe(true);
+    expect(body.synthesis.savedAt).toBe(savedAggregate.savedAt);
+  });
+
+  it('returns the aggregate without savedAt when the write is unavailable', async () => {
+    const study = makeStoredStudy({ id: 'study-unavailable-write', revision: 4 });
+    study.config.id = study.id;
+    kvMock.getStudy.mockResolvedValue(study);
+    kvMock.getStudyInterviewsChecked.mockResolvedValue({ status: 'ok', items: [
+      makeStoredInterview({ id: 'current-a', studyId: study.id, studyRevision: 4, synthesis }),
+      makeStoredInterview({ id: 'current-b', studyId: study.id, studyRevision: 4, synthesis }),
+    ] });
+    kvMock.saveStudyAggregate.mockResolvedValue('unavailable');
+
+    const response = await POST(new Request('http://localhost/api/synthesis/aggregate', {
+      method: 'POST',
+      body: JSON.stringify({ studyId: study.id }),
+    }));
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.synthesis.savedAt).toBeUndefined();
+    expect(body.synthesis.studyId).toBe(study.id);
+  });
+
+  it('returns the aggregate without savedAt when the write is too large', async () => {
+    const study = makeStoredStudy({ id: 'study-too-large-write', revision: 4 });
+    study.config.id = study.id;
+    kvMock.getStudy.mockResolvedValue(study);
+    kvMock.getStudyInterviewsChecked.mockResolvedValue({ status: 'ok', items: [
+      makeStoredInterview({ id: 'current-a', studyId: study.id, studyRevision: 4, synthesis }),
+      makeStoredInterview({ id: 'current-b', studyId: study.id, studyRevision: 4, synthesis }),
+    ] });
+    kvMock.saveStudyAggregate.mockResolvedValue('too-large');
+
+    const response = await POST(new Request('http://localhost/api/synthesis/aggregate', {
+      method: 'POST',
+      body: JSON.stringify({ studyId: study.id }),
+    }));
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.synthesis.savedAt).toBeUndefined();
+    expect(body.synthesis.studyId).toBe(study.id);
   });
 
   it('records OpenRouter requested, served, and routed provenance from execution', async () => {

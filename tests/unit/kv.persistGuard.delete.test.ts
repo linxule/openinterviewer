@@ -49,7 +49,9 @@ describe('persist guard vs delete/config/link', () => {
     const [script, keys] = evalMock.mock.calls[0] as [string, string[]];
     expect(script).toContain("redis.call('SCARD', KEYS[6])");
     expect(script).toContain("return {'oi:still-pending'}");
-    expect(keys[keys.length - 1]).toBe('study-persisting:study-pending');
+    // The aggregate key (N6.1) is appended after the persist set, not last.
+    expect(keys[keys.length - 2]).toBe('study-persisting:study-pending');
+    expect(keys[keys.length - 1]).toBe('study-aggregate:study-pending');
   });
 
   it('config replace and link toggle return persist-guard without mutating', async () => {

@@ -182,10 +182,21 @@ function validateProvenance(value: {
   };
 }
 
+/**
+ * The aggregate provenance gate: null when the record does not name a known
+ * provider and the model that actually ran. Exported because the aggregate is
+ * now stored rather than signed, and the check outlived the signature.
+ */
+export function aggregateProvenance(
+  synthesis: Omit<AggregateSynthesisResult, '_receipt'>,
+): SynthesisProvenance | null {
+  return validateProvenance(synthesis);
+}
+
 export async function createAggregateSynthesisReceipt(
   synthesis: UnsignedAggregateSynthesis,
 ): Promise<string> {
-  const provenance = validateProvenance(synthesis);
+  const provenance = aggregateProvenance(synthesis);
   if (!provenance) throw new Error('Aggregate synthesis provenance is incomplete');
 
   return new jose.SignJWT({

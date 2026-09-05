@@ -52,7 +52,19 @@ import { POST as synthesize } from '@/app/api/synthesis/route';
 import { POST as save } from '@/app/api/interviews/save/route';
 import { POST as aggregate } from '@/app/api/synthesis/aggregate/route';
 import { POST as followup } from '@/app/api/studies/[id]/generate-followup/route';
-import { verifyAggregateSynthesisReceipt, verifySynthesisReceipt } from '@/lib/synthesisReceipt';
+import { verifySynthesisReceipt } from '@/lib/synthesisReceipt';
+
+// A minimal in-memory RedisPort so the real saveStudyAggregate/
+// getStudyAggregateChecked (unmocked above) have somewhere to write the
+// aggregate the route persists (Slice N: the aggregate is stored, not
+// signed back to the browser).
+function fakeKvClient() {
+  const store = new Map<string, unknown>();
+  return {
+    get: vi.fn(async (key: string) => store.get(key) ?? null),
+    set: vi.fn(async (key: string, value: unknown) => { store.set(key, value); return 'OK'; }),
+  };
+}
 
 const studyId = 'study-gateway-workflow';
 const sessionId = 'participant-fixture';
@@ -92,7 +104,7 @@ beforeEach(() => {
   vi.stubEnv('AI_TRANSPORT', 'gateway');
   vi.stubEnv('VERCEL', '1');
   vi.stubEnv('PARTICIPANT_TOKEN_SECRET', 'gateway-workflow-fixture-secret-1234567890');
-  const context = { kvClient: {}, researcherId: undefined };
+  const context = { kvClient: fakeKvClient(), researcherId: undefined };
   contextMock.resolveParticipantOrPreviewContext.mockResolvedValue({
     valid: true, context, studyId, isAdmin: false,
     participantSessionId: sessionId, linkId: 'link-fixture', studyRevision: 1,
@@ -171,26 +183,19 @@ describe('Gateway synthesis completion and researcher follow-up', () => {
       });
       const aggregateResponse = await aggregate(request('/api/synthesis/aggregate', { studyId }));
       expect(aggregateResponse.status).toBe(200);
-      const { synthesis: signedAggregate }: { synthesis: AggregateSynthesisResult & { _receipt: string } } =
+      const { synthesis: storedAggregate }: { synthesis: AggregateSynthesisResult & { savedAt?: number } } =
         await aggregateResponse.json();
-      expect(signedAggregate).toMatchObject(provenance);
-      // Receipt validity must survive a transport configuration change between
-      // generation and consumption; no live provider is used for this check.
-      vi.stubEnv('AI_TRANSPORT', 'direct');
-      await expect(verifyAggregateSynthesisReceipt({
-        receipt: signedAggregate._receipt, synthesis: signedAggregate,
-      })).resolves.toEqual(provenance);
-      vi.stubEnv('AI_TRANSPORT', 'gateway');
+      expect(storedAggregate).toMatchObject(provenance);
+      // Slice N: the route persists what it just verified; the browser is
+      // handed the stored copy (savedAt present) rather than a signature.
+      expect(Number.isSafeInteger(storedAggregate.savedAt)).toBe(true);
 
+      // generate-followup now reads the server's own stored copy — the
+      // browser posts no body at all (N9.4) — so its provenance revalidation
+      // (aggregateProvenance) runs over the stored record, not a signature.
       const followupPath = `/api/studies/${studyId}/generate-followup`;
       const params = { params: Promise.resolve({ id: studyId }) };
-      const tamperedFollowup = await followup(request(followupPath, {
-        synthesis: { ...signedAggregate, bottomLine: 'Invented aggregate.' },
-      }), params);
-      expect(tamperedFollowup.status).toBe(403);
-      expect(generateTextMock).toHaveBeenCalledTimes(2);
-
-      const followupResponse = await followup(request(followupPath, { synthesis: signedAggregate }), params);
+      const followupResponse = await followup(new Request(`http://localhost${followupPath}`, { method: 'POST' }), params);
       expect(followupResponse.status).toBe(200);
       await expect(followupResponse.json()).resolves.toMatchObject({
         followUpConfig: followupOutput,
