@@ -98,7 +98,7 @@ describe('BYOS config/link serialization', () => {
       expect(result.study.isLocked).toBe(true);
     }
     expect(memory.strings.get(`study:${study.id}`)?.startsWith('{"id"')).toBe(true);
-    expect(REPLACE_STUDY_CONFIG_SCRIPT).toContain("return {'oi:updated', 'oi:json:' .. cjson.encode(study)}");
+    expect(REPLACE_STUDY_CONFIG_SCRIPT).toContain("return {'oi:updated', 'oi:json:' .. updatedJson}");
     expect(parseStudyCasResult(['oi:updated', `oi:json:${JSON.stringify(study)}`]).status).toBe('ok');
   });
 

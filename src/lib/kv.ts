@@ -12,6 +12,7 @@ import { parseFamilyWire, parsePersistResult, parsePrefixedJson } from './wire/p
 import { parseStudyCasResult } from './wire/studyCas';
 import type { PersistRatePlanRow } from './rateLimit';
 import { logRequestFailure } from './requestLog';
+import { STUDY_JSON_LUA } from './studyJsonLua';
 
 // Key prefixes for organizing data
 const INTERVIEW_PREFIX = 'interview:';
@@ -413,7 +414,7 @@ redis.call('SADD', KEYS[4], ARGV[4])
 return {'oi:persist-started'}
 `;
 
-export const PERSIST_COMPLETED_INTERVIEW_FINISH_SCRIPT = `
+export const PERSIST_COMPLETED_INTERVIEW_FINISH_SCRIPT = `${STUDY_JSON_LUA}
 local function decode_json(value, prefix)
   if type(value) ~= 'string' or string.sub(value, 1, #prefix) ~= prefix then return nil end
   local ok, obj = pcall(cjson.decode, string.sub(value, #prefix + 1))
@@ -427,13 +428,7 @@ local function decode_study(raw)
   local payload = prefixed and string.sub(raw, 10) or raw
   local ok, obj = pcall(cjson.decode, payload)
   if not ok or type(obj) ~= 'table' then return nil, prefixed end
-  return obj, prefixed
-end
-
-local function encode_study(obj, prefixed)
-  local encoded = cjson.encode(obj)
-  if prefixed then return 'oi:study:' .. encoded end
-  return encoded
+  return obj, prefixed, payload
 end
 
 local function decode_fp(value)
@@ -488,7 +483,7 @@ if not stored or existingFp ~= requestFp or not valid_immutable(stored, guard.in
   return {'oi:persist-conflict'}
 end
 
-local study, studyPrefixed = decode_study(redis.call('GET', KEYS[5]))
+local study, studyPrefixed, studyJson = decode_study(redis.call('GET', KEYS[5]))
 if not study or study.id ~= guard.studyId then
   return {'oi:persist-not-found'}
 end
@@ -502,10 +497,12 @@ if mode == 'standalone' then
   redis.call('SADD', KEYS[12], ARGV[2])
 end
 
-study.interviewCount = redis.call('SCARD', KEYS[7])
-study.isLocked = true
-study.updatedAt = tonumber(guard.frozenUpdatedAt)
-redis.call('SET', KEYS[5], encode_study(study, studyPrefixed))
+local updatedJson = patch_json_object(studyJson, {
+  {'interviewCount', tostring(redis.call('SCARD', KEYS[7]))},
+  {'isLocked', 'true'},
+  {'updatedAt', string.format('%.0f', tonumber(guard.frozenUpdatedAt))}
+})
+redis.call('SET', KEYS[5], encode_study(updatedJson, studyPrefixed))
 -- fault cut F2
 
 for i = 1, 4 do
@@ -1184,20 +1181,14 @@ function studyCasKeys(studyId: string): string[] {
   ];
 }
 
-const STUDY_CAS_LUA = `
+const STUDY_CAS_LUA = `${STUDY_JSON_LUA}
 local function decode_study(raw)
   if type(raw) ~= 'string' then return nil, false end
   local prefixed = string.sub(raw, 1, 9) == 'oi:study:'
   local payload = prefixed and string.sub(raw, 10) or raw
   local ok, obj = pcall(cjson.decode, payload)
   if not ok or type(obj) ~= 'table' then return nil, prefixed end
-  return obj, prefixed
-end
-
-local function encode_study(obj, prefixed)
-  local encoded = cjson.encode(obj)
-  if prefixed then return 'oi:study:' .. encoded end
-  return encoded
+  return obj, prefixed, payload
 end
 
 if redis.call('SCARD', KEYS[2]) > 0 then
@@ -1220,16 +1211,18 @@ end
 `;
 
 export const SET_STUDY_LINKS_SCRIPT = `${STUDY_CAS_LUA}
-local study, prefixed = decode_study(redis.call('GET', KEYS[1]))
+local study, prefixed, studyJson = decode_study(redis.call('GET', KEYS[1]))
 if not study then return {'oi:not-found'} end
-if not study.config then study.config = {} end
-study.config.linksEnabled = ARGV[1] == '1'
-study.updatedAt = tonumber(ARGV[2])
 local nextRev = (tonumber(study.revision) or 1) + 1
 if nextRev > 99999999999999 then return {'oi:invalid'} end
-study.revision = nextRev
-redis.call('SET', KEYS[1], encode_study(study, prefixed))
-return {'oi:updated', 'oi:json:' .. cjson.encode(study)}
+local configJson = study.config and json_object_value(studyJson, 'config') or '{}'
+local updatedJson = patch_json_object(studyJson, {
+  {'config', patch_json_object(configJson, {{'linksEnabled', ARGV[1] == '1' and 'true' or 'false'}})},
+  {'updatedAt', ARGV[2]},
+  {'revision', string.format('%.0f', nextRev)}
+})
+redis.call('SET', KEYS[1], encode_study(updatedJson, prefixed))
+return {'oi:updated', 'oi:json:' .. updatedJson}
 `;
 
 export async function setStudyLinksEnabled(
@@ -1255,20 +1248,22 @@ export async function setStudyLinksEnabled(
 }
 
 export const REPLACE_STUDY_CONFIG_SCRIPT = `${STUDY_CAS_LUA}
-local study, prefixed = decode_study(redis.call('GET', KEYS[1]))
+local study, prefixed, studyJson = decode_study(redis.call('GET', KEYS[1]))
 if not study then return {'oi:not-found'} end
 if (tonumber(study.revision) or 1) ~= tonumber(ARGV[1]) then
   return {'oi:conflict', 'oi:revision:' .. string.format('%.0f', math.floor(tonumber(study.revision) or 1))}
 end
 local cok, config = pcall(cjson.decode, ARGV[2])
 if not cok or type(config) ~= 'table' then return {'oi:invalid'} end
-study.config = config
-study.updatedAt = tonumber(ARGV[3])
 local nextRev = (tonumber(study.revision) or 1) + 1
 if nextRev > 99999999999999 then return {'oi:invalid'} end
-study.revision = nextRev
-redis.call('SET', KEYS[1], encode_study(study, prefixed))
-return {'oi:updated', 'oi:json:' .. cjson.encode(study)}
+local updatedJson = patch_json_object(studyJson, {
+  {'config', ARGV[2]},
+  {'updatedAt', ARGV[3]},
+  {'revision', string.format('%.0f', nextRev)}
+})
+redis.call('SET', KEYS[1], encode_study(updatedJson, prefixed))
+return {'oi:updated', 'oi:json:' .. updatedJson}
 `;
 
 export async function replaceStudyConfigAtomic(
