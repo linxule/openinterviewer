@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, within, fireEvent } from '@testing-library/react';
+import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
+import { makeStudyConfig } from '../fixtures/models';
 
 /**
  * Slice E regressions: StudySetup reskins as a faithful document — every
@@ -81,8 +82,37 @@ describe('StudySetup document reskin', () => {
   });
 
   it('carries no decorative icons', () => {
+    // §6's rule is "no decorative icons", not "no icons": M8.1 puts a
+    // functional Icon in four remove/dismiss controls. Assert the rule
+    // itself — every svg is inside a button, aria-hidden, unlabeled, and no
+    // heading or section carries one directly — rather than a raw count,
+    // so the assertion survives the next functional icon and still fails on
+    // a decorative one.
     const { container } = render(<StudySetup />);
-    expect(container.querySelectorAll('svg')).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: /Current Role/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add Question' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add Topic' }));
+
+    const svgs = Array.from(container.querySelectorAll('svg'));
+    expect(svgs.length).toBeGreaterThan(0);
+    for (const svg of svgs) {
+      expect(svg.closest('button')).not.toBeNull();
+      expect(svg).toHaveAttribute('aria-hidden', 'true');
+      expect(svg).not.toHaveAttribute('role');
+      expect(svg).not.toHaveAttribute('title');
+      expect(svg).not.toHaveAttribute('aria-label');
+    }
+    for (const heading of container.querySelectorAll('h2, section')) {
+      expect(heading.querySelector(':scope > svg')).toBeNull();
+    }
+
+    const removeField = screen.getByRole('button', { name: 'Remove Current Role' });
+    expect(removeField.querySelectorAll('svg')).toHaveLength(1);
+    const removeQuestion = screen.getByRole('button', { name: 'Remove question 2' });
+    expect(removeQuestion.querySelectorAll('svg')).toHaveLength(1);
+    const removeTopic = screen.getByRole('button', { name: 'Remove topic 2' });
+    expect(removeTopic.querySelectorAll('svg')).toHaveLength(1);
   });
 
   it('never applies reading measure to profile-field or question register rows', () => {
@@ -102,5 +132,137 @@ describe('StudySetup document reskin', () => {
       expect(node.className).not.toMatch(/max-w-measure/);
       node = node.parentElement;
     }
+  });
+});
+
+describe('StudySetup document mode (F1: read-mode for saved studies)', () => {
+  const SAVED_ID = '4e52c093-96b2-4b56-88a9-330d740a42ea';
+
+  function seedSavedStudy(overrides: Record<string, unknown> = {}) {
+    storeMock.seed({
+      studyConfig: makeStudyConfig({ id: SAVED_ID, name: 'Saved Study', ...overrides }),
+      setStudyConfig: vi.fn(),
+      setStep: vi.fn(),
+      loadExampleStudy: vi.fn(),
+      setViewMode: vi.fn(),
+      setAiTransport: vi.fn(),
+      resetParticipant: vi.fn(),
+    });
+  }
+
+  it('exposes all eight sections in the index, and each behind its own Edit control that reveals its fields independently', () => {
+    seedSavedStudy();
+    render(<StudySetup />);
+
+    const nav = screen.getByRole('navigation', { name: 'Study sections' });
+    const links = within(nav).getAllByRole('link');
+    expect(links).toHaveLength(SECTION_IDS.length);
+    for (const id of SECTION_IDS) {
+      expect(document.querySelector(`#${id}`)).toBeInTheDocument();
+    }
+
+    for (const label of [
+      'Study Details', 'Profile Fields', 'Core Questions', 'Topic Areas',
+      'AI Provider', 'AI Interview Style', 'Link Settings', 'Consent Text',
+    ]) {
+      expect(screen.getByRole('button', { name: `Edit ${label}` })).toBeInTheDocument();
+    }
+
+    // No section renders a form control before its Edit is clicked.
+    expect(screen.queryByPlaceholderText('e.g., AI Adoption in Healthcare')).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('Question 1...')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Link Expiration')).not.toBeInTheDocument();
+
+    // Clicking one section's Edit reveals only that section's fields.
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Core Questions' }));
+    expect(screen.getByPlaceholderText('Question 1...')).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('e.g., AI Adoption in Healthcare')).not.toBeInTheDocument();
+  });
+
+  it('does not dirty the draft when opening a section', () => {
+    seedSavedStudy();
+    render(<StudySetup />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Study Details' }));
+
+    // isDirty untouched by opening a section: a no-op save must stay impossible.
+    expect(screen.getByRole('button', { name: 'Saved' })).toBeDisabled();
+  });
+
+  it('gives core-question read rows measure and profile-field read rows none (A2)', () => {
+    seedSavedStudy({ coreQuestions: ['First question?', 'Second question?'] });
+    render(<StudySetup />);
+
+    const questionText = screen.getByText('First question?');
+    expect(questionText.className).toMatch(/max-w-measure/);
+
+    const fieldLabel = screen.getByText('Current Role');
+    let node: HTMLElement | null = fieldLabel;
+    let sawMeasure = false;
+    while (node && node !== document.body) {
+      if (/max-w-measure/.test(node.className)) sawMeasure = true;
+      node = node.parentElement;
+    }
+    expect(sawMeasure).toBe(false);
+  });
+
+  it('renders the revision fact block in mono with the README sentences verbatim', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const path = new URL(url, 'http://localhost').pathname;
+      if (path === '/api/auth') {
+        return { ok: true, status: 200, json: async () => ({ authenticated: false }) };
+      }
+      if (path === `/api/studies/${SAVED_ID}`) {
+        return { ok: true, status: 200, json: async () => ({ study: { revision: 3 } }) };
+      }
+      return { ok: false, status: 404, json: async () => ({ error: 'not found' }) };
+    }));
+    seedSavedStudy();
+    render(<StudySetup />);
+
+    const revisionText = await screen.findByText('Study revision 3');
+    expect(revisionText.tagName).toBe('SPAN');
+    expect(revisionText.className).toMatch(/font-mono/);
+    expect(screen.getByText(/Editing a study advances its revision and invalidates links and participant sessions issued/)).toBeInTheDocument();
+    expect(screen.getByText(/Generate and distribute a new link after a consequential edit\./)).toBeInTheDocument();
+  });
+
+  it('omits the revision line on a failed fetch without blocking editing', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const path = new URL(url, 'http://localhost').pathname;
+      if (path === '/api/auth') {
+        return { ok: true, status: 200, json: async () => ({ authenticated: false }) };
+      }
+      if (path === `/api/studies/${SAVED_ID}`) {
+        return { ok: false, status: 503, json: async () => ({ error: 'unavailable' }) };
+      }
+      return { ok: false, status: 404, json: async () => ({ error: 'not found' }) };
+    }));
+    seedSavedStudy();
+    render(<StudySetup />);
+
+    // Give the failed fetch a turn to resolve, then confirm no placeholder,
+    // no error surfaced, and the form is still fully editable.
+    await waitFor(() => expect(screen.getByText('Revision')).toBeInTheDocument());
+    expect(screen.queryByText(/Study revision/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit Study Details' })).toBeInTheDocument();
+  });
+
+  it('renders no revision block and no Edit control for a new study', () => {
+    storeMock.seed({
+      studyConfig: null,
+      setStudyConfig: vi.fn(),
+      setStep: vi.fn(),
+      loadExampleStudy: vi.fn(),
+      setViewMode: vi.fn(),
+      setAiTransport: vi.fn(),
+      resetParticipant: vi.fn(),
+    });
+    render(<StudySetup />);
+
+    expect(screen.queryByText('Revision')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Study revision/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Edit / })).not.toBeInTheDocument();
   });
 });

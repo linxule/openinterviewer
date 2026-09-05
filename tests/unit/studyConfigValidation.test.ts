@@ -190,6 +190,40 @@ describe('consent text placeholder guard', () => {
   });
 });
 
+describe('researcherContact (M9.2)', () => {
+  it('accepts a bounded contact string', () => {
+    const config = makeStudyConfig({ researcherContact: 'Dr. Amara Osei · research@university.edu' });
+    expect(validateStudyConfig(config)).toEqual({ ok: true, config });
+  });
+
+  it('rejects a contact string over 200 characters', () => {
+    const config = makeStudyConfig({ researcherContact: 'x'.repeat(201) });
+    expect(validateStudyConfig(config)).toMatchObject({
+      ok: false,
+      error: 'Researcher contact must be 200 characters or fewer',
+    });
+  });
+
+  it('rejects an empty-string contact (the field is either absent or has content)', () => {
+    const config = makeStudyConfig({ researcherContact: '' });
+    expect(validateStudyConfig(config)).toMatchObject({
+      ok: false,
+      error: 'Researcher contact must be 200 characters or fewer',
+    });
+  });
+
+  it('validates on all three entry points when the key is absent — the bound is vacuous on the entire read path', () => {
+    const config = makeStudyConfig();
+    delete config.researcherContact;
+    expect(validateStudyConfig(config)).toMatchObject({ ok: true });
+    expect(validateStudyConfigForCreate(config, { id: 'server-id', createdAt: config.createdAt }))
+      .toMatchObject({ ok: true });
+    const current = makeStudyConfig({ id: 'server-id', createdAt: 123 });
+    delete current.researcherContact;
+    expect(validateStudyConfigUpdate(current, {}, undefined)).toMatchObject({ ok: true });
+  });
+});
+
 describe('readStudyMutationBody', () => {
   it('accepts only the operation-specific top-level fields', async () => {
     const createRequest = new Request('http://localhost/api/studies', {

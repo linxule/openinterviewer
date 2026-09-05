@@ -143,6 +143,12 @@ describe('StudySetup auth gate (JSON body, not HTTP status)', () => {
     render(<StudySetup />);
 
     expect(await screen.findByText('Google Gemini is not available')).toBeInTheDocument();
+
+    // A saved study opens as a document (M5.3): the Edit control exists but
+    // the provider radios do not render until it is clicked.
+    expect(screen.getByRole('button', { name: 'Edit AI Provider' })).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: /Anthropic Claude/ })).not.toBeInTheDocument();
+
     expect(screen.getByRole('button', { name: 'Saved' })).toBeDisabled();
     expect(screen.getAllByRole('button', { name: /preview/i })).toHaveLength(2);
     screen.getAllByRole('button', { name: /preview/i }).forEach((button) => {
@@ -153,6 +159,7 @@ describe('StudySetup auth gate (JSON body, not HTTP status)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Account & connections' }));
     expect(routerMock.push).toHaveBeenCalledWith('/settings');
 
+    fireEvent.click(screen.getByRole('button', { name: 'Edit AI Provider' }));
     fireEvent.click(screen.getByRole('radio', { name: /Anthropic Claude/ }));
     await waitFor(() => {
       expect(screen.queryByText('Google Gemini is not available')).not.toBeInTheDocument();

@@ -24,6 +24,7 @@ const MAX_PROFILE_OPTION_COUNT = 20;
 const MAX_PROFILE_OPTION_LENGTH = 500;
 const MAX_ID_LENGTH = 200;
 const MAX_MODEL_LENGTH = 200;
+const MAX_RESEARCHER_CONTACT_LENGTH = 200;
 
 const STUDY_CONFIG_FIELDS = new Set([
   'id',
@@ -37,6 +38,7 @@ const STUDY_CONFIG_FIELDS = new Set([
   'aiProvider',
   'aiModel',
   'consentText',
+  'researcherContact',
   'createdAt',
   'parentStudyId',
   'parentStudyName',
@@ -191,6 +193,10 @@ export function validateStudyConfig(value: unknown): ValidationResult {
     && value.generatedFrom !== 'synthesis'
     && value.generatedFrom !== 'manual') {
     return { ok: false, error: 'Invalid study lineage type' };
+  }
+  if (value.researcherContact !== undefined
+    && !isBoundedString(value.researcherContact, MAX_RESEARCHER_CONTACT_LENGTH, true)) {
+    return { ok: false, error: 'Researcher contact must be 200 characters or fewer' };
   }
   if (value.linksEnabled !== undefined && typeof value.linksEnabled !== 'boolean') {
     return { ok: false, error: 'Invalid participant link status' };

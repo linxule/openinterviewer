@@ -39,11 +39,12 @@ function seedStore(overrides: {
   interviewHistory: InterviewMessage[];
   consentTimestamp?: number | null;
   synthesisValue?: typeof synthesis | null;
+  researcherContact?: string;
 }) {
   useStore.setState(useStore.getInitialState(), true);
   useStore.setState({
     viewMode: 'participant',
-    studyConfig: makeStudyConfig({ id: 'study-receipt' }),
+    studyConfig: makeStudyConfig({ id: 'study-receipt', researcherContact: overrides.researcherContact }),
     participantProfile: null,
     interviewHistory: overrides.interviewHistory,
     synthesis: 'synthesisValue' in overrides ? overrides.synthesisValue ?? null : synthesis,
@@ -83,6 +84,31 @@ describe('Synthesis receipt — saved state', () => {
     expect(dl!.querySelectorAll('dt')).toHaveLength(3);
     expect(dl!.querySelectorAll('dd')).toHaveLength(3);
     void getAllByRole;
+  });
+
+  it('renders a Researcher contact row, not in mono, when the study config carries one (M9.5)', async () => {
+    seedStore({
+      interviewHistory: [
+        { id: 'm-1', role: 'user', content: 'First', timestamp: 1_700_000_000_000 - 252_000 },
+        { id: 'm-2', role: 'user', content: 'Second', timestamp: 1_700_000_000_000 },
+      ],
+      consentTimestamp: 1_700_000_000_000,
+      researcherContact: 'Dr. Amara Osei · research@university.edu',
+    });
+    serviceMocks.saveCompletedInterview.mockResolvedValue({ success: true, id: 'interview-1' });
+
+    render(<Synthesis />);
+
+    await screen.findByText('Interview submitted');
+
+    expect(screen.getByText('Researcher contact')).toBeInTheDocument();
+    const value = screen.getByText('Dr. Amara Osei · research@university.edu');
+    expect(value.tagName).toBe('SPAN');
+    expect(value.className).not.toMatch(/font-mono/);
+
+    const dl = document.querySelector('dl');
+    expect(dl!.querySelectorAll('dt')).toHaveLength(4);
+    expect(dl!.querySelectorAll('dd')).toHaveLength(4);
   });
 
   it('omits Elapsed for a one-message transcript, and still shows Turns contributed', async () => {

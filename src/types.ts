@@ -131,6 +131,13 @@ export interface StudyConfig {
   aiProvider?: AIProviderType;
   aiModel?: string;
   consentText: string;
+  /**
+   * Optional. Shown to participants on their submission receipt so they can
+   * reach the study's data controller. Free text — a name, an address, a lab
+   * page — and deliberately not format-validated: the server cannot verify a
+   * contact, so it must never be presented as verified.
+   */
+  researcherContact?: string;
   createdAt: number;
   // Follow-up study lineage
   parentStudyId?: string;         // ID of parent study if this is a follow-up

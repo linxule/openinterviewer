@@ -8,7 +8,7 @@ export type StudyMutationResponseBody = {
   error?: string;
   message?: string;
   code?: string;
-  study?: { id: string; config?: unknown };
+  study?: { id: string; config?: unknown; revision?: number };
   studyId?: string;
   operationId?: string;
   reconciliationPending?: boolean;
