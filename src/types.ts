@@ -66,6 +66,7 @@ export interface AIModelOption {
 
 // Available Gemini models
 export const GEMINI_MODELS: AIModelOption[] = [
+  { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', desc: 'Newest Flash model' },
   { id: 'gemini-3.7-flash', label: 'Gemini 3.7 Flash', desc: 'Balanced capability and speed' },
   { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', desc: 'Fast, cost-effective' },
   { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', desc: 'Higher quality' },
@@ -107,7 +108,7 @@ export const DEFAULT_OPENAI_MODEL = 'gpt-5.6-terra';
 export const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-5.6-terra';
 
 // Synthesis models (switch to the app's configured higher-capability model)
-export const GEMINI_SYNTHESIS_MODEL = 'gemini-3.1-pro-preview';
+export const GEMINI_SYNTHESIS_MODEL = 'gemini-3.8-flash';
 export const CLAUDE_SYNTHESIS_MODEL = 'claude-opus-5';
 export const OPENAI_SYNTHESIS_MODEL = 'gpt-5.6-sol';
 export const OPENROUTER_SYNTHESIS_MODEL = 'openai/gpt-5.6-sol';

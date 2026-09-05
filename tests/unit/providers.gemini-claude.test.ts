@@ -129,6 +129,28 @@ describe('GeminiProvider Interactions API', () => {
       model: 'gemini-3.1-pro-preview-2026-07-15',
     });
     expect(geminiCreateMock.mock.calls[0][0].store).toBe(false);
+
+    // Gemini's Interactions API rejects response_format schemas containing
+    // maxLength/minimum/minItems with a 400, even though synthesisResponseSchema
+    // (shared with every other provider) legitimately declares them. See
+    // toGeminiResponseSchema in src/lib/providers/gemini.ts.
+    const sentSchema = geminiCreateMock.mock.calls[0][0].response_format.schema;
+    const seenKeys = new Set<string>();
+    (function collect(value: unknown) {
+      if (Array.isArray(value)) {
+        value.forEach(collect);
+        return;
+      }
+      if (value !== null && typeof value === 'object') {
+        for (const [key, entry] of Object.entries(value)) {
+          seenKeys.add(key);
+          collect(entry);
+        }
+      }
+    })(sentSchema);
+    expect(seenKeys.has('maxLength')).toBe(false);
+    expect(seenKeys.has('minimum')).toBe(false);
+    expect(seenKeys.has('minItems')).toBe(false);
   });
 });
 
