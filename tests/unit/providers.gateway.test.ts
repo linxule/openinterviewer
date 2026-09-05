@@ -2,7 +2,6 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeStudyConfig } from '../fixtures/models';
-import { OPENAI_SYNTHESIS_MODEL } from '@/types';
 
 const generateTextMock = vi.hoisted(() => vi.fn());
 const gatewayMock = vi.hoisted(() => vi.fn((model: string) => ({ modelId: model })));
@@ -86,7 +85,7 @@ describe('GatewayProvider', () => {
     }));
   });
 
-  it('records the actual Gateway request model, response model, and pinned routed provider', async () => {
+  it('records the study\'s own configured model as the Gateway request, the response model, and pinned routed provider', async () => {
     generateTextMock.mockResolvedValue({
       output: synthesisOutput(),
       text: '',
@@ -102,12 +101,27 @@ describe('GatewayProvider', () => {
       null,
     );
 
+    expect(gatewayMock).toHaveBeenCalledWith('openai/gpt-5.6-terra');
     expect(result.execution).toEqual({
       provider: 'openai',
-      requestedModel: `openai/${OPENAI_SYNTHESIS_MODEL}`,
+      requestedModel: 'openai/gpt-5.6-terra',
       model: 'openai/gpt-5.6-sol-2026-08-01',
       routedProvider: 'openai',
     });
+  });
+
+  it('fails closed instead of falling back to a default when the study has no explicit model', async () => {
+    const config = makeStudyConfig({ aiProvider: 'openai', aiModel: 'gpt-5.6-terra' });
+    const provider = new GatewayProvider('openai', config.aiModel!);
+    delete config.aiModel;
+
+    await expect(provider.synthesizeInterview(
+      [],
+      config,
+      { timePerTopic: {}, messagesPerTopic: {}, topicsExplored: [], contradictions: [] },
+      null,
+    )).rejects.toThrow('Study is missing an explicit AI model required for synthesis');
+    expect(generateTextMock).not.toHaveBeenCalled();
   });
 
   it('keeps plain-text greetings on the same privacy and route policy', async () => {

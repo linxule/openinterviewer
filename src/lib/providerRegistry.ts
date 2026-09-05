@@ -1,17 +1,13 @@
 import {
   AIProviderType,
   CLAUDE_MODELS,
-  CLAUDE_SYNTHESIS_MODEL,
   DEFAULT_CLAUDE_MODEL,
   DEFAULT_GEMINI_MODEL,
   DEFAULT_OPENAI_MODEL,
   DEFAULT_OPENROUTER_MODEL,
   GEMINI_MODELS,
-  GEMINI_SYNTHESIS_MODEL,
   OPENAI_MODELS,
-  OPENAI_SYNTHESIS_MODEL,
   OPENROUTER_MODELS,
-  OPENROUTER_SYNTHESIS_MODEL,
 } from '@/types';
 
 export const PROVIDER_OPTIONS: ReadonlyArray<{
@@ -37,13 +33,6 @@ export const DEFAULT_MODEL_BY_PROVIDER = {
   claude: DEFAULT_CLAUDE_MODEL,
   openai: DEFAULT_OPENAI_MODEL,
   openrouter: DEFAULT_OPENROUTER_MODEL,
-} satisfies Record<AIProviderType, string>;
-
-export const SYNTHESIS_MODEL_BY_PROVIDER = {
-  gemini: GEMINI_SYNTHESIS_MODEL,
-  claude: CLAUDE_SYNTHESIS_MODEL,
-  openai: OPENAI_SYNTHESIS_MODEL,
-  openrouter: OPENROUTER_SYNTHESIS_MODEL,
 } satisfies Record<AIProviderType, string>;
 
 const OPENROUTER_MODEL_ID = /^[a-z0-9][a-z0-9._-]{0,63}\/[a-z0-9][a-z0-9._:-]{0,134}$/i;

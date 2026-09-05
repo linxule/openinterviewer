@@ -1,63 +1,39 @@
 // @vitest-environment node
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-  CLAUDE_SYNTHESIS_MODEL,
-  GEMINI_SYNTHESIS_MODEL,
-  OPENAI_SYNTHESIS_MODEL,
-  OPENROUTER_SYNTHESIS_MODEL,
-} from '@/types';
-import {
-  resolveProviderType,
-  resolveSynthesisModel,
-} from '@/lib/providers';
+import { describe, expect, it } from 'vitest';
+import { resolveSynthesisModel } from '@/lib/providers';
 import { makeStudyConfig } from '../fixtures/models';
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
+/**
+ * Synthesis (per-interview synthesis, aggregate synthesis, and follow-up
+ * generation) uses the study's own configured provider and model — the
+ * researcher's own choice — never a fixed per-provider override. See
+ * AGENTS.md's synthesis-provenance invariant.
+ */
+describe('synthesis model resolution', () => {
+  it.each(['gemini', 'claude', 'openai', 'openrouter'] as const)(
+    'resolves a %s study to its own configured model, not a fixed override',
+    (provider) => {
+      const config = makeStudyConfig({ aiProvider: provider, aiModel: `${provider}-researcher-choice` });
 
-describe('synthesis provenance resolution', () => {
-  it('resolves Gemini studies to the Gemini synthesis model', () => {
-    const provider = resolveProviderType(makeStudyConfig({ aiProvider: 'gemini' }));
+      expect(resolveSynthesisModel(config)).toBe(`${provider}-researcher-choice`);
+    },
+  );
 
-    expect(provider).toBe('gemini');
-    expect(resolveSynthesisModel(provider)).toBe(GEMINI_SYNTHESIS_MODEL);
+  it('fails closed rather than substituting a default when the study has no explicit model', () => {
+    const config = makeStudyConfig({ aiProvider: 'gemini' });
+    delete config.aiModel;
+
+    expect(() => resolveSynthesisModel(config)).toThrow(
+      'Study is missing an explicit AI model required for synthesis',
+    );
   });
 
-  it('resolves Claude studies to the Claude synthesis model', () => {
-    const provider = resolveProviderType(makeStudyConfig({ aiProvider: 'claude' }));
+  it('fails closed on an empty-string model rather than treating it as configured', () => {
+    const config = makeStudyConfig({ aiProvider: 'openai', aiModel: '' });
 
-    expect(provider).toBe('claude');
-    expect(resolveSynthesisModel(provider)).toBe(CLAUDE_SYNTHESIS_MODEL);
-  });
-
-  it('resolves OpenAI studies to the OpenAI synthesis model', () => {
-    const provider = resolveProviderType(makeStudyConfig({ aiProvider: 'openai' }));
-
-    expect(provider).toBe('openai');
-    expect(resolveSynthesisModel(provider)).toBe(OPENAI_SYNTHESIS_MODEL);
-  });
-
-  it('resolves OpenRouter studies to the OpenRouter synthesis model', () => {
-    const provider = resolveProviderType(makeStudyConfig({ aiProvider: 'openrouter' }));
-
-    expect(provider).toBe('openrouter');
-    expect(resolveSynthesisModel(provider)).toBe(OPENROUTER_SYNTHESIS_MODEL);
-  });
-
-  it('fails closed when a canonical study omits its provider', () => {
-    vi.stubEnv('AI_PROVIDER', 'not-a-provider');
-    const config = makeStudyConfig();
-    delete config.aiProvider;
-
-    expect(() => resolveProviderType(config)).toThrow('Canonical study is missing an explicit AI provider');
-  });
-
-  it('uses the deployment default only when no study is being resolved', () => {
-    const provider = resolveProviderType();
-
-    expect(provider).toBe('gemini');
-    expect(resolveSynthesisModel(provider)).toBe(GEMINI_SYNTHESIS_MODEL);
+    expect(() => resolveSynthesisModel(config)).toThrow(
+      'Study is missing an explicit AI model required for synthesis',
+    );
   });
 });

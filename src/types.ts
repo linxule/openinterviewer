@@ -107,12 +107,6 @@ export const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-5';
 export const DEFAULT_OPENAI_MODEL = 'gpt-5.6-terra';
 export const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-5.6-terra';
 
-// Synthesis models (switch to the app's configured higher-capability model)
-export const GEMINI_SYNTHESIS_MODEL = 'gemini-3.8-flash';
-export const CLAUDE_SYNTHESIS_MODEL = 'claude-opus-5';
-export const OPENAI_SYNTHESIS_MODEL = 'gpt-5.6-sol';
-export const OPENROUTER_SYNTHESIS_MODEL = 'openai/gpt-5.6-sol';
-
 // Link expiration options
 export type LinkExpirationOption = 'never' | '7days' | '30days' | '90days';
 

@@ -14,7 +14,6 @@ import {
   type AggregateSynthesisResult,
   type AIInterviewResponse,
   type BehaviorData,
-  CLAUDE_SYNTHESIS_MODEL,
   DEFAULT_CLAUDE_MODEL,
   type InterviewMessage,
   type ParticipantProfile,
@@ -53,6 +52,7 @@ import {
   type AggregateSynthesisPayload,
 } from './shared';
 import { isKnownProviderModel } from '../providerRegistry';
+import { resolveSynthesisModel } from './synthesisModel';
 
 function supportsAdaptiveThinking(model: string): boolean {
   return /^claude-(?:sonnet|opus|fable|mythos)-5(?:$|-)/.test(model)
@@ -176,7 +176,7 @@ export class ClaudeProvider implements AIProvider {
     behaviorData: BehaviorData,
     participantProfile: ParticipantProfile | null,
   ): Promise<ProviderResult<SynthesisResult>> {
-    const requestedModel = CLAUDE_SYNTHESIS_MODEL;
+    const requestedModel = resolveSynthesisModel(studyConfig);
     const response = await this.createStructured({
       model: requestedModel,
       messages: [{
@@ -198,7 +198,7 @@ export class ClaudeProvider implements AIProvider {
     syntheses: SynthesisResult[],
     interviewCount: number,
   ): Promise<ProviderResult<AggregateSynthesisPayload>> {
-    const requestedModel = CLAUDE_SYNTHESIS_MODEL;
+    const requestedModel = resolveSynthesisModel(studyConfig);
     const response = await this.createStructured({
       model: requestedModel,
       messages: [{
@@ -223,7 +223,7 @@ export class ClaudeProvider implements AIProvider {
     parentConfig: StudyConfig,
     synthesis: AggregateSynthesisResult,
   ): Promise<ProviderResult<FollowupStudy>> {
-    const requestedModel = CLAUDE_SYNTHESIS_MODEL;
+    const requestedModel = resolveSynthesisModel(parentConfig);
     const response = await this.createStructured({
       model: requestedModel,
       messages: [{ role: 'user', content: buildFollowupPrompt(parentConfig, synthesis) }],

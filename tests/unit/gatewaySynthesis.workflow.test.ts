@@ -3,8 +3,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeStoredInterview, makeStoredStudy, makeStudyConfig } from '../fixtures/models';
 import type { AggregateSynthesisResult, StoredInterview, SynthesisResult } from '@/types';
-import { SYNTHESIS_MODEL_BY_PROVIDER } from '@/lib/providerRegistry';
 import { gatewayRouteForProvider, toGatewayModelId, type GatewayProviderType } from '@/lib/aiTransport';
+
+// Per-provider fixture models the researcher chose for the study — synthesis
+// must use exactly this model, not a fixed override (AGENTS.md invariant).
+const STUDY_MODEL_BY_PROVIDER: Record<GatewayProviderType, string> = {
+  gemini: 'gemini-3.7-flash',
+  claude: 'claude-sonnet-5',
+  openai: 'gpt-5.6-terra',
+};
 
 // Exercise the real routes, provider factory, Gateway adapter, and receipt
 // signer/verifiers together. Only external execution and storage/authority
@@ -126,7 +133,7 @@ describe('Gateway synthesis completion and researcher follow-up', () => {
   it.each<GatewayProviderType>(['gemini', 'claude', 'openai'])(
     'saves %s synthesis and consumes its signed aggregate without losing execution provenance',
     async (provider) => {
-      const nativeModel = SYNTHESIS_MODEL_BY_PROVIDER[provider];
+      const nativeModel = STUDY_MODEL_BY_PROVIDER[provider];
       const requestedModel = toGatewayModelId(provider, nativeModel);
       // An execution's actual model may differ from its requested alias. Keep
       // the exact value returned by the SDK in the receipt and stored record.

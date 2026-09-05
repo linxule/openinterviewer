@@ -95,7 +95,7 @@ The participant sequence is link exchange -> HttpOnly participant session -> con
 - AI/provider failure is an error. Never substitute a plausible research response, synthesis, or greeting.
 - Completion persistence and study mutation remain atomic and idempotent under retries and concurrency.
 - Editing a study advances its revision and invalidates older participant authority.
-- Synthesis provenance must record the provider and model actually used, which may differ from the interview-turn model.
+- Synthesis (per-interview synthesis, aggregate synthesis, follow-up generation) uses the study's own configured provider and model — never a fixed override. Synthesis provenance must record the provider and model actually used, which may differ from the requested model when the provider serves a specific dated snapshot.
 
 ## Change map and focused gates
 

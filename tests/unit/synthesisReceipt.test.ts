@@ -7,12 +7,12 @@ import {
   verifySynthesisReceipt,
 } from '@/lib/synthesisReceipt';
 import { getParticipantSigningSecret } from '@/lib/auth';
-import {
-  CLAUDE_SYNTHESIS_MODEL,
-  GEMINI_SYNTHESIS_MODEL,
-  OPENAI_SYNTHESIS_MODEL,
-  OPENROUTER_SYNTHESIS_MODEL,
-} from '@/types';
+// Fixture models standing in for whatever the study's researcher configured;
+// synthesis provenance must record exactly this value, not a fixed override.
+const GEMINI_SYNTHESIS_MODEL = 'gemini-3.7-flash';
+const CLAUDE_SYNTHESIS_MODEL = 'claude-sonnet-5';
+const OPENAI_SYNTHESIS_MODEL = 'gpt-5.6-terra';
+const OPENROUTER_SYNTHESIS_MODEL = 'openai/gpt-5.6-terra';
 
 const payload = {
   studyId: 'study-a',

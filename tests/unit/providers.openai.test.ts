@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OpenAIProvider } from '@/lib/providers/openai';
 import { ProviderFailure } from '@/lib/providerErrors';
-import { DEFAULT_OPENAI_MODEL, OPENAI_SYNTHESIS_MODEL } from '@/types';
+import { DEFAULT_OPENAI_MODEL } from '@/types';
 import { makeStudyConfig } from '../fixtures/models';
 
 const createMock = vi.hoisted(() => vi.fn());
@@ -137,7 +137,7 @@ describe('OpenAIProvider', () => {
     expect(createMock.mock.calls[1][0].reasoning).toEqual({ effort: 'medium' });
   });
 
-  it('returns synthesis execution provenance with the served model', async () => {
+  it('sends the study\'s own configured model and returns execution provenance with the served model', async () => {
     createMock.mockResolvedValue(response(JSON.stringify({
       statedPreferences: [],
       revealedPreferences: [],
@@ -147,10 +147,11 @@ describe('OpenAIProvider', () => {
       bottomLine: 'Bottom line.',
     }), 'gpt-5.6-sol'));
     const provider = new OpenAIProvider(undefined, 'sk-test');
+    const studyModel = 'gpt-5.6-researcher-choice';
 
     const result = await provider.synthesizeInterview(
       [],
-      studyConfig(),
+      makeStudyConfig({ aiProvider: 'openai', aiModel: studyModel }),
       { timePerTopic: {}, messagesPerTopic: {}, topicsExplored: [], contradictions: [] },
       null
     );
@@ -158,11 +159,25 @@ describe('OpenAIProvider', () => {
     expect(result.value.keyInsights).toEqual(['Insight']);
     expect(result.execution).toEqual({
       provider: 'openai',
-      requestedModel: OPENAI_SYNTHESIS_MODEL,
+      requestedModel: studyModel,
       model: 'gpt-5.6-sol',
     });
-    expect(createMock.mock.calls[0][0].model).toBe(OPENAI_SYNTHESIS_MODEL);
+    expect(createMock.mock.calls[0][0].model).toBe(studyModel);
     expect(createMock.mock.calls[0][0].max_output_tokens).toBe(8_192);
+  });
+
+  it('fails closed instead of falling back to a default when the study has no explicit model', async () => {
+    const provider = new OpenAIProvider(undefined, 'sk-test');
+    const config = studyConfig();
+    delete config.aiModel;
+
+    await expect(provider.synthesizeInterview(
+      [],
+      config,
+      { timePerTopic: {}, messagesPerTopic: {}, topicsExplored: [], contradictions: [] },
+      null
+    )).rejects.toThrow('Study is missing an explicit AI model required for synthesis');
+    expect(createMock).not.toHaveBeenCalled();
   });
 
   it('generates a plain-text greeting without a schema', async () => {

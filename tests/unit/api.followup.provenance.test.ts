@@ -2,8 +2,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeStoredInterview, makeStoredStudy } from '../fixtures/models';
-import { GEMINI_SYNTHESIS_MODEL, StoredStudy } from '@/types';
+import { StoredStudy } from '@/types';
 import { ProviderFailure } from '@/lib/providerErrors';
+
+// Fixture model standing in for the study's researcher-configured model.
+const GEMINI_SYNTHESIS_MODEL = 'gemini-3.7-flash';
 
 const contextMock = vi.hoisted(() => ({
   getRequestContext: vi.fn(),

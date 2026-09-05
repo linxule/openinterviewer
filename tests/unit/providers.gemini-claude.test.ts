@@ -4,10 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GeminiProvider } from '@/lib/providers/gemini';
 import { ClaudeProvider } from '@/lib/providers/claude';
 import {
-  CLAUDE_SYNTHESIS_MODEL,
   DEFAULT_CLAUDE_MODEL,
   DEFAULT_GEMINI_MODEL,
-  GEMINI_SYNTHESIS_MODEL,
 } from '@/types';
 import { makeStudyConfig } from '../fixtures/models';
 
@@ -109,23 +107,25 @@ describe('GeminiProvider Interactions API', () => {
     expect(request.previous_interaction_id).toBeUndefined();
   });
 
-  it('returns synthesis requested/resolved provenance from Interactions', async () => {
+  it('sends the study\'s own configured model and returns requested/resolved provenance', async () => {
     geminiCreateMock.mockResolvedValue({
       output_text: JSON.stringify(synthesis),
       model: 'gemini-3.1-pro-preview-2026-07-15',
     });
     const provider = new GeminiProvider(undefined, 'gemini-test');
+    const studyModel = 'gemini-3.8-flash-researcher-choice';
 
     const result = await provider.synthesizeInterview(
       [],
-      makeStudyConfig({ aiProvider: 'gemini', aiModel: DEFAULT_GEMINI_MODEL }),
+      makeStudyConfig({ aiProvider: 'gemini', aiModel: studyModel }),
       behavior,
       null,
     );
 
+    expect(geminiCreateMock.mock.calls[0][0].model).toBe(studyModel);
     expect(result.execution).toEqual({
       provider: 'gemini',
-      requestedModel: GEMINI_SYNTHESIS_MODEL,
+      requestedModel: studyModel,
       model: 'gemini-3.1-pro-preview-2026-07-15',
     });
     expect(geminiCreateMock.mock.calls[0][0].store).toBe(false);
@@ -151,6 +151,17 @@ describe('GeminiProvider Interactions API', () => {
     expect(seenKeys.has('maxLength')).toBe(false);
     expect(seenKeys.has('minimum')).toBe(false);
     expect(seenKeys.has('minItems')).toBe(false);
+  });
+
+  it('fails closed instead of falling back to a default when the study has no explicit model', async () => {
+    const provider = new GeminiProvider(undefined, 'gemini-test');
+    const config = makeStudyConfig({ aiProvider: 'gemini', aiModel: DEFAULT_GEMINI_MODEL });
+    delete config.aiModel;
+
+    await expect(provider.synthesizeInterview([], config, behavior, null)).rejects.toThrow(
+      'Study is missing an explicit AI model required for synthesis',
+    );
+    expect(geminiCreateMock).not.toHaveBeenCalled();
   });
 });
 
@@ -184,24 +195,37 @@ describe('ClaudeProvider native structured output', () => {
     expect(request.tool_choice).toBeUndefined();
   });
 
-  it('returns synthesis requested/resolved provenance from Messages', async () => {
+  it('sends the study\'s own configured model and returns requested/resolved provenance', async () => {
     claudeCreateMock.mockResolvedValue({
       content: [{ type: 'text', text: JSON.stringify(synthesis) }],
       model: 'claude-opus-5-20260801',
     });
     const provider = new ClaudeProvider(undefined, 'claude-test');
+    const studyModel = 'claude-opus-5-researcher-choice';
 
     const result = await provider.synthesizeInterview(
       [],
-      makeStudyConfig({ aiProvider: 'claude', aiModel: DEFAULT_CLAUDE_MODEL }),
+      makeStudyConfig({ aiProvider: 'claude', aiModel: studyModel }),
       behavior,
       null,
     );
 
+    expect(claudeCreateMock.mock.calls[0][0].model).toBe(studyModel);
     expect(result.execution).toEqual({
       provider: 'claude',
-      requestedModel: CLAUDE_SYNTHESIS_MODEL,
+      requestedModel: studyModel,
       model: 'claude-opus-5-20260801',
     });
+  });
+
+  it('fails closed instead of falling back to a default when the study has no explicit model', async () => {
+    const provider = new ClaudeProvider(undefined, 'claude-test');
+    const config = makeStudyConfig({ aiProvider: 'claude', aiModel: DEFAULT_CLAUDE_MODEL });
+    delete config.aiModel;
+
+    await expect(provider.synthesizeInterview([], config, behavior, null)).rejects.toThrow(
+      'Study is missing an explicit AI model required for synthesis',
+    );
+    expect(claudeCreateMock).not.toHaveBeenCalled();
   });
 });
