@@ -1,22 +1,20 @@
 // @vitest-environment node
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-// Fixture model standing in for the study's researcher-configured model.
-const GEMINI_SYNTHESIS_MODEL = 'gemini-3.7-flash';
 
 /**
- * A9.5 — the single most valuable test in the I2a slice.
+ * A9.5, updated for slice P.
  *
- * /api/synthesis signs a receipt over `validateSynthesisResult(providerOutput)`.
- * /api/interviews/save re-runs `validateSynthesisResult` over the client's
- * payload and re-verifies the receipt against that output. If the two
- * validator invocations ever disagree on canonical shape, every save 403s.
- *
- * Unlike tests/unit/api.save.idempotent.test.ts, this suite does NOT mock
- * @/lib/synthesisReceipt — it signs a real receipt with the real validator
- * output and lets the real route re-verify it, proving digest equality
- * end-to-end for both the new evidenceRefs shape and the legacy evidence
- * shape (the A1.2 rollout-window guarantee).
+ * Originally: /api/synthesis signed a receipt over `validateSynthesisResult`'s
+ * output, and /api/interviews/save re-verified a digest of the same shape —
+ * this file proved the two invocations agreed for both the new evidenceRefs
+ * shape and the legacy free-text evidence shape. The receipt is retired
+ * (slice P §P9): a participant save now carries no synthesis at all, and the
+ * server writes its own analysis later. What remains worth pinning is that
+ * `validateInterviewSubmission` still accepts a synthesis body in either
+ * shape without 400ing the save — a submission's shape must never gate
+ * whether the interview itself is durable — even though the value is
+ * discarded on the participant path (P5.1).
  */
 
 const contextMock = vi.hoisted(() => ({
@@ -28,6 +26,7 @@ const contextMock = vi.hoisted(() => ({
     if (typeof body.studyId === 'string' && body.studyId.length > 0) return body.studyId;
     return undefined;
   }),
+  providerKeysFromContext: vi.fn(() => ({})),
 }));
 vi.mock('@/lib/researcherContext', () => contextMock);
 
@@ -47,9 +46,13 @@ const kvMock = vi.hoisted(() => ({
 }));
 vi.mock('@/lib/kv', () => kvMock);
 
+const afterMock = vi.hoisted(() => vi.fn());
+vi.mock('next/server', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('next/server')>();
+  return { ...actual, after: afterMock };
+});
+
 import { POST } from '@/app/api/interviews/save/route';
-import { createSynthesisReceipt } from '@/lib/synthesisReceipt';
-import { validateSynthesisResult } from '@/lib/providerValidation';
 
 const makeRequest = (body: unknown) =>
   new Request('http://localhost/api/interviews/save', {
@@ -78,7 +81,6 @@ const behaviorData = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  process.env.PARTICIPANT_TOKEN_SECRET = 'participant-receipt-secret-12345678901234567890';
   contextMock.getParticipantRequestContext.mockResolvedValue({
     valid: true,
     context: { kvClient: {} },
@@ -90,7 +92,11 @@ beforeEach(() => {
   });
   canonicalMock.loadCanonicalStudy.mockResolvedValue({
     ok: true,
-    study: { id: 'study-a', revision: 1, config: { name: 'Canonical Study', consentText: 'Consent text' } },
+    study: {
+      id: 'study-a',
+      revision: 1,
+      config: { name: 'Canonical Study', consentText: 'Consent text', aiProvider: 'gemini', aiModel: 'gemini-3.7-flash' },
+    },
   });
   consentMock.verifyParticipantConsent.mockResolvedValue({
     status: 'accepted',
@@ -110,43 +116,26 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  delete process.env.PARTICIPANT_TOKEN_SECRET;
+  vi.clearAllMocks();
 });
 
-async function signAndSave(providerOutput: unknown) {
-  // Simulates /api/synthesis: validate the raw provider output once, and
-  // sign a receipt over exactly that validated shape.
-  const synthesis = validateSynthesisResult(providerOutput);
-  const receipt = await createSynthesisReceipt({
+async function save(id: string, synthesis: unknown) {
+  // Round-tripped through JSON exactly as a browser would post it.
+  const body = JSON.parse(JSON.stringify({
+    id,
     studyId: 'study-a',
-    studyRevision: 1,
-    participantSessionId: 'session-a',
-    aiProvider: 'gemini',
-    aiModel: GEMINI_SYNTHESIS_MODEL,
-    requestedAiModel: GEMINI_SYNTHESIS_MODEL,
     transcript,
     participantProfile,
     behaviorData,
     synthesis,
-  });
-
-  // Simulates the client submitting the same validated synthesis back,
-  // round-tripped through JSON exactly as a browser would.
-  const body = JSON.parse(JSON.stringify({
-    id: 'interview-evidence-refs',
-    studyId: 'study-a',
-    transcript,
-    participantProfile,
-    behaviorData,
-    synthesis: { ...synthesis, _receipt: receipt },
   }));
 
   return POST(makeRequest(body));
 }
 
-describe('POST /api/interviews/save — evidenceRefs digest equality (A9.5)', () => {
-  it('saves a new-shape synthesis whose themes carry evidenceRefs', async () => {
-    const response = await signAndSave({
+describe('POST /api/interviews/save — a submitted synthesis shape never gates durability', () => {
+  it('accepts a new-shape synthesis whose themes carry evidenceRefs, and discards it', async () => {
+    const response = await save('interview-evidence-refs', {
       statedPreferences: ['Clarity'],
       revealedPreferences: ['Needs guidance'],
       themes: [
@@ -166,10 +155,11 @@ describe('POST /api/interviews/save — evidenceRefs digest equality (A9.5)', ()
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ success: true, created: true });
     expect(kvMock.persistCompletedInterview).toHaveBeenCalledTimes(1);
+    expect(kvMock.persistCompletedInterview.mock.calls[0][0]).toMatchObject({ synthesis: null });
   });
 
-  it('saves a legacy-shaped synthesis whose themes carry a free-text evidence string (A1.2 rollout window)', async () => {
-    const response = await signAndSave({
+  it('accepts a legacy-shaped synthesis whose themes carry a free-text evidence string, and discards it', async () => {
+    const response = await save('interview-evidence-legacy', {
       statedPreferences: ['Clarity'],
       revealedPreferences: ['Needs guidance'],
       themes: [
@@ -187,5 +177,12 @@ describe('POST /api/interviews/save — evidenceRefs digest equality (A9.5)', ()
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ success: true, created: true });
     expect(kvMock.persistCompletedInterview).toHaveBeenCalledTimes(1);
+    expect(kvMock.persistCompletedInterview.mock.calls[0][0]).toMatchObject({ synthesis: null });
+  });
+
+  it('saves with no synthesis field at all', async () => {
+    const response = await save('interview-no-synthesis', undefined);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ success: true, created: true });
   });
 });

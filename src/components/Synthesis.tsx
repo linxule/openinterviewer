@@ -9,6 +9,7 @@ import { Button, Coordinate, Label, Notice, Page, Rule, Verbatim } from '@/compo
 import { SynthesisReading } from '@/components/SynthesisReading';
 import type { SynthesisResult } from '@/types';
 import { formatConsentTimestamp, formatElapsed, participantTurnCount, transcriptElapsedMs } from '@/lib/receiptFacts';
+import { defaultThankYouText } from '@/lib/thankYouText';
 
 type CompletionInputs = Pick<ReturnType<typeof useStore.getState>,
   'studyConfig' | 'participantProfile' | 'interviewHistory' | 'behaviorData' | 'viewMode' | 'participantSessionHandle'
@@ -49,6 +50,8 @@ const Synthesis: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'pending' | 'saved' | 'preview' | 'failed' | null>(null);
+  // Researcher/preview-only: the participant path never calls /api/synthesis
+  // and so never produces this error (slice P — save first, analyze later).
   const [analysisError, setAnalysisError] = useState<
     null | { kind: 'failed' } | { kind: 'rate-limited'; retryAfterSeconds: number | null }
   >(null);
@@ -79,7 +82,7 @@ const Synthesis: React.FC = () => {
 
   const doSave = useCallback(async (attempt: CompletionAttempt) => {
     const { studyConfig, participantProfile, interviewHistory, behaviorData, viewMode, participantSessionHandle } = attempt.inputs;
-    if (!isCurrentAttempt(attempt) || attempt.saving || !studyConfig || !attempt.result) return;
+    if (!isCurrentAttempt(attempt) || attempt.saving || !studyConfig) return;
 
     attempt.saving = true;
     setIsSaving(true);
@@ -94,7 +97,12 @@ const Synthesis: React.FC = () => {
         studyName: studyConfig.name,
         participantProfile,
         transcript: interviewHistory,
-        synthesis: attempt.result,
+        // A participant save carries no synthesis: the interview is durable
+        // the moment it saves, and the analysis is a second, server-run act.
+        // `attempt.result` is always null on the participant path — it is
+        // never assigned there — so this also covers the researcher/preview
+        // branch's real reading with no special case.
+        synthesis: viewMode === 'participant' ? null : attempt.result,
         behaviorData,
         createdAt: participantProfile?.timestamp ?? firstMessage.timestamp
       }, viewMode === 'preview', participantSessionHandle);
@@ -142,6 +150,15 @@ const Synthesis: React.FC = () => {
 
     const attempt: CompletionAttempt = { inputs, result: existingSynthesis, saving: false };
     activeAttempt.current = attempt;
+
+    if (viewMode === 'participant') {
+      // Participant completion is a save. The analysis is the server's
+      // problem and the researcher's; a participant who finished must never
+      // be asked to retry a model call to make their own words durable.
+      const saveOnly = async () => { await doSave(attempt); };
+      void saveOnly();
+      return;
+    }
 
     if (existingSynthesis) {
       void doSave(attempt);
@@ -200,26 +217,22 @@ const Synthesis: React.FC = () => {
   }
 
   if (viewMode === 'participant') {
-    const participantState = analysisError?.kind === 'rate-limited'
-      ? 'rate-limited'
-      : analysisError?.kind === 'failed'
-        ? 'analysis-failed'
-        : saveStatus === 'failed' || saveStatus === 'preview'
-          ? 'save-failed'
-          : saveStatus === 'saved'
-            ? 'saved'
-            : 'finalizing';
+    const participantState = saveStatus === 'failed' || saveStatus === 'preview'
+      ? 'save-failed'
+      : saveStatus === 'saved'
+        ? 'saved'
+        : 'finalizing';
 
     const elapsedMs = transcriptElapsedMs(interviewHistory);
     const consentAccepted = formatConsentTimestamp(consentTimestamp);
-    const receiptFacts: { term: string; value: string; mono?: boolean }[] = participantState === 'saved'
+    // No `Researcher contact` row here: the contact now has a sentence that
+    // tells the participant what to do with it (below), and the <dl> goes
+    // back to being machine-verifiable facts only (P12.4).
+    const receiptFacts: { term: string; value: string }[] = participantState === 'saved'
       ? [
           { term: 'Turns contributed', value: String(participantTurnCount(interviewHistory)) },
           ...(elapsedMs === null ? [] : [{ term: 'Elapsed', value: formatElapsed(elapsedMs) }]),
           ...(consentAccepted === null ? [] : [{ term: 'Consent accepted', value: consentAccepted }]),
-          ...(studyConfig.researcherContact
-            ? [{ term: 'Researcher contact', value: studyConfig.researcherContact, mono: false }]
-            : []),
         ]
       : [];
 
@@ -228,12 +241,29 @@ const Synthesis: React.FC = () => {
         <div className="mx-auto max-w-measure space-y-6">
           {participantState === 'saved' ? (
             <>
+              {/* Ruling 4: the thank-you leads. Order is heading -> the
+                  fail-closed safe-to-close line (verbatim, role="status",
+                  still first line under the heading) -> the researcher's
+                  thank-you sheet -> the contact line when present -> the
+                  receipt <dl>. */}
               <Verbatim as="h1" className="text-[28px] font-normal leading-[36px] text-ink-900">
-                Interview submitted
+                Thank you
               </Verbatim>
               <p className="font-sans text-[15px] leading-[24px] text-ink-700" role="status" aria-live="polite">
                 Your responses have been saved. It is now safe to close this tab.
               </p>
+              <Verbatim
+                as="div"
+                className="max-w-measure whitespace-pre-wrap text-[19px] leading-[31px] text-ink-700"
+              >
+                {studyConfig.thankYouText?.trim() || defaultThankYouText(studyConfig.name)}
+              </Verbatim>
+              {studyConfig.researcherContact ? (
+                <p className="font-sans text-[15px] leading-[24px] text-ink-700">
+                  Questions or concerns? Contact:{' '}
+                  <span className="text-ink-900">{studyConfig.researcherContact}</span>
+                </p>
+              ) : null}
               {receiptFacts.length > 0 ? (
                 <>
                   <Rule className="mt-2" />
@@ -241,55 +271,12 @@ const Synthesis: React.FC = () => {
                     {receiptFacts.map((fact) => (
                       <React.Fragment key={fact.term}>
                         <dt><Label>{fact.term}</Label></dt>
-                        <dd>{fact.mono !== false
-                          ? <Coordinate className="text-[13px] text-ink-700">{fact.value}</Coordinate>
-                          : <span className="font-sans text-[13px] text-ink-700">{fact.value}</span>}</dd>
+                        <dd><Coordinate className="text-[13px] text-ink-700">{fact.value}</Coordinate></dd>
                       </React.Fragment>
                     ))}
                   </dl>
                 </>
               ) : null}
-            </>
-          ) : participantState === 'analysis-failed' ? (
-            <>
-              <Verbatim as="h1" className="text-[28px] font-normal leading-[36px] text-ink-900">
-                We couldn&apos;t finalize your interview
-              </Verbatim>
-              <Notice tone="error">
-                <p className="font-sans text-[15px] leading-[24px] text-ink-700" role="alert">
-                  Your responses are still in this tab, but they have not been saved. Keep this tab open and try again.
-                </p>
-              </Notice>
-              <div className="flex flex-col gap-3 sm:flex-row">
-                <Button variant="quiet" onClick={handleBack}>
-                  Back to interview
-                </Button>
-                <Button variant="primary" onClick={handleRetryAnalysis}>
-                  Retry finalization
-                </Button>
-              </div>
-            </>
-          ) : participantState === 'rate-limited' ? (
-            <>
-              <Verbatim as="h1" className="text-[28px] font-normal leading-[36px] text-ink-900">
-                Too many finalization attempts
-              </Verbatim>
-              <Notice tone="error">
-                <p className="font-sans text-[15px] leading-[24px] text-ink-700" role="alert">
-                  Your responses are safe in this tab.{' '}
-                  {analysisError?.kind === 'rate-limited' && analysisError.retryAfterSeconds != null
-                    ? `Wait about ${Math.max(1, Math.ceil(analysisError.retryAfterSeconds / 60))} minutes, then retry — keep this tab open.`
-                    : 'Wait a few minutes, then retry — keep this tab open.'}
-                </p>
-              </Notice>
-              <div className="flex flex-col gap-3 sm:flex-row">
-                <Button variant="quiet" onClick={handleBack}>
-                  Back to interview
-                </Button>
-                <Button variant="primary" onClick={handleRetryAnalysis}>
-                  Retry finalization
-                </Button>
-              </div>
             </>
           ) : participantState === 'save-failed' ? (
             <>

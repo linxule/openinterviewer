@@ -14,6 +14,7 @@ import {
 } from '@/services/storageService';
 import { Button, Coordinate, Field, Measure, Notice, Rule } from '@/components/ui';
 import { shortInterviewId } from '@/lib/interviewId';
+import { analysisStatus } from '@/lib/analysisState';
 import { useSetTrailingCrumb } from '@/components/shell/breadcrumb';
 
 export default function Dashboard() {
@@ -310,7 +311,13 @@ export default function Dashboard() {
                   scope="col"
                   className="hidden px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500 lg:table-cell"
                 >
-                  Model
+                  Conducted
+                </th>
+                <th
+                  scope="col"
+                  className="hidden px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500 lg:table-cell"
+                >
+                  Synthesized
                 </th>
                 <th scope="col" className="px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500">
                   Status
@@ -362,12 +369,18 @@ export default function Dashboard() {
                       <Coordinate>{interview.transcript.length}</Coordinate>
                     </td>
                     <td className="hidden px-3 py-3 align-top text-[13px] text-ink-700 lg:table-cell">
-                      <Coordinate>{interview.aiModel ?? '—'}</Coordinate>
+                      <Coordinate>{interview.conductedByModel ?? 'not recorded'}</Coordinate>
+                    </td>
+                    <td className="hidden px-3 py-3 align-top text-[13px] text-ink-700 lg:table-cell">
+                      <Coordinate>{interview.aiModel ?? 'not recorded'}</Coordinate>
                     </td>
                     <td className="px-3 py-3 align-top text-[13px] text-ink-700">
-                      <span className={interview.status === 'completed' ? 'text-ink-500' : 'text-ink-900'}>
-                        {interview.status}
-                      </span>
+                      {(() => {
+                        const status = analysisStatus(interview);
+                        if (status === 'complete') return <span className="text-ink-500">analyzed</span>;
+                        if (status === 'failed') return <span className="text-error">analysis failed</span>;
+                        return <span className="text-ink-900">awaiting analysis</span>;
+                      })()}
                     </td>
                   </tr>
                 );

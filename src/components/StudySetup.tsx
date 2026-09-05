@@ -15,6 +15,7 @@ import {
   PROVIDER_OPTIONS,
 } from '@/lib/providerRegistry';
 import { CONSENT_TEXT_PLACEHOLDER, CONSENT_TEXT_PLACEHOLDER_ERROR } from '@/lib/consentText';
+import { BRACKETED_PLACEHOLDER, THANK_YOU_TEXT_PLACEHOLDER_ERROR } from '@/lib/thankYouText';
 import { Button, Coordinate, Icon, Label, Notice, Rule } from '@/components/ui';
 import { useSetTrailingCrumb } from '@/components/shell/breadcrumb';
 import {
@@ -35,6 +36,7 @@ import { ProviderSection } from '@/components/studySetup/ProviderSection';
 import { InterviewStyleSection } from '@/components/studySetup/InterviewStyleSection';
 import { LinkSettingsSection } from '@/components/studySetup/LinkSettingsSection';
 import { ConsentSection } from '@/components/studySetup/ConsentSection';
+import { ThankYouSection } from '@/components/studySetup/ThankYouSection';
 
 const StudySetup: React.FC = () => {
   const router = useRouter();
@@ -521,6 +523,10 @@ const StudySetup: React.FC = () => {
         setSaveError(CONSENT_TEXT_PLACEHOLDER_ERROR);
         return;
       }
+      if (config.thankYouText !== undefined && BRACKETED_PLACEHOLDER.test(config.thankYouText)) {
+        setSaveError(THANK_YOU_TEXT_PLACEHOLDER_ERROR);
+        return;
+      }
       const result = await saveStudy({
         config,
         updateStudyId: isUpdate ? draft.savedStudyId || undefined : undefined,
@@ -627,6 +633,7 @@ const StudySetup: React.FC = () => {
     { id: 'ai-interview-style', label: 'AI Interview Style' },
     { id: 'link-settings', label: 'Link Settings' },
     { id: 'consent-text', label: 'Consent Text' },
+    { id: 'thank-you-text', label: 'Thank-You Screen' },
   ];
 
   return (
@@ -789,6 +796,13 @@ const StudySetup: React.FC = () => {
             draft={draft}
             editing={isEditing('consent-text')}
             onEdit={() => openSection('consent-text')}
+          />
+          <Rule />
+
+          <ThankYouSection
+            draft={draft}
+            editing={isEditing('thank-you-text')}
+            onEdit={() => openSection('thank-you-text')}
           />
           <Rule />
 

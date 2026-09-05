@@ -106,16 +106,25 @@ beforeEach(() => {
   // Distinct createdAt values, chronologically REVERSED from insertion order,
   // so the P-numbering below is exercised rather than accidental: interview-b
   // is older and becomes P01, interview-a is newer and becomes P02.
+  // Analyzed and at the current revision, so eligibleInterviewCount (P11.4's
+  // Analyze All gate) is 2 by default — every test below is about the
+  // aggregate reading, not about analysis status.
+  const analyzedSynthesis = {
+    statedPreferences: [], revealedPreferences: [], themes: [],
+    contradictions: [], keyInsights: [], bottomLine: 'Per-interview bottom line',
+  };
   storageMock.getStudyInterviews.mockResolvedValue([
     makeStoredInterview({
-      id: 'interview-a', studyId: 'study-aggregate', createdAt: 2_000,
+      id: 'interview-a', studyId: 'study-aggregate', createdAt: 2_000, studyRevision: 4,
+      synthesis: analyzedSynthesis,
       transcript: [
         { id: 'm-1', role: 'ai', content: 'Tell me about your process.', timestamp: 2_000 },
         { id: 'm-2', role: 'user', content: 'I keep a written log of every decision I make.', timestamp: 2_100 },
       ],
     }),
     makeStoredInterview({
-      id: 'interview-b', studyId: 'study-aggregate', createdAt: 1_000,
+      id: 'interview-b', studyId: 'study-aggregate', createdAt: 1_000, studyRevision: 4,
+      synthesis: analyzedSynthesis,
       transcript: [
         { id: 'm-1', role: 'ai', content: 'Tell me about your process.', timestamp: 1_000 },
         { id: 'm-2', role: 'user', content: 'I never write anything down.', timestamp: 1_100 },

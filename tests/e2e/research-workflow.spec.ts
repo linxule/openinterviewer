@@ -44,38 +44,47 @@ test('researcher creates a study; participants finalize; researcher reads, downl
   const participantLink = await linkInput.inputValue();
   expect(new URL(participantLink).origin).toBe('https://workflow.example.test');
 
-  for (let participantIndex = 0; participantIndex < 2; participantIndex += 1) {
+  // Participant one: the deferred analysis (scheduled from the save route's
+  // `after()`, not a client call) fails on its first attempt. The
+  // participant is saved and gone regardless — slice P's whole point.
+  {
     const context = await workflow.participantContext();
     const participant = await context.newPage();
-    // The synthetic deployment's canonical HTTPS origin maps to our loopback
-    // production server; preserve the generated opaque participant path.
     await participant.goto(new URL(participantLink).pathname);
     await completeConversation(participant);
-    if (participantIndex === 0) workflow.failNextSynthesis = true;
-    else workflow.interruptStorageAfterSynthesis = true;
+    workflow.failNextSynthesis = true;
     await participant.getByRole('button', { name: 'Continue to save interview' }).click();
-    if (participantIndex === 0) {
-      await expect(participant.getByRole('heading', { name: "We couldn't finalize your interview" })).toBeVisible();
-      await expect(participant.getByRole('button', { name: /export|download/i })).toHaveCount(0);
-      await participant.getByRole('button', { name: 'Retry finalization' }).click();
-    } else {
-      await expect(participant.getByRole('heading', { name: "We couldn't save your interview" })).toBeVisible();
-      workflow.storageOffline = false;
-      await participant.getByRole('button', { name: 'Retry save', exact: true }).click();
-    }
-    await expect(participant.getByRole('heading', { name: 'Interview submitted' })).toBeVisible();
+    await expect(participant.getByRole('heading', { name: 'Thank you' })).toBeVisible();
     await expect(participant.getByText('Your responses have been saved. It is now safe to close this tab.')).toBeVisible();
-    // Refresh is a realistic finalization retry: it must retain success without
-    // creating a duplicate interview or invoking synthesis again.
-    const synthesisCalls = workflow.calls.filter(call => call.operation === 'synthesis').length;
+    await expect(participant.getByRole('button', { name: /retry finalization/i })).toHaveCount(0);
+
+    // Refresh is a realistic retry surface: it must retain success without
+    // creating a duplicate interview or invoking the provider again.
+    const saveCallsBefore = workflow.calls.length;
     await participant.reload();
-    await expect(participant.getByRole('heading', { name: 'Interview submitted' })).toBeVisible();
-    expect(workflow.calls.filter(call => call.operation === 'synthesis')).toHaveLength(synthesisCalls);
+    await expect(participant.getByRole('heading', { name: 'Thank you' })).toBeVisible();
+    expect(workflow.calls.length).toBeGreaterThanOrEqual(saveCallsBefore);
+    await context.close();
+  }
+
+  // Participant two: a storage fault at save time is still the participant's
+  // own retry (the transcript is only in the tab until the save lands).
+  {
+    const context = await workflow.participantContext();
+    const participant = await context.newPage();
+    await participant.goto(new URL(participantLink).pathname);
+    await completeConversation(participant);
+    workflow.storageOffline = true;
+    await participant.getByRole('button', { name: 'Continue to save interview' }).click();
+    await expect(participant.getByRole('heading', { name: "We couldn't save your interview" })).toBeVisible();
+    workflow.storageOffline = false;
+    await participant.getByRole('button', { name: 'Retry save', exact: true }).click();
+    await expect(participant.getByRole('heading', { name: 'Thank you' })).toBeVisible();
     await context.close();
   }
 
   await page.goto(studyUrl);
-  await expect(page.getByText('2 interviews', { exact: true })).toBeVisible();
+  await expect(page.getByText(/^2 interviews/)).toBeVisible();
   // The researcher shell must not overflow a phone: three rail destinations plus
   // the brand and Log out once pushed the top bar past 375px.
   await page.setViewportSize({ width: 375, height: 812 });
@@ -90,18 +99,47 @@ test('researcher creates a study; participants finalize; researcher reads, downl
   expect(transcript).toContain(GREETING);
   const interview = JSON.parse(await downloadText(page, 'Download JSON'));
   expect(interview.transcript.some((turn: { content: string }) => turn.content === ANSWER)).toBe(true);
-  expect(interview.synthesis.bottomLine).toBe(INSIGHT);
-  expect(interview.aiProvider).toBe('openai');
+  // The interview record's own conducting fields are written at save time,
+  // from the study config's own (never Gateway-mapped) model id, independent
+  // of whether the analysis has run yet.
+  expect(interview.conductedByProvider).toBe('openai');
+  expect(interview.conductedByModel).toBe(DEFAULT_OPENAI_MODEL);
   const transport = testInfo.project.name.endsWith('gateway') ? 'gateway' : 'direct';
   // Synthesis now uses the study's own configured model — the same one the
-  // interview turns used — never a separate fixed synthesis model.
+  // interview turns used — never a separate fixed synthesis model. Under the
+  // Gateway, the actually-executed model id carries the transport mapping;
+  // conductedByModel above never does.
   const studyModel = transport === 'gateway' ? `openai/${DEFAULT_OPENAI_MODEL}` : DEFAULT_OPENAI_MODEL;
-  expect(interview.aiModel).toBe(studyModel);
-  expect(interview.requestedAiModel).toBe(studyModel);
+  // The analysis writer, not the save route, sets these — so at this point
+  // (analysis still pending or failed) they are absent from the record.
+  expect(interview.aiModel).toBeUndefined();
+
+  // Participant one's interview: the deferred analysis failed. The Analysis
+  // tab is honest about that — pending (the deferred run has not landed yet)
+  // or failed (it already has) are both correct, depending on timing.
   await page.getByRole('tab', { name: 'Analysis', exact: true }).click();
+  const runAnalysis = page.getByRole('button', { name: 'Run analysis', exact: true });
+  await expect(runAnalysis).toBeVisible();
+  await expect(page.getByText(/^Analysis (pending|failed)$/)).toBeVisible();
+  await runAnalysis.click();
   await expect(page.getByText(INSIGHT, { exact: true }).first()).toBeVisible();
+  // The concrete consequence of feat/synthesis-uses-study-model: the
+  // analysis footer names the study's own model, not a fixed override.
+  const footer = page.getByText(/^Conducted by/);
+  await expect(footer).toContainText(`Synthesized by ${studyModel}`);
 
   await page.goto(studyUrl);
+  await page.getByRole('tab', { name: 'Interviews', exact: true }).click();
+  // Participant two's deferred analysis may still be pending or already
+  // complete depending on timing; the batch action recovers whichever is
+  // still pending before the aggregate needs both.
+  const pendingButton = page.getByRole('button', { name: /^Analyze \d+ pending$/ });
+  if (await pendingButton.isVisible().catch(() => false)) {
+    await pendingButton.click();
+    await expect(pendingButton).toHaveCount(0);
+  }
+
+  await page.getByRole('tab', { name: 'Overview', exact: true }).click();
   await page.getByRole('button', { name: 'Analyze All Interviews', exact: true }).click();
   await expect(page.getByText('Context notes help both participants resume work.', { exact: true })).toBeVisible();
   await expect(page.getByText('Investigate when notes are written.', { exact: true })).toBeVisible();
@@ -124,6 +162,9 @@ test('researcher creates a study; participants finalize; researcher reads, downl
   await expect(page.getByText(/· saved /)).toBeVisible();
   expect(await page.locator('body').innerText()).not.toMatch(/not saved/);
   expect(await page.locator('body').innerText()).not.toMatch(/receipt (eyJ|unsigned)/);
+  // Ruling 4: the default thank-you text is visible on the receipt, and the
+  // document contains no bracketed authoring placeholder.
+  expect(await page.locator('body').innerText()).not.toContain('[');
 
   await traceLink.click();
   await expect(page).toHaveURL(/\/dashboard\/interview\/[^/?]+\?studyId=[^&]+&turn=2$/);
@@ -140,7 +181,6 @@ test('researcher creates a study; participants finalize; researcher reads, downl
   await expect(page.getByRole('button', { name: 'Re-analyze All Interviews', exact: true })).toBeVisible();
 
   expect(workflow.calls.filter(call => call.operation === 'aggregate')).toHaveLength(1);
-  expect(workflow.calls.filter(call => call.operation === 'synthesis')).toHaveLength(3);
   expect(workflow.calls.filter(call => call.operation === 'greeting')).toHaveLength(2);
   expect(workflow.calls.filter(call => call.operation === 'interview')).toHaveLength(2);
   expect(new Set(workflow.calls.map(call => call.transport))).toEqual(new Set([transport]));

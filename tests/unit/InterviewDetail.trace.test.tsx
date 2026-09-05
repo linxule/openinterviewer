@@ -77,7 +77,6 @@ const interview = makeStoredInterview({
     contradictions: [],
     keyInsights: [],
     bottomLine: 'A verified bottom line',
-    _receipt: 'a'.repeat(24),
   },
 });
 

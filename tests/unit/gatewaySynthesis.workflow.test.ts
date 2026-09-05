@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeStoredInterview, makeStoredStudy, makeStudyConfig } from '../fixtures/models';
-import type { AggregateSynthesisResult, StoredInterview, SynthesisResult } from '@/types';
+import type { AggregateSynthesisResult, StoredInterview } from '@/types';
 import { gatewayRouteForProvider, toGatewayModelId, type GatewayProviderType } from '@/lib/aiTransport';
 
 // Per-provider fixture models the researcher chose for the study — synthesis
@@ -13,10 +13,20 @@ const STUDY_MODEL_BY_PROVIDER: Record<GatewayProviderType, string> = {
   openai: 'gpt-5.6-terra',
 };
 
-// Exercise the real routes, provider factory, Gateway adapter, and receipt
-// signer/verifiers together. Only external execution and storage/authority
-// boundaries are fixtures; no fabricated ProviderResult or receipt can hide a
-// mismatch between the adapter's provenance and the save/follow-up consumers.
+/**
+ * Exercises the real routes, the real provider factory, and the real Gateway
+ * adapter together — proving Gateway execution provenance survives the trip
+ * from `generateText`'s response through `runInterviewAnalysis` into the
+ * stored record and out through the aggregate/follow-up routes.
+ *
+ * Slice P: the participant save carries no synthesis and no receipt (the
+ * `/api/synthesis` route it used to call is now researcher-preview-only).
+ * The deferred analysis is exercised directly here via `runInterviewAnalysis`
+ * — the same function `after()` schedules from the save route and the
+ * researcher-triggered analyze route call — rather than by simulating
+ * `after()` itself, which this file does not stand up a real Next request
+ * scope for.
+ */
 const generateTextMock = vi.hoisted(() => vi.fn());
 vi.mock('ai', () => ({
   generateText: generateTextMock,
@@ -39,6 +49,10 @@ const kvMock = vi.hoisted(() => ({
   getStudyChecked: vi.fn(),
   getStudyInterviewsChecked: vi.fn(),
   persistCompletedInterview: vi.fn(),
+  getInterviewChecked: vi.fn(),
+  claimInterviewAnalysis: vi.fn(),
+  attachInterviewAnalysis: vi.fn(),
+  recordInterviewAnalysisFailure: vi.fn(),
 }));
 vi.mock('@/lib/kv', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/lib/kv')>(),
@@ -55,16 +69,19 @@ vi.mock('@/lib/platformAiRateLimit', () => ({
   hostedAiRateLimitResponse: vi.fn(async () => null),
 }));
 
-import { POST as synthesize } from '@/app/api/synthesis/route';
+// The save route schedules the deferred analysis via `after()`; this file
+// exercises that analysis explicitly (see `runInterviewAnalysis` below)
+// rather than through the real `after()` request-scope machinery.
+vi.mock('next/server', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('next/server')>();
+  return { ...actual, after: vi.fn() };
+});
+
 import { POST as save } from '@/app/api/interviews/save/route';
 import { POST as aggregate } from '@/app/api/synthesis/aggregate/route';
 import { POST as followup } from '@/app/api/studies/[id]/generate-followup/route';
-import { verifySynthesisReceipt } from '@/lib/synthesisReceipt';
+import { runInterviewAnalysis } from '@/lib/interviewAnalysis';
 
-// A minimal in-memory RedisPort so the real saveStudyAggregate/
-// getStudyAggregateChecked (unmocked above) have somewhere to write the
-// aggregate the route persists (Slice N: the aggregate is stored, not
-// signed back to the browser).
 function fakeKvClient() {
   const store = new Map<string, unknown>();
   return {
@@ -106,12 +123,15 @@ function request(path: string, body: unknown) {
   });
 }
 
+let sharedContext: { kvClient: ReturnType<typeof fakeKvClient>; researcherId: undefined };
+
 beforeEach(() => {
   vi.stubEnv('DEPLOYMENT_MODE', 'standalone');
   vi.stubEnv('AI_TRANSPORT', 'gateway');
   vi.stubEnv('VERCEL', '1');
   vi.stubEnv('PARTICIPANT_TOKEN_SECRET', 'gateway-workflow-fixture-secret-1234567890');
   const context = { kvClient: fakeKvClient(), researcherId: undefined };
+  sharedContext = context;
   contextMock.resolveParticipantOrPreviewContext.mockResolvedValue({
     valid: true, context, studyId, isAdmin: false,
     participantSessionId: sessionId, linkId: 'link-fixture', studyRevision: 1,
@@ -131,12 +151,12 @@ afterEach(() => vi.unstubAllEnvs());
 
 describe('Gateway synthesis completion and researcher follow-up', () => {
   it.each<GatewayProviderType>(['gemini', 'claude', 'openai'])(
-    'saves %s synthesis and consumes its signed aggregate without losing execution provenance',
+    'saves %s with no synthesis, then analyzes and aggregates without losing execution provenance',
     async (provider) => {
       const nativeModel = STUDY_MODEL_BY_PROVIDER[provider];
       const requestedModel = toGatewayModelId(provider, nativeModel);
       // An execution's actual model may differ from its requested alias. Keep
-      // the exact value returned by the SDK in the receipt and stored record.
+      // the exact value returned by the SDK in the stored record.
       const actualModel = `${requestedModel}-served-revision`;
       const provenance = {
         aiProvider: provider,
@@ -154,39 +174,62 @@ describe('Gateway synthesis completion and researcher follow-up', () => {
         generateTextMock.mockResolvedValueOnce({ output, text: '', response: { modelId: actualModel } });
       }
 
-      const synthesisResponse = await synthesize(request('/api/synthesis', {
-        history: transcript, participantProfile: null, behaviorData,
-      }));
-      expect(synthesisResponse.status).toBe(200);
-      const signedSynthesis: SynthesisResult & { _receipt: string } = await synthesisResponse.json();
-      await expect(verifySynthesisReceipt({
-        receipt: signedSynthesis._receipt,
-        studyId, studyRevision: 1, participantSessionId: sessionId,
-        transcript, participantProfile: null, behaviorData, synthesis: signedSynthesis,
-      })).resolves.toEqual(provenance);
-
+      // The participant save carries no synthesis at all — a body that
+      // includes one is silently discarded, never a validation error.
       const submission = {
-        id: 'browser-id', studyId, transcript, participantProfile: null,
-        behaviorData, synthesis: signedSynthesis,
+        id: 'browser-id', studyId, transcript, participantProfile: null, behaviorData,
+        synthesis: { ...synthesisOutput, bottomLine: 'Invented finding a participant body cannot assert.' },
       };
       const saveResponse = await save(request('/api/interviews/save', submission));
       expect(saveResponse.status).toBe(200);
       await expect(saveResponse.json()).resolves.toMatchObject({ success: true, created: true });
       const stored = kvMock.persistCompletedInterview.mock.calls[0][0] as StoredInterview;
       expect(stored).toMatchObject({
-        ...provenance, id: `session-${sessionId}`, transcript, synthesis: synthesisOutput,
+        id: `session-${sessionId}`, transcript, synthesis: null,
+        conductedByProvider: provider, conductedByModel: nativeModel,
+        analysis: { status: 'pending', attempts: 0 },
       });
+      expect(JSON.stringify(stored)).not.toContain('Invented finding');
 
-      // Browser edits must remain rejected before storage even with a valid
-      // Gateway receipt issued by the preceding synthesis endpoint.
-      const tamperedSave = await save(request('/api/interviews/save', {
-        ...submission, synthesis: { ...signedSynthesis, bottomLine: 'Invented finding.' },
-      }));
-      expect(tamperedSave.status).toBe(403);
-      expect(kvMock.persistCompletedInterview).toHaveBeenCalledTimes(1);
+      // The deferred analysis — the same function `after()` schedules from
+      // the save route — runs the REAL provider factory and Gateway adapter.
+      kvMock.getInterviewChecked.mockResolvedValue({ status: 'found', interview: stored });
+      kvMock.claimInterviewAnalysis.mockResolvedValue({ status: 'claimed', claimId: 'claim-1', attempts: 1 });
+      kvMock.attachInterviewAnalysis.mockResolvedValue({ status: 'written' });
+
+      const outcome = await runInterviewAnalysis({
+        interviewId: stored.id,
+        study,
+        kvClient: sharedContext.kvClient as never,
+        providerKeys: {},
+      });
+      expect(outcome).toEqual({ status: 'complete' });
+      expect(kvMock.attachInterviewAnalysis).toHaveBeenCalledWith(
+        expect.objectContaining({
+          interviewId: stored.id,
+          claimId: 'claim-1',
+          synthesis: synthesisOutput,
+          provenance,
+          studyRevision: study.revision,
+        }),
+        expect.anything(),
+      );
+
+      // Downstream routes read the record as it stands after a successful
+      // attach — construct it here since attachInterviewAnalysis is mocked
+      // above rather than actually mutating the fake store.
+      const analyzed: StoredInterview = {
+        ...stored,
+        synthesis: synthesisOutput,
+        aiProvider: provenance.aiProvider,
+        aiModel: provenance.aiModel,
+        requestedAiModel: provenance.requestedAiModel,
+        routedProvider: provenance.routedProvider,
+        analysis: { status: 'complete', attempts: 1, lastAttemptAt: Date.now(), studyRevision: study.revision },
+      };
 
       kvMock.getStudyInterviewsChecked.mockResolvedValue({
-        status: 'ok', items: [stored, makeStoredInterview({ ...stored, id: 'second-interview' })],
+        status: 'ok', items: [analyzed, makeStoredInterview({ ...analyzed, id: 'second-interview' })],
       });
       const aggregateResponse = await aggregate(request('/api/synthesis/aggregate', { studyId }));
       expect(aggregateResponse.status).toBe(200);

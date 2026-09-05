@@ -72,12 +72,6 @@ const consentMock = vi.hoisted(() => ({
 
 vi.mock('@/lib/participantConsent', () => consentMock);
 
-const receiptMock = vi.hoisted(() => ({
-  createSynthesisReceipt: vi.fn(),
-}));
-
-vi.mock('@/lib/synthesisReceipt', () => receiptMock);
-
 import { POST as interviewPOST } from '@/app/api/interview/route';
 import { POST as greetingPOST } from '@/app/api/greeting/route';
 import { POST as synthesisPOST } from '@/app/api/synthesis/route';
@@ -125,7 +119,6 @@ beforeEach(() => {
   kvMock.getStudy.mockResolvedValue(makeStoredStudy({ id: 'study-a', config: canonicalConfig }));
   rateLimitMock.participantRateLimitResponse.mockResolvedValue(null);
   platformRateLimitMock.hostedAiRateLimitResponse.mockResolvedValue(null);
-  receiptMock.createSynthesisReceipt.mockResolvedValue('synthesis-receipt');
   consentMock.verifyParticipantConsent.mockResolvedValue({
     status: 'accepted',
     consent: {
@@ -281,8 +274,8 @@ describe('POST /api/greeting canonical provider context', () => {
   });
 });
 
-describe('POST /api/synthesis hosted platform limits', () => {
-  it('enforces the platform-owned participant scope before synthesis', async () => {
+describe('POST /api/synthesis — researcher-preview-only (slice P §P3.3)', () => {
+  it('refuses a participant token with 403 before any provider call or platform rate-limit check', async () => {
     const res = await synthesisPOST(
       new Request('http://localhost/api/synthesis', {
         method: 'POST',
@@ -301,20 +294,8 @@ describe('POST /api/synthesis hosted platform limits', () => {
       })
     );
 
-    expect(res.status).toBe(200);
-    expect(platformRateLimitMock.hostedAiRateLimitResponse).toHaveBeenCalledWith(
-      expect.any(Request),
-      'synthesis',
-      { researcherId: 'researcher-a', participantSessionId: 'participant-session-a' }
-    );
-    expect(providersMock.getInterviewProvider.mock.results[0].value.synthesizeInterview)
-      .toHaveBeenCalledOnce();
-    expect(receiptMock.createSynthesisReceipt).toHaveBeenCalledWith(
-      expect.objectContaining({
-        aiProvider: 'gemini',
-        requestedAiModel: 'gemini-3.1-pro-preview',
-        aiModel: 'gemini-3.1-pro-preview-001',
-      })
-    );
+    expect(res.status).toBe(403);
+    expect(platformRateLimitMock.hostedAiRateLimitResponse).not.toHaveBeenCalled();
+    expect(providersMock.getInterviewProvider).not.toHaveBeenCalled();
   });
 });

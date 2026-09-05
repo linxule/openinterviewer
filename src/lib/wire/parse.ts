@@ -358,3 +358,26 @@ export function parseAccountDeleteResult(wire: unknown): WireResult<never> {
 export function parseReceiptResult(wire: unknown): WireResult<never> {
   return unavailableOnlyFamily('receipt', wire);
 }
+
+export type AnalysisWireOutcome =
+  | { outcome: 'notfound' | 'busy' | 'done' | 'stale' | 'written' | 'recorded' }
+  | { outcome: 'claimed'; value: string };
+
+const ANALYSIS_SIMPLE: Record<string, Exclude<AnalysisWireOutcome['outcome'], 'claimed'>> = {
+  'oi:analysis-notfound': 'notfound',
+  'oi:analysis-busy': 'busy',
+  'oi:analysis-done': 'done',
+  'oi:analysis-stale': 'stale',
+  'oi:analysis-written': 'written',
+  'oi:analysis-recorded': 'recorded',
+};
+
+export function parseAnalysisResult(wire: unknown): WireResult<AnalysisWireOutcome> {
+  const parsed = parseFamilyWire('analysis', wire);
+  if (parsed.status !== 'ok') return parsed;
+  const { tag, payload } = parsed.value;
+  if (tag === 'oi:analysis-claimed') return ok({ outcome: 'claimed', value: payload as string });
+  const outcome = ANALYSIS_SIMPLE[tag];
+  if (!outcome) return UNAVAILABLE;
+  return ok({ outcome });
+}

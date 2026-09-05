@@ -47,7 +47,6 @@ const synthesisWithRefs: SynthesisResult = {
   contradictions: [],
   keyInsights: ['An insight'],
   bottomLine: 'A bottom line',
-  _receipt: 'test-receipt',
 };
 
 const interviewHistoryFixture = [
@@ -99,7 +98,7 @@ describe('Synthesis trace — participant branch gains nothing (A1)', () => {
 
     const { container } = render(<Synthesis />);
 
-    await screen.findByRole('heading', { level: 1, name: 'Interview submitted' });
+    await screen.findByRole('heading', { level: 1, name: 'Thank you' });
     assertNoTrace(container);
   });
 
@@ -110,16 +109,6 @@ describe('Synthesis trace — participant branch gains nothing (A1)', () => {
     const { container } = render(<Synthesis />);
 
     await screen.findByRole('heading', { level: 1, name: "We couldn't save your interview" });
-    assertNoTrace(container);
-  });
-
-  it('analysis-failed', async () => {
-    seedStore('participant', null);
-    serviceMocks.synthesizeInterview.mockRejectedValue(new Error('synthesis unavailable'));
-
-    const { container } = render(<Synthesis />);
-
-    await screen.findByRole('heading', { level: 1, name: "We couldn't finalize your interview" });
     assertNoTrace(container);
   });
 });

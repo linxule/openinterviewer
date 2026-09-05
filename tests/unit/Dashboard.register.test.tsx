@@ -88,6 +88,29 @@ describe('Dashboard register table', () => {
     expect(screen.getByRole('columnheader', { name: 'Status' })).toBeInTheDocument();
   });
 
+  it('renders Conducted and Synthesized columns, with "not recorded" for absent fields and no cell ever reading "—"', async () => {
+    const recorded = makeStoredInterview({
+      id: 'interview-recorded', studyName: 'Study Alpha',
+      conductedByModel: 'gemini-3.7-flash', aiModel: 'gemini-3.7-flash',
+    });
+    const legacy = makeStoredInterview({ id: 'interview-legacy', studyName: 'Study Beta' });
+    storageMock.readAllInterviews.mockResolvedValue({
+      status: 'ok',
+      value: { interviews: [recorded, legacy], pendingStudies: [] },
+    });
+
+    renderDashboard();
+
+    await screen.findByRole('table');
+    expect(screen.getByRole('columnheader', { name: 'Conducted' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Synthesized' })).toBeInTheDocument();
+    expect(screen.getAllByText('gemini-3.7-flash')).toHaveLength(2);
+    // Once per absent field (Conducted and Synthesized on the legacy row) —
+    // the model columns never fall back to the bare-em-dash placeholder that
+    // the unrelated Participant column still uses for a different reason.
+    expect(screen.getAllByText('not recorded')).toHaveLength(2);
+  });
+
   it('navigates via the row primary button with the encoded studyId', async () => {
     const interview = makeStoredInterview({
       id: 'interview-alpha',

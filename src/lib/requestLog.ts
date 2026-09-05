@@ -26,7 +26,7 @@ export const REQUEST_LOG_EVENT_ALLOWLIST = [
   'platform.unavailable',
   'route.failure',
   'synthesis.evidence',
-  'rateLimit.refund',
+  'interview.analysis',
 ] as const;
 
 export const REQUEST_LOG_REASON_ALLOWLIST = [
@@ -42,6 +42,8 @@ export const REQUEST_LOG_REASON_ALLOWLIST = [
   'mutation-cancelled',
   'too-large',
   'invalid',
+  'provider-failure',
+  'timeout',
 ] as const;
 
 export type RequestLogField = (typeof REQUEST_LOG_ALLOWLIST)[number];

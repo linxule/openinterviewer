@@ -3,15 +3,25 @@
 // Server-side validation ensures data integrity
 // Idempotent: a completed interview is created once and then immutable.
 // Exact retries are successful no-ops; conflicting reuse of an id is rejected.
+//
+// Slice P — save first, analyze later. The transcript is durable the moment
+// the participant finishes: this route persists with `synthesis: null` and
+// `analysis: { status: 'pending', ... }` and never waits on a provider call.
+// A successful, newly-created save schedules the deferred analysis via
+// `after()`; the researcher-triggered `POST /api/interviews/[id]/analyze` is
+// the recovery path for everything that run cannot finish.
+
+export const maxDuration = 120;
 
 import { createHash } from 'crypto';
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 import {
   INTERVIEW_PERSISTING_PREFIX,
   parsePersistingGuard,
   persistCompletedInterview,
 } from '@/lib/kv';
 import {
+  providerKeysFromContext,
   resolveParticipantOrPreviewContext,
   selectedStudyIdFromParticipantBody,
 } from '@/lib/researcherContext';
@@ -19,7 +29,8 @@ import { loadCanonicalStudy } from '@/lib/canonicalStudy';
 import { StoredInterview } from '@/types';
 import { validateInterviewSubmission } from '@/lib/interviewSubmission';
 import { getSavePersistRatePlan } from '@/lib/rateLimit';
-import { verifySynthesisReceipt } from '@/lib/synthesisReceipt';
+import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
+import { runInterviewAnalysis } from '@/lib/interviewAnalysis';
 import { verifyParticipantConsent, type ParticipantConsentRecord } from '@/lib/participantConsent';
 import { readBoundedJsonObject } from '@/lib/requestBody';
 import { createRequestId, logRequestFailure } from '@/lib/requestLog';
@@ -135,23 +146,11 @@ export async function POST(request: Request) {
       consentRecord = consent.consent;
     }
 
-    const { _receipt, ...verifiedSynthesis } = clientData.synthesis;
-    const synthesisProvenance = await verifySynthesisReceipt({
-      receipt: _receipt,
-      studyId: canonical.study.id,
-      studyRevision: canonical.study.revision ?? 1,
-      participantSessionId: isAdmin ? 'admin-preview' : participantSessionId!,
-      transcript: clientData.transcript,
-      participantProfile: clientData.participantProfile,
-      behaviorData: clientData.behaviorData,
-      synthesis: verifiedSynthesis,
-    });
-    if (!synthesisProvenance) {
-      return NextResponse.json({ error: 'Synthesis receipt is invalid or expired.' }, { status: 403 });
-    }
-
-    // Researcher preview exercises the real provider and canonical study, but
-    // must never contaminate the participant dataset or lock/count the study.
+    // Researcher preview exercises the real provider (via /api/synthesis) and
+    // the canonical study, but must never contaminate the participant dataset
+    // or lock/count the study. Nothing above needed the body's synthesis
+    // field — the researcher preview has no receipt to verify and no record
+    // to write, so it returns before either.
     if (isAdmin) {
       return NextResponse.json({
         success: true,
@@ -185,7 +184,12 @@ export async function POST(request: Request) {
       studyName: canonical.study.config.name,
       participantProfile: clientData.participantProfile || defaultProfile,
       transcript: clientData.transcript,
-      synthesis: verifiedSynthesis,
+      // A participant save carries no synthesis: the analysis is a second,
+      // retryable, researcher-owned act performed entirely on the server.
+      // No aiProvider/aiModel/requestedAiModel/routedProvider either — this
+      // record has not been analyzed yet. They are written by the analysis
+      // writer, once, when it succeeds.
+      synthesis: null,
       behaviorData: clientData.behaviorData,
       // Server-controlled timestamps - don't trust client-provided values
       // Accept client createdAt only if in the past and within 30 days
@@ -197,27 +201,31 @@ export async function POST(request: Request) {
       studyRevision: canonical.study.revision ?? 1,
       consentHash: consentRecord!.consentHash,
       consentAcceptedAt: consentRecord!.acceptedAt,
-      aiProvider: synthesisProvenance.aiProvider,
-      aiModel: synthesisProvenance.aiModel,
-      requestedAiModel: synthesisProvenance.requestedAiModel,
-      routedProvider: synthesisProvenance.routedProvider,
+      // The researcher's own choice, at the revision this session is pinned
+      // to. Never from the body: see interviewSubmission.ts's explicit field
+      // copy, which drops any client-asserted conducting model.
+      conductedByProvider: canonical.study.config.aiProvider,
+      conductedByModel: canonical.study.config.aiModel,
+      analysis: { status: 'pending', attempts: 0, lastAttemptAt: now },
       participantLinkId: linkId,
     };
 
+    // The fingerprint is the identity of the SUBMISSION. It must not cover
+    // `analysis` or `synthesis`: the analysis is written later, by a
+    // different actor, possibly several times, and a `persist-repair` retry
+    // arriving after a successful analysis must still recognize its own
+    // earlier attempt.
     const fingerprint = submissionFingerprint({
       id: interviewId,
       studyId: canonical.study.id,
       participantProfile: clientData.participantProfile,
       transcript: clientData.transcript,
-      synthesis: verifiedSynthesis,
       behaviorData: clientData.behaviorData,
       createdAt: clientData.createdAt ?? null,
       consentHash: consentRecord!.consentHash,
       consentAcceptedAt: consentRecord!.acceptedAt,
-      aiProvider: synthesisProvenance.aiProvider,
-      aiModel: synthesisProvenance.aiModel,
-      requestedAiModel: synthesisProvenance.requestedAiModel,
-      routedProvider: synthesisProvenance.routedProvider,
+      conductedByProvider: canonical.study.config.aiProvider,
+      conductedByModel: canonical.study.config.aiModel,
     });
 
     if (persistRepairOnly) {
@@ -298,6 +306,38 @@ export async function POST(request: Request) {
         { error: 'Too many save attempts. Please wait before trying again.', retryable: true },
         { status: 429, headers: { 'Retry-After': '3600' } }
       );
+    }
+
+    // Deferred work is scheduled ONLY on `created` — never on `duplicate`,
+    // and never on any refusal — so a retrying participant cannot schedule a
+    // second run. The claim CAS inside runInterviewAnalysis is still the
+    // real concurrency gate; this is just the common case's first attempt.
+    if (persistence.status === 'created') {
+      const kvClient = context.kvClient;
+      const study = canonical.study;
+      const providerKeys = providerKeysFromContext(context);
+      const analysisParticipantSessionId = participantSessionId;
+      const researcherId = context.researcherId;
+      after(async () => {
+        // The same hosted platform budget the participant-triggered call
+        // consumed before this slice — one save, one analysis, inside the
+        // existing budget. A rate-limited or unavailable check simply skips
+        // scheduling this attempt; the interview stays `pending` and the
+        // researcher's "Run analysis" (a separate budget) recovers it.
+        const platformLimited = await hostedAiRateLimitResponse(
+          request,
+          'synthesis',
+          { researcherId, participantSessionId: analysisParticipantSessionId }
+        );
+        if (platformLimited) return;
+        await runInterviewAnalysis({
+          interviewId: interview.id,
+          study,
+          kvClient,
+          providerKeys,
+          platformAuthority: { researcherId, participantSessionId: analysisParticipantSessionId },
+        });
+      });
     }
 
     return NextResponse.json({

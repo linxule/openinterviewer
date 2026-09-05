@@ -15,6 +15,7 @@ import {
 } from '@/lib/ownedStudies';
 import JSZip from 'jszip';
 import { csvCell } from '@/lib/csv';
+import { analysisStatus } from '@/lib/analysisState';
 import { StoredInterview, StoredAggregateSynthesis } from '@/types';
 import { logRequestFailure } from '@/lib/requestLog';
 import type { RedisPort } from '@/lib/redisPort';
@@ -126,14 +127,14 @@ async function buildExportResponse(
   }
 
   const csvLines = [
-    'Interview ID,Study,Date,Duration (min),Messages,Themes,Key Insight',
+    'Interview ID,Study,Date,Duration (min),Messages,Themes,Key Insight,Analysis',
   ];
   interviews.forEach((interview) => {
     const duration = Math.round((interview.completedAt - interview.createdAt) / 1000 / 60);
     const themes = interview.synthesis?.themes.length || 0;
     const insight = interview.synthesis?.bottomLine || '';
     csvLines.push(
-      `${csvCell(interview.id)},${csvCell(interview.studyName)},${csvCell(new Date(interview.createdAt).toISOString())},${duration},${interview.transcript.length},${themes},${csvCell(insight)}`,
+      `${csvCell(interview.id)},${csvCell(interview.studyName)},${csvCell(new Date(interview.createdAt).toISOString())},${duration},${interview.transcript.length},${themes},${csvCell(insight)},${csvCell(analysisStatus(interview))}`,
     );
   });
   zip.file('summary.csv', csvLines.join('\n'));

@@ -23,6 +23,8 @@ import {
   resumeAccountDeletion,
 } from '@/lib/platformDb';
 import {
+  attachInterviewAnalysis,
+  claimInterviewAnalysis,
   CREATE_STUDY_SCRIPT,
   DELETE_EMPTY_STUDY_SCRIPT,
   createStudyAtomic,
@@ -940,6 +942,67 @@ describe('transport response-loss and undecodable-after-commit', () => {
     expect(await createStudyAtomic(study, redis)).toBe('created');
     expect((await deleteStudy(study.id, redis)).status).toBe('unavailable');
     expect(await redis.get(`study:${study.id}`)).toBeTruthy();
+  });
+});
+
+describe('slice P: interview analysis attach preserves untouched JSON types', () => {
+  it('claim then attach on a record with an empty array and an empty string round-trips both byte-identically', async () => {
+    const studyId = uuid();
+    const config = makeStudyConfig({ id: studyId, aiProvider: 'gemini', aiModel: 'gemini-3.7-flash' });
+    const study = makeStoredStudy({ id: studyId, config });
+    expect(await createStudyAtomic(study, redis)).toBe('created');
+
+    const interview = makeStoredInterview({
+      id: `interview-${uuid()}`,
+      studyId,
+      // The classic cjson pitfall this Lua patcher exists to avoid: an empty
+      // array decodes indistinguishably from an empty object unless the
+      // untouched member's raw text is preserved verbatim.
+      behaviorData: {
+        timePerTopic: {},
+        messagesPerTopic: {},
+        topicsExplored: [],
+        contradictions: [],
+      },
+      participantProfile: { id: 'profile-empty', fields: [], rawContext: '', timestamp: NOW },
+    });
+    const options = {
+      expectedStudyRevision: 1,
+      identity: { participantSessionId: `session-${uuid()}`, linkId: `link-${uuid()}` },
+    };
+    expect(await persistCompletedInterview(interview, FP, options, redis)).toEqual({ status: 'created' });
+
+    const claimed = await claimInterviewAnalysis(interview.id, redis);
+    expect(claimed.status).toBe('claimed');
+    if (claimed.status !== 'claimed') throw new Error('Claim failed');
+
+    const synthesis = {
+      statedPreferences: [], revealedPreferences: [], themes: [],
+      contradictions: [], keyInsights: ['An insight'], bottomLine: 'A bottom line',
+    };
+    const attached = await attachInterviewAnalysis({
+      interviewId: interview.id,
+      claimId: claimed.claimId,
+      synthesis,
+      provenance: { aiProvider: 'gemini', aiModel: 'gemini-3.7-flash', requestedAiModel: 'gemini-3.7-flash' },
+      studyRevision: 1,
+    }, redis);
+    expect(attached.status).toBe('written');
+
+    const raw = await redis.get<string>(`interview:${interview.id}`);
+    if (typeof raw !== 'string') throw new Error('Stored interview JSON is missing');
+    expect(raw.startsWith('oi:interview:')).toBe(true);
+    const stored = JSON.parse(raw.slice('oi:interview:'.length)) as typeof interview;
+
+    // The untouched members round-trip with their original JSON types —
+    // real cjson is the only place `[]` vs `{}` is genuinely exercised.
+    expect(stored.behaviorData.topicsExplored).toEqual([]);
+    expect(Array.isArray(stored.behaviorData.topicsExplored)).toBe(true);
+    expect(stored.participantProfile?.rawContext).toBe('');
+    expect(stored.synthesis).toEqual(synthesis);
+    expect(stored.analysis).toMatchObject({ status: 'complete', studyRevision: 1 });
+    expect(stored.aiProvider).toBe('gemini');
+    expect(stored.aiModel).toBe('gemini-3.7-flash');
   });
 });
 

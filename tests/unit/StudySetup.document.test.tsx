@@ -40,6 +40,7 @@ const SECTION_IDS = [
   'ai-interview-style',
   'link-settings',
   'consent-text',
+  'thank-you-text',
 ];
 
 beforeEach(() => {
@@ -150,7 +151,7 @@ describe('StudySetup document mode (F1: read-mode for saved studies)', () => {
     });
   }
 
-  it('exposes all eight sections in the index, and each behind its own Edit control that reveals its fields independently', () => {
+  it('exposes all nine sections in the index, and each behind its own Edit control that reveals its fields independently', () => {
     seedSavedStudy();
     render(<StudySetup />);
 
@@ -163,7 +164,7 @@ describe('StudySetup document mode (F1: read-mode for saved studies)', () => {
 
     for (const label of [
       'Study Details', 'Profile Fields', 'Core Questions', 'Topic Areas',
-      'AI Provider', 'AI Interview Style', 'Link Settings', 'Consent Text',
+      'AI Provider', 'AI Interview Style', 'Link Settings', 'Consent Text', 'Thank-You Screen',
     ]) {
       expect(screen.getByRole('button', { name: `Edit ${label}` })).toBeInTheDocument();
     }
@@ -264,5 +265,75 @@ describe('StudySetup document mode (F1: read-mode for saved studies)', () => {
     expect(screen.queryByText('Revision')).not.toBeInTheDocument();
     expect(screen.queryByText(/Study revision/)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Edit / })).not.toBeInTheDocument();
+  });
+});
+
+describe('StudySetup Thank-You Screen section (slice P §P12.5)', () => {
+  const SAVED_ID = '4e52c093-96b2-4b56-88a9-330d740a42ea';
+
+  function seedSavedStudy(overrides: Record<string, unknown> = {}) {
+    storeMock.seed({
+      studyConfig: makeStudyConfig({ id: SAVED_ID, name: 'Saved Study', ...overrides }),
+      setStudyConfig: vi.fn(),
+      setStep: vi.fn(),
+      loadExampleStudy: vi.fn(),
+      setViewMode: vi.fn(),
+      setAiTransport: vi.fn(),
+      resetParticipant: vi.fn(),
+    });
+  }
+
+  function stubAuthenticatedFetch() {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const path = new URL(url, 'http://localhost').pathname;
+      if (path === '/api/auth') {
+        return { ok: true, status: 200, json: async () => ({ authenticated: true }) };
+      }
+      if (path === '/api/config/status') {
+        return {
+          ok: true, status: 200,
+          json: async () => ({
+            mode: 'hosted', aiTransport: 'direct',
+            hasGeminiKey: true, hasAnthropicKey: true, hasOpenAiKey: true, hasOpenRouterKey: true,
+          }),
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({ error: 'not found' }) };
+    }));
+  }
+
+  it('renders its own Edit control, and the read sheet defaults for a blank draft', () => {
+    seedSavedStudy();
+    render(<StudySetup />);
+
+    expect(screen.getByRole('button', { name: 'Edit Thank-You Screen' })).toBeInTheDocument();
+    expect(screen.getByText('What participants will read after they finish')).toBeInTheDocument();
+    expect(screen.getByText(/Thank you for taking part\./)).toBeInTheDocument();
+  });
+
+  it('"Insert a template" fills the textarea with bracketed text', () => {
+    seedSavedStudy();
+    render(<StudySetup />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Thank-You Screen' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Insert a template' }));
+
+    const textarea = screen.getByLabelText('Thank-You Screen') as HTMLTextAreaElement;
+    expect(textarea.value).toContain('[study name]');
+  });
+
+  it('saving the template unedited surfaces the placeholder error', async () => {
+    stubAuthenticatedFetch();
+    seedSavedStudy();
+    render(<StudySetup />);
+
+    await waitFor(() => expect(screen.queryByText(/Checking configured AI providers/i)).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Thank-You Screen' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Insert a template' }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Update Study' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Update Study' }));
+    expect(await screen.findByText(/cannot contain a bracketed placeholder/i)).toBeInTheDocument();
   });
 });

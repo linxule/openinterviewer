@@ -133,6 +133,14 @@ export interface StudyConfig {
    * contact, so it must never be presented as verified.
    */
   researcherContact?: string;
+  /**
+   * Optional. The researcher-authored screen a participant reads once their
+   * interview is saved. Absent means "render the generated default", and
+   * unlike `consentText` it is deliberately NOT frozen into the record at
+   * save time: no consent hash binds it, and a stored copy would freeze one
+   * deployment's default forever.
+   */
+  thankYouText?: string;
   createdAt: number;
   // Follow-up study lineage
   parentStudyId?: string;         // ID of parent study if this is a follow-up
@@ -202,7 +210,6 @@ export interface SynthesisResult {
   contradictions: string[];
   keyInsights: string[];
   bottomLine: string;
-  _receipt?: string;
 }
 
 // ============================================
@@ -242,6 +249,35 @@ export interface AIInterviewResponse {
 }
 
 // ============================================
+// Interview analysis (Slice P — save first, analyze later)
+// ============================================
+
+/** How the analysis of one interview stands. Enums and counts only. */
+export type InterviewAnalysisStatus = 'pending' | 'running' | 'complete' | 'failed';
+
+/**
+ * Why the last attempt produced no synthesis. Deliberately coarse: a provider
+ * message, status line or payload must never reach a stored record or a
+ * researcher's screen (AGENTS.md counts-only logging).
+ */
+export type InterviewAnalysisFailureKind =
+  | 'provider'        // the call threw or returned an error
+  | 'invalid-output'  // the response did not validate as a SynthesisResult
+  | 'too-large'       // over MAX_ATTACHED_SYNTHESIS_BYTES
+  | 'timeout'         // the deferred run outlived its lease
+  | 'storage';        // the attach write failed
+
+export interface InterviewAnalysisState {
+  status: InterviewAnalysisStatus;
+  attempts: number;          // completed attempts, successful or not; never decremented
+  lastAttemptAt: number;     // epoch ms of the most recent attempt start
+  claimId?: string;          // present only while `running`; the CAS token
+  claimedAt?: number;
+  failureKind?: InterviewAnalysisFailureKind;  // only when `status === 'failed'`
+  studyRevision?: number;    // the revision the successful analysis ran under
+}
+
+// ============================================
 // Stored Interview (Upstash Redis)
 // ============================================
 
@@ -259,10 +295,42 @@ export interface StoredInterview {
   studyRevision?: number;
   consentHash?: string;
   consentAcceptedAt?: number;
+
+  /**
+   * The provider and model that produced this record's SYNTHESIS, written by
+   * the server at analysis time — which, because an analysis may run days
+   * later and after an edit, is not necessarily the config the conversation
+   * ran under. That divergence is why `conductedBy*` still exists below.
+   */
   aiProvider?: AIProviderType;
   aiModel?: string;
   requestedAiModel?: string;
   routedProvider?: string;
+
+  /**
+   * The provider and model that conducted the CONVERSATION — the researcher's
+   * own choice, snapshotted server-side from the canonical study config at
+   * save time. Safe to treat as the model every turn used: the participant
+   * session is pinned to a study revision (auth.ts), a config edit advances
+   * that revision (kv.ts REPLACE_STUDY_CONFIG_SCRIPT), and a moved revision
+   * refuses every participant request (researcherContext.ts) — so the config
+   * cannot change inside one interview.
+   *
+   * This is the model that was ASKED FOR, not one a provider reported: an
+   * interview turn returns no execution provenance (ai.ts AIProvider). Absent
+   * on every interview saved before Slice O; render those as "not recorded"
+   * and never fill them in from the study's current config.
+   */
+  conductedByProvider?: AIProviderType;
+  conductedByModel?: string;
+
+  /**
+   * Absent on every record written before Slice P. Read it through
+   * `analysisStatus()` (src/lib/analysisState.ts), never directly: a legacy
+   * record's status is derived from whether it carries a synthesis.
+   */
+  analysis?: InterviewAnalysisState;
+
   participantLinkId?: string;
 }
 
