@@ -64,6 +64,7 @@ const InterviewChat: React.FC = () => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mountedRef = useRef(true);
   const greetingStartedRef = useRef(false);
+  const stickToBottomRef = useRef(true);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -72,9 +73,28 @@ const InterviewChat: React.FC = () => {
     };
   }, []);
 
-  // Scroll to bottom on new messages
+  // The participant may scroll up to re-read an earlier answer. Auto-scroll is
+  // for people already at the live edge; it must never move the page under
+  // someone who is reading. 120px ≈ four lines of body leading.
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const updatePin = () => {
+      const remaining =
+        document.documentElement.scrollHeight - window.innerHeight - window.scrollY;
+      stickToBottomRef.current = remaining <= 120;
+    };
+    updatePin();
+    window.addEventListener('scroll', updatePin, { passive: true });
+    return () => window.removeEventListener('scroll', updatePin);
+  }, []);
+
+  // Scroll to bottom on new messages, but only when the participant is at the
+  // live edge, and instantly under prefers-reduced-motion.
+  useEffect(() => {
+    if (!stickToBottomRef.current) return;
+    const reduced =
+      typeof window.matchMedia === 'function'
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    messagesEndRef.current?.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'end' });
   }, [interviewHistory, isAiThinking]);
 
   // Show finish option after background phase
@@ -158,6 +178,7 @@ const InterviewChat: React.FC = () => {
       timestamp: Date.now()
     };
     addMessage(userMsg);
+    stickToBottomRef.current = true;
     setInput('');
     setSendError(null);
 
@@ -305,9 +326,9 @@ const InterviewChat: React.FC = () => {
   };
 
   return (
-    <div className="flex h-dvh flex-col bg-paper-0">
+    <div className="min-h-dvh bg-paper-0">
       {/* Running head */}
-      <header className="sticky top-0 z-10 flex min-h-16 items-center justify-between gap-3 border-b border-ink-300 bg-paper-0 px-4 py-2 sm:px-6">
+      <header className="sticky top-[var(--preview-banner-height,0px)] z-20 flex min-h-16 items-center justify-between gap-3 border-b border-ink-300 bg-paper-0 px-4 py-2 sm:px-6">
         <div className="min-w-0">
           <h1 className="truncate font-sans text-[15px] font-semibold text-ink-900">{studyConfig.name}</h1>
           <p className="text-[13px] text-ink-500">{getProgressDisplay()}</p>
@@ -324,98 +345,101 @@ const InterviewChat: React.FC = () => {
         )}
       </header>
 
-      {/* Transcript */}
-      {/* `relative` keeps the absolutely-positioned sr-only speaker prefixes inside
-          this scroll container — without it they resolve against the body and
-          inflate the document's scroll height. */}
-      <div role="log" aria-live="polite" className="relative min-h-0 flex-1 overflow-y-auto bg-paper-0">
-        <div className="mx-auto max-w-measure space-y-8 px-4 py-8">
-          {interviewHistory.map((msg) => (
-            <InterviewTurn key={msg.id} role={msg.role} content={msg.content} />
-          ))}
+      <main>
+        {/* Transcript */}
+        {/* `relative` keeps the absolutely-positioned sr-only speaker prefixes inside
+            a positioned ancestor — without it they resolve against the initial
+            containing block and can inflate the document's scroll height, which
+            now is the page's scroll height. */}
+        <div role="log" aria-live="polite" className="relative">
+          <div className="mx-auto max-w-measure space-y-8 px-4 py-8">
+            {interviewHistory.map((msg) => (
+              <InterviewTurn key={msg.id} role={msg.role} content={msg.content} />
+            ))}
 
-          {isAiThinking && (
-            <div role="status">
-              <div className="h-[2px] overflow-hidden">
-                <div className="composing-bar h-full bg-ink-300" />
-              </div>
-              <p className="mt-2 text-[13px] text-ink-500">Composing a follow-up…</p>
-            </div>
-          )}
-
-          <div ref={messagesEndRef} />
-        </div>
-      </div>
-
-      {/* Input Area or Completion UI */}
-      {isComplete ? (
-        <div className="border-t border-ink-300 bg-paper-0 px-6 py-8">
-          <div className="mx-auto max-w-measure space-y-4 text-center">
-            <h3 className="font-sans text-[18px] leading-[26px] font-semibold text-ink-900">
-              {viewMode === 'preview' ? 'Preview conversation complete' : 'Interview conversation complete'}
-            </h3>
-            <p className="font-sans text-[15px] leading-[24px] text-ink-700">
-              {viewMode === 'preview'
-                ? 'Continue to generate the preview analysis. Preview responses will not be added to study data.'
-                : 'Your responses have not been saved yet. Continue to finalize and save your interview. Keep this tab open until you see confirmation that it is safe to close.'}
-            </p>
-            <Button type="button" variant="primary" onClick={handleViewAnalysis} className="mx-auto">
-              {viewMode === 'preview' ? 'Continue preview' : 'Continue to save interview'}
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <div className="border-t border-ink-300 bg-paper-0 px-4 py-4 sm:px-6">
-          <div className="mx-auto max-w-measure space-y-2">
-            {(initError || sendError) && (
-              <div
-                role="alert"
-                className="flex items-start justify-between gap-3 bg-error px-4 py-3 font-sans text-[15px] leading-[24px] text-paper-1"
-              >
-                <p>{initError || sendError}</p>
-                {initError && (
-                  <button
-                    type="button"
-                    onClick={handleRetryGreeting}
-                    disabled={isAiThinking}
-                    className="shrink-0 text-paper-1 underline underline-offset-2 hover:opacity-90 disabled:opacity-50"
-                  >
-                    Try again
-                  </button>
-                )}
+            {isAiThinking && (
+              <div role="status">
+                <div className="h-[2px] overflow-hidden">
+                  <div className="composing-bar h-full bg-ink-300" />
+                </div>
+                <p className="mt-2 text-[13px] text-ink-500">Composing a follow-up…</p>
               </div>
             )}
-            <div className="flex items-end gap-3">
-              <div className="flex-1">
-                <label htmlFor="interview-response" className="sr-only">
-                  Your response
-                </label>
-                <textarea
-                  ref={textareaRef}
-                  id="interview-response"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={handleTextareaKeyDown}
-                  placeholder="Take as much space as you need."
-                  disabled={isAiThinking}
-                  rows={3}
-                  className="input-verbatim w-full resize-none rounded border border-ink-300 bg-paper-2 px-4 py-3 text-[17px] leading-[1.6] text-ink-900 placeholder:text-ink-500 disabled:opacity-50"
-                />
-              </div>
-
-              <Button
-                type="button"
-                variant="primary"
-                onClick={() => handleSend()}
-                disabled={!input.trim() || isAiThinking}
-              >
-                Send
-              </Button>
-            </div>
-            <p className="text-[12px] text-ink-500 [@media(pointer:coarse)]:hidden">⌘/Ctrl + Enter to send</p>
           </div>
         </div>
-      )}
+
+        {/* Input Area or Completion UI */}
+        {isComplete ? (
+          <div className="border-t border-ink-300 px-4 py-8 sm:px-6">
+            <div className="mx-auto max-w-measure space-y-4">
+              <h3 className="font-sans text-[18px] leading-[26px] font-semibold text-ink-900">
+                {viewMode === 'preview' ? 'Preview conversation complete' : 'Interview conversation complete'}
+              </h3>
+              <p className="font-sans text-[15px] leading-[24px] text-ink-700">
+                {viewMode === 'preview'
+                  ? 'Continue to generate the preview analysis. Preview responses will not be added to study data.'
+                  : 'Your responses have not been saved yet. Continue to finalize and save your interview. Keep this tab open until you see confirmation that it is safe to close.'}
+              </p>
+              <Button type="button" variant="primary" onClick={handleViewAnalysis}>
+                {viewMode === 'preview' ? 'Continue preview' : 'Continue to save interview'}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="sticky bottom-0 z-10 border-t border-ink-300 bg-paper-0 px-4 py-4 sm:px-6">
+            <div className="mx-auto max-w-measure space-y-2 pl-8">
+              {(initError || sendError) && (
+                <div
+                  role="alert"
+                  className="flex items-start justify-between gap-3 bg-error px-4 py-3 font-sans text-[15px] leading-[24px] text-paper-1"
+                >
+                  <p>{initError || sendError}</p>
+                  {initError && (
+                    <button
+                      type="button"
+                      onClick={handleRetryGreeting}
+                      disabled={isAiThinking}
+                      className="shrink-0 text-paper-1 underline underline-offset-2 hover:opacity-90 disabled:opacity-50"
+                    >
+                      Try again
+                    </button>
+                  )}
+                </div>
+              )}
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:gap-3">
+                <div className="flex-1">
+                  <label htmlFor="interview-response" className="sr-only">
+                    Your response
+                  </label>
+                  <textarea
+                    ref={textareaRef}
+                    id="interview-response"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={handleTextareaKeyDown}
+                    placeholder="Take as much space as you need."
+                    disabled={isAiThinking}
+                    rows={3}
+                    className="input-verbatim w-full resize-none rounded border border-ink-300 bg-paper-2 px-4 py-3 text-[19px] leading-[31px] text-ink-900 placeholder:text-ink-500 disabled:opacity-50"
+                  />
+                </div>
+
+                <Button
+                  type="button"
+                  variant="primary"
+                  onClick={() => handleSend()}
+                  disabled={!input.trim() || isAiThinking}
+                  className="min-h-11 w-full sm:w-auto"
+                >
+                  Send
+                </Button>
+              </div>
+              <p className="text-[13px] leading-[20px] text-ink-500 [@media(pointer:coarse)]:hidden">⌘/Ctrl + Enter to send</p>
+            </div>
+          </div>
+        )}
+        <div ref={messagesEndRef} />
+      </main>
     </div>
   );
 };

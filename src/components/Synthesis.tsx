@@ -8,6 +8,7 @@ import { saveCompletedInterview } from '@/services/storageService';
 import { Button, Citation, Coordinate, Label, Notice, Page, Rule, Verbatim } from '@/components/ui';
 import { resolveThemeEvidence } from '@/lib/evidence';
 import type { SynthesisResult } from '@/types';
+import { formatConsentTimestamp, formatElapsed, participantTurnCount, transcriptElapsedMs } from '@/lib/receiptFacts';
 
 type CompletionInputs = Pick<ReturnType<typeof useStore.getState>,
   'studyConfig' | 'participantProfile' | 'interviewHistory' | 'behaviorData' | 'viewMode' | 'participantSessionHandle'
@@ -41,7 +42,8 @@ const Synthesis: React.FC = () => {
     setSynthesis,
     setStep,
     participantSessionHandle,
-    viewMode
+    viewMode,
+    consentTimestamp
   } = useStore();
 
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -201,6 +203,16 @@ const Synthesis: React.FC = () => {
           ? 'saved'
           : 'finalizing';
 
+    const elapsedMs = transcriptElapsedMs(interviewHistory);
+    const consentAccepted = formatConsentTimestamp(consentTimestamp);
+    const receiptFacts = participantState === 'saved'
+      ? [
+          { term: 'Turns contributed', value: String(participantTurnCount(interviewHistory)) },
+          ...(elapsedMs === null ? [] : [{ term: 'Elapsed', value: formatElapsed(elapsedMs) }]),
+          ...(consentAccepted === null ? [] : [{ term: 'Consent accepted', value: consentAccepted }]),
+        ]
+      : [];
+
     return (
       <main className="min-h-dvh bg-paper-0 px-4 py-12 sm:px-8 sm:py-20">
         <div className="mx-auto max-w-measure space-y-6">
@@ -212,6 +224,19 @@ const Synthesis: React.FC = () => {
               <p className="font-sans text-[15px] leading-[24px] text-ink-700" role="status" aria-live="polite">
                 Your responses have been saved. It is now safe to close this tab.
               </p>
+              {receiptFacts.length > 0 ? (
+                <>
+                  <Rule className="mt-2" />
+                  <dl className="grid grid-cols-[auto_1fr] items-baseline gap-x-6 gap-y-2">
+                    {receiptFacts.map((fact) => (
+                      <React.Fragment key={fact.term}>
+                        <dt><Label>{fact.term}</Label></dt>
+                        <dd><Coordinate className="text-[13px] text-ink-700">{fact.value}</Coordinate></dd>
+                      </React.Fragment>
+                    ))}
+                  </dl>
+                </>
+              ) : null}
             </>
           ) : participantState === 'analysis-failed' ? (
             <>

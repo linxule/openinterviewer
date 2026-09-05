@@ -69,7 +69,8 @@ describe('Synthesis trace — participant branch gains nothing (A1)', () => {
     expect(container.querySelector('[aria-expanded]')).toBeNull();
     expect(screen.queryByRole('region')).toBeNull();
     expect(container.innerHTML).not.toMatch(/\bt\.\d/);
-    expect(container.innerHTML).not.toContain('tabular-nums');
+    // Mono facts on the saved-state receipt (Slice K, A2) are not apparatus; the
+    // guards above cover citation triggers, notes, numerals, and wine.
     expect(container.innerHTML).not.toContain('--evidence');
   };
 
