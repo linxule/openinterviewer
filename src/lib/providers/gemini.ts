@@ -64,6 +64,33 @@ export function getGeminiInteractionThinkingLevel(
   return enableReasoning ? 'high' : 'low';
 }
 
+// Gemini's Interactions API response_format.schema rejects these JSON Schema
+// keywords with a 400 (`Request contains an invalid argument`), even though
+// they are valid JSON Schema and accepted by every other provider adapter.
+// All three bounds are re-enforced server-side by src/lib/providerValidation.ts,
+// so stripping them from the WIRE schema Gemini sees loses no safety — only
+// this adapter's outbound request is affected; the shared schemas in
+// src/lib/providerSchemas.ts stay strict for every other provider.
+const GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS = ['maxLength', 'minimum', 'minItems'] as const;
+
+export function toGeminiResponseSchema(schema: ProviderJsonSchema): ProviderJsonSchema {
+  function strip(value: unknown): unknown {
+    if (Array.isArray(value)) {
+      return value.map(strip);
+    }
+    if (value !== null && typeof value === 'object') {
+      const result: Record<string, unknown> = {};
+      for (const [key, entry] of Object.entries(value)) {
+        if ((GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS as readonly string[]).includes(key)) continue;
+        result[key] = strip(entry);
+      }
+      return result;
+    }
+    return value;
+  }
+  return strip(schema) as ProviderJsonSchema;
+}
+
 export class GeminiProvider implements AIProvider {
   private readonly ai: GoogleGenAI;
   private readonly model: string;
@@ -107,7 +134,7 @@ export class GeminiProvider implements AIProvider {
                 response_format: {
                   type: 'text' as const,
                   mime_type: 'application/json' as const,
-                  schema: options.schema,
+                  schema: toGeminiResponseSchema(options.schema),
                 },
               }
             : {}),
