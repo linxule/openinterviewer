@@ -65,13 +65,14 @@ export function getGeminiInteractionThinkingLevel(
 }
 
 // Gemini's Interactions API response_format.schema rejects these JSON Schema
+// keywords (maxItems confirmed by live bisect 2026-09-05 on gemini-3.8-flash)
 // keywords with a 400 (`Request contains an invalid argument`), even though
 // they are valid JSON Schema and accepted by every other provider adapter.
 // All three bounds are re-enforced server-side by src/lib/providerValidation.ts,
 // so stripping them from the WIRE schema Gemini sees loses no safety — only
 // this adapter's outbound request is affected; the shared schemas in
 // src/lib/providerSchemas.ts stay strict for every other provider.
-const GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS = ['maxLength', 'minimum', 'minItems'] as const;
+const GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS = ['maxLength', 'minimum', 'minItems', 'maxItems'] as const;
 
 export function toGeminiResponseSchema(schema: ProviderJsonSchema): ProviderJsonSchema {
   function strip(value: unknown): unknown {

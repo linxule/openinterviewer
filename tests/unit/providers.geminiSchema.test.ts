@@ -14,7 +14,7 @@ import {
 // JSON Schema keywords with a 400. They are re-enforced server-side by
 // src/lib/providerValidation.ts, so stripping them from the Gemini-bound wire
 // schema loses no safety. See src/lib/providers/gemini.ts.
-const REJECTED_KEYWORDS = ['maxLength', 'minimum', 'minItems'] as const;
+const REJECTED_KEYWORDS = ['maxLength', 'minimum', 'minItems', 'maxItems'] as const;
 
 const SCHEMAS: Record<string, ProviderJsonSchema> = {
   interviewResponseSchema,
@@ -78,7 +78,7 @@ describe('toGeminiResponseSchema', () => {
     });
   }
 
-  it('preserves maxItems, additionalProperties: false, required, and enum where present', () => {
+  it('preserves additionalProperties: false, required, and enum where present', () => {
     const sanitized = toGeminiResponseSchema(interviewResponseSchema);
     expect(sanitized).toMatchObject({
       additionalProperties: false,
@@ -93,7 +93,7 @@ describe('toGeminiResponseSchema', () => {
     const sanitizedTyped = sanitized as {
       properties: {
         phaseTransition: { enum: unknown[] };
-        profileUpdates: { maxItems: number; items: { required: unknown[] } };
+        profileUpdates: { maxItems?: number; items: { required: unknown[] } };
       };
     };
     expect(sanitizedTyped.properties.phaseTransition.enum).toEqual([
@@ -104,7 +104,7 @@ describe('toGeminiResponseSchema', () => {
       'wrap-up',
       null,
     ]);
-    expect(sanitizedTyped.properties.profileUpdates.maxItems).toBe(50);
+    expect(sanitizedTyped.properties.profileUpdates.maxItems).toBeUndefined();
     expect(sanitizedTyped.properties.profileUpdates.items.required).toEqual([
       'fieldId',
       'value',
@@ -112,21 +112,21 @@ describe('toGeminiResponseSchema', () => {
     ]);
   });
 
-  it('preserves maxItems and additionalProperties: false in the synthesis schema evidenceRefs', () => {
+  it('preserves additionalProperties: false in the synthesis schema evidenceRefs', () => {
     const sanitized = toGeminiResponseSchema(synthesisResponseSchema) as {
       properties: {
         themes: {
           items: {
             additionalProperties: boolean;
             properties: {
-              evidenceRefs: { maxItems: number; items: { additionalProperties: boolean } };
+              evidenceRefs: { maxItems?: number; items: { additionalProperties: boolean } };
             };
           };
         };
       };
     };
     expect(sanitized.properties.themes.items.additionalProperties).toBe(false);
-    expect(sanitized.properties.themes.items.properties.evidenceRefs.maxItems).toBe(3);
+    expect(sanitized.properties.themes.items.properties.evidenceRefs.maxItems).toBeUndefined();
     expect(
       sanitized.properties.themes.items.properties.evidenceRefs.items.additionalProperties
     ).toBe(false);
