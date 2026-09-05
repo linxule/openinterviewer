@@ -121,12 +121,17 @@ describe('StudySetup create idempotency', () => {
         });
       }
       if (path === '/api/studies' || path.startsWith('/api/studies/')) {
-        fetchMock.posts.push({
-          url: path,
-          method,
-          headers: headerMap(init),
-          body: init?.body ? JSON.parse(String(init.body)) : null,
-        });
+        // M6.1's revision fetch issues a GET on mount for any saved study;
+        // this file's subject is which mutation went out with which header,
+        // so only mutations are recorded.
+        if (method !== 'GET') {
+          fetchMock.posts.push({
+            url: path,
+            method,
+            headers: headerMap(init),
+            body: init?.body ? JSON.parse(String(init.body)) : null,
+          });
+        }
         if (fetchMock.createImpl) return fetchMock.createImpl(init);
         return jsonResponse(fetchMock.createStatus, fetchMock.createBody);
       }
@@ -256,6 +261,7 @@ describe('StudySetup create idempotency', () => {
     });
     render(<StudySetup />);
     await waitFor(() => expect(screen.queryByText(/Checking configured AI providers/i)).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Study Details' }));
     fireEvent.change(screen.getByPlaceholderText('e.g., AI Adoption in Healthcare'), {
       target: { value: 'Existing study edited' },
     });

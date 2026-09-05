@@ -166,6 +166,7 @@ export async function POST(
       profileSchema: parentStudy.config.profileSchema,
       aiBehavior: parentStudy.config.aiBehavior,
       consentText: parentStudy.config.consentText,
+      researcherContact: parentStudy.config.researcherContact,
       aiProvider: parentStudy.config.aiProvider,
       aiModel: parentStudy.config.aiModel,
       enableReasoning: parentStudy.config.enableReasoning,

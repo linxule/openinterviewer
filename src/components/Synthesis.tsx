@@ -204,11 +204,14 @@ const Synthesis: React.FC = () => {
 
     const elapsedMs = transcriptElapsedMs(interviewHistory);
     const consentAccepted = formatConsentTimestamp(consentTimestamp);
-    const receiptFacts = participantState === 'saved'
+    const receiptFacts: { term: string; value: string; mono?: boolean }[] = participantState === 'saved'
       ? [
           { term: 'Turns contributed', value: String(participantTurnCount(interviewHistory)) },
           ...(elapsedMs === null ? [] : [{ term: 'Elapsed', value: formatElapsed(elapsedMs) }]),
           ...(consentAccepted === null ? [] : [{ term: 'Consent accepted', value: consentAccepted }]),
+          ...(studyConfig.researcherContact
+            ? [{ term: 'Researcher contact', value: studyConfig.researcherContact, mono: false }]
+            : []),
         ]
       : [];
 
@@ -230,7 +233,9 @@ const Synthesis: React.FC = () => {
                     {receiptFacts.map((fact) => (
                       <React.Fragment key={fact.term}>
                         <dt><Label>{fact.term}</Label></dt>
-                        <dd><Coordinate className="text-[13px] text-ink-700">{fact.value}</Coordinate></dd>
+                        <dd>{fact.mono !== false
+                          ? <Coordinate className="text-[13px] text-ink-700">{fact.value}</Coordinate>
+                          : <span className="font-sans text-[13px] text-ink-700">{fact.value}</span>}</dd>
                       </React.Fragment>
                     ))}
                   </dl>
