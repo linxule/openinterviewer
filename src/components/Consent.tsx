@@ -104,7 +104,9 @@ const Consent: React.FC = () => {
               <p className="text-[13px] text-ink-500">Help us understand your context</p>
             </li>
             <li>
-              <p className="text-ink-900">{studyConfig.coreQuestions.length} core questions about your experiences</p>
+              <p className="text-ink-900">
+                {studyConfig.coreQuestions.length} core question{studyConfig.coreQuestions.length !== 1 ? 's' : ''} about your experiences
+              </p>
               <p className="text-[13px] text-ink-500">The heart of the interview</p>
             </li>
             <li>
@@ -121,7 +123,7 @@ const Consent: React.FC = () => {
           </p>
         </section>
 
-        <div className="rounded bg-paper-2 p-4 font-sans text-[13px] leading-5 text-ink-700">
+        <div className="bg-paper-2 p-4 font-sans text-[13px] leading-5 text-ink-700">
           <strong className="text-ink-900">Data notice:</strong>{' '}
           <span className="font-mono">{providerDisclosure}</span>{' '}
           The researcher is the study&apos;s data controller and controls its storage and retention settings. Do
@@ -136,7 +138,7 @@ const Consent: React.FC = () => {
         )}
 
         {consentError && (
-          <p role="alert" className="rounded bg-error px-4 py-3 text-sm text-paper-1">
+          <p role="alert" className="bg-error px-4 py-3 font-sans text-[15px] leading-[24px] text-paper-1">
             {consentError}
           </p>
         )}

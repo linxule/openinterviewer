@@ -351,10 +351,10 @@ const InterviewChat: React.FC = () => {
       {isComplete ? (
         <div className="border-t border-ink-300 bg-paper-0 px-6 py-8">
           <div className="mx-auto max-w-measure space-y-4 text-center">
-            <h3 className="font-sans text-lg font-semibold text-ink-900">
+            <h3 className="font-sans text-[18px] leading-[26px] font-semibold text-ink-900">
               {viewMode === 'preview' ? 'Preview conversation complete' : 'Interview conversation complete'}
             </h3>
-            <p className="text-sm text-ink-500">
+            <p className="font-sans text-[15px] leading-[24px] text-ink-700">
               {viewMode === 'preview'
                 ? 'Continue to generate the preview analysis. Preview responses will not be added to study data.'
                 : 'Your responses have not been saved yet. Continue to finalize and save your interview. Keep this tab open until you see confirmation that it is safe to close.'}
@@ -370,7 +370,7 @@ const InterviewChat: React.FC = () => {
             {(initError || sendError) && (
               <div
                 role="alert"
-                className="flex items-start justify-between gap-3 rounded bg-error px-4 py-3 text-sm text-paper-1"
+                className="flex items-start justify-between gap-3 bg-error px-4 py-3 font-sans text-[15px] leading-[24px] text-paper-1"
               >
                 <p>{initError || sendError}</p>
                 {initError && (

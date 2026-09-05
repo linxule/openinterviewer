@@ -6,6 +6,7 @@ import {
   validateStudyConfigForCreate,
   validateStudyConfigUpdate,
 } from '@/lib/studyConfigValidation';
+import { CONSENT_TEXT_PLACEHOLDER_ERROR } from '@/lib/consentText';
 import { makeStudyConfig } from '../fixtures/models';
 
 describe('validateStudyConfig', () => {
@@ -164,6 +165,28 @@ describe('server-owned StudyConfig fields', () => {
       ok: false,
       error: 'Invalid study configuration fields',
     });
+  });
+});
+
+describe('consent text placeholder guard', () => {
+  it('rejects a bracketed consent text on create, but the read path still accepts it', () => {
+    const input = makeStudyConfig({ consentText: 'Understand [research topic] better.' });
+
+    expect(validateStudyConfigForCreate(input, { id: 'server-id', createdAt: 123 })).toEqual({
+      ok: false,
+      error: CONSENT_TEXT_PLACEHOLDER_ERROR,
+    });
+    // The read path (canonicalStudy, researcherContext, generate-link) must keep
+    // serving studies stored before this slice with the bracketed default.
+    expect(validateStudyConfig({ ...input, id: 'server-id', createdAt: 123 })).toMatchObject({ ok: true });
+  });
+
+  it('rejects a bracketed consent text on update', () => {
+    const current = makeStudyConfig({ id: 'server-id', createdAt: 123 });
+
+    expect(
+      validateStudyConfigUpdate(current, { consentText: 'Understand [research topic] better.' }, undefined)
+    ).toEqual({ ok: false, error: CONSENT_TEXT_PLACEHOLDER_ERROR });
   });
 });
 

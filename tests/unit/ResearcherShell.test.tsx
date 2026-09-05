@@ -20,14 +20,17 @@ beforeEach(() => {
 });
 
 describe('ResearcherShell', () => {
-  it('renders both destinations as links to /studies and /settings', () => {
+  it('renders all three destinations as links to /studies, /dashboard, and /settings', () => {
     render(<ResearcherShell>content</ResearcherShell>);
 
     const studiesLinks = screen.getAllByRole('link', { name: 'Studies' });
+    const interviewsLinks = screen.getAllByRole('link', { name: 'Interviews' });
     const settingsLinks = screen.getAllByRole('link', { name: 'Settings' });
     expect(studiesLinks.length).toBeGreaterThan(0);
+    expect(interviewsLinks.length).toBeGreaterThan(0);
     expect(settingsLinks.length).toBeGreaterThan(0);
     studiesLinks.forEach((link) => expect(link).toHaveAttribute('href', '/studies'));
+    interviewsLinks.forEach((link) => expect(link).toHaveAttribute('href', '/dashboard'));
     settingsLinks.forEach((link) => expect(link).toHaveAttribute('href', '/settings'));
   });
 
@@ -41,24 +44,37 @@ describe('ResearcherShell', () => {
     }
   });
 
-  it('treats non-settings pathnames as Studies-active', () => {
+  it('marks Interviews active on dashboard paths', () => {
     navigation.pathname = '/dashboard/interview/abc123';
     render(<ResearcherShell>content</ResearcherShell>);
 
     for (const nav of screen.getAllByRole('navigation', { name: 'Researcher' })) {
-      expect(within(nav).getByRole('link', { name: 'Studies' })).toHaveAttribute('aria-current', 'page');
+      expect(within(nav).getByRole('link', { name: 'Interviews' })).toHaveAttribute('aria-current', 'page');
+      expect(within(nav).getByRole('link', { name: 'Studies' })).not.toHaveAttribute('aria-current');
       expect(within(nav).getByRole('link', { name: 'Settings' })).not.toHaveAttribute('aria-current');
     }
   });
 
-  it('renders a breadcrumb trail of Studies, Interviews, and the trailing id for an interview detail path', () => {
+  it('still marks Studies active on /setup', () => {
+    navigation.pathname = '/setup';
+    render(<ResearcherShell>content</ResearcherShell>);
+
+    for (const nav of screen.getAllByRole('navigation', { name: 'Researcher' })) {
+      expect(within(nav).getByRole('link', { name: 'Studies' })).toHaveAttribute('aria-current', 'page');
+      expect(within(nav).getByRole('link', { name: 'Interviews' })).not.toHaveAttribute('aria-current');
+      expect(within(nav).getByRole('link', { name: 'Settings' })).not.toHaveAttribute('aria-current');
+    }
+  });
+
+  it('renders a breadcrumb trail of Interviews and the trailing id, with no Studies crumb, for an interview detail path', () => {
     navigation.pathname = '/dashboard/interview/abc123';
     render(<ResearcherShell>content</ResearcherShell>);
 
     const breadcrumb = screen.getByRole('navigation', { name: 'Breadcrumb' });
-    expect(within(breadcrumb).getByText('Studies')).toBeInTheDocument();
     expect(within(breadcrumb).getByText('Interviews')).toBeInTheDocument();
     expect(within(breadcrumb).getByText('abc123')).toBeInTheDocument();
+    expect(within(breadcrumb).queryByText('Studies')).not.toBeInTheDocument();
+    expect(within(breadcrumb).getByRole('link', { name: 'Interviews' })).toHaveAttribute('href', '/dashboard');
   });
 
   it('shows the "Your keys · your database" line', () => {

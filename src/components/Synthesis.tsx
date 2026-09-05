@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useStore } from '@/store';
 import { synthesizeInterview } from '@/services/interviewApi';
 import { saveCompletedInterview } from '@/services/storageService';
-import { Button, Citation, Coordinate, Label, Page, Rule, Verbatim } from '@/components/ui';
+import { Button, Citation, Coordinate, Label, Notice, Page, Rule, Verbatim } from '@/components/ui';
 import { resolveThemeEvidence } from '@/lib/evidence';
 import type { SynthesisResult } from '@/types';
 
@@ -218,11 +218,11 @@ const Synthesis: React.FC = () => {
               <Verbatim as="h1" className="text-[28px] font-normal leading-[36px] text-ink-900">
                 We couldn&apos;t finalize your interview
               </Verbatim>
-              <div className="border-l-2 border-error bg-paper-2 px-4 py-3">
+              <Notice tone="error">
                 <p className="font-sans text-[15px] leading-[24px] text-ink-700" role="alert">
                   Your responses are still in this tab, but they have not been saved. Keep this tab open and try again.
                 </p>
-              </div>
+              </Notice>
               <div className="flex flex-col gap-3 sm:flex-row">
                 <Button variant="quiet" onClick={handleBack}>
                   Back to interview
@@ -237,11 +237,11 @@ const Synthesis: React.FC = () => {
               <Verbatim as="h1" className="text-[28px] font-normal leading-[36px] text-ink-900">
                 We couldn&apos;t save your interview
               </Verbatim>
-              <div className="border-l-2 border-error bg-paper-2 px-4 py-3">
+              <Notice tone="error">
                 <p className="font-sans text-[15px] leading-[24px] text-ink-700" role="alert">
                   Your responses are still in this tab. Keep it open and retry the save before closing.
                 </p>
-              </div>
+              </Notice>
               <div className="flex flex-col gap-3 sm:flex-row">
                 <Button variant="quiet" onClick={handleBack}>
                   Back to interview
@@ -291,37 +291,33 @@ const Synthesis: React.FC = () => {
           <div className="space-y-6">
             {/* Save Status Notices */}
             {saveStatus === 'saved' && (
-              <div className="border-l-2 border-success bg-paper-2 px-4 py-3">
-                <Label>Saved</Label>
+              <Notice tone="success" eyebrow="Saved">
                 <p className="mt-1 text-[13px] text-ink-700">
                   Interview saved successfully. View it in the researcher dashboard.
                 </p>
-              </div>
+              </Notice>
             )}
             {saveStatus === 'preview' && (
-              <div className="border-l-2 border-ink-500 bg-paper-2 px-4 py-3">
-                <Label>Preview</Label>
+              <Notice tone="neutral" eyebrow="Preview">
                 <p className="mt-1 text-[13px] text-ink-700">
                   Preview complete. This interview was not added to the study data.
                 </p>
-              </div>
+              </Notice>
             )}
             {saveStatus === 'failed' && (
-              <div className="border-l-2 border-error bg-paper-2 px-4 py-3">
-                <Label>Not saved</Label>
+              <Notice tone="error" eyebrow="Not saved">
                 <p className="mt-1 text-[13px] text-ink-700">
                   Could not save interview. You can still export locally below.
                 </p>
                 <Button variant="quiet" disabled={isSaving} onClick={handleRetrySave} className="mt-2">
                   Retry Save
                 </Button>
-              </div>
+              </Notice>
             )}
             {saveStatus === 'pending' && isSaving && (
-              <div className="border-l-2 border-ink-500 bg-paper-2 px-4 py-3">
-                <Label>Saving</Label>
+              <Notice tone="neutral" eyebrow="Saving">
                 <p className="mt-1 text-[13px] text-ink-700">Saving interview...</p>
-              </div>
+              </Notice>
             )}
 
             {/* Bottom line */}

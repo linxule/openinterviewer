@@ -16,6 +16,7 @@ import {
   PROVIDER_OPTIONS,
 } from '@/lib/providerRegistry';
 import { cn } from '@/lib/cn';
+import { CONSENT_TEXT_PLACEHOLDER, CONSENT_TEXT_PLACEHOLDER_ERROR, defaultConsentText } from '@/lib/consentText';
 import { Button, Coordinate, Field, Label, Rule } from '@/components/ui';
 
 type ConfigStatus = {
@@ -171,10 +172,7 @@ const StudySetup: React.FC = () => {
   const [linkExpiration, setLinkExpiration] = useState<LinkExpirationOption>(
     studyConfig?.linkExpiration || '30days'
   );
-  const [consentText, setConsentText] = useState(
-    studyConfig?.consentText ||
-    'Thank you for participating in this research study. Your responses will be used to understand [research topic]. You may stop at any time. Do you consent to participate?'
-  );
+  const [consentText, setConsentText] = useState(studyConfig?.consentText ?? '');
 
   // Participant link generation
   const [participantLink, setParticipantLink] = useState<string | null>(null);
@@ -524,7 +522,7 @@ const StudySetup: React.FC = () => {
     enableReasoning: aiProvider === 'gemini' ? enableReasoning : undefined,
     linkExpiration,
     linksEnabled: studyConfig?.linksEnabled ?? true,
-    consentText,
+    consentText: consentText.trim() || defaultConsentText(researchQuestion),
     createdAt: studyConfig?.createdAt || Date.now(),
     // Include parent study info if this is a follow-up
     ...(parentStudyInfo && {
@@ -730,6 +728,10 @@ const StudySetup: React.FC = () => {
 
     try {
       const config = buildConfig();
+      if (CONSENT_TEXT_PLACEHOLDER.test(config.consentText)) {
+        setSaveError(CONSENT_TEXT_PLACEHOLDER_ERROR);
+        return;
+      }
       const result = await saveStudy({
         config,
         updateStudyId: isUpdate ? savedStudyId || undefined : undefined,
@@ -1383,7 +1385,11 @@ const StudySetup: React.FC = () => {
 
           {/* Consent Text */}
           <section id="consent-text" className="space-y-4">
-            <Field label="Consent Text" htmlFor="study-consent-text">
+            <Field
+              label="Consent Text"
+              htmlFor="study-consent-text"
+              hint="Leave blank to generate this from your research question when you save. Square brackets are not allowed — participants read this text exactly as written."
+            >
               <textarea
                 value={consentText}
                 onChange={(e) => { setConsentText(e.target.value); setIsDirty(true); }}

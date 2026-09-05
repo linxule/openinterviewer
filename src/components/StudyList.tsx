@@ -8,7 +8,7 @@ import {
   getAllStudies,
   reconcileStudyOperations,
 } from '@/services/storageService';
-import { Button, Coordinate, Label, Measure, Rule } from '@/components/ui';
+import { Button, Coordinate, Icon, Measure, Notice, Rule } from '@/components/ui';
 
 export default function StudyList() {
   const router = useRouter();
@@ -210,22 +210,22 @@ export default function StudyList() {
       <Rule className="my-6" />
 
       {kvWarning && (
-        <div className="mb-6 border-l-2 border-error bg-paper-2 px-4 py-3">
-          <Label>
-            {kvWarning.toLowerCase().includes('unavailable') ? 'Workspace unavailable' : 'Storage Not Configured'}
-          </Label>
+        <Notice
+          tone="error"
+          eyebrow={kvWarning.toLowerCase().includes('unavailable') ? 'Workspace unavailable' : 'Storage Not Configured'}
+          className="mb-6"
+        >
           <p className="mt-1 text-[13px] text-ink-700">{kvWarning}</p>
           {!kvWarning.toLowerCase().includes('unavailable') && (
             <p className="mt-1 text-[13px] text-ink-700">
               See the README for setup instructions using Upstash Redis.
             </p>
           )}
-        </div>
+        </Notice>
       )}
 
       {operationNotice && (
-        <div role="status" className="mb-6 border-l-2 border-error bg-paper-2 px-4 py-3">
-          <Label>Pending reconciliation</Label>
+        <Notice tone="error" eyebrow="Pending reconciliation" role="status" className="mb-6">
           <p className="mt-1 text-[13px] text-ink-700">{operationNotice}</p>
           {hostedMode && (
             <Button
@@ -238,25 +238,21 @@ export default function StudyList() {
               Reconcile
             </Button>
           )}
-        </div>
+        </Notice>
       )}
 
       {sampleMessage && (
-        <div
-          className={`mb-6 flex items-start gap-3 border-l-2 bg-paper-2 px-4 py-3 ${
-            sampleMessage.type === 'success' ? 'border-success' : 'border-error'
-          }`}
-        >
+        <Notice tone={sampleMessage.type} className="mb-6 flex items-start gap-3">
           <p className="flex-1 text-[13px] text-ink-700">{sampleMessage.text}</p>
           <button
             type="button"
             onClick={() => setSampleMessage(null)}
             aria-label="Dismiss message"
-            className="text-ink-500 hover:text-ink-900"
+            className="flex min-h-11 min-w-11 items-center justify-center text-ink-500 hover:text-ink-900"
           >
-            ×
+            <Icon name="close" />
           </button>
-        </div>
+        </Notice>
       )}
 
       {loading ? (
@@ -379,9 +375,10 @@ export default function StudyList() {
                         aria-label={`Open actions for ${name}`}
                         aria-haspopup="menu"
                         aria-expanded={menuOpenId === study.id}
-                        className="text-[13px] text-ink-500 hover:text-ink-900"
+                        className="inline-flex items-center gap-1 min-h-11 text-[13px] text-ink-500 hover:text-ink-900"
                       >
                         Actions
+                        <Icon name="chevron" className={menuOpenId === study.id ? 'rotate-180' : undefined} />
                       </button>
                       {menuOpenId === study.id && (
                         <div

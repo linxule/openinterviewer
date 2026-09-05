@@ -12,7 +12,8 @@ import {
   ResearcherStorageUnavailableError,
   StudyOperationPendingError,
 } from '@/services/storageService';
-import { Button, Coordinate, Field, Label, Measure, Rule } from '@/components/ui';
+import { Button, Coordinate, Field, Measure, Notice, Rule } from '@/components/ui';
+import { shortInterviewId } from '@/lib/interviewId';
 import { useSetTrailingCrumb } from '@/components/shell/breadcrumb';
 
 export default function Dashboard() {
@@ -222,8 +223,7 @@ export default function Dashboard() {
       )}
 
       {operationPending && (
-        <div role="status" className="mb-6 border-l-2 border-error bg-paper-2 px-4 py-3">
-          <Label>Pending reconciliation</Label>
+        <Notice tone="error" eyebrow="Pending reconciliation" role="status" className="mb-6">
           <p className="mt-1 text-[13px] text-ink-700">A study operation is already in progress.</p>
           <Button
             type="button"
@@ -234,14 +234,13 @@ export default function Dashboard() {
           >
             Reconcile
           </Button>
-        </div>
+        </Notice>
       )}
 
       {warning && (
-        <div className="mb-6 border-l-2 border-error bg-paper-2 px-4 py-3">
-          <Label>Workspace</Label>
+        <Notice tone="error" eyebrow="Workspace" className="mb-6">
           <p className="mt-1 text-[13px] text-ink-700">{warning}</p>
-        </div>
+        </Notice>
       )}
 
       {loading ? (
@@ -332,7 +331,7 @@ export default function Dashboard() {
                     onClick={() => handleViewInterview(interview.id, interview.studyId)}
                   >
                     <td className="px-3 py-3 align-top text-[13px] text-ink-700">
-                      <Coordinate>{interview.id.slice(0, 8)}</Coordinate>
+                      <Coordinate>{shortInterviewId(interview.id)}</Coordinate>
                     </td>
                     <td className="px-3 py-3 align-top text-[13px] text-ink-700">
                       <button

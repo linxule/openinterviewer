@@ -19,6 +19,7 @@ This is the canonical repository guide for coding agents and contributors. `READ
 - Deployability contract: `scripts/check-setup.mjs`
 - CI gates and safe hosted build fixtures: `.github/workflows/ci.yml`
 - Shared domain shapes: `src/types.ts`
+- Design direction and UI vocabulary: `docs/design/DIRECTION-final.md` (decided), `docs/design/initiative-*-brief.md` and `docs/design/slice-*-spec.md` (per-slice implementation contracts). The design law is lint-enforced in `eslint.config.mjs`: no Tailwind default palette, no raw `font-serif`, and the wine/ochre custom properties reach the UI only through primitives in `src/components/ui/`.
 
 Production is external state. Verify it through the deployment provider and public readiness endpoints; do not preserve a live snapshot in repository guidance.
 
@@ -49,6 +50,7 @@ The sample-workspace seed is not the public demo. `/demo` is component-memory-on
 ### Storage and tenancy
 
 - Researcher studies/interviews and atomic Redis scripts: `src/lib/kv.ts`
+- Field-level JSON patching inside Redis Lua (preserves untouched value types): `src/lib/studyJsonLua.ts`
 - Redis client construction, cache lifecycle, and Upstash URL validation: `src/lib/kvClient.ts`
 - Public Redis port and node-redis test adapter: `src/lib/redisPort.ts`, `src/lib/redisNodeAdapter.ts`
 - Closed Redis wire parsers: `src/lib/wire/`
@@ -108,10 +110,11 @@ The participant sequence is link exchange -> HttpOnly participant session -> con
 | Structured request logs | `src/lib/requestLog.ts`, `providerErrors.ts`, API catch sites | `requestLog.test.ts` + `providerErrors.test.ts` + health/config contract tests |
 | Participant/preview headers | `src/services/participantHeaders.ts`, `interviewApi.ts`, `storageService.ts`, `Consent.tsx` | `participantHeaders.test.ts` + `participantSessionHeaders.test.ts` + consent/isolation suites |
 | Researcher UI | components, services, page entry | paired component/API tests; inspect 375px when layout changes |
+| Design system | `src/components/ui/`, `src/app/globals.css`, `tailwind.config.ts`, `eslint.config.mjs` | `tests/unit/ui.*.test.tsx`; new visual vocabulary is added as a primitive here, never inline in a screen; changes follow a `docs/design/slice-*-spec.md` |
 
 Vitest tests live in two tiers. `tests/unit/` runs under the base vitest config (jsdom) and mirrors the security or product boundary it protects; prefer a realistic regression at that boundary over snapshots of implementation detail. `tests/integration/` runs under `vitest.integration.config.mts` (node environment) against a runner-owned disposable `redis-server` via `tests/helpers/disposableRedis.ts` — it must never connect to an inherited, shared, or production Redis. Use `npm run test:redis-crash` and `npm run test:adversarial` for these suites; they need a local `redis-server` binary (or the CI container) and are the only place real-wire crash-cut and cross-tenant claims are actually exercised.
 
-`tests/e2e/` runs the browser journeys with real application API handlers and disposable Redis; only external provider HTTP responses are synthetic. Keep the Next test proxy confined to its test-only server launcher. Do not mock internal synthesis/save APIs in the successful completion regression: it must exercise receipt creation and verification across that boundary. The keyless demo regression still requires no API or external requests.
+`tests/e2e/` runs the browser journeys with real application API handlers and disposable Redis; only external provider HTTP responses are synthetic. `tests/e2e/server.mjs` builds and boots the production app with a blank, credential-free fixture environment (one server per transport) and `tests/e2e/workflow-fixture.ts` intercepts Upstash and provider HTTP at Next's test-mode boundary — together they are the sanctioned way to exercise the full researcher and participant workflow locally without any real credentials. Keep the Next test proxy confined to its test-only server launcher. Do not mock internal synthesis/save APIs in the successful completion regression: it must exercise receipt creation and verification across that boundary. The keyless demo regression still requires no API or external requests.
 
 ## Canonical commands
 
