@@ -129,6 +129,9 @@ const Consent: React.FC = () => {
           The researcher is the study&apos;s data controller and controls its storage and retention settings. Do
           not include information you do not want to share. Contact the researcher for retention, access, and
           deletion details.
+          {studyConfig.researcherContact
+            ? <>{' '}Researcher contact: <span className="font-sans text-ink-900">{studyConfig.researcherContact}</span></>
+            : null}
         </div>
 
         {!providerConfigurationReady && (
