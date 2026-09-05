@@ -404,21 +404,19 @@ export interface AggregateSynthesisResult {
    * client-supplied.
    */
   savedAt?: number;
-  _receipt?: string;            // Server-signed aggregate content and provenance
 }
 
 /**
- * The aggregate as it is stored: the verified facts, no receipt, plus the
- * server's write timestamp. `save/route.ts:138` is the precedent — a signature
- * whose job is discharged is not part of the record it secured.
+ * The aggregate as it is stored: the verified facts plus the server's write
+ * timestamp.
  */
 export type StoredAggregateSynthesis =
-  Omit<AggregateSynthesisResult, '_receipt'> & { savedAt: number };
+  AggregateSynthesisResult & { savedAt: number };
 
 /** What an AIProvider returns for an aggregate: ids are not resolved yet. */
 export type AggregateSynthesisProviderPayload = Omit<
   AggregateSynthesisResult,
   | 'studyId' | 'studyRevision' | 'interviewIds' | 'interviewCount'
   | 'aiProvider' | 'aiModel' | 'requestedAiModel' | 'routedProvider'
-  | 'generatedAt' | '_receipt' | 'commonThemes'
+  | 'generatedAt' | 'commonThemes'
 > & { commonThemes: AggregateThemeClaim[] };

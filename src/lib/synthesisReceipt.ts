@@ -7,9 +7,7 @@ import { gatewayRouteForProvider, isGatewayProvider, toGatewayModelId } from './
 
 const ISSUER = 'openinterviewer';
 const AUDIENCE = 'openinterviewer:synthesis-receipt';
-const AGGREGATE_AUDIENCE = 'openinterviewer:aggregate-synthesis-receipt';
 const RECEIPT_VERSION = 3;
-const AGGREGATE_RECEIPT_VERSION = 1;
 
 export interface SynthesisProvenance {
   aiProvider: AIProviderType;
@@ -17,8 +15,6 @@ export interface SynthesisProvenance {
   requestedAiModel: string;
   routedProvider?: string;
 }
-
-type UnsignedAggregateSynthesis = Omit<AggregateSynthesisResult, '_receipt'>;
 
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -184,72 +180,10 @@ function validateProvenance(value: {
 
 /**
  * The aggregate provenance gate: null when the record does not name a known
- * provider and the model that actually ran. Exported because the aggregate is
- * now stored rather than signed, and the check outlived the signature.
+ * provider and the model that actually ran.
  */
 export function aggregateProvenance(
-  synthesis: Omit<AggregateSynthesisResult, '_receipt'>,
+  synthesis: AggregateSynthesisResult,
 ): SynthesisProvenance | null {
   return validateProvenance(synthesis);
-}
-
-export async function createAggregateSynthesisReceipt(
-  synthesis: UnsignedAggregateSynthesis,
-): Promise<string> {
-  const provenance = aggregateProvenance(synthesis);
-  if (!provenance) throw new Error('Aggregate synthesis provenance is incomplete');
-
-  return new jose.SignJWT({
-    type: 'aggregate-synthesis-receipt',
-    version: AGGREGATE_RECEIPT_VERSION,
-    studyId: synthesis.studyId,
-    studyRevision: synthesis.studyRevision,
-    ...provenance,
-    dataDigest: digest(synthesis),
-  })
-    .setProtectedHeader({ alg: 'HS256' })
-    .setIssuer(ISSUER)
-    .setAudience(AGGREGATE_AUDIENCE)
-    .setIssuedAt()
-    .setExpirationTime('1h')
-    .sign(getParticipantSigningSecret());
-}
-
-export async function verifyAggregateSynthesisReceipt(options: {
-  receipt: string;
-  synthesis: UnsignedAggregateSynthesis;
-}): Promise<SynthesisProvenance | null> {
-  try {
-    const { payload } = await jose.jwtVerify(
-      options.receipt,
-      getParticipantSigningSecret(),
-      {
-        algorithms: ['HS256'],
-        issuer: ISSUER,
-        audience: AGGREGATE_AUDIENCE,
-      },
-    );
-    if (payload.type !== 'aggregate-synthesis-receipt'
-      || payload.version !== AGGREGATE_RECEIPT_VERSION
-      || payload.studyId !== options.synthesis.studyId
-      || payload.studyRevision !== options.synthesis.studyRevision
-      || payload.dataDigest !== digest(options.synthesis)) {
-      return null;
-    }
-
-    const provider = payload.aiProvider;
-    if (provider !== 'gemini' && provider !== 'claude'
-      && provider !== 'openai' && provider !== 'openrouter') {
-      return null;
-    }
-    if (provider !== options.synthesis.aiProvider
-      || payload.aiModel !== options.synthesis.aiModel
-      || payload.requestedAiModel !== options.synthesis.requestedAiModel
-      || payload.routedProvider !== options.synthesis.routedProvider) {
-      return null;
-    }
-    return validateProvenance(options.synthesis);
-  } catch {
-    return null;
-  }
 }

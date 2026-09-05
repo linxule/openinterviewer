@@ -42,7 +42,6 @@ const platformRateLimitMock = vi.hoisted(() => ({ hostedAiRateLimitResponse: vi.
 vi.mock('@/lib/platformAiRateLimit', () => platformRateLimitMock);
 
 const receiptMock = vi.hoisted(() => ({
-  createAggregateSynthesisReceipt: vi.fn(),
   aggregateProvenance: vi.fn(() => ({
     aiProvider: 'gemini',
     aiModel: GEMINI_SYNTHESIS_MODEL,
@@ -108,7 +107,6 @@ beforeEach(() => {
     () => contextMock.getRequestContext(),
   );
   platformRateLimitMock.hostedAiRateLimitResponse.mockResolvedValue(null);
-  receiptMock.createAggregateSynthesisReceipt.mockResolvedValue('aggregate-receipt');
   kvMock.saveStudyAggregate.mockResolvedValue('saved');
   kvMock.getStudyChecked.mockImplementation(async (id: string) => {
     const study = await kvMock.getStudy(id);

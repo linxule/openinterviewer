@@ -3,9 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as jose from 'jose';
 import {
-  createAggregateSynthesisReceipt,
   createSynthesisReceipt,
-  verifyAggregateSynthesisReceipt,
   verifySynthesisReceipt,
 } from '@/lib/synthesisReceipt';
 import { getParticipantSigningSecret } from '@/lib/auth';
@@ -190,57 +188,6 @@ describe('synthesis receipts', () => {
 
     await expect(verifySynthesisReceipt({ ...payload, receipt: legacyReceipt })).resolves.toBeNull();
   });
-});
-
-describe('aggregate synthesis receipts', () => {
-  const aggregate = {
-    studyId: 'study-a',
-    studyRevision: 1,
-    interviewIds: ['interview-a', 'interview-b'],
-    interviewCount: 2,
-    aiProvider: 'openrouter' as const,
-    aiModel: 'openai/gpt-5.6-sol-2026-08-01',
-    requestedAiModel: OPENROUTER_SYNTHESIS_MODEL,
-    routedProvider: 'OpenAI',
-    commonThemes: [],
-    divergentViews: [],
-    keyFindings: ['A signed finding'],
-    researchImplications: [],
-    bottomLine: 'Signed aggregate.',
-    generatedAt: 1,
-  };
-
-  it('binds aggregate content, interview provenance, and routed provider', async () => {
-    const receipt = await createAggregateSynthesisReceipt(aggregate);
-
-    await expect(verifyAggregateSynthesisReceipt({ receipt, synthesis: aggregate })).resolves.toEqual({
-      aiProvider: 'openrouter',
-      aiModel: aggregate.aiModel,
-      requestedAiModel: OPENROUTER_SYNTHESIS_MODEL,
-      routedProvider: 'OpenAI',
-    });
-    await expect(verifyAggregateSynthesisReceipt({
-      receipt,
-      synthesis: { ...aggregate, bottomLine: 'Tampered aggregate.' },
-    })).resolves.toBeNull();
-  });
-
-  it('preserves direct native provenance without a routed provider', async () => {
-    const direct = {
-      ...aggregate,
-      aiProvider: 'gemini' as const,
-      requestedAiModel: GEMINI_SYNTHESIS_MODEL,
-      aiModel: `${GEMINI_SYNTHESIS_MODEL}-served`,
-      routedProvider: undefined,
-    };
-    const receipt = await createAggregateSynthesisReceipt(direct);
-
-    await expect(verifyAggregateSynthesisReceipt({ receipt, synthesis: direct })).resolves.toEqual({
-      aiProvider: 'gemini',
-      requestedAiModel: GEMINI_SYNTHESIS_MODEL,
-      aiModel: direct.aiModel,
-    });
-  });
 
   it.each([
     { name: 'unknown Gateway model', requestedAiModel: 'openai/unknown', routedProvider: 'openai' },
@@ -250,14 +197,12 @@ describe('aggregate synthesis receipts', () => {
     { name: 'native model with a Gateway route', requestedAiModel: OPENAI_SYNTHESIS_MODEL, routedProvider: 'openai' },
     { name: 'empty Gateway route', requestedAiModel: `openai/${OPENAI_SYNTHESIS_MODEL}`, routedProvider: '' },
     { name: 'unbounded response model', requestedAiModel: `openai/${OPENAI_SYNTHESIS_MODEL}`, routedProvider: 'openai', aiModel: 'x'.repeat(201) },
-  ])('rejects $name in both receipt contracts', async ({ name: _name, ...invalid }) => {
+  ])('rejects $name in signed provenance', async ({ name: _name, ...invalid }) => {
     const provenance = { aiProvider: 'openai' as const, aiModel: 'served-model', ...invalid };
     // The signer is trusted, but verification must reject even signed malformed
     // provenance, not only browser edits that invalidate the JWT signature.
     const participantReceipt = await createSynthesisReceipt({ ...payload, ...provenance });
     await expect(verifySynthesisReceipt({ ...payload, receipt: participantReceipt })).resolves.toBeNull();
-    await expect(createAggregateSynthesisReceipt({ ...aggregate, ...provenance }))
-      .rejects.toThrow('Aggregate synthesis provenance is incomplete');
   });
 
   it('rejects altered Gateway provenance without a valid signature', async () => {
