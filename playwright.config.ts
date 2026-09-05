@@ -8,7 +8,7 @@ export default defineConfig({
   fullyParallel: false,
   workers: process.env.CI ? 1 : undefined,
   forbidOnly: Boolean(process.env.CI),
-  timeout: 60_000,
+  timeout: 120_000,
   retries: process.env.CI ? 1 : 0,
   reporter: [
     ['list'],
@@ -16,34 +16,28 @@ export default defineConfig({
   ],
   use: {
     baseURL: BASE_URL,
+    actionTimeout: 15_000,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
   },
   projects: [
     {
-      name: 'chromium',
+      name: 'standalone-direct',
       use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'standalone-gateway',
+      testMatch: '**/research-workflow.spec.ts',
+      use: { ...devices['Desktop Chrome'], baseURL: `http://127.0.0.1:${PORT + 1}` },
     },
   ],
   webServer: {
-    command: `npm run build && npm run start -- -p ${PORT} -H 127.0.0.1`,
-    url: BASE_URL,
+    command: `node tests/e2e/server.mjs launch ${PORT}`,
+    // The Gateway server is started only after the single production build.
+    url: `http://127.0.0.1:${PORT + 1}`,
     reuseExistingServer: false,
     timeout: 300_000,
-    env: {
-      ...process.env,
-      DEPLOYMENT_MODE: process.env.DEPLOYMENT_MODE || 'standalone',
-      ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || 'e2e-test-password',
-      SESSION_SECRET: process.env.SESSION_SECRET || 'e2e-test-session-secret',
-      PARTICIPANT_TOKEN_SECRET: process.env.PARTICIPANT_TOKEN_SECRET || 'e2e-test-token-secret',
-      GEMINI_API_KEY: '',
-      ANTHROPIC_API_KEY: '',
-      KV_URL: '',
-      KV_REST_API_URL: '',
-      KV_REST_API_TOKEN: '',
-      KV_REST_API_READ_ONLY_TOKEN: '',
-      REDIS_URL: '',
-    },
+    stdout: 'pipe',
   },
 });

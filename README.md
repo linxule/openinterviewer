@@ -233,7 +233,9 @@ For participants:
 1. Open the study link.
 2. Review the study information and give consent.
 3. Complete the adaptive interview.
-4. Submit the completed interview.
+4. Choose **Continue to save interview** and wait for **Interview submitted** before closing the tab.
+
+Finalization generates the synthesis and then saves the interview. If either step fails, keep the tab open and use **Retry finalization** or **Retry save**. A successful synthesis alone is not a save confirmation. Researchers can download the saved transcript and JSON from the interview detail view. Researcher previews do not store research records; if preview analysis fails, **Export transcript** still opens the transcript download.
 
 Editing a study advances its revision and invalidates links and participant sessions issued for the previous revision. Generate and distribute a new link after a consequential edit.
 
@@ -294,7 +296,9 @@ npm run test:adversarial
 git diff --check
 ```
 
-The browser regression proves that the keyless demo does not contact application AI APIs or external services. Production logs are allowlisted JSON and never contain prompts, keys, or bodies. Real-Redis crash and shared-BYOS adversarial jobs never accept an inherited production `REDIS_URL`.
+The browser suite covers the keyless demo plus standalone direct and Gateway research workflows: study creation, participant-link exchange, consent, interview, synthesis, saving, researcher review, and export. The workflow tests run the real application APIs with synthetic provider HTTP responses and a fresh disposable Redis instance per test. They require Docker or a local `redis-server`; inherited `REDIS_URL` or Redis attestation configuration is refused. Test-only servers use fixture credentials and Next's test proxy; the deployed application does not enable that proxy. These tests verify application behavior, not live provider availability, model quality, or hosted OAuth onboarding.
+
+Production logs are allowlisted JSON and never contain prompts, keys, or bodies. Real-Redis crash and shared-BYOS adversarial jobs also refuse inherited production Redis connections.
 
 For ordinary updates to an already configured deployment, use a reviewed pull request, require the CI and preview checks, merge to `main`, then verify the exact Git-backed production deployment on the canonical domain and scan runtime errors. The longer runbook above is for the first hosted-mode infrastructure cutover, not every application release.
 

@@ -41,3 +41,26 @@ Completed using Node 24.19.0, an environment without inherited credentials, the 
 - `npm run test:e2e`: the repository's one Chromium test passed, covering the keyless demo's research loop and lack of API/external requests. Participant and researcher behavior in this change is covered by unit tests, not a live-provider browser run.
 - `npm run test:redis-crash`: 14 passed. `npm run test:adversarial`: 23 passed across the in-memory and real-Redis suites.
 - Independent frontend and backend diff reviews found no actionable issues; `git diff --check` passed.
+
+## Follow-up: completion and researcher workflows
+
+A report from someone running a local deployment prompted a separate completion audit. Their version, transport, and error output were unavailable, so these findings do not establish which defect they encountered. The earlier maintenance changes above did not address completion.
+
+Three defects were reproduced and fixed:
+
+- Gateway synthesis produced mapped model IDs and creator-route provenance that receipt validation rejected. Participant saves then failed after successful synthesis, and aggregate receipt creation also failed. A shared provenance validator now accepts the known Gateway mappings with the exact creator route, independently of the current deployment transport. Native, OpenRouter, and legacy receipt checks remain intact.
+- Completion replaced a null participant profile after synthesis had signed it, regenerated fallback submission identity/time on retries, and allowed late analysis responses to affect a superseding session. The component now saves its captured analysis inputs, retains stable fallback identity/time, and ignores superseded responses. Preview users can export their transcript when analysis fails.
+- The first real-storage browser run exposed Redis Lua re-encoding valid empty arrays as objects while updating the study's interview count. The initial save succeeded, but canonical study validation failed on refresh and for the next participant. Completion, link toggles, and config replacement now patch selected JSON fields without re-encoding untouched values. The shared helper uses portable Redis Lua; atomic guards and recovery cuts remain unchanged.
+
+The browser suite now connects real application routes, signed receipts, and runner-owned Redis. Both standalone direct and Gateway journeys create a study, use separate participant sessions, recover from synthesis and storage failures, refresh saved submissions, verify exactly two interviews, download transcript and JSON, and run aggregate synthesis. Preview recovery is checked at 375px, including transcript export and zero saved research records. External provider HTTP responses are synthetic; deployed application configuration never enables the test proxy.
+
+The storage fix prevents new corruption. It does not repair study records already damaged by older versions; those need inspection and recovery from known-good configuration. No external deployment or stored research data was inspected or changed. Live provider availability, model quality, hosted OAuth onboarding, and actual deployed configuration remain outside this browser coverage.
+
+Follow-up verification passed with Node 24.19.0 and synthetic fixtures:
+
+- `npm run check`: lint, typecheck, and 132 unit files / 1,190 tests.
+- `npm run test:setup`: 17 tests; demo, direct, Gateway, and hosted setup contracts.
+- Standalone direct, standalone Gateway, and hosted production builds.
+- `npm run test:e2e`: five Chromium scenarios. The subsequent launcher readiness change also passed a focused startup/shutdown check for both transport servers; the 375px preview recovery screen was visually inspected.
+- `npm run test:redis-crash`: 19 tests; `npm run test:adversarial`: 23 tests.
+- Independent completion, receipt, and Redis diff reviews found no actionable issues; `git diff --check` passed.
