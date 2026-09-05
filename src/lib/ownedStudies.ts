@@ -132,9 +132,11 @@ export async function loadAllowedInterviews(
 ): Promise<OwnedCollectionLoadResult<StoredInterview>> {
   const interviews: StoredInterview[] = [];
   for (const studyId of studyIds) {
-    const loaded = await getStudyInterviewsChecked(studyId, kvClient, maximum);
+    const loaded = await getStudyInterviewsChecked(studyId, kvClient, maximum - interviews.length);
     if (loaded.status === 'unavailable') return { status: 'unavailable' };
-    if (loaded.status === 'too-large') return loaded;
+    if (loaded.status === 'too-large') {
+      return { status: 'too-large', count: interviews.length + loaded.count, maximum };
+    }
     interviews.push(...loaded.items);
   }
   interviews.sort((a, b) => b.createdAt - a.createdAt);
