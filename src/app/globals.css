@@ -79,7 +79,7 @@
   .input-verbatim {
     font-family: var(--font-serif), Georgia, serif;
     field-sizing: content;
-    min-height: 76px;
+    min-height: 7.5rem;
     max-height: 40vh;
     overflow-y: auto;
   }

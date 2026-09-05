@@ -101,21 +101,21 @@ const Consent: React.FC = () => {
           <ol className="list-decimal space-y-3 pl-5 font-sans text-[15px] leading-[24px]">
             <li>
               <p className="text-ink-900">Brief background questions</p>
-              <p className="text-[13px] text-ink-500">Help us understand your context</p>
+              <p className="text-[13px] leading-[20px] text-ink-500">Help us understand your context</p>
             </li>
             <li>
               <p className="text-ink-900">
                 {studyConfig.coreQuestions.length} core question{studyConfig.coreQuestions.length !== 1 ? 's' : ''} about your experiences
               </p>
-              <p className="text-[13px] text-ink-500">The heart of the interview</p>
+              <p className="text-[13px] leading-[20px] text-ink-500">The heart of the interview</p>
             </li>
             <li>
               <p className="text-ink-900">The AI may ask follow-up questions</p>
-              <p className="text-[13px] text-ink-500">To better understand your perspective</p>
+              <p className="text-[13px] leading-[20px] text-ink-500">To better understand your perspective</p>
             </li>
             <li>
               <p className="text-ink-900">A final question for your feedback</p>
-              <p className="text-[13px] text-ink-500">Your thoughts on the interview itself</p>
+              <p className="text-[13px] leading-[20px] text-ink-500">Your thoughts on the interview itself</p>
             </li>
           </ol>
           <p className="border-t border-ink-300 pt-4 font-sans text-[15px] leading-[24px] text-ink-700">
@@ -123,7 +123,7 @@ const Consent: React.FC = () => {
           </p>
         </section>
 
-        <div className="bg-paper-2 p-4 font-sans text-[13px] leading-5 text-ink-700">
+        <div className="bg-paper-2 p-4 font-sans text-[13px] leading-[20px] text-ink-700">
           <strong className="text-ink-900">Data notice:</strong>{' '}
           <span className="font-mono">{providerDisclosure}</span>{' '}
           The researcher is the study&apos;s data controller and controls its storage and retention settings. Do
