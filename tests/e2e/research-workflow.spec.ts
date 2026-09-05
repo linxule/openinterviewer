@@ -76,6 +76,11 @@ test('researcher creates a study; participants finalize; researcher reads, downl
 
   await page.goto(studyUrl);
   await expect(page.getByText('2 interviews', { exact: true })).toBeVisible();
+  // The researcher shell must not overflow a phone: three rail destinations plus
+  // the brand and Log out once pushed the top bar past 375px.
+  await page.setViewportSize({ width: 375, height: 812 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.setViewportSize({ width: 1280, height: 720 });
   await page.getByRole('tab', { name: 'Interviews', exact: true }).click();
   await expect(page.getByRole('button', { name: /View interview \d/ })).toHaveCount(2);
   await page.getByRole('button', { name: 'View interview 1', exact: true }).click();
