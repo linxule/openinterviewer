@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useStore } from '@/store';
-import { Button, Coordinate, Label, Page, Rule, Verbatim } from '@/components/ui';
+import { Button, Coordinate, Icon, Label, Page, Rule, Verbatim } from '@/components/ui';
 
 const Export: React.FC = () => {
   const router = useRouter();
@@ -317,8 +317,11 @@ const Export: React.FC = () => {
             onClick={handleCopyJSON}
             className="group block w-full border-t border-ink-300 py-4 text-left"
           >
-            <span className={`block font-sans text-[15px] font-medium group-hover:text-action ${jsonCopied ? 'text-success' : 'text-ink-900'}`}>
-              {jsonCopied ? 'Copied!' : 'Copy to Clipboard'}
+            <span className="flex items-center gap-2">
+              <Icon name={jsonCopied ? 'check' : 'copy'} />
+              <span className={`font-sans text-[15px] font-medium group-hover:text-action ${jsonCopied ? 'text-success' : 'text-ink-900'}`}>
+                {jsonCopied ? 'Copied!' : 'Copy to Clipboard'}
+              </span>
             </span>
             <span className="block font-sans text-[13px] text-ink-500">
               Copy JSON data to clipboard

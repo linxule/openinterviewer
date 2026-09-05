@@ -25,13 +25,18 @@ beforeEach(() => {
 });
 
 describe('Export register styling', () => {
-  it('carries no legacy classes or icons in preview mode', () => {
+  it('carries no legacy classes, and its one icon is decorative inside a button, in preview mode', () => {
     seedStore('preview');
     const { container } = render(<Export />);
 
-    expect(container.querySelectorAll('svg')).toHaveLength(0);
+    const icons = container.querySelectorAll('svg');
+    expect(icons).toHaveLength(1);
+    icons.forEach((svg) => {
+      expect(svg.getAttribute('aria-hidden')).toBe('true');
+      expect(svg.closest('button')).not.toBeNull();
+    });
     container.querySelectorAll('[class]').forEach((el) => {
-      expect(el.className).not.toMatch(/stone-|rounded-xl|rounded-full/);
+      expect(el.getAttribute('class')).not.toMatch(/stone-|rounded-xl|rounded-full/);
     });
   });
 

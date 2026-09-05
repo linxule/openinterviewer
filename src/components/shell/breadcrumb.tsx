@@ -4,6 +4,7 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Coordinate } from '@/components/ui';
+import { shortInterviewId } from '@/lib/interviewId';
 
 interface BreadcrumbContextValue {
   trailing: string | null;
@@ -68,10 +69,7 @@ function buildTrail(pathname: string, trailing: string | null): CrumbItem[] {
   }
 
   if (pathname === '/dashboard') {
-    const items: CrumbItem[] = [
-      { label: 'Studies', href: '/studies' },
-      { label: 'Interviews', href: trailing ? '/dashboard' : null },
-    ];
+    const items: CrumbItem[] = [{ label: 'Interviews', href: trailing ? '/dashboard' : null }];
     if (trailing) items.push({ label: trailing, href: null });
     return items;
   }
@@ -80,9 +78,8 @@ function buildTrail(pathname: string, trailing: string | null): CrumbItem[] {
   if (interviewDetailMatch) {
     const id = interviewDetailMatch[1];
     return [
-      { label: 'Studies', href: '/studies' },
       { label: 'Interviews', href: '/dashboard' },
-      { label: trailing ?? id.slice(0, 8), href: null, mono: !trailing },
+      { label: trailing ?? shortInterviewId(id), href: null, mono: !trailing },
     ];
   }
 

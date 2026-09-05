@@ -113,6 +113,44 @@ describe('StudyDetail register table', () => {
     expect(container.querySelectorAll('svg').length).toBe(0);
   });
 
+  it('shows a Copy control with one aria-hidden icon that flips to Copied! after copying a generated link', async () => {
+    const config = makeStudyConfig({ id: 'study-link', name: 'Link Study' });
+    storageMock.getStudy.mockResolvedValue(makeStoredStudy({ id: 'study-link', config, revision: 1 }));
+    storageMock.getStudyInterviews.mockResolvedValue([]);
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.includes('/api/generate-link')) {
+          return new Response(JSON.stringify({ url: 'https://example.com/p/token123' }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(JSON.stringify({ links: [], truncated: false }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      })
+    );
+    const writeText = vi.fn();
+    Object.assign(navigator, { clipboard: { writeText } });
+
+    renderStudyDetail('study-link');
+    await screen.findByRole('heading', { name: 'Link Study' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Study settings' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Generate New Link' }));
+
+    const copyButton = await screen.findByRole('button', { name: 'Copy' });
+    expect(copyButton.querySelectorAll('svg[aria-hidden="true"]').length).toBe(1);
+
+    fireEvent.click(copyButton);
+    expect(writeText).toHaveBeenCalledWith('https://example.com/p/token123');
+    expect(await screen.findByRole('button', { name: 'Copied!' })).toBeInTheDocument();
+  });
+
   it('renders the participant-access toggle as a switch reading ENABLED', async () => {
     const config = makeStudyConfig({ id: 'study-d', name: 'Toggle Study', linksEnabled: true });
     storageMock.getStudy.mockResolvedValue(makeStoredStudy({ id: 'study-d', config, revision: 1 }));

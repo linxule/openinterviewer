@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Button, Field, Label, Rule } from '@/components/ui';
+import { Button, Field, Label, Notice, Rule } from '@/components/ui';
 import OAuthLogin from './OAuthLogin';
 
 const Login: React.FC = () => {
@@ -109,64 +109,62 @@ const Login: React.FC = () => {
   return (
     <main className="flex min-h-dvh items-center justify-center bg-paper-0 px-4 py-12">
       <div className="w-full max-w-sm">
-        <div className="border border-ink-300 bg-paper-1 p-6 md:p-8">
-          <div className="mb-6">
-            <Label>Researcher access</Label>
-            <h1 className="font-sans text-[24px] font-semibold leading-[32px] text-ink-900">Researcher Login</h1>
-            <p className="mt-1 font-sans text-[13px] text-ink-500">
-              {mode === 'hosted'
-                ? 'Sign in to access your research dashboard'
-                : mode === 'standalone'
-                  ? 'Enter your admin password to access the dashboard'
-                  : 'Sign-in is unavailable because this server is not configured.'}
-            </p>
-          </div>
-
-          {(error || (mode === 'hosted' && !configReady)) && (
-            <div className="mb-4 border-l-2 border-error bg-paper-2 px-4 py-3">
-              <Label>Sign-in failed</Label>
-              <p className="mt-1 font-sans text-[13px] text-ink-700">
-                {error || 'This hosted instance is missing required configuration.'}
-              </p>
-            </div>
-          )}
-
-          {mode === 'hosted' ? (
-            configReady ? (
-              <OAuthLogin loading={loading} providers={oauthProviders} returnTo={returnTo} />
-            ) : (
-              <p className="font-sans text-[13px] text-ink-500">
-                Sign-in is disabled until the operator completes server configuration.
-              </p>
-            )
-          ) : mode === 'standalone' ? (
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <Field label="Password" htmlFor="password">
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter admin password"
-                  autoFocus
-                  className="w-full"
-                />
-              </Field>
-
-              <Button type="submit" variant="primary" disabled={!password.trim() || loading} className="w-full">
-                {loading ? 'Logging in...' : 'Login'}
-              </Button>
-            </form>
-          ) : null}
-
-          <Rule className="mt-6" />
-          <button
-            type="button"
-            onClick={() => router.push('/')}
-            className="mt-6 block min-h-11 font-sans text-[13px] text-ink-500 hover:text-ink-900"
-          >
-            Back home
-          </button>
+        <div>
+          <Label>Researcher access</Label>
+          <h1 className="font-sans text-[24px] font-semibold leading-[32px] text-ink-900">Researcher Login</h1>
+          <p className="mt-1 font-sans text-[13px] text-ink-500">
+            {mode === 'hosted'
+              ? 'Sign in to access your research dashboard'
+              : mode === 'standalone'
+                ? 'Enter your admin password to access the dashboard'
+                : 'Sign-in is unavailable because this server is not configured.'}
+          </p>
         </div>
+        <Rule className="my-6" />
+
+        {(error || (mode === 'hosted' && !configReady)) && (
+          <Notice tone="error" eyebrow="Sign-in failed" className="mb-4">
+            <p className="mt-1 font-sans text-[13px] text-ink-700">
+              {error || 'This hosted instance is missing required configuration.'}
+            </p>
+          </Notice>
+        )}
+
+        {mode === 'hosted' ? (
+          configReady ? (
+            <OAuthLogin loading={loading} providers={oauthProviders} returnTo={returnTo} />
+          ) : (
+            <p className="font-sans text-[13px] text-ink-500">
+              Sign-in is disabled until the operator completes server configuration.
+            </p>
+          )
+        ) : mode === 'standalone' ? (
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <Field label="Password" htmlFor="password">
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Enter admin password"
+                autoFocus
+                className="w-full"
+              />
+            </Field>
+
+            <Button type="submit" variant="primary" disabled={!password.trim() || loading} className="w-full">
+              {loading ? 'Logging in...' : 'Login'}
+            </Button>
+          </form>
+        ) : null}
+
+        <Rule className="mt-6" />
+        <button
+          type="button"
+          onClick={() => router.push('/')}
+          className="mt-6 block min-h-11 font-sans text-[13px] text-ink-500 hover:text-ink-900"
+        >
+          Back home
+        </button>
       </div>
     </main>
   );

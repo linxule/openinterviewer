@@ -11,7 +11,8 @@ import {
   ResearcherStorageUnavailableError,
   StudyOperationPendingError,
 } from '@/services/storageService';
-import { Button, Coordinate, Label, Rule, Verbatim } from '@/components/ui';
+import { Button, Coordinate, Icon, Label, Notice, Rule, Verbatim } from '@/components/ui';
+import { shortInterviewId } from '@/lib/interviewId';
 import { useSetTrailingCrumb } from '@/components/shell/breadcrumb';
 
 interface StudyDetailProps {
@@ -393,8 +394,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
       </div>
 
       {operationPending && (
-        <div role="status" className="mb-6 border-l-2 border-error bg-paper-2 px-4 py-3">
-          <Label>Pending reconciliation</Label>
+        <Notice tone="error" eyebrow="Pending reconciliation" role="status" className="mb-6">
           <p className="mt-1 text-[13px] text-ink-700">A study operation is already in progress.</p>
           <Button
             type="button"
@@ -405,7 +405,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
           >
             Reconcile
           </Button>
-        </div>
+        </Notice>
       )}
 
       {/* Tabs */}
@@ -615,7 +615,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                       onClick={() => router.push(`/dashboard/interview/${interview.id}?studyId=${encodeURIComponent(studyId)}`)}
                     >
                       <td className="px-3 py-3 align-top text-[13px] text-ink-700">
-                        <Coordinate>{interview.id.slice(0, 8)}</Coordinate>
+                        <Coordinate>{shortInterviewId(interview.id)}</Coordinate>
                       </td>
                       <td className="px-3 py-3 align-top text-[13px] text-ink-700">
                         <button
@@ -655,12 +655,11 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
       {activeTab === 'settings' && (
         <div className="space-y-8">
           {study.interviewCount > 0 && (
-            <div className="border-l-2 border-ink-500 bg-paper-2 px-4 py-3">
-              <Label>{`${study.interviewCount} interview${study.interviewCount > 1 ? 's' : ''} collected`}</Label>
+            <Notice tone="neutral" eyebrow={`${study.interviewCount} interview${study.interviewCount > 1 ? 's' : ''} collected`}>
               <p className="mt-1 text-[13px] text-ink-700">
                 This study has collected data. Editing is allowed but may affect consistency with existing responses.
               </p>
-            </div>
+            </Notice>
           )}
 
           {/* Study Config Display */}
@@ -766,11 +765,11 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
             )}
 
             {!(study.config.linksEnabled ?? true) && (
-              <div className="mt-3 border-l-2 border-error bg-paper-2 px-4 py-3">
+              <Notice tone="error" className="mt-3">
                 <p className="text-[13px] text-ink-700">
                   Warning: All participant links are currently disabled. Participants trying to access the study will see an error message.
                 </p>
-              </div>
+              </Notice>
             )}
 
             <div className="mt-6 border-t border-ink-300 pt-4">
@@ -793,7 +792,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
               </div>
 
               {linksError ? (
-                <div className="mt-3 flex items-center justify-between gap-3 border-l-2 border-error bg-paper-2 px-4 py-3">
+                <Notice tone="error" className="mt-3 flex items-center justify-between gap-3">
                   <p className="text-[13px] text-ink-700">{linksError}</p>
                   <button
                     type="button"
@@ -802,7 +801,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                   >
                     Retry
                   </button>
-                </div>
+                </Notice>
               ) : linksLoading ? (
                 <p className="mt-3 text-[13px] text-ink-500">Loading generated links…</p>
               ) : participantLinks.length === 0 ? (
@@ -879,15 +878,16 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                       readOnly
                       className="min-w-0 flex-1 rounded border border-ink-300 bg-paper-2 px-3 py-2 font-mono text-[13px] text-ink-900"
                     />
-                    <Button variant="quiet" onClick={handleCopyLink}>
-                      {copied ? 'Copied!' : 'Copy'}
+                    <Button variant="quiet" onClick={handleCopyLink} className="inline-flex items-center gap-2">
+                      <Icon name={copied ? 'check' : 'copy'} />
+                      <span>{copied ? 'Copied!' : 'Copy'}</span>
                     </Button>
                   </div>
-                  <div className="border-l-2 border-error bg-paper-2 px-4 py-3">
+                  <Notice tone="error">
                     <p className="text-[13px] text-ink-700">
                       Copy this link now. For security, its URL cannot be recovered from the generated-links list.
                     </p>
-                  </div>
+                  </Notice>
                 </div>
               )}
 

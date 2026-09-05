@@ -4,6 +4,7 @@ import {
 } from '@/types';
 import { readBoundedJsonObject } from './requestBody';
 import { isKnownProviderModel } from './providerRegistry';
+import { CONSENT_TEXT_PLACEHOLDER, CONSENT_TEXT_PLACEHOLDER_ERROR } from './consentText';
 
 export const STUDY_MUTATION_MAX_BYTES = 128 * 1024;
 
@@ -210,7 +211,11 @@ export function validateStudyConfigForCreate(
   serverOwned: { id: string; createdAt: number }
 ): ValidationResult {
   if (!isRecord(value)) return { ok: false, error: 'Missing required field: config' };
-  return validateStudyConfig({ ...value, ...serverOwned });
+  const result = validateStudyConfig({ ...value, ...serverOwned });
+  if (result.ok && CONSENT_TEXT_PLACEHOLDER.test(result.config.consentText)) {
+    return { ok: false, error: CONSENT_TEXT_PLACEHOLDER_ERROR };
+  }
+  return result;
 }
 
 /** Merge a partial edit into canonical state while protecting server-owned fields. */
@@ -228,13 +233,17 @@ export function validateStudyConfigUpdate(
   }
 
   const { id: _id, createdAt: _createdAt, linksEnabled: _embeddedLinkStatus, ...editable } = patch;
-  return validateStudyConfig({
+  const result = validateStudyConfig({
     ...current,
     ...editable,
     id: current.id,
     createdAt: current.createdAt,
     linksEnabled: linksEnabled ?? current.linksEnabled,
   });
+  if (result.ok && CONSENT_TEXT_PLACEHOLDER.test(result.config.consentText)) {
+    return { ok: false, error: CONSENT_TEXT_PLACEHOLDER_ERROR };
+  }
+  return result;
 }
 
 /** Bounded, strict parsing for researcher study create/update request bodies. */

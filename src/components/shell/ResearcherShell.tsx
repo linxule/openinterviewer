@@ -8,14 +8,17 @@ import { BreadcrumbProvider, Breadcrumb } from './breadcrumb';
 
 const destinations = [
   { label: 'Studies', href: '/studies' },
+  { label: 'Interviews', href: '/dashboard' },
   { label: 'Settings', href: '/settings' },
 ];
 
 function isDestinationActive(href: string, pathname: string): boolean {
-  if (href === '/studies') {
-    return !(pathname === '/settings' || pathname.startsWith('/settings/'));
-  }
-  return pathname === href || pathname.startsWith(`${href}/`);
+  const inSettings = pathname === '/settings' || pathname.startsWith('/settings/');
+  const inInterviews = pathname === '/dashboard' || pathname.startsWith('/dashboard/');
+  if (href === '/settings') return inSettings;
+  if (href === '/dashboard') return inInterviews;
+  // '/studies' is the fallback destination: it owns /studies, /studies/<id>, and /setup.
+  return !inSettings && !inInterviews;
 }
 
 export default function ResearcherShell({ children }: { children: ReactNode }) {
@@ -103,7 +106,7 @@ export default function ResearcherShell({ children }: { children: ReactNode }) {
         <button
           type="button"
           onClick={() => void handleLogout()}
-          className="ml-auto text-[13px] text-ink-500 hover:text-ink-900"
+          className="ml-auto shrink-0 whitespace-nowrap text-[13px] text-ink-500 hover:text-ink-900"
         >
           Log out
         </button>
