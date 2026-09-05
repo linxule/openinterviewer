@@ -53,7 +53,6 @@ const interview = makeStoredInterview({
     contradictions: [],
     keyInsights: [],
     bottomLine: 'A verified bottom line',
-    _receipt: 'a'.repeat(24),
   },
 });
 
@@ -83,13 +82,15 @@ describe('InterviewDetail reading surface', () => {
     const { container } = renderInterviewDetail();
 
     await screen.findByText('What brought you here today?');
-    fireEvent.click(screen.getByRole('button', { name: 'Analysis' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Analysis' }));
 
     const bottomLine = await screen.findByText('A verified bottom line');
     expect(bottomLine.closest('[class*="font-serif"]')).not.toBeNull();
 
     const footer = screen.getByText(/^Synthesized by/);
-    expect(footer.textContent).toMatch(/^Synthesized by .+ · study rev .+ · .+ · receipt /);
+    expect(footer.textContent?.startsWith('Synthesized by gemini-2.5-flash · study rev 3 · saved ')).toBe(true);
+    expect(footer.textContent).not.toMatch(/receipt/i);
+    expect(footer.textContent).not.toMatch(/unsigned/i);
 
     expect(container.querySelectorAll('svg').length).toBe(0);
   });
@@ -99,5 +100,32 @@ describe('InterviewDetail reading surface', () => {
     await screen.findByText('What brought you here today?');
     expect(container.querySelector('.min-h-screen')).toBeNull();
     expect(container.querySelector('.min-h-dvh')).toBeNull();
+  });
+
+  it('pluralizes a one-message transcript as "1 message"', async () => {
+    storageMock.getInterview.mockResolvedValue(makeStoredInterview({
+      ...interview,
+      id: 'interview-one-message',
+      transcript: [{ id: 'm-1', role: 'ai' as const, content: 'A single greeting.', timestamp: 1000 }],
+    }));
+
+    render(
+      <BreadcrumbProvider>
+        <InterviewDetail interviewId="interview-one-message" studyId="study-reading" />
+      </BreadcrumbProvider>
+    );
+
+    await screen.findByText('A single greeting.');
+    expect(screen.getByText('1 message')).toBeInTheDocument();
+    expect(screen.queryByText('1 messages')).not.toBeInTheDocument();
+  });
+
+  it('renders "Back to Interviews" and not "Back to Dashboard" when the interview is not found', async () => {
+    storageMock.getInterview.mockResolvedValue(null);
+
+    renderInterviewDetail();
+
+    expect(await screen.findByRole('button', { name: 'Back to Interviews' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Back to Dashboard' })).not.toBeInTheDocument();
   });
 });

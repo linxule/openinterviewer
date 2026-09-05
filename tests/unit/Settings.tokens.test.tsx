@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -75,9 +75,23 @@ describe('Settings token reskin', () => {
     expect(heading.closest('[role="note"]')).toBeNull();
   });
 
-  it('carries no decorative icons', async () => {
+  it('marks external links and carries no other icons', async () => {
     const { container } = render(<Settings />);
     await screen.findByRole('heading', { level: 1, name: 'Settings' });
-    expect(container.querySelectorAll('svg')).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: 'OpenRouter setup guide' }));
+
+    const svgs = Array.from(container.querySelectorAll('svg'));
+    expect(svgs.length).toBeGreaterThan(0);
+    for (const svg of svgs) {
+      expect(svg).toHaveAttribute('aria-hidden', 'true');
+      expect(svg.closest('a, button')).not.toBeNull();
+    }
+    expect(svgs.length).toBe(container.querySelectorAll('a[target="_blank"]').length);
+
+    container.querySelectorAll('*').forEach((el) => {
+      const className = typeof el.className === 'string' ? el.className : '';
+      expect(className).not.toMatch(/stone-|rounded-xl|rounded-full/);
+    });
   });
 });

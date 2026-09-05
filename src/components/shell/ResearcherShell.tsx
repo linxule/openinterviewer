@@ -85,31 +85,35 @@ export default function ResearcherShell({ children }: { children: ReactNode }) {
 
       <nav
         aria-label="Researcher"
-        className="sticky top-0 z-40 flex h-14 items-center gap-4 border-b border-ink-300 bg-paper-0 px-4 lg:hidden"
+        className="sticky top-0 z-40 border-b border-ink-300 bg-paper-0 lg:hidden"
       >
-        <Link href="/studies" className="font-sans text-[15px] font-semibold text-ink-900">
-          OpenInterviewer
-        </Link>
-        {destinations.map((destination) => {
-          const active = isDestinationActive(destination.href, pathname);
-          return (
-            <Link
-              key={destination.href}
-              href={destination.href}
-              aria-current={active ? 'page' : undefined}
-              className={`text-[13px] ${active ? 'font-semibold text-action' : 'text-ink-700 hover:text-ink-900'}`}
-            >
-              {destination.label}
-            </Link>
-          );
-        })}
-        <button
-          type="button"
-          onClick={() => void handleLogout()}
-          className="ml-auto shrink-0 whitespace-nowrap text-[13px] text-ink-500 hover:text-ink-900"
-        >
-          Log out
-        </button>
+        <div className="flex h-12 items-center justify-between px-4">
+          <Link href="/studies" className="font-sans text-[15px] font-semibold text-ink-900">
+            OpenInterviewer
+          </Link>
+          <button
+            type="button"
+            onClick={() => void handleLogout()}
+            className="min-h-11 text-[13px] text-ink-500 hover:text-ink-900"
+          >
+            Log out
+          </button>
+        </div>
+        <div className="flex gap-5 px-4 pb-2">
+          {destinations.map((destination) => {
+            const active = isDestinationActive(destination.href, pathname);
+            return (
+              <Link
+                key={destination.href}
+                href={destination.href}
+                aria-current={active ? 'page' : undefined}
+                className={`text-[13px] ${active ? 'font-semibold text-action' : 'text-ink-700 hover:text-ink-900'}`}
+              >
+                {destination.label}
+              </Link>
+            );
+          })}
+        </div>
       </nav>
 
       <main id="researcher-main" className="min-h-dvh bg-paper-0 lg:pl-60">

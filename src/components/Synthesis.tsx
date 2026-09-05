@@ -5,8 +5,8 @@ import { useRouter } from 'next/navigation';
 import { useStore } from '@/store';
 import { synthesizeInterview } from '@/services/interviewApi';
 import { saveCompletedInterview } from '@/services/storageService';
-import { Button, Citation, Coordinate, Label, Notice, Page, Rule, Verbatim } from '@/components/ui';
-import { resolveThemeEvidence } from '@/lib/evidence';
+import { Button, Coordinate, Label, Notice, Page, Rule, Verbatim } from '@/components/ui';
+import { SynthesisReading } from '@/components/SynthesisReading';
 import type { SynthesisResult } from '@/types';
 import { formatConsentTimestamp, formatElapsed, participantTurnCount, transcriptElapsedMs } from '@/lib/receiptFacts';
 
@@ -72,7 +72,6 @@ const Synthesis: React.FC = () => {
 
   // Citation notes open on first paint; keyed `${themeIndex}:${refIndex}`.
   const [openNotes, setOpenNotes] = useState<Record<string, boolean>>({});
-  const isNoteOpen = (themeIndex: number, refIndex: number) => openNotes[`${themeIndex}:${refIndex}`] ?? true;
   const setNoteOpen = (themeIndex: number, refIndex: number, next: boolean) =>
     setOpenNotes((prev) => ({ ...prev, [`${themeIndex}:${refIndex}`]: next }));
 
@@ -345,138 +344,12 @@ const Synthesis: React.FC = () => {
               </Notice>
             )}
 
-            {/* Bottom line */}
-            <section>
-              <Label className="block">Bottom line</Label>
-              <Verbatim
-                as="p"
-                className="mt-3 max-w-measure text-[24px] font-normal leading-[36px] text-ink-900 md:text-[28px] md:leading-[40px]"
-              >
-                {synthesis.bottomLine}
-              </Verbatim>
-            </section>
-            <Rule className="mt-8" />
-
-            {/* Stated vs Revealed */}
-            <section>
-              <h3 className="font-sans text-[15px] font-semibold text-ink-900">Stated vs Revealed</h3>
-              <div className="mt-4 md:grid md:grid-cols-2 md:gap-10">
-                <div>
-                  <Label>What they said</Label>
-                  <ul>
-                    {synthesis.statedPreferences.map((item, i) => (
-                      <li
-                        key={i}
-                        className="border-t border-ink-300 py-2 font-sans text-[15px] leading-[24px] text-ink-700"
-                      >
-                        {item}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-                <div className="mt-6 md:mt-0">
-                  <Label>What their behavior revealed</Label>
-                  <ul>
-                    {synthesis.revealedPreferences.map((item, i) => (
-                      <li
-                        key={i}
-                        className="border-t border-ink-300 py-2 font-sans text-[15px] leading-[24px] text-ink-700"
-                      >
-                        {item}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-            </section>
-            <Rule className="mt-8" />
-
-            {/* Key Themes */}
-            <section>
-              <h3 className="font-sans text-[15px] font-semibold text-ink-900">Key Themes</h3>
-              <ul className="mt-4">
-                {synthesis.themes.map((theme, i) => {
-                  const view = resolveThemeEvidence(theme, interviewHistory);
-                  return (
-                    <li key={i} className="border-t border-ink-300 py-4">
-                      <p className="font-sans text-[15px] font-medium text-ink-900">
-                        {theme.theme}
-                        {view.kind === 'refs'
-                          ? view.entries.map((entry, j) =>
-                              entry.match.status === 'verified' ? (
-                                <Citation
-                                  key={j}
-                                  label={`t.${entry.ref.turnIndex}`}
-                                  open={isNoteOpen(i, j)}
-                                  onOpenChange={(next) => setNoteOpen(i, j, next)}
-                                  className="ml-1"
-                                >
-                                  <span className="block text-[19px] leading-[31px] text-ink-900">
-                                    {`“${entry.quotedFromRecord}”`}
-                                  </span>
-                                  <Coordinate className="mt-2 block">
-                                    {`Participant · turn ${entry.ref.turnIndex}`}
-                                  </Coordinate>
-                                </Citation>
-                              ) : null
-                            )
-                          : null}
-                      </p>
-                      {view.kind === 'legacy' ? (
-                        <Verbatim
-                          as="p"
-                          className="mt-2 max-w-measure border-l border-ink-300 pl-4 text-[17px] leading-[28px] text-ink-700"
-                        >
-                          {view.text}
-                        </Verbatim>
-                      ) : null}
-                      {view.kind === 'refs'
-                        ? view.entries
-                            .filter((entry) => entry.match.status !== 'verified')
-                            .map((entry, j) => (
-                              <Verbatim
-                                key={j}
-                                as="p"
-                                className="mt-2 max-w-measure border-l border-ink-300 pl-4 text-[17px] leading-[28px] text-ink-700"
-                              >
-                                {entry.ref.quote}
-                              </Verbatim>
-                            ))
-                        : null}
-                    </li>
-                  );
-                })}
-              </ul>
-            </section>
-
-            {/* Contradictions */}
-            {synthesis.contradictions.length > 0 && (
-              <section className="border-t border-ink-300 pt-5">
-                <h3 className="font-sans text-[15px] font-semibold text-ink-900">Potential Contradictions</h3>
-                <ul className="mt-3 space-y-2">
-                  {synthesis.contradictions.map((c, i) => (
-                    <li key={i} className="max-w-measure font-sans text-[15px] leading-[24px] text-ink-700">
-                      {c}
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
-
-            {/* Additional Insights */}
-            <section>
-              <h3 className="font-sans text-[15px] font-semibold text-ink-900">Additional Insights</h3>
-              <ul className="mt-4">
-                {synthesis.keyInsights.map((insight, i) => (
-                  <li
-                    key={i}
-                    className="border-t border-ink-300 py-2 font-sans text-[15px] leading-[24px] text-ink-700"
-                  >
-                    {insight}
-                  </li>
-                ))}
-              </ul>
-            </section>
+            <SynthesisReading
+              synthesis={synthesis}
+              transcript={interviewHistory}
+              openNotes={openNotes}
+              onNoteOpenChange={setNoteOpen}
+            />
 
             {/* Actions */}
             <div className="flex flex-col gap-3 pt-4 sm:flex-row">

@@ -11,7 +11,8 @@ import {
   ResearcherStorageUnavailableError,
   StudyOperationPendingError,
 } from '@/services/storageService';
-import { Button, Coordinate, Icon, Label, Notice, Rule, Verbatim } from '@/components/ui';
+import { Button, Coordinate, Icon, Label, Notice, Rule, Tabs } from '@/components/ui';
+import { AggregateReading, ProvenanceFooter } from '@/components/SynthesisReading';
 import { shortInterviewId } from '@/lib/interviewId';
 import { useSetTrailingCrumb } from '@/components/shell/breadcrumb';
 
@@ -385,7 +386,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
           {study.config.name}
         </h1>
         <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
-          <span className="font-sans text-[13px] text-ink-500">{study.interviewCount} interviews</span>
+          <span className="font-sans text-[13px] text-ink-500">{study.interviewCount} interview{study.interviewCount !== 1 ? 's' : ''}</span>
           <Coordinate>Created {formatDate(study.createdAt)}</Coordinate>
           <span className={`font-sans text-[13px] ${study.isLocked ? 'text-ink-500' : 'text-success'}`}>
             {study.isLocked ? 'Locked' : 'Editable'}
@@ -408,27 +409,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
         </Notice>
       )}
 
-      {/* Tabs */}
-      <div className="mb-8 grid grid-cols-3 border-b border-ink-300" role="tablist" aria-label="Study sections">
-        {tabs.map((tab) => (
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === tab.id}
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`min-h-11 border-b-2 px-2 py-3 text-center font-sans text-[15px] font-medium ${
-              activeTab === tab.id
-                ? 'border-action text-action'
-                : 'border-transparent text-ink-500 hover:text-ink-900'
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Tab Content */}
+      <Tabs items={tabs} value={activeTab} onValueChange={setActiveTab} label="Study sections" className="mb-8 grid-cols-3">
       {activeTab === 'overview' && (
         <div>
           <Label>Research Question</Label>
@@ -483,52 +464,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
               </p>
             ) : aggregateSynthesis ? (
               <div className="mt-6 space-y-6">
-                <section>
-                  <Label className="block">Bottom line</Label>
-                  <Verbatim
-                    as="p"
-                    className="mt-3 max-w-measure text-[24px] font-normal leading-[36px] text-ink-900 md:text-[28px] md:leading-[40px]"
-                  >
-                    {aggregateSynthesis.bottomLine}
-                  </Verbatim>
-                </section>
-                <Rule className="mt-8" />
-
-                <section>
-                  <h4 className="font-sans text-[15px] font-semibold text-ink-900">Key Findings</h4>
-                  <ul className="mt-3">
-                    {aggregateSynthesis.keyFindings.map((finding, i) => (
-                      <li
-                        key={i}
-                        className="max-w-measure border-t border-ink-300 py-2 font-sans text-[15px] leading-[24px] text-ink-700"
-                      >
-                        {finding}
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-
-                {aggregateSynthesis.commonThemes.length > 0 && (
-                  <section>
-                    <h4 className="font-sans text-[15px] font-semibold text-ink-900">Common Themes</h4>
-                    <ul className="mt-3">
-                      {aggregateSynthesis.commonThemes.map((theme, i) => (
-                        <li key={i} className="border-t border-ink-300 py-4">
-                          <p className="font-sans text-[15px] font-medium text-ink-900">{theme.theme}</p>
-                          {theme.representativeQuotes.map((quote, j) => (
-                            <Verbatim
-                              key={j}
-                              as="p"
-                              className="mt-2 max-w-measure border-l border-ink-300 pl-4 text-[17px] leading-[28px] text-ink-700"
-                            >
-                              {quote}
-                            </Verbatim>
-                          ))}
-                        </li>
-                      ))}
-                    </ul>
-                  </section>
-                )}
+                <AggregateReading synthesis={aggregateSynthesis} />
 
                 <div className="border-t border-ink-300 pt-4">
                   <Button
@@ -543,15 +479,17 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                   </p>
                 </div>
 
-                <footer className="mt-10 border-t border-ink-300 pt-4">
-                  <Coordinate className="block">
-                    {`Synthesized by ${aggregateSynthesis.aiModel} · study rev ${aggregateSynthesis.studyRevision} · ${formatDate(
-                      aggregateSynthesis.generatedAt
-                    )} · receipt ${
-                      aggregateSynthesis._receipt ? aggregateSynthesis._receipt.slice(0, 12) : 'unsigned'
-                    }`}
-                  </Coordinate>
-                </footer>
+                <ProvenanceFooter
+                  model={aggregateSynthesis.aiModel}
+                  studyRevision={aggregateSynthesis.studyRevision}
+                  timestamp={
+                    Number.isFinite(aggregateSynthesis.generatedAt)
+                      ? formatDate(aggregateSynthesis.generatedAt)
+                      : 'time unrecorded'
+                  }
+                  verb="generated"
+                  note="not saved — regenerate to refresh"
+                />
               </div>
             ) : (
               <p className="mt-3 text-[13px] text-ink-500">
@@ -899,6 +837,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
           </div>
         </div>
       )}
+      </Tabs>
     </div>
   );
 };

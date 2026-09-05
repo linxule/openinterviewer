@@ -76,6 +76,11 @@ test('researcher creates a study; participants finalize; researcher reads, downl
 
   await page.goto(studyUrl);
   await expect(page.getByText('2 interviews', { exact: true })).toBeVisible();
+  // The researcher shell must not overflow a phone: three rail destinations plus
+  // the brand and Log out once pushed the top bar past 375px.
+  await page.setViewportSize({ width: 375, height: 812 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.setViewportSize({ width: 1280, height: 720 });
   await page.getByRole('tab', { name: 'Interviews', exact: true }).click();
   await expect(page.getByRole('button', { name: /View interview \d/ })).toHaveCount(2);
   await page.getByRole('button', { name: 'View interview 1', exact: true }).click();
@@ -91,12 +96,16 @@ test('researcher creates a study; participants finalize; researcher reads, downl
   const synthesisModel = transport === 'gateway' ? `openai/${OPENAI_SYNTHESIS_MODEL}` : OPENAI_SYNTHESIS_MODEL;
   expect(interview.aiModel).toBe(synthesisModel);
   expect(interview.requestedAiModel).toBe(synthesisModel);
-  await page.getByRole('button', { name: 'Analysis', exact: true }).click();
+  await page.getByRole('tab', { name: 'Analysis', exact: true }).click();
   await expect(page.getByText(INSIGHT, { exact: true }).first()).toBeVisible();
 
   await page.goto(studyUrl);
   await page.getByRole('button', { name: 'Analyze All Interviews', exact: true }).click();
   await expect(page.getByText('Context notes help both participants resume work.', { exact: true })).toBeVisible();
+  await expect(page.getByText('Investigate when notes are written.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Divergent Views', exact: true })).toHaveCount(0);
+  await expect(page.getByText(/not saved — regenerate to refresh/)).toBeVisible();
+  expect(await page.locator('body').innerText()).not.toMatch(/receipt (eyJ|unsigned)/);
   expect(workflow.calls.filter(call => call.operation === 'aggregate')).toHaveLength(1);
   expect(workflow.calls.filter(call => call.operation === 'synthesis')).toHaveLength(3);
   expect(workflow.calls.filter(call => call.operation === 'greeting')).toHaveLength(2);

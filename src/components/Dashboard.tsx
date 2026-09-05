@@ -174,7 +174,7 @@ export default function Dashboard() {
     <div>
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h1 className="font-sans text-[24px] leading-[32px] font-semibold text-ink-900">Interview Dashboard</h1>
+          <h1 className="font-sans text-[24px] leading-[32px] font-semibold text-ink-900">Interviews</h1>
           <p className="text-[13px] text-ink-500">
             {interviews.length} interview{interviews.length !== 1 ? 's' : ''} collected
           </p>
