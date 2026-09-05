@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import type { Page } from '@playwright/test';
-import { OPENAI_SYNTHESIS_MODEL } from '../../src/types';
+import { DEFAULT_OPENAI_MODEL } from '../../src/types';
 import { test, expect, ANSWER, GREETING, INSIGHT, UNSAID } from './workflow-fixture';
 
 async function createStudy(page: Page) {
@@ -93,9 +93,11 @@ test('researcher creates a study; participants finalize; researcher reads, downl
   expect(interview.synthesis.bottomLine).toBe(INSIGHT);
   expect(interview.aiProvider).toBe('openai');
   const transport = testInfo.project.name.endsWith('gateway') ? 'gateway' : 'direct';
-  const synthesisModel = transport === 'gateway' ? `openai/${OPENAI_SYNTHESIS_MODEL}` : OPENAI_SYNTHESIS_MODEL;
-  expect(interview.aiModel).toBe(synthesisModel);
-  expect(interview.requestedAiModel).toBe(synthesisModel);
+  // Synthesis now uses the study's own configured model — the same one the
+  // interview turns used — never a separate fixed synthesis model.
+  const studyModel = transport === 'gateway' ? `openai/${DEFAULT_OPENAI_MODEL}` : DEFAULT_OPENAI_MODEL;
+  expect(interview.aiModel).toBe(studyModel);
+  expect(interview.requestedAiModel).toBe(studyModel);
   await page.getByRole('tab', { name: 'Analysis', exact: true }).click();
   await expect(page.getByText(INSIGHT, { exact: true }).first()).toBeVisible();
 

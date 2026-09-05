@@ -41,8 +41,8 @@ const providersMock = vi.hoisted(() => ({
   resolveProviderType: vi.fn((config?: { aiProvider?: string }) => (
     config?.aiProvider === 'claude' ? 'claude' : 'gemini'
   )),
-  resolveSynthesisModel: vi.fn((provider: string) => (
-    provider === 'claude' ? 'claude-opus-4-5' : 'gemini-3.1-pro-preview'
+  resolveSynthesisModel: vi.fn((config: { aiProvider?: string; aiModel?: string }) => (
+    config?.aiModel ?? (config?.aiProvider === 'claude' ? 'claude-opus-4-5' : 'gemini-3.1-pro-preview')
   )),
 }));
 

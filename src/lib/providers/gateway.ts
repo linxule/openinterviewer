@@ -222,7 +222,7 @@ export class GatewayProvider implements AIProvider {
     participantProfile: ParticipantProfile | null,
   ): Promise<ProviderResult<SynthesisResult>> {
     const response = await this.createStructured({
-      model: resolveSynthesisModel(this.provider),
+      model: resolveSynthesisModel(studyConfig),
       prompt: buildSynthesisPrompt(history, studyConfig, behaviorData, participantProfile),
       schema: synthesisResponseSchema,
       validate: validateSynthesisResult,
@@ -247,7 +247,7 @@ export class GatewayProvider implements AIProvider {
     interviewCount: number,
   ): Promise<ProviderResult<AggregateSynthesisPayload>> {
     const response = await this.createStructured({
-      model: resolveSynthesisModel(this.provider),
+      model: resolveSynthesisModel(studyConfig),
       prompt: buildAggregateSynthesisPrompt(studyConfig, syntheses, interviewCount),
       schema: aggregateSynthesisResponseSchema,
       validate: validateAggregateSynthesisPayload,
@@ -271,7 +271,7 @@ export class GatewayProvider implements AIProvider {
     synthesis: AggregateSynthesisResult,
   ): Promise<ProviderResult<FollowupStudy>> {
     const response = await this.createStructured({
-      model: resolveSynthesisModel(this.provider),
+      model: resolveSynthesisModel(parentConfig),
       prompt: buildFollowupPrompt(parentConfig, synthesis),
       schema: followupStudyResponseSchema,
       validate: validateFollowupStudy,

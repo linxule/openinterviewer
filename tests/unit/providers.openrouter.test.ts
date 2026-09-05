@@ -2,10 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OpenRouterProvider } from '@/lib/providers/openrouter';
-import {
-  DEFAULT_OPENROUTER_MODEL,
-  OPENROUTER_SYNTHESIS_MODEL,
-} from '@/types';
+import { DEFAULT_OPENROUTER_MODEL } from '@/types';
 import { makeStudyConfig } from '../fixtures/models';
 
 const sendMock = vi.hoisted(() => vi.fn());
@@ -118,7 +115,7 @@ describe('OpenRouterProvider', () => {
     expect(sendMock.mock.calls[0][0].chatRequest.responseFormat).toBeUndefined();
   });
 
-  it('records requested/resolved model and upstream provider from routing metadata', async () => {
+  it('sends the study\'s own configured model and records requested/resolved model and upstream provider', async () => {
     sendMock.mockResolvedValue(completion(JSON.stringify({
       statedPreferences: [],
       revealedPreferences: [],
@@ -128,20 +125,36 @@ describe('OpenRouterProvider', () => {
       bottomLine: 'Bottom line.',
     }), { model: 'openai/gpt-5.6-sol-2026-08-01', provider: 'OpenAI' }));
     const provider = new OpenRouterProvider(undefined, 'or-test');
+    const studyModel = 'openai/gpt-5.6-researcher-choice';
 
     const result = await provider.synthesizeInterview(
       [],
-      studyConfig(),
+      makeStudyConfig({ aiProvider: 'openrouter', aiModel: studyModel }),
       { timePerTopic: {}, messagesPerTopic: {}, topicsExplored: [], contradictions: [] },
       null,
     );
 
+    expect(sendMock.mock.calls[0][0].chatRequest.model).toBe(studyModel);
     expect(result.execution).toEqual({
       provider: 'openrouter',
-      requestedModel: OPENROUTER_SYNTHESIS_MODEL,
+      requestedModel: studyModel,
       model: 'openai/gpt-5.6-sol-2026-08-01',
       routedProvider: 'OpenAI',
     });
+  });
+
+  it('fails closed instead of falling back to a default when the study has no explicit model', async () => {
+    const provider = new OpenRouterProvider(undefined, 'or-test');
+    const config = studyConfig();
+    delete config.aiModel;
+
+    await expect(provider.synthesizeInterview(
+      [],
+      config,
+      { timePerTopic: {}, messagesPerTopic: {}, topicsExplored: [], contradictions: [] },
+      null,
+    )).rejects.toThrow('Study is missing an explicit AI model required for synthesis');
+    expect(sendMock).not.toHaveBeenCalled();
   });
 
   it('fails closed when upstream routing metadata is absent', async () => {

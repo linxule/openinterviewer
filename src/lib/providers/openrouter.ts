@@ -16,7 +16,6 @@ import {
   type BehaviorData,
   DEFAULT_OPENROUTER_MODEL,
   type InterviewMessage,
-  OPENROUTER_SYNTHESIS_MODEL,
   type ParticipantProfile,
   type QuestionProgress,
   type StudyConfig,
@@ -54,6 +53,7 @@ import {
   type AggregateSynthesisPayload,
 } from './shared';
 import { isKnownProviderModel } from '../providerRegistry';
+import { resolveSynthesisModel } from './synthesisModel';
 
 const ROUTING_POLICY = {
   requireParameters: true,
@@ -187,7 +187,7 @@ export class OpenRouterProvider implements AIProvider {
     behaviorData: BehaviorData,
     participantProfile: ParticipantProfile | null,
   ): Promise<ProviderResult<SynthesisResult>> {
-    const requestedModel = OPENROUTER_SYNTHESIS_MODEL;
+    const requestedModel = resolveSynthesisModel(studyConfig);
     const response = await this.send({
       model: requestedModel,
       input: buildSynthesisPrompt(history, studyConfig, behaviorData, participantProfile),
@@ -207,7 +207,7 @@ export class OpenRouterProvider implements AIProvider {
     syntheses: SynthesisResult[],
     interviewCount: number,
   ): Promise<ProviderResult<AggregateSynthesisPayload>> {
-    const requestedModel = OPENROUTER_SYNTHESIS_MODEL;
+    const requestedModel = resolveSynthesisModel(studyConfig);
     const response = await this.send({
       model: requestedModel,
       input: buildAggregateSynthesisPrompt(studyConfig, syntheses, interviewCount),
@@ -230,7 +230,7 @@ export class OpenRouterProvider implements AIProvider {
     parentConfig: StudyConfig,
     synthesis: AggregateSynthesisResult,
   ): Promise<ProviderResult<FollowupStudy>> {
-    const requestedModel = OPENROUTER_SYNTHESIS_MODEL;
+    const requestedModel = resolveSynthesisModel(parentConfig);
     const response = await this.send({
       model: requestedModel,
       input: buildFollowupPrompt(parentConfig, synthesis),

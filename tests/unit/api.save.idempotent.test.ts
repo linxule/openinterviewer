@@ -1,8 +1,12 @@
 import { createHash } from 'crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { makeStoredInterview } from '../fixtures/models';
-import { CLAUDE_SYNTHESIS_MODEL, GEMINI_SYNTHESIS_MODEL } from '@/types';
+import { makeStoredInterview, makeStudyConfig } from '../fixtures/models';
 import { resolveProviderType, resolveSynthesisModel } from '@/lib/providers';
+
+// Fixture models standing in for whatever the study's researcher configured
+// for each provider; synthesis provenance must record exactly this value.
+const GEMINI_SYNTHESIS_MODEL = 'gemini-3.7-flash';
+const CLAUDE_SYNTHESIS_MODEL = 'claude-sonnet-5';
 
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -189,7 +193,9 @@ describe('POST /api/interviews/save idempotency', () => {
   it('stores signed generation-time provenance when provider resolution changes before save', async () => {
     vi.stubEnv('AI_PROVIDER', 'claude');
     const generationProvider = resolveProviderType();
-    const generationModel = resolveSynthesisModel(generationProvider);
+    const generationModel = resolveSynthesisModel(
+      makeStudyConfig({ aiProvider: generationProvider, aiModel: CLAUDE_SYNTHESIS_MODEL }),
+    );
     receiptMock.verifySynthesisReceipt.mockResolvedValue({
       aiProvider: generationProvider,
       aiModel: generationModel,

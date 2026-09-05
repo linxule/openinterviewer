@@ -2,8 +2,10 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeStoredInterview, makeStoredStudy } from '../fixtures/models';
-import { GEMINI_SYNTHESIS_MODEL } from '@/types';
 import { withRecordBackedEvidence } from '@/lib/evidence';
+
+// Fixture model standing in for the study's researcher-configured model.
+const GEMINI_SYNTHESIS_MODEL = 'gemini-3.7-flash';
 
 // All quotes and transcripts below are invented fixture content, never real
 // participant text (AGENTS.md "Start here" §5).

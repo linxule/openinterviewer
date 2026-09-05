@@ -2,7 +2,9 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeStoredInterview, makeStoredStudy } from '../fixtures/models';
-import { GEMINI_SYNTHESIS_MODEL, OPENROUTER_SYNTHESIS_MODEL } from '@/types';
+// Fixture models standing in for the study's researcher-configured model.
+const GEMINI_SYNTHESIS_MODEL = 'gemini-3.7-flash';
+const OPENROUTER_SYNTHESIS_MODEL = 'openai/gpt-5.6-terra';
 
 const contextMock = vi.hoisted(() => ({
   getRequestContext: vi.fn(),

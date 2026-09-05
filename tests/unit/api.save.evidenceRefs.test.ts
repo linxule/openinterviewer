@@ -1,7 +1,8 @@
 // @vitest-environment node
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { GEMINI_SYNTHESIS_MODEL } from '@/types';
+// Fixture model standing in for the study's researcher-configured model.
+const GEMINI_SYNTHESIS_MODEL = 'gemini-3.7-flash';
 
 /**
  * A9.5 — the single most valuable test in the I2a slice.
