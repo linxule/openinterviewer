@@ -1,5 +1,7 @@
+import Link from 'next/link';
 import { Citation, Coordinate, Label, Rule, Verbatim } from '@/components/ui';
-import { resolveThemeEvidence } from '@/lib/evidence';
+import { participantLabel, resolveAggregateThemeEvidence, resolveThemeEvidence } from '@/lib/evidence';
+import type { AggregateInterviewIndex } from '@/lib/evidence';
 import type { AggregateSynthesisResult, InterviewMessage, SynthesisResult } from '@/types';
 
 export interface SynthesisReadingProps {
@@ -18,6 +20,11 @@ export interface SynthesisReadingProps {
 
 export interface AggregateReadingProps {
   synthesis: AggregateSynthesisResult
+  /** The records every citation is checked against. Built by the consumer. */
+  interviewIndex: AggregateInterviewIndex
+  /** Controlled note state, keyed `${themeIndex}:${refIndex}`. Missing means open. */
+  openNotes: Record<string, boolean>
+  onNoteOpenChange: (themeIndex: number, refIndex: number, open: boolean) => void
 }
 
 export interface ProvenanceFooterProps {
@@ -195,11 +202,14 @@ export function SynthesisReading({
 }
 
 /**
- * The aggregate synthesis reading (C1/B3): bottom line, key findings, common
- * themes with representative quotes, divergent views, and research
- * implications. `quoteRefs` stays unread — aggregate citations are Slice L.
+ * The aggregate synthesis reading (C1/B3, citations per Slice L): bottom
+ * line, key findings, common themes with citations, divergent views, and
+ * research implications. Stays hook-free like SynthesisReading: the
+ * consumer builds the interview index and owns the note state.
  */
-export function AggregateReading({ synthesis }: AggregateReadingProps) {
+export function AggregateReading({ synthesis, interviewIndex, openNotes, onNoteOpenChange }: AggregateReadingProps) {
+  const isNoteOpen = (themeIndex: number, refIndex: number) => openNotes[`${themeIndex}:${refIndex}`] ?? true;
+
   return (
     <>
       {/* Bottom line */}
@@ -234,20 +244,67 @@ export function AggregateReading({ synthesis }: AggregateReadingProps) {
         <section>
           <h4 className="font-sans text-[15px] font-semibold text-ink-900">Common Themes</h4>
           <ul className="mt-3">
-            {synthesis.commonThemes.map((theme, i) => (
-              <li key={i} className="border-t border-ink-300 py-4">
-                <p className="font-sans text-[15px] font-medium text-ink-900">{theme.theme}</p>
-                {theme.representativeQuotes.map((quote, j) => (
-                  <Verbatim
-                    key={j}
-                    as="p"
-                    className="mt-2 max-w-measure border-l border-ink-300 pl-4 text-[17px] leading-[28px] text-ink-700"
-                  >
-                    {quote}
-                  </Verbatim>
-                ))}
-              </li>
-            ))}
+            {synthesis.commonThemes.map((theme, i) => {
+              const view = resolveAggregateThemeEvidence(theme, interviewIndex);
+              return (
+                <li key={i} className="border-t border-ink-300 py-4">
+                  <p className="font-sans text-[15px] font-medium text-ink-900">
+                    {theme.theme}
+                    {view.kind === 'refs'
+                      ? view.entries.map((entry, j) =>
+                          entry.match.status === 'verified' && entry.participantNumber !== null ? (
+                            <Citation
+                              key={j}
+                              label={`t.${entry.ref.turnIndex}`}
+                              open={isNoteOpen(i, j)}
+                              onOpenChange={(next) => onNoteOpenChange(i, j, next)}
+                              className="ml-1"
+                            >
+                              <span className="block text-[19px] leading-[31px] text-ink-900">
+                                {`“${entry.quotedFromRecord}”`}
+                              </span>
+                              <Coordinate className="mt-2 block">
+                                {`${participantLabel(entry.participantNumber)} · turn ${entry.ref.turnIndex}`}
+                              </Coordinate>
+                              <Link
+                                href={`/dashboard/interview/${encodeURIComponent(entry.ref.interviewId!)}`
+                                  + `?studyId=${encodeURIComponent(synthesis.studyId)}&turn=${entry.ref.turnIndex}`}
+                                className="mt-2 block font-sans text-[13px] text-action underline underline-offset-2"
+                              >
+                                {`Read in ${participantLabel(entry.participantNumber)}'s transcript`}
+                              </Link>
+                            </Citation>
+                          ) : null
+                        )
+                      : null}
+                  </p>
+                  {view.kind === 'legacy'
+                    ? view.quotes.map((quote, j) => (
+                        <Verbatim
+                          key={j}
+                          as="p"
+                          className="mt-2 max-w-measure border-l border-ink-300 pl-4 text-[17px] leading-[28px] text-ink-700"
+                        >
+                          {quote}
+                        </Verbatim>
+                      ))
+                    : null}
+                  {view.kind === 'refs'
+                    ? view.entries
+                        .filter((entry) => entry.match.status !== 'verified' || entry.participantNumber === null)
+                        .map((entry, j) => (
+                          <Verbatim
+                            key={j}
+                            as="p"
+                            className="mt-2 max-w-measure border-l border-ink-300 pl-4 text-[17px] leading-[28px] text-ink-700"
+                          >
+                            {entry.ref.quote}
+                          </Verbatim>
+                        ))
+                    : null}
+                </li>
+              );
+            })}
           </ul>
         </section>
       )}

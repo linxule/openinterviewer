@@ -338,16 +338,40 @@ export function isPendingStudyStub(study: StudyWorkspaceItem): study is PendingS
 // Aggregate Synthesis (Cross-Interview)
 // ============================================
 
+/**
+ * An aggregate citation as the MODEL returns it. The interview is named by its
+ * 1-based position in the prompt's interview list — never by id. The server
+ * owns the position→id mapping; see src/app/api/synthesis/aggregate/route.ts.
+ */
+export interface AggregateQuoteClaim {
+  quote: string;
+  turnIndex: number;
+  interviewIndex: number;
+}
+
+/** A common theme as the model returns it, before the server resolves ids. */
+export interface AggregateThemeClaim {
+  theme: string;
+  frequency: number;
+  /** Positions in the prompt catalogue. Empty is honest and expected. */
+  quoteRefs: AggregateQuoteClaim[];
+}
+
 export interface AggregateTheme {
   theme: string;
   frequency: number;
   /**
-   * Free-text quotes. REQUIRED until I2c ships: `StudyDetail.tsx:518` maps this
-   * field unguarded, and I2a may not edit that file. I2c makes it optional and
-   * adds the guard in the same diff.
+   * Free-text quotes composed by the model from interview summaries. Written
+   * only by aggregates generated before Slice L. Optional since Slice L; the
+   * aggregate is never persisted, so this shape survives only in a browser tab
+   * held open across a deploy (see generate-followup, L12).
    */
-  representativeQuotes: string[];
-  /** Structured citations, each carrying the interviewId the quote came from. Never populated before I2c. */
+  representativeQuotes?: string[];
+  /**
+   * Structured citations, each carrying the interviewId the SERVER resolved
+   * from the model's catalogue position. A ref is a claim, not a verified
+   * fact: src/lib/evidence.ts checks it against the record at render time.
+   */
   quoteRefs?: EvidenceRef[];
 }
 
@@ -368,3 +392,11 @@ export interface AggregateSynthesisResult {
   generatedAt: number;
   _receipt?: string;            // Server-signed aggregate content and provenance
 }
+
+/** What an AIProvider returns for an aggregate: ids are not resolved yet. */
+export type AggregateSynthesisProviderPayload = Omit<
+  AggregateSynthesisResult,
+  | 'studyId' | 'studyRevision' | 'interviewIds' | 'interviewCount'
+  | 'aiProvider' | 'aiModel' | 'requestedAiModel' | 'routedProvider'
+  | 'generatedAt' | '_receipt' | 'commonThemes'
+> & { commonThemes: AggregateThemeClaim[] };

@@ -104,9 +104,22 @@ export const aggregateSynthesisResponseSchema = {
         properties: {
           theme: { type: 'string' },
           frequency: { type: 'number', minimum: 0 },
-          representativeQuotes: stringArray,
+          quoteRefs: {
+            type: 'array',
+            maxItems: 3,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                interviewIndex: { type: 'integer', minimum: 1 },
+                turnIndex: { type: 'integer', minimum: 1 },
+                quote: { type: 'string', maxLength: 2000 },
+              },
+              required: ['interviewIndex', 'turnIndex', 'quote'],
+            },
+          },
         },
-        required: ['theme', 'frequency', 'representativeQuotes'],
+        required: ['theme', 'frequency', 'quoteRefs'],
       },
     },
     divergentViews: {

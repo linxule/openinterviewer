@@ -15,9 +15,10 @@ import { mapCollectionLoad, mapStudyLoad } from '@/lib/ownedStudies';
 import { providerErrorResponse } from '@/lib/providerErrors';
 import { createAggregateSynthesisReceipt } from '@/lib/synthesisReceipt';
 import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
-import { AggregateSynthesisResult, SynthesisResult } from '@/types';
+import { AggregateSynthesisResult, AggregateTheme, SynthesisResult } from '@/types';
 import { readBoundedJsonObject } from '@/lib/requestBody';
-import { createRequestId, logRequestFailure } from '@/lib/requestLog';
+import { createRequestId, logRequestEvent, logRequestFailure } from '@/lib/requestLog';
+import { resolveEvidenceRef, withRecordBackedEvidence } from '@/lib/evidence';
 
 export async function POST(request: Request) {
   try {
@@ -83,8 +84,13 @@ export async function POST(request: Request) {
       );
     }
 
+    // The route holds the transcripts; the prompt builder does not. So the
+    // catalogue the provider sees is already checked against the records it
+    // names: every surviving ref's quote is the record's own characters, and
+    // an unlocatable ref never reaches the prompt. Legacy (evidence-shaped)
+    // themes pass through unchanged, by identity (L7.1).
     const syntheses: SynthesisResult[] = currentRevisionInterviews.map(
-      interview => interview.synthesis!
+      interview => withRecordBackedEvidence(interview.synthesis!, interview.transcript)
     );
 
     const platformLimited = await hostedAiRateLimitResponse(
@@ -117,12 +123,32 @@ export async function POST(request: Request) {
       return providerErrorResponse(providerError);
     }
 
+    // Resolve the model's catalogue positions into interview ids BEFORE
+    // signing (L7.2). This is the one place a fabricated id could otherwise
+    // enter a signed record: the model never sees or returns an interview
+    // id, only a 1-based position into the same array the route built.
+    const interviewIds = currentRevisionInterviews.map(interview => interview.id);
+    const commonThemes: AggregateTheme[] = aggregateResult.value.commonThemes.map(theme => ({
+      theme: theme.theme,
+      frequency: theme.frequency,
+      quoteRefs: theme.quoteRefs.flatMap(claim => {
+        const interviewId = interviewIds[claim.interviewIndex - 1];
+        // An out-of-range interviewIndex names no record at all: there is no
+        // coordinate to print and no transcript to be unverified against, so
+        // it is dropped rather than rendered with no provenance (L7.2.1).
+        return interviewId === undefined
+          ? []
+          : [{ quote: claim.quote, turnIndex: claim.turnIndex, interviewId }];
+      }),
+    }));
+
     // Build full result with metadata
     const fullResult: AggregateSynthesisResult = {
       ...aggregateResult.value,
+      commonThemes,
       studyId,
       studyRevision: study.revision,
-      interviewIds: currentRevisionInterviews.map(interview => interview.id),
+      interviewIds,
       interviewCount: currentRevisionInterviews.length,
       aiProvider: aggregateResult.execution.provider,
       requestedAiModel: aggregateResult.execution.requestedModel,
@@ -132,6 +158,30 @@ export async function POST(request: Request) {
     };
 
     const receipt = await createAggregateSynthesisReceipt(fullResult);
+
+    // Match-rate telemetry (ADR-003: counts only — never quote, turn, or
+    // interview-id text). This is the only place the server runs the matcher
+    // on aggregate refs; the result never touches fullResult (L8, L13).
+    try {
+      const claims = aggregateResult.value.commonThemes.flatMap(theme => theme.quoteRefs);
+      logRequestEvent({
+        event: 'synthesis.evidence',
+        requestId: createRequestId(request.headers.get('x-request-id')),
+        route: '/api/synthesis/aggregate',
+        refsOffered: claims.length,
+        refsLocated: claims.filter(claim => {
+          const interview = currentRevisionInterviews[claim.interviewIndex - 1];
+          return interview !== undefined
+            && resolveEvidenceRef(
+                 { quote: claim.quote, turnIndex: claim.turnIndex },
+                 interview.transcript,
+               ).status === 'verified';
+        }).length,
+      });
+    } catch {
+      // Swallowed by design: a telemetry failure must never cost a paid
+      // aggregate call.
+    }
 
     return NextResponse.json({ synthesis: { ...fullResult, _receipt: receipt } });
   } catch (error) {

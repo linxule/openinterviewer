@@ -13,6 +13,7 @@ import { cn } from '@/lib/cn';
 interface InterviewDetailProps {
   interviewId: string;
   studyId?: string;
+  turn?: string;
 }
 
 const INTERVIEW_TABS = [
@@ -20,7 +21,7 @@ const INTERVIEW_TABS = [
   { id: 'analysis', label: 'Analysis' },
 ] as const satisfies readonly TabItem<'transcript' | 'analysis'>[];
 
-const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId }) => {
+const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId, turn }) => {
   const router = useRouter();
   const [interview, setInterview] = useState<StoredInterview | null>(null);
   const [loading, setLoading] = useState(true);
@@ -73,6 +74,23 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId 
     setOpenNotes({});
     setTracedTurn(null);
   }, [interviewId]);
+
+  // Landing on a cited turn from an aggregate citation's link (L11). Declared
+  // after the reset effect above so that on the commit where a record first
+  // arrives, the reset runs first and this focus runs second. An absent,
+  // non-numeric, or out-of-range `turn` is ignored silently — a stale link
+  // should land on the transcript, not on an error.
+  useEffect(() => {
+    if (!interview) return;
+    const requested = Number(turn);
+    if (!Number.isInteger(requested) || requested < 1 || requested > interview.transcript.length) return;
+    setActiveTab('transcript');
+    setTracedTurn(requested);
+    const frame = requestAnimationFrame(() => {
+      document.getElementById(`turn-${requested}`)?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [interview, turn]);
 
   const handleDownloadJSON = () => {
     if (!interview) return;

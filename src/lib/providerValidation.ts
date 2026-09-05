@@ -11,7 +11,12 @@ import {
   SynthesisTheme,
   EvidenceRef,
   AggregateSynthesisResult,
+  AggregateSynthesisProviderPayload,
+  AggregateThemeClaim,
+  AggregateQuoteClaim,
+  AggregateTheme,
 } from '@/types';
+import { MAX_AGGREGATE_QUOTE_REFS } from '@/lib/prompts/synthesis';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -34,6 +39,11 @@ const MAX_PROFILE_VALUE = 4_000;
 export const MAX_EVIDENCE_REFS = 3;
 const MAX_EVIDENCE_QUOTE = 2_000;
 const INTERVIEW_ID = /^[A-Za-z0-9_-]{1,120}$/;
+// Matches the aggregate route's own collection ceiling
+// (getStudyInterviewsChecked(..., 1_000) in aggregate/route.ts and
+// generate-followup/route.ts). Bounds the shape only; the route is the one
+// place that knows how many interviews actually loaded.
+const MAX_AGGREGATE_INTERVIEW_INDEX = 1_000;
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -246,11 +256,25 @@ export function validateSynthesisResult(input: unknown): SynthesisResult {
 // Aggregate synthesis (cross-interview)
 // ============================================
 
-export function validateAggregateSynthesisPayload(
-  input: unknown
-): Omit<AggregateSynthesisResult,
-  'studyId' | 'studyRevision' | 'interviewIds' | 'interviewCount' | 'aiProvider' | 'aiModel' | 'generatedAt'
-> {
+type AggregateCoreResult<TTheme> = {
+  commonThemes: TTheme[];
+  divergentViews: { topic: string; viewA: string; viewB: string }[];
+  keyFindings: string[];
+  researchImplications: string[];
+  bottomLine: string;
+};
+
+/**
+ * Shared body of both aggregate validators. `validateTheme` receives the
+ * theme's already-checked `theme` name and `frequency`, plus the raw record,
+ * and decides the evidence shape — a provider claim (interviewIndex) or a
+ * resolved ref (interviewId). Everything else — divergentViews, keyFindings,
+ * researchImplications, bottomLine, and every cap — is identical either way.
+ */
+function validateAggregateCore<TTheme>(
+  input: unknown,
+  validateTheme: (rawTheme: UnknownRecord, theme: string, frequency: number, i: number) => TTheme,
+): AggregateCoreResult<TTheme> {
   if (!isRecord(input)) {
     fail('aggregate synthesis', 'root', 'must be an object');
   }
@@ -260,24 +284,17 @@ export function validateAggregateSynthesisPayload(
   if (input.commonThemes.length > MAX_PROVIDER_LIST_ITEMS) {
     fail('aggregate synthesis', 'commonThemes', `must contain at most ${MAX_PROVIDER_LIST_ITEMS} items`);
   }
-  const commonThemes = input.commonThemes.map((theme, i) => {
-    if (!isRecord(theme)) {
+  const commonThemes = input.commonThemes.map((rawTheme, i) => {
+    if (!isRecord(rawTheme)) {
       fail('aggregate synthesis', `commonThemes[${i}]`, 'must be an object');
     }
-    if (!isNonEmptyString(theme.theme)) {
+    if (!isNonEmptyString(rawTheme.theme)) {
       fail('aggregate synthesis', `commonThemes[${i}].theme`, 'must be a non-empty string');
     }
-    if (!isFiniteNonNegativeNumber(theme.frequency)) {
+    if (!isFiniteNonNegativeNumber(rawTheme.frequency)) {
       fail('aggregate synthesis', `commonThemes[${i}].frequency`, 'must be a finite non-negative number');
     }
-    if (!isStringArray(theme.representativeQuotes)) {
-      fail('aggregate synthesis', `commonThemes[${i}].representativeQuotes`, 'must be an array of strings');
-    }
-    return {
-      theme: theme.theme,
-      frequency: theme.frequency,
-      representativeQuotes: theme.representativeQuotes,
-    };
+    return validateTheme(rawTheme, rawTheme.theme, rawTheme.frequency, i);
   });
 
   if (!Array.isArray(input.divergentViews)) {
@@ -318,6 +335,113 @@ export function validateAggregateSynthesisPayload(
     researchImplications: input.researchImplications,
     bottomLine: input.bottomLine,
   };
+}
+
+/**
+ * Validates what an AIProvider returns for an aggregate: quote *claims*,
+ * positioned by `interviewIndex` into the prompt's catalogue, never named by
+ * id. Called by the five adapters — keeps its name so no adapter import
+ * changes (L3.2, L6.1).
+ */
+export function validateAggregateSynthesisPayload(input: unknown): AggregateSynthesisProviderPayload {
+  return validateAggregateCore<AggregateThemeClaim>(input, (rawTheme, theme, frequency, i) => {
+    if (rawTheme.representativeQuotes !== undefined) {
+      fail('aggregate synthesis', `commonThemes[${i}]`, 'must not carry representativeQuotes');
+    }
+    if (!Array.isArray(rawTheme.quoteRefs) || rawTheme.quoteRefs.length > MAX_AGGREGATE_QUOTE_REFS) {
+      fail('aggregate synthesis', `commonThemes[${i}].quoteRefs`, `must be an array of at most ${MAX_AGGREGATE_QUOTE_REFS} items`);
+    }
+    const quoteRefs: AggregateQuoteClaim[] = rawTheme.quoteRefs.map((claim, j) => {
+      if (!isRecord(claim)) {
+        fail('aggregate synthesis', `commonThemes[${i}].quoteRefs[${j}]`, 'must be an object');
+      }
+      if (
+        typeof claim.quote !== 'string'
+        || claim.quote.length < 1
+        || claim.quote.length > MAX_EVIDENCE_QUOTE
+      ) {
+        fail('aggregate synthesis', `commonThemes[${i}].quoteRefs[${j}].quote`, `must be a string with length between 1 and ${MAX_EVIDENCE_QUOTE}`);
+      }
+      if (!isPositiveInteger(claim.turnIndex)) {
+        fail('aggregate synthesis', `commonThemes[${i}].quoteRefs[${j}].turnIndex`, 'must be an integer of at least 1');
+      }
+      if (!isPositiveInteger(claim.interviewIndex) || claim.interviewIndex > MAX_AGGREGATE_INTERVIEW_INDEX) {
+        fail('aggregate synthesis', `commonThemes[${i}].quoteRefs[${j}].interviewIndex`, `must be an integer between 1 and ${MAX_AGGREGATE_INTERVIEW_INDEX}`);
+      }
+      const knownKeys = new Set(['quote', 'turnIndex', 'interviewIndex']);
+      if (Object.keys(claim).some((key) => !knownKeys.has(key))) {
+        fail('aggregate synthesis', `commonThemes[${i}].quoteRefs[${j}]`, 'must not carry unknown fields');
+      }
+      return {
+        quote: claim.quote,
+        turnIndex: claim.turnIndex,
+        interviewIndex: claim.interviewIndex,
+      };
+    });
+    return { theme, frequency, quoteRefs };
+  });
+}
+
+/**
+ * Validates the aggregate the BROWSER posts back to generate-followup: by
+ * then every surviving ref carries a server-resolved `interviewId`, never an
+ * `interviewIndex`. Also accepts the legacy `representativeQuotes` shape —
+ * the L2.7 rollout window, permanent, not transitional. Neither field or
+ * both fields on the same theme is rejected.
+ */
+export function validateResolvedAggregateSynthesis(
+  input: unknown
+): Omit<AggregateSynthesisResult,
+  'studyId' | 'studyRevision' | 'interviewIds' | 'interviewCount'
+  | 'aiProvider' | 'aiModel' | 'requestedAiModel' | 'routedProvider'
+  | 'generatedAt' | '_receipt'
+> {
+  return validateAggregateCore<AggregateTheme>(input, (rawTheme, theme, frequency, i) => {
+    const hasLegacy = rawTheme.representativeQuotes !== undefined;
+    const hasRefs = rawTheme.quoteRefs !== undefined;
+    if (hasLegacy === hasRefs) {
+      fail('aggregate synthesis', `commonThemes[${i}]`, 'must carry exactly one of representativeQuotes or quoteRefs');
+    }
+
+    if (hasLegacy) {
+      if (!isStringArray(rawTheme.representativeQuotes)) {
+        fail('aggregate synthesis', `commonThemes[${i}].representativeQuotes`, 'must be an array of strings');
+      }
+      return { theme, frequency, representativeQuotes: rawTheme.representativeQuotes };
+    }
+
+    if (!Array.isArray(rawTheme.quoteRefs) || rawTheme.quoteRefs.length > MAX_AGGREGATE_QUOTE_REFS) {
+      fail('aggregate synthesis', `commonThemes[${i}].quoteRefs`, `must be an array of at most ${MAX_AGGREGATE_QUOTE_REFS} items`);
+    }
+    const quoteRefs: EvidenceRef[] = rawTheme.quoteRefs.map((ref, j) => {
+      if (!isRecord(ref)) {
+        fail('aggregate synthesis', `commonThemes[${i}].quoteRefs[${j}]`, 'must be an object');
+      }
+      if (
+        typeof ref.quote !== 'string'
+        || ref.quote.length < 1
+        || ref.quote.length > MAX_EVIDENCE_QUOTE
+      ) {
+        fail('aggregate synthesis', `commonThemes[${i}].quoteRefs[${j}].quote`, `must be a string with length between 1 and ${MAX_EVIDENCE_QUOTE}`);
+      }
+      if (!isPositiveInteger(ref.turnIndex)) {
+        fail('aggregate synthesis', `commonThemes[${i}].quoteRefs[${j}].turnIndex`, 'must be an integer of at least 1');
+      }
+      if (typeof ref.interviewId !== 'string' || !INTERVIEW_ID.test(ref.interviewId)) {
+        fail('aggregate synthesis', `commonThemes[${i}].quoteRefs[${j}].interviewId`, 'must be a valid id');
+      }
+      const knownKeys = new Set(['quote', 'turnIndex', 'interviewId']);
+      if (Object.keys(ref).some((key) => !knownKeys.has(key))) {
+        fail('aggregate synthesis', `commonThemes[${i}].quoteRefs[${j}]`, 'must not carry unknown fields');
+      }
+      return {
+        quote: ref.quote,
+        turnIndex: ref.turnIndex,
+        interviewId: ref.interviewId,
+      };
+    });
+    return { theme, frequency, quoteRefs };
+  });
 }
 
 // ============================================

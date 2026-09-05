@@ -93,6 +93,27 @@ describe('StudyDetail register table', () => {
     );
   });
 
+  it('numbers rows by participant chronology (Ruling 2), not by newest-first array position', async () => {
+    const config = makeStudyConfig({ id: 'study-reverse', name: 'Reverse Order Study' });
+    storageMock.getStudy.mockResolvedValue(makeStoredStudy({ id: 'study-reverse', config, revision: 1 }));
+    // Array order is [newer, older] (newest-first, as the real collection
+    // loader returns it) — the reverse of chronological order.
+    const newer = makeStoredInterview({ id: 'interview-newer', studyId: 'study-reverse', createdAt: 2_000 });
+    const older = makeStoredInterview({ id: 'interview-older', studyId: 'study-reverse', createdAt: 1_000 });
+    storageMock.getStudyInterviews.mockResolvedValue([newer, older]);
+
+    renderStudyDetail('study-reverse');
+    await screen.findByRole('heading', { name: 'Reverse Order Study' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Interviews' }));
+    await screen.findByRole('table');
+
+    // The first rendered row is the array's first item (newer), but its
+    // number is the OLDER participant's chronological position: Interview 2.
+    const rows = screen.getAllByRole('row').slice(1); // drop the header row
+    expect(rows[0]).toHaveTextContent('Interview 2');
+    expect(rows[1]).toHaveTextContent('Interview 1');
+  });
+
   it('carries no icons on any tab', async () => {
     const config = makeStudyConfig({ id: 'study-c', name: 'Icon-free Study' });
     storageMock.getStudy.mockResolvedValue(makeStoredStudy({ id: 'study-c', config, revision: 1 }));

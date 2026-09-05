@@ -37,7 +37,7 @@ const validSynthesisResult = {
 
 const validAggregatePayload = {
   commonThemes: [
-    { theme: 'Speed', frequency: 4, representativeQuotes: ['"Speed matters"'] },
+    { theme: 'Speed', frequency: 4, quoteRefs: [{ interviewIndex: 1, turnIndex: 3, quote: 'Speed matters' }] },
   ],
   divergentViews: [{ topic: 'Remote work', viewA: 'Prefer office', viewB: 'Prefer home' }],
   keyFindings: ['Speed is the dominant value'],
@@ -303,15 +303,36 @@ describe('validateAggregateSynthesisPayload', () => {
     expect(() => validateAggregateSynthesisPayload(withoutImplications)).toThrow(/researchImplications/);
   });
 
-  it('rejects malformed commonThemes including nested representativeQuotes', () => {
+  it('rejects malformed commonThemes including nested quoteRefs', () => {
     const input = clone(validAggregatePayload);
-    input.commonThemes = [{ theme: 'Speed', frequency: 4 }]; // missing representativeQuotes
+    input.commonThemes = [{ theme: 'Speed', frequency: 4 }]; // missing quoteRefs
+    expect(() => validateAggregateSynthesisPayload(input)).toThrow(/quoteRefs/);
+
+    input.commonThemes = [{ theme: 'Speed', frequency: 4, quoteRefs: [{ interviewIndex: 1, turnIndex: 3 }] }]; // no quote
+    expect(() => validateAggregateSynthesisPayload(input)).toThrow(/quote/);
+
+    input.commonThemes = [{ theme: 'Speed', frequency: 4, quoteRefs: [{ interviewIndex: 0, turnIndex: 3, quote: 'x' }] }];
+    expect(() => validateAggregateSynthesisPayload(input)).toThrow(/interviewIndex/);
+
+    input.commonThemes = [{
+      theme: 'Speed', frequency: 4,
+      quoteRefs: [
+        { interviewIndex: 1, turnIndex: 1, quote: 'a' },
+        { interviewIndex: 1, turnIndex: 2, quote: 'b' },
+        { interviewIndex: 1, turnIndex: 3, quote: 'c' },
+        { interviewIndex: 1, turnIndex: 4, quote: 'd' },
+      ],
+    }];
+    expect(() => validateAggregateSynthesisPayload(input)).toThrow(/quoteRefs/);
+
+    input.commonThemes = [{
+      theme: 'Speed', frequency: 4,
+      representativeQuotes: ['"Speed matters"'],
+      quoteRefs: [{ interviewIndex: 1, turnIndex: 3, quote: 'Speed matters' }],
+    }];
     expect(() => validateAggregateSynthesisPayload(input)).toThrow(/representativeQuotes/);
 
-    input.commonThemes = [{ theme: 'Speed', frequency: 4, representativeQuotes: ['ok', 2] }];
-    expect(() => validateAggregateSynthesisPayload(input)).toThrow(/representativeQuotes/);
-
-    input.commonThemes = [{ theme: 'Speed', frequency: '4', representativeQuotes: [] }];
+    input.commonThemes = [{ theme: 'Speed', frequency: '4', quoteRefs: [] }];
     expect(() => validateAggregateSynthesisPayload(input)).toThrow(/frequency/);
 
     input.commonThemes = 'none';
@@ -344,7 +365,7 @@ describe('validateAggregateSynthesisPayload', () => {
   it('rejects oversized aggregate collections', () => {
     const input = clone(validAggregatePayload);
     input.commonThemes = Array.from({ length: 101 }, () => ({
-      theme: 'Theme', frequency: 1, representativeQuotes: [],
+      theme: 'Theme', frequency: 1, quoteRefs: [],
     }));
     expect(() => validateAggregateSynthesisPayload(input)).toThrow(/commonThemes/);
   });

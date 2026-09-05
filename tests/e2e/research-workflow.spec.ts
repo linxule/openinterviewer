@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import type { Page } from '@playwright/test';
 import { OPENAI_SYNTHESIS_MODEL } from '../../src/types';
-import { test, expect, ANSWER, GREETING, INSIGHT } from './workflow-fixture';
+import { test, expect, ANSWER, GREETING, INSIGHT, UNSAID } from './workflow-fixture';
 
 async function createStudy(page: Page) {
   await page.goto('/login');
@@ -104,8 +104,30 @@ test('researcher creates a study; participants finalize; researcher reads, downl
   await expect(page.getByText('Context notes help both participants resume work.', { exact: true })).toBeVisible();
   await expect(page.getByText('Investigate when notes are written.', { exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Divergent Views', exact: true })).toHaveCount(0);
+
+  // Aggregate citations (Slice L): ANSWER's ref verifies (both synthetic
+  // interviews share turn 2), UNSAID's never locates — the pair that proves
+  // the whole chain end to end. Exactly one wine numeral must exist: the
+  // absence of a trigger is the signal that UNSAID's ref did not verify.
+  await expect(page.getByRole('button', { name: /^t\.\d+$/ })).toHaveCount(1);
+  const citationTrigger = page.getByRole('button', { name: 't.2', exact: true });
+  await expect(citationTrigger).toBeVisible();
+  await expect(page.getByText(ANSWER)).toBeVisible();
+  await expect(page.getByText(/^P0\d · turn 2$/)).toBeVisible();
+  const traceLink = page.getByRole('link', { name: /^Read in P0\d's transcript$/ });
+  await expect(traceLink).toBeVisible();
+  await expect(traceLink).toHaveAttribute('href', /turn=2/);
+  await expect(page.getByText(UNSAID)).toBeVisible();
+
   await expect(page.getByText(/not saved — regenerate to refresh/)).toBeVisible();
   expect(await page.locator('body').innerText()).not.toMatch(/receipt (eyJ|unsigned)/);
+
+  await traceLink.click();
+  await expect(page).toHaveURL(/\/dashboard\/interview\/[^/?]+\?studyId=[^&]+&turn=2$/);
+  const tracedTurn = page.locator('#turn-2');
+  await expect(tracedTurn).toBeFocused();
+  await expect(tracedTurn).toHaveClass(/trace-ring/);
+
   expect(workflow.calls.filter(call => call.operation === 'aggregate')).toHaveLength(1);
   expect(workflow.calls.filter(call => call.operation === 'synthesis')).toHaveLength(3);
   expect(workflow.calls.filter(call => call.operation === 'greeting')).toHaveLength(2);

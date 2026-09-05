@@ -1,22 +1,12 @@
 import type { ProviderExecution, ProviderResult } from '../ai';
-import type { AIProviderType, AggregateSynthesisResult, StudyConfig } from '@/types';
+import type { AIProviderType, AggregateSynthesisProviderPayload, AggregateSynthesisResult, StudyConfig } from '@/types';
 import type { FollowupStudy } from '../providerValidation';
 
 export const GREETING_DEADLINE_MS = 30_000;
 export const INTERVIEW_DEADLINE_MS = 60_000;
 export const SYNTHESIS_DEADLINE_MS = 120_000;
 
-export type AggregateSynthesisPayload = Omit<AggregateSynthesisResult,
-  | 'studyId'
-  | 'studyRevision'
-  | 'interviewIds'
-  | 'interviewCount'
-  | 'aiProvider'
-  | 'aiModel'
-  | 'requestedAiModel'
-  | 'routedProvider'
-  | 'generatedAt'
->;
+export type AggregateSynthesisPayload = AggregateSynthesisProviderPayload;
 
 export function providerResult<T>(
   value: T,
