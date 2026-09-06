@@ -61,6 +61,8 @@ The sample-workspace seed is not the public demo. `/demo` is component-memory-on
 - Cross-database study-operation repair: `src/lib/studyOperationReconciler.ts`
 - Disposable Redis fault harness: `tests/helpers/disposableRedis.ts`, `tests/helpers/faultManifest.ts`
 
+The interview analysis attach script distinguishes two non-writes: `unavailable` (transport or transient; retryable) and `corrupt` (the stored record's identity members or `analysis` state are not the shape the script owns). A corrupt record is never patched, is logged as `reason: corrupt-record`, and is reported to callers as `unavailable` so the researcher response stays retryable. Keep the two tags separate; folding `corrupt` into `unavailable` hides record faults behind outage alerts.
+
 Hosted study create/delete is a durable cross-database operation. Preserve the operation marker/tombstone and reconciliation protocol; a superficially simpler sequence can reintroduce orphaned ownership or BYOS records.
 
 ### Participant and AI flow
@@ -114,6 +116,8 @@ The participant sequence is link exchange -> HttpOnly participant session -> con
 | Design system | `src/components/ui/`, `src/app/globals.css`, `tailwind.config.ts`, `eslint.config.mjs` | `tests/unit/ui.*.test.tsx`; new visual vocabulary is added as a primitive here, never inline in a screen; changes follow a `docs/design/slice-*-spec.md` |
 
 Vitest tests live in two tiers. `tests/unit/` runs under the base vitest config (jsdom) and mirrors the security or product boundary it protects; prefer a realistic regression at that boundary over snapshots of implementation detail. `tests/integration/` runs under `vitest.integration.config.mts` (node environment) against a runner-owned disposable `redis-server` via `tests/helpers/disposableRedis.ts` — it must never connect to an inherited, shared, or production Redis. Use `npm run test:redis-crash` and `npm run test:adversarial` for these suites; they need a local `redis-server` binary (or the CI container) and are the only place real-wire crash-cut and cross-tenant claims are actually exercised.
+
+`tests/smoke/` is a third, paid tier and is excluded from `npm run check`: `vitest.smoke.config.mts` runs one live `synthesizeInterview` through the real direct adapter to confirm the served response names a model. It is gated on `SMOKE_PROVIDER`, refuses if any other provider credential is present, forces direct transport and standalone mode, constructs no store client, and reports metadata or a failure class only. Run it when a provider adapter, SDK, or the provenance requirement changes; fixtures cannot establish live-provider compatibility.
 
 `tests/e2e/` runs the browser journeys with real application API handlers and disposable Redis; only external provider HTTP responses are synthetic. `tests/e2e/server.mjs` builds and boots the production app with a blank, credential-free fixture environment (one server per transport) and `tests/e2e/workflow-fixture.ts` intercepts Upstash and provider HTTP at Next's test-mode boundary — together they are the sanctioned way to exercise the full researcher and participant workflow locally without any real credentials. Keep the Next test proxy confined to its test-only server launcher. Do not mock internal save/analyze APIs in the completion regression: it must exercise transcript persistence, deferred analysis, and researcher recovery across that boundary. The keyless demo regression still requires no API or external requests.
 

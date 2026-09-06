@@ -84,3 +84,33 @@ The work is isolated on `codex/maintenance-review-20260906` at
 `/Users/xulelin/.codex/worktrees/openinterviewer-review-20260906`. The original
 checkout's untracked duplicate files and user-owned `.claude/` directory were
 preserved. No credentials, external data, push, merge, or deployment were involved.
+
+## Follow-up (same day, PR #27, `6bcb5b0`)
+
+A second review of the merged diffs, made after `c92af80` was deployed, agreed
+with the fixes and raised two gaps:
+
+- The new served-model requirement had been verified only against fixtures.
+  `execution()` is used solely by synthesis, aggregate, and follow-up, so the
+  live participant interview was never at risk; researcher-side analysis was.
+- The attach script's new structural gates returned the same
+  `oi:analysis-unavailable` as a transport failure, so a malformed record was
+  indistinguishable from an outage in logs.
+
+Two corrections to that second review were accepted: the five-to-three
+command count already included the post-claim read, and the identity checks
+had moved from `decodeStoredInterview()` into the script rather than being new.
+
+Changes: `oi:analysis-corrupt` as a new closed-family tag, mapped explicitly at
+claim, attach, and failure recording; logged as `reason: corrupt-record` at
+503 and returned as `unavailable`, so the public response is unchanged; a
+corrupt attach makes no second write. Real-Redis coverage asserts refused
+records are byte-for-byte unchanged and legacy records still claim. A gated,
+single-credential live smoke runner was added under `tests/smoke/`.
+
+Verification: `npm run check` (1,576 unit tests), `npm run test:redis-crash`
+(34), `git diff --check`. Live smoke, Gemini only: requested and served
+`gemini-3.7-flash`, two calls, direct transport, standalone mode, no store
+client. Gemini echoes the alias rather than a dated snapshot, so the check is
+satisfied but not discriminating there. Claude, OpenAI, and OpenRouter remain
+unverified live.
