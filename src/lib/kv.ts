@@ -663,12 +663,16 @@ export const MAX_ATTACHED_SYNTHESIS_BYTES = 256_000;
 /** How long one claim holds the record before another run may take over. */
 export const ANALYSIS_CLAIM_LEASE_MS = 180_000;
 
+/** `corrupt`: the stored record exists but its identity members or analysis
+ *  state are not the shape this script owns. Nothing was written; a retry
+ *  cannot succeed until the record is repaired. Distinct from `unavailable`
+ *  (transport or transient) so an operator can tell the two apart in logs. */
 export type ClaimAnalysisResult =
   | { status: 'claimed'; claimId: string; attempts: number }
-  | { status: 'busy' | 'already-complete' | 'not-found' | 'unavailable' };
+  | { status: 'busy' | 'already-complete' | 'not-found' | 'unavailable' | 'corrupt' };
 
 export type AttachAnalysisResult =
-  { status: 'written' | 'already-complete' | 'stale' | 'too-large' | 'not-found' | 'unavailable' };
+  { status: 'written' | 'already-complete' | 'stale' | 'too-large' | 'not-found' | 'unavailable' | 'corrupt' };
 
 /**
  * KEYS[1] interview:<id>   ARGV[1] op 'claim'|'complete'|'fail'
@@ -697,7 +701,7 @@ if interview.status ~= 'completed' or interview.id ~= ARGV[2] then
   return {'oi:analysis-notfound'}
 end
 if type(interview.studyId) ~= 'string' or type(interview.createdAt) ~= 'number' or type(interview.completedAt) ~= 'number' then
-  return {'oi:analysis-unavailable'}
+  return {'oi:analysis-corrupt'}
 end
 
 local op = ARGV[1]
@@ -724,7 +728,7 @@ if state then
   effectiveClaimedAt = tonumber(state.claimedAt)
   attempts = state.attempts
   if type(attempts) ~= 'number' or attempts < 0 or attempts > 9007199254740991 or attempts ~= math.floor(attempts) then
-    return {'oi:analysis-unavailable'}
+    return {'oi:analysis-corrupt'}
   end
 else
   local synthesisRaw = json_object_value(body, 'synthesis')
@@ -752,7 +756,7 @@ end
 -- Counters and the attempt-start timestamp come from this claimed record,
 -- never a GET taken before a contender's claim or failure became visible.
 local lastAttemptAt = json_object_value(analysisRaw, 'lastAttemptAt')
-if not lastAttemptAt then return {'oi:analysis-unavailable'} end
+if not lastAttemptAt then return {'oi:analysis-corrupt'} end
 local nextAnalysis = patch_json_object(ARGV[6], {
   {'attempts', string.format('%.0f', attempts)},
   {'lastAttemptAt', lastAttemptAt}
@@ -822,6 +826,8 @@ export async function claimInterviewAnalysis(
         return { status: 'already-complete' };
       case 'notfound':
         return { status: 'not-found' };
+      case 'corrupt':
+        return { status: 'corrupt' };
       default:
         return { status: 'unavailable' };
     }
@@ -873,6 +879,8 @@ export async function attachInterviewAnalysis(
         return { status: 'stale' };
       case 'notfound':
         return { status: 'not-found' };
+      case 'corrupt':
+        return { status: 'corrupt' };
       default:
         return { status: 'unavailable' };
     }
@@ -906,6 +914,8 @@ export async function recordInterviewAnalysisFailure(
         return { status: 'stale' };
       case 'notfound':
         return { status: 'not-found' };
+      case 'corrupt':
+        return { status: 'corrupt' };
       default:
         return { status: 'unavailable' };
     }

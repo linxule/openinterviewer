@@ -43,7 +43,7 @@ export async function runInterviewAnalysis(input: {
   // HTTP status); 200 means a known record outcome, while 503 preserves
   // storage uncertainty. Neither a reason nor a status carries provider text.
   const logOutcome = (
-    reason?: 'provider-failure' | 'invalid' | 'too-large' | 'unavailable',
+    reason?: 'provider-failure' | 'invalid' | 'too-large' | 'unavailable' | 'corrupt-record',
     status = 200,
   ) => {
     logRequestEvent({
@@ -59,6 +59,13 @@ export async function runInterviewAnalysis(input: {
   // immediately, with no provider call.
   const claim = await claimInterviewAnalysis(interviewId, kvClient);
   if (claim.status !== 'claimed') {
+    // A corrupt record is reported to the caller as `unavailable` (the
+    // researcher cannot repair it and the response stays retryable), but the
+    // log reason says which of the two it was.
+    if (claim.status === 'corrupt') {
+      logOutcome('corrupt-record', 503);
+      return { status: 'unavailable' };
+    }
     const outcome: RunAnalysisOutcome =
       claim.status === 'already-complete' ? { status: 'already-complete' }
       : claim.status === 'not-found' ? { status: 'not-found' }
@@ -96,6 +103,9 @@ export async function runInterviewAnalysis(input: {
       case 'not-found':
         logOutcome();
         return { status: 'not-found' };
+      case 'corrupt':
+        logOutcome('corrupt-record', 503);
+        return { status: 'unavailable' };
       default:
         logOutcome('unavailable', 503);
         return { status: 'unavailable' };
@@ -185,6 +195,11 @@ export async function runInterviewAnalysis(input: {
       return { status: 'not-found' };
     case 'too-large':
       return recordFailure('too-large', 'too-large');
+    case 'corrupt':
+      // The record refused this write for a structural reason; a failure
+      // marker would be refused the same way. Return without a second write.
+      logOutcome('corrupt-record', 503);
+      return { status: 'unavailable' };
     case 'unavailable':
     default:
       return recordFailure('storage', 'unavailable');

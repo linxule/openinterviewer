@@ -44,6 +44,7 @@ export const REQUEST_LOG_REASON_ALLOWLIST = [
   'invalid',
   'provider-failure',
   'timeout',
+  'corrupt-record',
 ] as const;
 
 export type RequestLogField = (typeof REQUEST_LOG_ALLOWLIST)[number];

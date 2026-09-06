@@ -22,6 +22,12 @@ vi.mock('@/lib/providers', () => ({
   getInterviewProvider: vi.fn(() => ({ synthesizeInterview })),
 }));
 
+const logRequestEvent = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/requestLog', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/requestLog')>()),
+  logRequestEvent,
+}));
+
 import { runInterviewAnalysis } from '@/lib/interviewAnalysis';
 
 const study = { ...makeStudyConfig(), aiProvider: 'gemini' as const, aiModel: 'gemini-3.7-flash' };
@@ -220,5 +226,54 @@ describe('runInterviewAnalysis: failure classification', () => {
 
     expect(result).toEqual({ status: 'unavailable' });
     expect(kvMock.recordInterviewAnalysisFailure).toHaveBeenCalledWith('interview-a', 'claim-1', 'storage', {});
+  });
+});
+
+describe('runInterviewAnalysis: corrupt stored analysis state', () => {
+  const corruptLog = () => logRequestEvent.mock.calls
+    .map(([event]) => event as Record<string, unknown>)
+    .filter(event => event.event === 'interview.analysis');
+
+  it('a corrupt claim is reported as unavailable, logged as corrupt-record, and makes no provider call or write', async () => {
+    kvMock.claimInterviewAnalysis.mockResolvedValue({ status: 'corrupt' });
+
+    const result = await runInterviewAnalysis(baseInput());
+
+    expect(result).toEqual({ status: 'unavailable' });
+    expect(synthesizeInterview).not.toHaveBeenCalled();
+    expect(kvMock.recordInterviewAnalysisFailure).not.toHaveBeenCalled();
+    expect(corruptLog()).toEqual([expect.objectContaining({ reason: 'corrupt-record', status: 503 })]);
+  });
+
+  it('a corrupt attach returns immediately without a failure-marker write', async () => {
+    kvMock.claimInterviewAnalysis.mockResolvedValue({ status: 'claimed', claimId: 'claim-1', attempts: 1 });
+    synthesizeInterview.mockResolvedValue(providerResult());
+    kvMock.attachInterviewAnalysis.mockResolvedValue({ status: 'corrupt' });
+
+    const result = await runInterviewAnalysis(baseInput());
+
+    expect(result).toEqual({ status: 'unavailable' });
+    expect(kvMock.recordInterviewAnalysisFailure).not.toHaveBeenCalled();
+    expect(corruptLog()).toEqual([expect.objectContaining({ reason: 'corrupt-record', status: 503 })]);
+  });
+
+  it('a corrupt failure-marker write is reported as unavailable, not as a recorded provider failure', async () => {
+    kvMock.claimInterviewAnalysis.mockResolvedValue({ status: 'claimed', claimId: 'claim-1', attempts: 1 });
+    synthesizeInterview.mockRejectedValue(new Error('provider down'));
+    kvMock.recordInterviewAnalysisFailure.mockResolvedValue({ status: 'corrupt' });
+
+    const result = await runInterviewAnalysis(baseInput());
+
+    expect(result).toEqual({ status: 'unavailable' });
+    expect(kvMock.recordInterviewAnalysisFailure).toHaveBeenCalledTimes(1);
+    expect(corruptLog()).toEqual([expect.objectContaining({ reason: 'corrupt-record', status: 503 })]);
+  });
+
+  it('never puts record contents in the log', async () => {
+    kvMock.claimInterviewAnalysis.mockResolvedValue({ status: 'corrupt' });
+    await runInterviewAnalysis(baseInput());
+    for (const event of corruptLog()) {
+      expect(Object.keys(event).sort()).toEqual(['event', 'operation', 'reason', 'route', 'status']);
+    }
   });
 });

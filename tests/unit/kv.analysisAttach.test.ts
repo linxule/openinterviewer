@@ -56,6 +56,8 @@ describe('kv.analysisAttach: claimInterviewAnalysis', () => {
       .resolves.toEqual({ status: 'already-complete' });
     await expect(claimInterviewAnalysis('interview-a', client('oi:analysis-notfound')))
       .resolves.toEqual({ status: 'not-found' });
+    await expect(claimInterviewAnalysis('interview-a', client('oi:analysis-corrupt')))
+      .resolves.toEqual({ status: 'corrupt' });
   });
 
   it('maps an unknown tag to unavailable', async () => {
@@ -130,6 +132,7 @@ describe('kv.analysisAttach: attachInterviewAnalysis', () => {
     await expect(attachInterviewAnalysis(input, client('oi:analysis-done'))).resolves.toEqual({ status: 'already-complete' });
     await expect(attachInterviewAnalysis(input, client('oi:analysis-stale'))).resolves.toEqual({ status: 'stale' });
     await expect(attachInterviewAnalysis(input, client('oi:analysis-notfound'))).resolves.toEqual({ status: 'not-found' });
+    await expect(attachInterviewAnalysis(input, client('oi:analysis-corrupt'))).resolves.toEqual({ status: 'corrupt' });
   });
 
   it('maps an unknown wire tag to unavailable', async () => {
@@ -162,5 +165,15 @@ describe('kv.analysisAttach: recordInterviewAnalysisFailure', () => {
     await expect(recordInterviewAnalysisFailure('interview-a', 'claim-1', 'provider', client))
       .resolves.toEqual({ status: 'written' });
     expect(client.get).not.toHaveBeenCalled();
+  });
+
+  it('maps oi:analysis-corrupt to corrupt, distinct from unavailable', async () => {
+    const client = {
+      get: vi.fn(),
+      eval: vi.fn().mockResolvedValue(['oi:analysis-corrupt']),
+    } as unknown as RedisPort;
+
+    await expect(recordInterviewAnalysisFailure('interview-a', 'claim-1', 'provider', client))
+      .resolves.toEqual({ status: 'corrupt' });
   });
 });

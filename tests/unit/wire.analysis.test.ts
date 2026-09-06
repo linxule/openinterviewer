@@ -13,6 +13,12 @@ describe('wire.analysis: parseAnalysisResult', () => {
     expect(parseAnalysisResult(['oi:analysis-stale'])).toEqual({ status: 'ok', value: { outcome: 'stale' } });
     expect(parseAnalysisResult(['oi:analysis-written'])).toEqual({ status: 'ok', value: { outcome: 'written' } });
     expect(parseAnalysisResult(['oi:analysis-recorded'])).toEqual({ status: 'ok', value: { outcome: 'recorded' } });
+    expect(parseAnalysisResult(['oi:analysis-corrupt'])).toEqual({ status: 'ok', value: { outcome: 'corrupt' } });
+  });
+
+  it('keeps corrupt distinct from the unavailable marker and rejects a payload on it', () => {
+    expect(parseAnalysisResult(['oi:analysis-corrupt'])).not.toEqual({ status: 'unavailable' });
+    expect(parseAnalysisResult(['oi:analysis-corrupt', 'extra'])).toEqual({ status: 'unavailable' });
   });
 
   it('maps the claimed tag with the atomic attempt count', () => {

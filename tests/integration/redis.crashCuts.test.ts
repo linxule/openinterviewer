@@ -1037,15 +1037,82 @@ describe('slice P: interview analysis attach preserves untouched JSON types', ()
     });
   });
 
-  it.each([-1, 1.5, '2', Number.MAX_SAFE_INTEGER])('refuses an invalid or exhausted attempt counter (%s) without changing the record', async (attempts) => {
+  it.each([-1, 1.5, '2'])('refuses a malformed attempt counter (%s) as corrupt without changing the record', async (attempts) => {
     const interview = makeStoredInterview({ id: `interview-${uuid()}` });
     const encoded = `oi:interview:${JSON.stringify({
       ...interview,
       analysis: { status: 'pending', attempts, lastAttemptAt: NOW },
     })}`;
     await redis.set(`interview:${interview.id}`, encoded);
+    expect(await claimInterviewAnalysis(interview.id, redis, NOW)).toEqual({ status: 'corrupt' });
+    expect(await redis.get(`interview:${interview.id}`)).toBe(encoded);
+  });
+
+  it('refuses a missing attempt counter as corrupt without changing the record', async () => {
+    const interview = makeStoredInterview({ id: `interview-${uuid()}` });
+    const encoded = `oi:interview:${JSON.stringify({
+      ...interview,
+      analysis: { status: 'pending', lastAttemptAt: NOW },
+    })}`;
+    await redis.set(`interview:${interview.id}`, encoded);
+    expect(await claimInterviewAnalysis(interview.id, redis, NOW)).toEqual({ status: 'corrupt' });
+    expect(await redis.get(`interview:${interview.id}`)).toBe(encoded);
+  });
+
+  it('refuses an exhausted attempt counter as unavailable, not corrupt, without changing the record', async () => {
+    const interview = makeStoredInterview({ id: `interview-${uuid()}` });
+    const encoded = `oi:interview:${JSON.stringify({
+      ...interview,
+      analysis: { status: 'pending', attempts: Number.MAX_SAFE_INTEGER, lastAttemptAt: NOW },
+    })}`;
+    await redis.set(`interview:${interview.id}`, encoded);
     expect(await claimInterviewAnalysis(interview.id, redis, NOW)).toEqual({ status: 'unavailable' });
     expect(await redis.get(`interview:${interview.id}`)).toBe(encoded);
+  });
+
+  it('refuses a running claim without an attempt-start time as corrupt on attach and fail, byte-for-byte unchanged', async () => {
+    const interview = makeStoredInterview({ id: `interview-${uuid()}` });
+    const encoded = `oi:interview:${JSON.stringify({
+      ...interview,
+      analysis: { status: 'running', attempts: 1, claimId: 'claim-held', claimedAt: NOW },
+    })}`;
+    await redis.set(`interview:${interview.id}`, encoded);
+    expect(await attachInterviewAnalysis({
+      interviewId: interview.id,
+      claimId: 'claim-held',
+      synthesis: {
+        statedPreferences: [], revealedPreferences: [], themes: [],
+        contradictions: [], keyInsights: [], bottomLine: 'Refused analysis',
+      },
+      provenance: { aiProvider: 'gemini', aiModel: 'gemini-3.7-flash', requestedAiModel: 'gemini-3.7-flash' },
+      studyRevision: 1,
+    }, redis)).toEqual({ status: 'corrupt' });
+    expect(await redis.get(`interview:${interview.id}`)).toBe(encoded);
+    expect(await recordInterviewAnalysisFailure(interview.id, 'claim-held', 'provider', redis))
+      .toEqual({ status: 'corrupt' });
+    expect(await redis.get(`interview:${interview.id}`)).toBe(encoded);
+  });
+
+  it('refuses a record with a non-numeric identity timestamp as corrupt without changing it', async () => {
+    const interview = makeStoredInterview({ id: `interview-${uuid()}` });
+    const encoded = `oi:interview:${JSON.stringify({ ...interview, createdAt: String(NOW) })}`;
+    await redis.set(`interview:${interview.id}`, encoded);
+    expect(await claimInterviewAnalysis(interview.id, redis, NOW)).toEqual({ status: 'corrupt' });
+    expect(await redis.get(`interview:${interview.id}`)).toBe(encoded);
+  });
+
+  it('still claims a legacy record that has no analysis member and starts its counter at one', async () => {
+    const interview = makeStoredInterview({ id: `interview-${uuid()}` });
+    const record = { ...interview } as Record<string, unknown>;
+    delete record.analysis;
+    expect(record).not.toHaveProperty('analysis');
+    await redis.set(`interview:${interview.id}`, `oi:interview:${JSON.stringify(record)}`);
+    const claim = await claimInterviewAnalysis(interview.id, redis, NOW);
+    expect(claim).toMatchObject({ status: 'claimed', attempts: 1 });
+    const stored = await getInterviewChecked(interview.id, redis);
+    expect(stored.status === 'found' && stored.interview.analysis).toMatchObject({
+      status: 'running', attempts: 1, lastAttemptAt: NOW,
+    });
   });
 
   it('claim then attach on a record with an empty array and an empty string round-trips both byte-identically', async () => {

@@ -126,6 +126,14 @@ describe('logRequestEvent allowlist', () => {
     expect(JSON.stringify(spy.mock.calls)).not.toContain('leaked');
   });
 
+  it('accepts the corrupt-record reason', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    logRequestEvent({ event: 'interview.analysis', reason: 'corrupt-record', status: 503 });
+    const payload = parseLogged(spy);
+    expect(payload.reason).toBe('corrupt-record');
+    expect(payload.status).toBe(503);
+  });
+
   it('rejects unknown event names and unknown reasons', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     logRequestEvent({ event: 'study.123@example.com', reason: 'please retry later' });
