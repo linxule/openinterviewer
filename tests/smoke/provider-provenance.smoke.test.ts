@@ -12,7 +12,9 @@
 // - One adapter invocation. The SDKs' own retry defaults are not overridden
 //   here (Anthropic and OpenAI SDKs retry up to 2 times on transient
 //   failures, so a single invocation may be up to 3 HTTP requests). Output
-//   caps come from the adapter: 8192 tokens for the synthesis call.
+//   caps are whatever the adapter's synthesis call sets: 8192 tokens for
+//   Claude, OpenAI, and OpenRouter; the Gemini adapter sets no explicit cap.
+// - On failure the original error is never rethrown: see smokeFailure.ts.
 //
 // Usage (one provider, one credential):
 //   SMOKE_PROVIDER=openai OPENAI_API_KEY="$(op read 'op://…')" \
@@ -21,7 +23,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { getInterviewProvider, isProviderType } from '@/lib/providers';
-import { ProviderFailure, ProviderTimeoutError } from '@/lib/providerErrors';
+import { classifySmokeFailure, sanitizedSmokeError } from './smokeFailure';
 import {
   DEFAULT_CLAUDE_MODEL,
   DEFAULT_GEMINI_MODEL,
@@ -123,16 +125,13 @@ describe.skipIf(!provider)('live provider provenance smoke', () => {
       expect(execution.requestedModel).toBe(model);
       expect(execution.model.trim().length).toBeGreaterThan(0);
     } catch (error) {
-      // Report the class only. A missing served model surfaces here as
-      // ProviderFailure kind 'invalid-response' — that is the finding this
-      // smoke exists to detect; do not retry, bring the class back.
-      const failure = error instanceof ProviderFailure
-        ? { class: 'ProviderFailure', kind: error.kind, message: error.message }
-        : error instanceof ProviderTimeoutError
-          ? { class: 'ProviderTimeoutError' }
-          : { class: error instanceof Error ? error.name : 'UnknownError' };
+      // Report the class and kind only, then throw a fresh error carrying
+      // nothing else. A missing served model surfaces as
+      // ProviderFailure/invalid-response — the finding this smoke exists to
+      // detect; do not retry, bring the class back.
+      const failure = classifySmokeFailure(error);
       console.log(JSON.stringify({ smoke: 'provider-provenance', provider, requestedModel: model, failure }));
-      throw error;
+      throw sanitizedSmokeError(failure);
     }
   });
 });
