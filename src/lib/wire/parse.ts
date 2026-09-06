@@ -360,7 +360,7 @@ export function parseReceiptResult(wire: unknown): WireResult<never> {
 }
 
 export type AnalysisWireOutcome =
-  | { outcome: 'notfound' | 'busy' | 'done' | 'stale' | 'written' | 'recorded' }
+  | { outcome: 'notfound' | 'busy' | 'done' | 'stale' | 'written' | 'recorded' | 'corrupt' }
   | { outcome: 'claimed'; attempts: number };
 
 const ANALYSIS_SIMPLE: Record<string, Exclude<AnalysisWireOutcome['outcome'], 'claimed'>> = {
@@ -370,6 +370,7 @@ const ANALYSIS_SIMPLE: Record<string, Exclude<AnalysisWireOutcome['outcome'], 'c
   'oi:analysis-stale': 'stale',
   'oi:analysis-written': 'written',
   'oi:analysis-recorded': 'recorded',
+  'oi:analysis-corrupt': 'corrupt',
 };
 
 export function parseAnalysisResult(wire: unknown): WireResult<AnalysisWireOutcome> {

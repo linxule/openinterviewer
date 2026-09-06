@@ -203,6 +203,7 @@ export const FAMILY_TAGS: Record<FamilyName, Readonly<Record<string, WireTagSpec
     'oi:analysis-stale': { arity: 1 },
     'oi:analysis-written': { arity: 1 },
     'oi:analysis-recorded': { arity: 1 },
+    'oi:analysis-corrupt': { arity: 1 },
     'oi:analysis-claimed': { arity: 2, payloadKind: 'count' },
   },
 };
