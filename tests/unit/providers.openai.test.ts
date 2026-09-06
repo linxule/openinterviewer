@@ -137,6 +137,54 @@ describe('OpenAIProvider', () => {
     expect(createMock.mock.calls[1][0].reasoning).toEqual({ effort: 'medium' });
   });
 
+  it.each([
+    'What did you mean by the closing } in your example?',
+    'How did you use [draft] and an opening { in that note?',
+    'You wrote "the } belongs here"; could you explain?',
+    'The path ends with a backslash \\, followed by }; what happened?',
+    'Could you explain the snippet ```json {"role":"editor"} ``` you mentioned?',
+  ])('preserves quoted research content in structured responses: %s', async (message) => {
+    createMock.mockResolvedValue(response(JSON.stringify({ ...interviewJson(), message })));
+    const provider = new OpenAIProvider(undefined, 'sk-test');
+
+    const result = await provider.generateInterviewResponse(
+      [], studyConfig(), null,
+      { questionsAsked: [], total: 1, currentPhase: 'background', isComplete: false },
+      '',
+    );
+
+    expect(result.message).toBe(message);
+  });
+
+  it('removes outer response prose and fences without changing embedded markdown', async () => {
+    const message = 'What did the ```json {"value":"}"} ``` snippet mean to you?';
+    const payload = JSON.stringify({ ...interviewJson(), message });
+    createMock.mockResolvedValue(response(`Here is the response:\n\`\`\`json\n${payload}\n\`\`\`\nEnd of response.`));
+    const provider = new OpenAIProvider(undefined, 'sk-test');
+
+    const result = await provider.generateInterviewResponse(
+      [], studyConfig(), null,
+      { questionsAsked: [], total: 1, currentPhase: 'background', isComplete: false },
+      '',
+    );
+
+    expect(result.message).toBe(message);
+  });
+
+  it.each([
+    JSON.stringify(interviewJson()).slice(0, -1),
+    `${JSON.stringify(interviewJson()).slice(0, -1)}]`,
+  ])('rejects truncated or mismatched structured JSON: %s', async (payload) => {
+    createMock.mockResolvedValue(response(payload));
+    const provider = new OpenAIProvider(undefined, 'sk-test');
+
+    await expect(provider.generateInterviewResponse(
+      [], studyConfig(), null,
+      { questionsAsked: [], total: 1, currentPhase: 'background', isComplete: false },
+      '',
+    )).rejects.toMatchObject({ kind: 'invalid-response' });
+  });
+
   it('sends the study\'s own configured model and returns execution provenance with the served model', async () => {
     createMock.mockResolvedValue(response(JSON.stringify({
       statedPreferences: [],
