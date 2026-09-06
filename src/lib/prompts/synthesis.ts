@@ -100,7 +100,7 @@ export const buildSynthesisPrompt = (
 ): string => {
   // Format transcript. Numbering runs over every element of `history`, 1-based,
   // regardless of role, because that is the array the researcher's `t. N`
-  // coordinate counts and the synthesis receipt binds.
+  // coordinate and evidence references address.
   const interviewText = history
     .map((m, i) => `TURN ${i + 1} · ${m.role === 'user' ? 'PARTICIPANT' : 'INTERVIEWER'}: ${m.content}`)
     .join('\n\n');

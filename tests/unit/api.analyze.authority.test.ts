@@ -98,7 +98,15 @@ describe('POST /api/interviews/[id]/analyze — tenancy', () => {
     expect(contextMock.getAuthorizedResearcherStudyContext).not.toHaveBeenCalled();
   });
 
-  it('runs the analysis and returns 200 for a same-tenant, authorized request', async () => {
+  it.each([
+    [{ status: 'complete' }, 200, { status: 'complete' }],
+    [{ status: 'failed', failureKind: 'provider' }, 200, { status: 'failed', failureKind: 'provider' }],
+    [{ status: 'busy' }, 200, { status: 'busy' }],
+    [{ status: 'already-complete' }, 200, { status: 'already-complete' }],
+    [{ status: 'unavailable' }, 503, {
+      error: 'Interview storage is temporarily unavailable. Please try again.', retryable: true,
+    }],
+  ])('returns the factual analysis outcome %j as HTTP %i for an authorized request', async (outcome, status, body) => {
     contextMock.getAuthorizedResearcherStudyContext.mockResolvedValue({
       authorized: true,
       context: { kvClient: {}, researcherId: 'researcher-a' },
@@ -112,13 +120,13 @@ describe('POST /api/interviews/[id]/analyze — tenancy', () => {
       ok: true,
       study: { id: 'study-a', revision: 1, config: { aiProvider: 'gemini', aiModel: 'gemini-3.7-flash' } },
     });
-    analysisMock.runInterviewAnalysis.mockResolvedValue({ status: 'complete' });
+    analysisMock.runInterviewAnalysis.mockResolvedValue(outcome);
 
     const { request, params } = makeRequest('interview-in-a', 'study-a');
     const response = await POST(request, { params });
 
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ status: 'complete' });
+    expect(response.status).toBe(status);
+    await expect(response.json()).resolves.toEqual(body);
     expect(analysisMock.runInterviewAnalysis).toHaveBeenCalledTimes(1);
   });
 });

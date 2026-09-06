@@ -40,14 +40,14 @@ vi.mock('@/lib/providers', async (importOriginal) => {
 const platformRateLimitMock = vi.hoisted(() => ({ hostedAiRateLimitResponse: vi.fn() }));
 vi.mock('@/lib/platformAiRateLimit', () => platformRateLimitMock);
 
-const receiptMock = vi.hoisted(() => ({
+const provenanceMock = vi.hoisted(() => ({
   aggregateProvenance: vi.fn(() => ({
     aiProvider: 'gemini',
     aiModel: 'gemini-served',
     requestedAiModel: 'gemini-requested',
   })),
 }));
-vi.mock('@/lib/synthesisReceipt', () => receiptMock);
+vi.mock('@/lib/synthesisProvenance', () => provenanceMock);
 
 import { POST } from '@/app/api/synthesis/aggregate/route';
 

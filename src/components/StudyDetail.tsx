@@ -12,6 +12,7 @@ import {
   ResearcherStorageUnavailableError,
   StudyOperationPendingError,
 } from '@/services/storageService';
+import { analyzeInterview } from '@/services/analysisApi';
 import { Button, Coordinate, Icon, Label, Notice, Rule, Tabs } from '@/components/ui';
 import { AggregateReading, ProvenanceFooter } from '@/components/SynthesisReading';
 import { shortInterviewId } from '@/lib/interviewId';
@@ -131,27 +132,34 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
   );
   const [isBatchAnalyzing, setIsBatchAnalyzing] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
+  const [batchError, setBatchError] = useState<string | null>(null);
 
   const handleAnalyzeBatch = async () => {
     if (operationPending || isBatchAnalyzing) return;
     const batch = pendingAnalysisInterviews.slice(0, ANALYSIS_BATCH_LIMIT);
     if (batch.length === 0) return;
     setIsBatchAnalyzing(true);
+    setBatchError(null);
     setBatchProgress({ done: 0, total: batch.length });
-    for (let i = 0; i < batch.length; i++) {
-      try {
-        await fetch(
-          `/api/interviews/${encodeURIComponent(batch[i].id)}/analyze?studyId=${encodeURIComponent(studyId)}`,
-          { method: 'POST' },
-        );
-      } catch (error) {
-        console.error('Error analyzing interview:', error);
+    try {
+      for (let i = 0; i < batch.length; i++) {
+        const result = await analyzeInterview(batch[i].id, studyId);
+        if (!result.ok) {
+          setBatchError(result.error);
+          if (result.kind === 'pending') setOperationPending(true);
+          // Retain the loaded register and its error during an outage: a
+          // follow-up read could fail too and replace it with an empty state.
+          return;
+        }
+        // A recorded provider failure is a completed request. Keep going;
+        // only a request-level failure stops this user-triggered batch.
+        setBatchProgress({ done: i + 1, total: batch.length });
       }
-      setBatchProgress({ done: i + 1, total: batch.length });
+      await loadStudyData();
+    } finally {
+      setIsBatchAnalyzing(false);
+      setBatchProgress(null);
     }
-    setIsBatchAnalyzing(false);
-    setBatchProgress(null);
-    await loadStudyData();
   };
 
   const loadParticipantLinks = useCallback(async () => {
@@ -650,6 +658,12 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
         ) : (
           <div>
             <ConductingModelsNotice conductingModels={conductingModels} recordedModelCount={recordedModelCount} />
+
+            {batchError && (
+              <Notice tone="error" eyebrow="Analysis batch stopped" role="alert" className="mb-4">
+                <p className="mt-1 text-[13px] text-ink-700">{batchError}</p>
+              </Notice>
+            )}
 
             {pendingAnalysisInterviews.length > 0 && (
               <div className="mb-4">

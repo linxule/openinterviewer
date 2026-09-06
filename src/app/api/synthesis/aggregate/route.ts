@@ -13,7 +13,7 @@ import { configurationRequiredResponse } from '@/lib/researcherAccess';
 import { getStudyChecked, getStudyInterviewsChecked, saveStudyAggregate } from '@/lib/kv';
 import { mapCollectionLoad, mapStudyLoad } from '@/lib/ownedStudies';
 import { providerErrorResponse } from '@/lib/providerErrors';
-import { aggregateProvenance } from '@/lib/synthesisReceipt';
+import { aggregateProvenance } from '@/lib/synthesisProvenance';
 import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
 import { AggregateSynthesisResult, AggregateTheme, StoredAggregateSynthesis, SynthesisResult } from '@/types';
 import { readBoundedJsonObject } from '@/lib/requestBody';

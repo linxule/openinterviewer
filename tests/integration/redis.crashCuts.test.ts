@@ -4,6 +4,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { RedisNodeAdapter } from '@/lib/redisNodeAdapter';
+import type { RedisPort } from '@/lib/redisPort';
 import { computeRedisBrand } from '@/lib/redisNodeAdapter';
 import { buildSchemaLineageValue } from '@/lib/platformSchema';
 import {
@@ -24,16 +25,20 @@ import {
 } from '@/lib/platformDb';
 import {
   attachInterviewAnalysis,
+  ANALYSIS_CLAIM_LEASE_MS,
   claimInterviewAnalysis,
   CREATE_STUDY_SCRIPT,
   DELETE_EMPTY_STUDY_SCRIPT,
   createStudyAtomic,
   deleteStudy,
   encodeMutationGuard,
+  encodeInterviewValue,
+  getInterviewChecked,
   getStudyAggregateChecked,
   persistCompletedInterview,
   persistCompletedInterviewFinish,
   persistCompletedInterviewP1,
+  recordInterviewAnalysisFailure,
   replaceStudyConfigAtomic,
   saveStudyAggregate,
   setStudyLinksEnabled,
@@ -946,6 +951,103 @@ describe('transport response-loss and undecodable-after-commit', () => {
 });
 
 describe('slice P: interview analysis attach preserves untouched JSON types', () => {
+  it('counts a delayed contender after intervening failures without overwriting its attempt-start time', async () => {
+    const interview = makeStoredInterview({ id: `interview-${uuid()}` });
+    await redis.set(`interview:${interview.id}`, encodeInterviewValue(interview));
+    const waiting = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const delayedClient = {
+      get: redis.get.bind(redis),
+      eval: async (...args: Parameters<RedisPort['eval']>) => {
+        waiting.resolve();
+        await release.promise;
+        return redis.eval(...args);
+      },
+    } as RedisPort;
+
+    // Before the fix this request GETs attempts=0, then queues its EVAL
+    // behind two complete claim/failure cycles and writes attempts=1 again.
+    const delayedClaim = claimInterviewAnalysis(interview.id, delayedClient, NOW);
+    await waiting.promise;
+    try {
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        const claim = await claimInterviewAnalysis(interview.id, redis, NOW + attempt);
+        expect(claim).toMatchObject({ status: 'claimed', attempts: attempt });
+        if (claim.status !== 'claimed') throw new Error('Claim failed');
+        expect(await recordInterviewAnalysisFailure(interview.id, claim.claimId, 'provider', redis))
+          .toEqual({ status: 'written' });
+        const failed = await getInterviewChecked(interview.id, redis);
+        expect(failed.status === 'found' && failed.interview.analysis).toMatchObject({
+          status: 'failed', attempts: attempt, lastAttemptAt: NOW + attempt,
+        });
+      }
+    } finally {
+      release.resolve();
+    }
+
+    const claim = await delayedClaim;
+    expect(claim).toMatchObject({ status: 'claimed', attempts: 3 });
+    if (claim.status !== 'claimed') throw new Error('Delayed claim failed');
+    expect(await attachInterviewAnalysis({
+      interviewId: interview.id,
+      claimId: claim.claimId,
+      synthesis: {
+        statedPreferences: [], revealedPreferences: [], themes: [],
+        contradictions: [], keyInsights: [], bottomLine: 'Saved analysis',
+      },
+      provenance: { aiProvider: 'gemini', aiModel: 'gemini-3.7-flash', requestedAiModel: 'gemini-3.7-flash' },
+      studyRevision: 2,
+    }, redis)).toEqual({ status: 'written' });
+    const completed = await getInterviewChecked(interview.id, redis);
+    expect(completed.status === 'found' && completed.interview.analysis).toMatchObject({
+      status: 'complete', attempts: 3, lastAttemptAt: NOW, studyRevision: 2,
+    });
+  });
+
+  it('admits one racing claim and fences its writes after a lease takeover', async () => {
+    const interview = makeStoredInterview({ id: `interview-${uuid()}` });
+    await redis.set(`interview:${interview.id}`, encodeInterviewValue(interview));
+    const racing = await Promise.all([
+      claimInterviewAnalysis(interview.id, redis, NOW),
+      claimInterviewAnalysis(interview.id, redis, NOW),
+    ]);
+    expect(racing.map(claim => claim.status).sort()).toEqual(['busy', 'claimed']);
+    const first = racing.find(claim => claim.status === 'claimed');
+    if (!first || first.status !== 'claimed') throw new Error('Claim failed');
+    const takeover = await claimInterviewAnalysis(interview.id, redis, NOW + ANALYSIS_CLAIM_LEASE_MS);
+    expect(takeover).toMatchObject({ status: 'claimed', attempts: 2 });
+    if (takeover.status !== 'claimed') throw new Error('Takeover failed');
+    expect(await attachInterviewAnalysis({
+      interviewId: interview.id,
+      claimId: first.claimId,
+      synthesis: {
+        statedPreferences: [], revealedPreferences: [], themes: [],
+        contradictions: [], keyInsights: [], bottomLine: 'Stale analysis',
+      },
+      provenance: { aiProvider: 'gemini', aiModel: 'gemini-3.7-flash', requestedAiModel: 'gemini-3.7-flash' },
+      studyRevision: 1,
+    }, redis)).toEqual({ status: 'stale' });
+    expect(await recordInterviewAnalysisFailure(interview.id, first.claimId, 'provider', redis))
+      .toEqual({ status: 'stale' });
+    expect(await recordInterviewAnalysisFailure(interview.id, takeover.claimId, 'provider', redis))
+      .toEqual({ status: 'written' });
+    const failed = await getInterviewChecked(interview.id, redis);
+    expect(failed.status === 'found' && failed.interview.analysis).toMatchObject({
+      status: 'failed', attempts: 2, lastAttemptAt: NOW + ANALYSIS_CLAIM_LEASE_MS,
+    });
+  });
+
+  it.each([-1, 1.5, '2', Number.MAX_SAFE_INTEGER])('refuses an invalid or exhausted attempt counter (%s) without changing the record', async (attempts) => {
+    const interview = makeStoredInterview({ id: `interview-${uuid()}` });
+    const encoded = `oi:interview:${JSON.stringify({
+      ...interview,
+      analysis: { status: 'pending', attempts, lastAttemptAt: NOW },
+    })}`;
+    await redis.set(`interview:${interview.id}`, encoded);
+    expect(await claimInterviewAnalysis(interview.id, redis, NOW)).toEqual({ status: 'unavailable' });
+    expect(await redis.get(`interview:${interview.id}`)).toBe(encoded);
+  });
+
   it('claim then attach on a record with an empty array and an empty string round-trips both byte-identically', async () => {
     const studyId = uuid();
     const config = makeStudyConfig({ id: studyId, aiProvider: 'gemini', aiModel: 'gemini-3.7-flash' });

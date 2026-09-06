@@ -5,9 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { MAX_EVIDENCE_REFS, validateSynthesisResult } from '@/lib/providerValidation';
 import { synthesisResponseSchema } from '@/lib/providerSchemas';
 
-// Duplicated from synthesisReceipt.ts's canonicalize/digest — those internals
-// are not exported, and this local copy is honest about what it duplicates
-// (see tests/unit/api.save.idempotent.test.ts for the same pattern).
+// Compare canonical payloads to detect any content lost during validation.
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
   if (value && typeof value === 'object') {

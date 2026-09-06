@@ -361,7 +361,7 @@ export function parseReceiptResult(wire: unknown): WireResult<never> {
 
 export type AnalysisWireOutcome =
   | { outcome: 'notfound' | 'busy' | 'done' | 'stale' | 'written' | 'recorded' }
-  | { outcome: 'claimed'; value: string };
+  | { outcome: 'claimed'; attempts: number };
 
 const ANALYSIS_SIMPLE: Record<string, Exclude<AnalysisWireOutcome['outcome'], 'claimed'>> = {
   'oi:analysis-notfound': 'notfound',
@@ -376,7 +376,10 @@ export function parseAnalysisResult(wire: unknown): WireResult<AnalysisWireOutco
   const parsed = parseFamilyWire('analysis', wire);
   if (parsed.status !== 'ok') return parsed;
   const { tag, payload } = parsed.value;
-  if (tag === 'oi:analysis-claimed') return ok({ outcome: 'claimed', value: payload as string });
+  if (tag === 'oi:analysis-claimed') {
+    if (typeof payload !== 'number' || payload < 1) return UNAVAILABLE;
+    return ok({ outcome: 'claimed', attempts: payload });
+  }
   const outcome = ANALYSIS_SIMPLE[tag];
   if (!outcome) return UNAVAILABLE;
   return ok({ outcome });

@@ -53,6 +53,7 @@ const baseInput = () => ({
 beforeEach(() => {
   vi.clearAllMocks();
   kvMock.getInterviewChecked.mockResolvedValue({ status: 'found', interview: makeStoredInterview({ id: 'interview-a' }) });
+  kvMock.recordInterviewAnalysisFailure.mockResolvedValue({ status: 'written' });
 });
 
 describe('runInterviewAnalysis: concurrency', () => {
@@ -97,6 +98,28 @@ describe('runInterviewAnalysis: concurrency', () => {
 });
 
 describe('runInterviewAnalysis: failure classification', () => {
+  it('reports an unavailable claim as a storage outage, without a provider call or an invented busy state', async () => {
+    kvMock.claimInterviewAnalysis.mockResolvedValue({ status: 'unavailable' });
+
+    const result = await runInterviewAnalysis(baseInput());
+
+    expect(result).toEqual({ status: 'unavailable' });
+    expect(synthesizeInterview).not.toHaveBeenCalled();
+    expect(kvMock.getInterviewChecked).not.toHaveBeenCalled();
+    expect(kvMock.recordInterviewAnalysisFailure).not.toHaveBeenCalled();
+  });
+
+  it('keeps a post-claim read outage retryable even when its storage-failure marker succeeds', async () => {
+    kvMock.claimInterviewAnalysis.mockResolvedValue({ status: 'claimed', claimId: 'claim-1', attempts: 1 });
+    kvMock.getInterviewChecked.mockResolvedValue({ status: 'unavailable' });
+
+    const result = await runInterviewAnalysis(baseInput());
+
+    expect(result).toEqual({ status: 'unavailable' });
+    expect(synthesizeInterview).not.toHaveBeenCalled();
+    expect(kvMock.recordInterviewAnalysisFailure).toHaveBeenCalledWith('interview-a', 'claim-1', 'storage', {});
+  });
+
   it('a provider throw records failureKind provider, and the thrown value reaches nowhere near the record', async () => {
     kvMock.claimInterviewAnalysis.mockResolvedValue({ status: 'claimed', claimId: 'claim-1', attempts: 1 });
     const secretError = new Error('super secret upstream body: sk-abc123');
@@ -145,5 +168,57 @@ describe('runInterviewAnalysis: failure classification', () => {
 
     expect(result).toEqual({ status: 'not-found' });
     expect(synthesizeInterview).not.toHaveBeenCalled();
+  });
+
+  it('does not report a persisted provider failure when its failure record could not be written', async () => {
+    kvMock.claimInterviewAnalysis.mockResolvedValue({ status: 'claimed', claimId: 'claim-1', attempts: 1 });
+    synthesizeInterview.mockRejectedValue(new Error('synthetic provider failure'));
+    kvMock.recordInterviewAnalysisFailure.mockResolvedValue({ status: 'unavailable' });
+
+    const result = await runInterviewAnalysis(baseInput());
+
+    expect(result).toEqual({ status: 'unavailable' });
+    expect(kvMock.recordInterviewAnalysisFailure).toHaveBeenCalledOnce();
+    expect(kvMock.attachInterviewAnalysis).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['already-complete', 'already-complete'],
+    ['stale', 'busy'],
+    ['not-found', 'not-found'],
+  ] as const)('reports the record outcome %s when failure recording loses its claim', async (recordStatus, expectedStatus) => {
+    kvMock.claimInterviewAnalysis.mockResolvedValue({ status: 'claimed', claimId: 'claim-1', attempts: 1 });
+    synthesizeInterview.mockRejectedValue(new Error('synthetic provider failure'));
+    kvMock.recordInterviewAnalysisFailure.mockResolvedValue({ status: recordStatus });
+
+    const result = await runInterviewAnalysis(baseInput());
+
+    expect(result).toEqual({ status: expectedStatus });
+    expect(kvMock.recordInterviewAnalysisFailure).toHaveBeenCalledOnce();
+  });
+
+  it('recognizes an attach that committed before losing its response instead of reporting a false storage failure', async () => {
+    kvMock.claimInterviewAnalysis.mockResolvedValue({ status: 'claimed', claimId: 'claim-1', attempts: 1 });
+    synthesizeInterview.mockResolvedValue(providerResult());
+    kvMock.attachInterviewAnalysis.mockResolvedValue({ status: 'unavailable' });
+    kvMock.recordInterviewAnalysisFailure.mockResolvedValue({ status: 'already-complete' });
+
+    const result = await runInterviewAnalysis(baseInput());
+
+    expect(result).toEqual({ status: 'already-complete' });
+    expect(synthesizeInterview).toHaveBeenCalledOnce();
+    expect(kvMock.attachInterviewAnalysis).toHaveBeenCalledOnce();
+    expect(kvMock.recordInterviewAnalysisFailure).toHaveBeenCalledWith('interview-a', 'claim-1', 'storage', {});
+  });
+
+  it('keeps an attach outage retryable even when its storage-failure marker succeeds', async () => {
+    kvMock.claimInterviewAnalysis.mockResolvedValue({ status: 'claimed', claimId: 'claim-1', attempts: 1 });
+    synthesizeInterview.mockResolvedValue(providerResult());
+    kvMock.attachInterviewAnalysis.mockResolvedValue({ status: 'unavailable' });
+
+    const result = await runInterviewAnalysis(baseInput());
+
+    expect(result).toEqual({ status: 'unavailable' });
+    expect(kvMock.recordInterviewAnalysisFailure).toHaveBeenCalledWith('interview-a', 'claim-1', 'storage', {});
   });
 });

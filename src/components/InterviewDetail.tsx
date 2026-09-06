@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { InterviewAnalysisFailureKind, StoredInterview } from '@/types';
 import { getInterview, StudyOperationPendingError } from '@/services/storageService';
+import { analyzeInterview } from '@/services/analysisApi';
 import ReactMarkdown from 'react-markdown';
 import { Button, Coordinate, Label, Notice, Tabs, Turn, type TabItem } from '@/components/ui';
 import { SynthesisReading, ProvenanceFooter } from '@/components/SynthesisReading';
@@ -54,6 +55,7 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId,
   const [tracedTurn, setTracedTurn] = useState<number | null>(null);
   const [openNotes, setOpenNotes] = useState<Record<string, boolean>>({});
   const [isRunningAnalysis, setIsRunningAnalysis] = useState(false);
+  const [analysisRequestError, setAnalysisRequestError] = useState<string | null>(null);
   // `Date.now()` is impure and may not be called during render; a running
   // analysis's lease elapsing is exactly the kind of clock-driven UI change
   // that needs its own tick, polled while (and only while) a claim is live.
@@ -108,6 +110,7 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId,
   useEffect(() => {
     setOpenNotes({});
     setTracedTurn(null);
+    setAnalysisRequestError(null);
   }, [interviewId]);
 
   // Landing on a cited turn from an aggregate citation's link (L11). Declared
@@ -128,18 +131,16 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId,
   }, [interview, turn]);
 
   const handleRunAnalysis = async () => {
-    if (!interview || !studyId || isRunningAnalysis) return;
+    if (!interview || isRunningAnalysis) return;
     setIsRunningAnalysis(true);
+    setAnalysisRequestError(null);
     try {
-      const response = await fetch(
-        `/api/interviews/${encodeURIComponent(interview.id)}/analyze?studyId=${encodeURIComponent(studyId)}`,
-        { method: 'POST' },
-      );
-      if (response.ok) {
+      const result = await analyzeInterview(interview.id, interview.studyId);
+      if (result.ok) {
         await loadInterview();
+      } else {
+        setAnalysisRequestError(result.error);
       }
-    } catch (error) {
-      console.error('Error running analysis:', error);
     } finally {
       setIsRunningAnalysis(false);
     }
@@ -316,6 +317,11 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId,
           </ol>
         ) : (
           <div>
+            {analysisRequestError && (
+              <Notice tone="error" eyebrow="Analysis request failed" role="alert" className="mb-6">
+                <p className="mt-1 text-[13px] text-ink-700">{analysisRequestError}</p>
+              </Notice>
+            )}
             {(() => {
               const status = analysisStatus(interview);
               if (status === 'complete' && interview.synthesis) {

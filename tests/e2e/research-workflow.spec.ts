@@ -60,10 +60,10 @@ test('researcher creates a study; participants finalize; researcher reads, downl
 
     // Refresh is a realistic retry surface: it must retain success without
     // creating a duplicate interview or invoking the provider again.
-    const saveCallsBefore = workflow.calls.length;
+    await expect.poll(() => workflow.calls.filter(call => call.operation === 'synthesis').length).toBe(1);
     await participant.reload();
     await expect(participant.getByRole('heading', { name: 'Thank you' })).toBeVisible();
-    expect(workflow.calls.length).toBeGreaterThanOrEqual(saveCallsBefore);
+    expect(workflow.calls.filter(call => call.operation === 'synthesis')).toHaveLength(1);
     await context.close();
   }
 
@@ -92,6 +92,19 @@ test('researcher creates a study; participants finalize; researcher reads, downl
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.getByRole('tab', { name: 'Interviews', exact: true }).click();
   await expect(page.getByRole('button', { name: /View interview \d/ })).toHaveCount(2);
+
+  // A failed batch request must retain the register, including on a phone,
+  // rather than reloading into an empty state during the same outage.
+  await page.setViewportSize({ width: 375, height: 812 });
+  workflow.storageOffline = true;
+  await page.getByRole('button', { name: /^Analyze \d+ pending$/ }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'Analysis batch stopped' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /View interview \d/ })).toHaveCount(2);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('analysis-batch-recovery-mobile.png'), fullPage: true });
+  workflow.storageOffline = false;
+  await page.setViewportSize({ width: 1280, height: 720 });
+
   await page.getByRole('button', { name: 'View interview 1', exact: true }).click();
   await expect(page.getByText(ANSWER, { exact: true })).toBeVisible();
   const transcript = await downloadText(page, 'Download transcript');
@@ -117,12 +130,27 @@ test('researcher creates a study; participants finalize; researcher reads, downl
   // Participant one's interview: the deferred analysis failed. The Analysis
   // tab is honest about that — pending (the deferred run has not landed yet)
   // or failed (it already has) are both correct, depending on timing.
+  // Standalone detail links also work without a studyId query. Recovery must
+  // use the study id from the interview loaded by the server.
+  await page.goto(new URL(page.url()).pathname);
   await page.getByRole('tab', { name: 'Analysis', exact: true }).click();
   const runAnalysis = page.getByRole('button', { name: 'Run analysis', exact: true });
   await expect(runAnalysis).toBeVisible();
   await expect(page.getByText(/^Analysis (pending|failed)$/)).toBeVisible();
+
+  // A storage refusal is visible and leaves the transcript available. Retry
+  // goes through the real analysis API after the synthetic outage is lifted.
+  await page.setViewportSize({ width: 375, height: 812 });
+  workflow.storageOffline = true;
+  await runAnalysis.click();
+  await expect(page.getByRole('alert').filter({ hasText: 'Analysis is temporarily unavailable. Please try again.' })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('analysis-recovery-mobile.png'), fullPage: true });
+  workflow.storageOffline = false;
   await runAnalysis.click();
   await expect(page.getByText(INSIGHT, { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole('tabpanel', { name: 'Analysis' }).getByRole('alert')).toHaveCount(0);
+  await page.setViewportSize({ width: 1280, height: 720 });
   // The concrete consequence of feat/synthesis-uses-study-model: the
   // analysis footer names the study's own model, not a fixed override.
   const footer = page.getByText(/^Conducted by/);

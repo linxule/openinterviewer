@@ -16,7 +16,7 @@ import { AggregateSynthesisResult, StudyConfig } from '@/types';
 import { validateResolvedAggregateSynthesis } from '@/lib/providerValidation';
 import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
 import { providerErrorResponse } from '@/lib/providerErrors';
-import { aggregateProvenance } from '@/lib/synthesisReceipt';
+import { aggregateProvenance } from '@/lib/synthesisProvenance';
 import { createRequestId, logRequestFailure } from '@/lib/requestLog';
 
 export async function POST(

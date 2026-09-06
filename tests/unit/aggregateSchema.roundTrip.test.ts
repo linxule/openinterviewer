@@ -6,9 +6,7 @@ import { validateResolvedAggregateSynthesis } from '@/lib/providerValidation';
 import { aggregateSynthesisResponseSchema } from '@/lib/providerSchemas';
 import { MAX_AGGREGATE_QUOTE_REFS } from '@/lib/prompts/synthesis';
 
-// Duplicated from synthesisReceipt.ts's canonicalize/digest — those internals
-// are not exported, and this local copy is honest about what it duplicates
-// (see tests/unit/synthesisSchema.roundTrip.test.ts for the same pattern).
+// Compare canonical payloads to detect any content lost during validation.
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
   if (value && typeof value === 'object') {

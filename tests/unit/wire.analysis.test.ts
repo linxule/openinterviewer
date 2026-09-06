@@ -15,10 +15,10 @@ describe('wire.analysis: parseAnalysisResult', () => {
     expect(parseAnalysisResult(['oi:analysis-recorded'])).toEqual({ status: 'ok', value: { outcome: 'recorded' } });
   });
 
-  it('maps the claimed tag with its claimId payload', () => {
-    expect(parseAnalysisResult(['oi:analysis-claimed', 'claim-123'])).toEqual({
+  it('maps the claimed tag with the atomic attempt count', () => {
+    expect(parseAnalysisResult(['oi:analysis-claimed', 'oi:count:3'])).toEqual({
       status: 'ok',
-      value: { outcome: 'claimed', value: 'claim-123' },
+      value: { outcome: 'claimed', attempts: 3 },
     });
   });
 
@@ -35,6 +35,9 @@ describe('wire.analysis: parseAnalysisResult', () => {
     expect(parseAnalysisResult(['oi:analysis-claimed'])).toEqual({ status: 'unavailable' });
     expect(parseAnalysisResult(['oi:analysis-claimed', 5])).toEqual({ status: 'unavailable' });
     expect(parseAnalysisResult(['oi:analysis-claimed', ''])).toEqual({ status: 'unavailable' });
+    for (const malformed of ['claim-123', 'oi:count:0', 'oi:count:-1', 'oi:count:1.5', 'oi:count:9007199254740992']) {
+      expect(parseAnalysisResult(['oi:analysis-claimed', malformed])).toEqual({ status: 'unavailable' });
+    }
     expect(parseAnalysisResult(['oi:analysis-done', 'extra'])).toEqual({ status: 'unavailable' });
     expect(parseAnalysisResult(['oi:analysis-totally-unknown'])).toEqual({ status: 'unavailable' });
   });
