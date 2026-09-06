@@ -1,6 +1,7 @@
 import type { ProviderExecution, ProviderResult } from '../ai';
 import type { AIProviderType, AggregateSynthesisProviderPayload, AggregateSynthesisResult, StudyConfig } from '@/types';
 import type { FollowupStudy } from '../providerValidation';
+import { ProviderFailure } from '../providerErrors';
 
 export const GREETING_DEADLINE_MS = 30_000;
 export const INTERVIEW_DEADLINE_MS = 60_000;
@@ -21,10 +22,14 @@ export function execution(
   responseModel?: string | null,
   routedProvider?: string | null,
 ): ProviderExecution {
+  const model = typeof responseModel === 'string' ? responseModel.trim() : '';
+  if (!model) {
+    throw new ProviderFailure('invalid-response', `${provider} response omitted its resolved model`);
+  }
   return {
     provider,
     requestedModel,
-    model: responseModel?.trim() || requestedModel,
+    model,
     ...(routedProvider?.trim() ? { routedProvider: routedProvider.trim() } : {}),
   };
 }

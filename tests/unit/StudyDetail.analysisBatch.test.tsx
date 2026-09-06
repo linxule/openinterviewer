@@ -140,4 +140,76 @@ describe('StudyDetail — analysis batch action', () => {
     expect(screen.getByRole('button', { name: 'Analyze All Interviews' })).toBeDisabled();
     expect(screen.getByText('Need at least 2 analyzed interviews to generate aggregate analysis.')).toBeInTheDocument();
   });
+
+  it.each<[number, string]>([
+    [429, 'The analysis request limit has been reached. Wait before trying again.'],
+    [503, 'Analysis is temporarily unavailable. Please try again.'],
+  ])('stops on HTTP %s, explains the failure, and retains the loaded register for retry', async (status, message) => {
+    const pending = [1, 2, 3].map(index => makeStoredInterview({
+      id: `interview-${index}`, studyId: 'study-batch', createdAt: index * 1_000,
+      analysis: { status: 'pending', attempts: 0, lastAttemptAt: 1 },
+    }));
+    storageMock.getStudyInterviews.mockResolvedValueOnce(pending).mockResolvedValue([]);
+    const analyzedIds: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (!url.includes('/analyze')) return new Response('{}', { status: 404 });
+      analyzedIds.push(url);
+      return analyzedIds.length === 1
+        ? new Response(JSON.stringify({ status: 'complete' }))
+        : new Response(JSON.stringify({ error: 'Private upstream error details' }), { status });
+    }));
+    renderStudyDetail('study-batch');
+    await screen.findByRole('heading', { name: 'Batch Study' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Interviews' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze 3 pending' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(message);
+    expect(await screen.findByRole('button', { name: 'Analyze 3 pending' })).toBeEnabled();
+    expect(analyzedIds).toHaveLength(2);
+    expect(analyzedIds[1]).toContain('interview-2');
+    expect(storageMock.getStudyInterviews).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('heading', { name: 'Batch Study' })).toBeInTheDocument();
+    expect(screen.queryByText('Private upstream error details')).not.toBeInTheDocument();
+  });
+
+  it('stops and explains a network failure without requesting the next interview', async () => {
+    storageMock.getStudyInterviews.mockResolvedValue([1, 2].map(index => makeStoredInterview({
+      id: `interview-${index}`, studyId: 'study-batch', createdAt: index * 1_000,
+    })));
+    const analyzedIds: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (!url.includes('/analyze')) return new Response('{}', { status: 404 });
+      analyzedIds.push(url);
+      throw new TypeError('Failed to fetch');
+    }));
+    renderStudyDetail('study-batch');
+    await screen.findByRole('heading', { name: 'Batch Study' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Interviews' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze 2 pending' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Check your connection and try again.');
+    expect(await screen.findByRole('button', { name: 'Analyze 2 pending' })).toBeEnabled();
+    expect(analyzedIds).toHaveLength(1);
+    expect(storageMock.getStudyInterviews).toHaveBeenCalledTimes(1);
+  });
+
+  it('continues to the next interview after a successfully recorded provider failure', async () => {
+    storageMock.getStudyInterviews.mockResolvedValue([1, 2].map(index => makeStoredInterview({
+      id: `interview-${index}`, studyId: 'study-batch', createdAt: index * 1_000,
+    })));
+    const analyzedIds: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (!url.includes('/analyze')) return new Response('{}', { status: 404 });
+      analyzedIds.push(url);
+      return new Response(JSON.stringify({ status: 'failed', failureKind: 'provider' }));
+    }));
+    renderStudyDetail('study-batch');
+    await screen.findByRole('heading', { name: 'Batch Study' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Interviews' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze 2 pending' }));
+
+    await waitFor(() => expect(storageMock.getStudyInterviews).toHaveBeenCalledTimes(2));
+    expect(analyzedIds).toHaveLength(2);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
 });

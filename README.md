@@ -233,9 +233,11 @@ For participants:
 1. Open the study link.
 2. Review the study information and give consent.
 3. Complete the adaptive interview.
-4. Choose **Continue to save interview** and wait for **Interview submitted** before closing the tab.
+4. Choose **Continue to save interview** and wait for **Your responses have been saved. It is now safe to close this tab.** before closing the tab.
 
-Finalization generates the synthesis and then saves the interview. If either step fails, keep the tab open and use **Retry finalization** or **Retry save**. A successful synthesis alone is not a save confirmation. Researchers can download the saved transcript and JSON from the interview detail view. Researcher previews do not store research records; if preview analysis fails, **Export transcript** still opens the transcript download.
+Finishing saves the transcript before starting analysis in the background. If the save fails, keep the tab open and use **Retry save**. Once the save is confirmed, the participant can close the tab even if analysis is still pending or fails. Researchers can use **Run analysis** on an interview or the pending-analysis batch action on a study to recover unfinished analysis. The saved transcript and JSON remain available from the interview detail view. Researchers can also customize the participant thank-you text in study setup.
+
+Analysis uses the study's current configured provider and model, including when the study was edited after collection; the result records the study revision used. Each interview separately records the provider and model configured when it was saved. Researcher previews do not store research records; if preview analysis fails, **Export transcript** still opens the transcript download.
 
 Editing a study advances its revision and invalidates links and participant sessions issued for the previous revision. Generate and distribute a new link after a consequential edit.
 
@@ -296,7 +298,7 @@ npm run test:adversarial
 git diff --check
 ```
 
-The browser suite covers the keyless demo plus standalone direct and Gateway research workflows: study creation, participant-link exchange, consent, interview, synthesis, saving, researcher review, and export. The workflow tests run the real application APIs with synthetic provider HTTP responses and a fresh disposable Redis instance per test. They require Docker or a local `redis-server`; inherited `REDIS_URL` or Redis attestation configuration is refused. Test-only servers use fixture credentials and Next's test proxy; the deployed application does not enable that proxy. These tests verify application behavior, not live provider availability, model quality, or hosted OAuth onboarding.
+The browser suite covers the keyless demo plus standalone direct and Gateway research workflows: study creation, participant-link exchange, consent, interview, saving, deferred analysis, researcher recovery and review, and export. The workflow tests run the real application APIs with synthetic provider HTTP responses and a fresh disposable Redis instance per test. They require Docker or a local `redis-server`; inherited `REDIS_URL` or Redis attestation configuration is refused. Test-only servers use fixture credentials and Next's test proxy; the deployed application does not enable that proxy. These tests verify application behavior, not live provider availability, model quality, or hosted OAuth onboarding.
 
 Production logs are allowlisted JSON and never contain prompts, keys, or bodies. Real-Redis crash and shared-BYOS adversarial jobs also refuse inherited production Redis connections.
 

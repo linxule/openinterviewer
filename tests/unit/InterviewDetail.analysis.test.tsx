@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeStoredInterview } from '../fixtures/models';
 import type { InterviewAnalysisFailureKind } from '@/types';
@@ -144,5 +144,55 @@ describe('InterviewDetail — four-way analysis state switch', () => {
       expect.objectContaining({ method: 'POST' }),
     );
     expect(await screen.findByText('Now analyzed.')).toBeInTheDocument();
+  });
+
+  it('uses the loaded record study ID when a standalone detail URL has no study query', async () => {
+    storageMock.getInterview.mockResolvedValue(baseInterview);
+    render(
+      <BreadcrumbProvider>
+        <InterviewDetail interviewId={baseInterview.id} />
+      </BreadcrumbProvider>,
+    );
+    await openAnalysisTab();
+    fireEvent.click(screen.getByRole('button', { name: 'Run analysis' }));
+
+    await waitFor(() => expect(storageMock.getInterview).toHaveBeenCalledTimes(2));
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/interview-analysis/analyze?studyId=study-analysis',
+      { method: 'POST' },
+    );
+  });
+
+  it.each<[number, string]>([
+    [429, 'The analysis request limit has been reached. Wait before trying again.'],
+    [503, 'Analysis is temporarily unavailable. Please try again.'],
+  ])('shows a request failure on HTTP %s and leaves the stored analysis state intact', async (status, message) => {
+    storageMock.getInterview.mockResolvedValue(baseInterview);
+    vi.mocked(global.fetch).mockResolvedValue(new Response(JSON.stringify({ error: 'Private upstream error details' }), { status }));
+    renderInterviewDetail();
+    await openAnalysisTab();
+    fireEvent.click(screen.getByRole('button', { name: 'Run analysis' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(message);
+    expect(screen.getByText('Analysis pending')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Run analysis' })).toBeEnabled();
+    expect(screen.queryByText('Private upstream error details')).not.toBeInTheDocument();
+    expect(storageMock.getInterview).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a network failure and clears it when the researcher retries successfully', async () => {
+    storageMock.getInterview.mockResolvedValue(baseInterview);
+    vi.mocked(global.fetch)
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'busy' })));
+    renderInterviewDetail();
+    await openAnalysisTab();
+    fireEvent.click(screen.getByRole('button', { name: 'Run analysis' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Check your connection and try again.');
+    fireEvent.click(screen.getByRole('button', { name: 'Run analysis' }));
+
+    await waitFor(() => expect(storageMock.getInterview).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });

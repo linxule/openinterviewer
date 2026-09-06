@@ -44,7 +44,7 @@ git diff --check
 
 Changes to hosted configuration, auth, tenancy, storage, or provider resolution must also pass a hosted production build using the safe fixture environment in `.github/workflows/ci.yml`.
 
-For completion, synthesis, persistence, or export changes, run the browser workflow suite as well as focused unit tests. Its direct and Gateway journeys connect the real API handlers, signed synthesis receipts, and disposable Redis persistence; mocking each service independently can hide incompatible contracts. Run with Docker or a local `redis-server`, and unset inherited Redis connection/attestation variables. Provider HTTP responses are synthetic, so no provider key or paid request is needed.
+For completion, synthesis, persistence, or export changes, run the browser workflow suite as well as focused unit tests. Its direct and Gateway journeys connect the real save and analysis API handlers with disposable Redis persistence, including recovery after analysis fails; mocking each service independently can hide incompatible contracts. Run with Docker or a local `redis-server`, and unset inherited Redis connection/attestation variables. Provider HTTP responses are synthetic, so no provider key or paid request is needed.
 
 ## Pull requests
 

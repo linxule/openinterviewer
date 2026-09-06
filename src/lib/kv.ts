@@ -20,7 +20,7 @@ import { parseStudyCasResult } from './wire/studyCas';
 import type { PersistRatePlanRow } from './rateLimit';
 import { logRequestFailure } from './requestLog';
 import { STUDY_JSON_LUA } from './studyJsonLua';
-import type { SynthesisProvenance } from './synthesisReceipt';
+import type { SynthesisProvenance } from './synthesisProvenance';
 
 // Key prefixes for organizing data
 const INTERVIEW_PREFIX = 'interview:';
@@ -674,7 +674,8 @@ export type AttachAnalysisResult =
  * KEYS[1] interview:<id>   ARGV[1] op 'claim'|'complete'|'fail'
  * ARGV[2] interviewId      ARGV[3] nowMs   ARGV[4] leaseMs
  * ARGV[5] claimId (claim: the new token; complete/fail: the token held)
- * ARGV[6] the replacement `analysis` member as JSON text
+ * ARGV[6] the replacement `analysis` metadata as JSON text; the script owns
+ *   attempts and preserves the running attempt's lastAttemptAt on completion
  * ARGV[7] complete only: the `synthesis` member as JSON text; '' otherwise
  * ARGV[8] complete only: a flat JSON object of the provenance members
  *   (aiProvider/aiModel/requestedAiModel/routedProvider) to patch alongside
@@ -695,6 +696,9 @@ if not interview then return {'oi:analysis-notfound'} end
 if interview.status ~= 'completed' or interview.id ~= ARGV[2] then
   return {'oi:analysis-notfound'}
 end
+if type(interview.studyId) ~= 'string' or type(interview.createdAt) ~= 'number' or type(interview.completedAt) ~= 'number' then
+  return {'oi:analysis-unavailable'}
+end
 
 local op = ARGV[1]
 local nowMs = tonumber(ARGV[3])
@@ -713,10 +717,15 @@ end
 local effectiveStatus
 local effectiveClaimId
 local effectiveClaimedAt
+local attempts = 0
 if state then
   effectiveStatus = state.status
   effectiveClaimId = state.claimId
   effectiveClaimedAt = tonumber(state.claimedAt)
+  attempts = state.attempts
+  if type(attempts) ~= 'number' or attempts < 0 or attempts > 9007199254740991 or attempts ~= math.floor(attempts) then
+    return {'oi:analysis-unavailable'}
+  end
 else
   local synthesisRaw = json_object_value(body, 'synthesis')
   effectiveStatus = (synthesisRaw and synthesisRaw ~= 'null') and 'complete' or 'pending'
@@ -727,9 +736,12 @@ if op == 'claim' then
   if effectiveStatus == 'running' and effectiveClaimedAt and (nowMs - effectiveClaimedAt) < leaseMs then
     return {'oi:analysis-busy'}
   end
-  local patched = patch_json_object(body, {{'analysis', ARGV[6]}})
+  if attempts >= 9007199254740991 then return {'oi:analysis-unavailable'} end
+  local nextAttempts = string.format('%.0f', attempts + 1)
+  local nextAnalysis = patch_json_object(ARGV[6], {{'attempts', nextAttempts}})
+  local patched = patch_json_object(body, {{'analysis', nextAnalysis}})
   redis.call('SET', KEYS[1], 'oi:interview:' .. patched)
-  return {'oi:analysis-claimed', claimId}
+  return {'oi:analysis-claimed', 'oi:count:' .. nextAttempts}
 end
 
 if effectiveStatus == 'complete' then return {'oi:analysis-done'} end
@@ -737,8 +749,17 @@ if effectiveStatus ~= 'running' or effectiveClaimId ~= claimId then
   return {'oi:analysis-stale'}
 end
 
+-- Counters and the attempt-start timestamp come from this claimed record,
+-- never a GET taken before a contender's claim or failure became visible.
+local lastAttemptAt = json_object_value(analysisRaw, 'lastAttemptAt')
+if not lastAttemptAt then return {'oi:analysis-unavailable'} end
+local nextAnalysis = patch_json_object(ARGV[6], {
+  {'attempts', string.format('%.0f', attempts)},
+  {'lastAttemptAt', lastAttemptAt}
+})
+
 if op == 'complete' then
-  local updates = {{'analysis', ARGV[6]}, {'synthesis', ARGV[7]}}
+  local updates = {{'analysis', nextAnalysis}, {'synthesis', ARGV[7]}}
   for _, member in ipairs(json_object_members(ARGV[8])) do
     updates[#updates + 1] = {member.key, member.value}
   end
@@ -748,7 +769,7 @@ if op == 'complete' then
 end
 
 if op == 'fail' then
-  local patched = patch_json_object(body, {{'analysis', ARGV[6]}})
+  local patched = patch_json_object(body, {{'analysis', nextAnalysis}})
   redis.call('SET', KEYS[1], 'oi:interview:' .. patched)
   return {'oi:analysis-recorded'}
 end
@@ -781,15 +802,9 @@ export async function claimInterviewAnalysis(
   nowMs: number = Date.now(),
 ): Promise<ClaimAnalysisResult> {
   if (!INTERVIEW_ID_TOKEN.test(interviewId)) return { status: 'unavailable' };
-  const loaded = await getInterviewChecked(interviewId, client);
-  if (loaded.status === 'unavailable') return { status: 'unavailable' };
-  if (loaded.status === 'not-found') return { status: 'not-found' };
-
-  const priorAttempts = loaded.interview.analysis?.attempts ?? 0;
   const claimId = randomUUID();
   const analysisMember = JSON.stringify({
     status: 'running',
-    attempts: priorAttempts + 1,
     lastAttemptAt: nowMs,
     claimId,
     claimedAt: nowMs,
@@ -800,7 +815,7 @@ export async function claimInterviewAnalysis(
     if (!outcome) return { status: 'unavailable' };
     switch (outcome.outcome) {
       case 'claimed':
-        return { status: 'claimed', claimId: outcome.value, attempts: priorAttempts + 1 };
+        return { status: 'claimed', claimId, attempts: outcome.attempts };
       case 'busy':
         return { status: 'busy' };
       case 'done':
@@ -841,17 +856,8 @@ export async function attachInterviewAnalysis(
   });
 
   try {
-    // Read-modify-write requires the current attempts count; a claim just
-    // ran so the record exists, but a vanished record between claim and
-    // attach is a legitimate 'not-found', not a crash.
-    const loaded = await getInterviewChecked(input.interviewId, client);
-    if (loaded.status === 'unavailable') return { status: 'unavailable' };
-    if (loaded.status === 'not-found') return { status: 'not-found' };
-    const attempts = loaded.interview.analysis?.attempts ?? 1;
     const analysisMember = JSON.stringify({
       status: 'complete',
-      attempts,
-      lastAttemptAt: nowMs,
       studyRevision: input.studyRevision,
     });
     const outcome = await evalAttachAnalysis(
@@ -885,14 +891,8 @@ export async function recordInterviewAnalysisFailure(
   if (!INTERVIEW_ID_TOKEN.test(interviewId)) return { status: 'unavailable' };
   const nowMs = Date.now();
   try {
-    const loaded = await getInterviewChecked(interviewId, client);
-    if (loaded.status === 'unavailable') return { status: 'unavailable' };
-    if (loaded.status === 'not-found') return { status: 'not-found' };
-    const attempts = loaded.interview.analysis?.attempts ?? 1;
     const analysisMember = JSON.stringify({
       status: 'failed',
-      attempts,
-      lastAttemptAt: nowMs,
       failureKind,
     });
     const outcome = await evalAttachAnalysis('fail', interviewId, claimId, analysisMember, '', '{}', client, nowMs);

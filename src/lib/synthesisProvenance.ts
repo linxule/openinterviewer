@@ -3,18 +3,9 @@ import { isKnownProviderModel, PROVIDER_MODELS } from './providerRegistry';
 import { gatewayRouteForProvider, isGatewayProvider, toGatewayModelId } from './aiTransport';
 
 /**
- * Shared provenance validation. Originally paired with a per-interview
- * signing/verification receipt that bound a browser-carried synthesis to the
- * study, revision and participant session before the save route would accept
- * it (slice K). Slice P removed that boundary entirely: `runInterviewAnalysis`
- * calls the provider and writes the result in the same function, holding the
- * canonical study it loaded itself, so no synthesis ever crosses a trust
- * boundary that needs a signature to close. What remains is the honesty
- * check every provenance-carrying record still needs: a result that does not
- * name a known provider and the model that actually produced it is not
- * storable (AGENTS.md). `validateProvenance`/`aggregateProvenance` are called
- * by `runInterviewAnalysis`, `synthesis/aggregate/route.ts`, and
- * `generate-followup/route.ts`.
+ * Shared validation for server-generated interview, aggregate, and follow-up
+ * provenance. Stored results must name a known requested provider/model and
+ * the model that actually produced the output, including its route when used.
  */
 export interface SynthesisProvenance {
   aiProvider: AIProviderType;

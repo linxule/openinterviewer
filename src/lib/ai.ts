@@ -73,29 +73,34 @@ export {
   followupStudyResponseSchema,
 } from './providerSchemas';
 
-// Clean JSON from AI response
+// Extract the JSON payload from optional provider prose or outer code fences.
+// Delimiters and markdown inside JSON strings are research content, not syntax
+// to strip. Leave incomplete or mismatched JSON for the caller to reject.
 export const cleanJSON = (text: string): string => {
   if (!text) return '{}';
-  let cleaned = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+  const cleaned = text.trim();
+  const start = cleaned.search(/[\[{]/);
+  if (start === -1) return cleaned;
 
-  const firstBracket = cleaned.indexOf('[');
-  const firstBrace = cleaned.indexOf('{');
+  const closingDelimiters: string[] = [];
+  let inString = false;
+  let escaped = false;
 
-  if (firstBracket !== -1 && (firstBrace === -1 || firstBracket < firstBrace)) {
-    let depth = 0;
-    for (let i = firstBracket; i < cleaned.length; i++) {
-      if (cleaned[i] === '[') depth++;
-      if (cleaned[i] === ']') depth--;
-      if (depth === 0) return cleaned.substring(firstBracket, i + 1);
+  for (let i = start; i < cleaned.length; i++) {
+    const character = cleaned[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === '"') inString = false;
+      continue;
     }
-  }
 
-  if (firstBrace !== -1) {
-    let depth = 0;
-    for (let i = firstBrace; i < cleaned.length; i++) {
-      if (cleaned[i] === '{') depth++;
-      if (cleaned[i] === '}') depth--;
-      if (depth === 0) return cleaned.substring(firstBrace, i + 1);
+    if (character === '"') inString = true;
+    else if (character === '{') closingDelimiters.push('}');
+    else if (character === '[') closingDelimiters.push(']');
+    else if (character === '}' || character === ']') {
+      if (closingDelimiters.pop() !== character) return cleaned;
+      if (closingDelimiters.length === 0) return cleaned.slice(start, i + 1);
     }
   }
 

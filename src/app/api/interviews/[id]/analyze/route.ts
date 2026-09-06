@@ -85,7 +85,14 @@ export async function POST(
       platformAuthority: { researcherId: gated.researcherId },
     });
 
-    // A failed analysis is a successful report of a failure: the researcher
+    if (outcome.status === 'unavailable') {
+      return NextResponse.json(
+        { error: 'Interview storage is temporarily unavailable. Please try again.', retryable: true },
+        { status: 503 },
+      );
+    }
+
+    // A recorded failed analysis is a successful report of a failure: the researcher
     // is being told a record fact, not a provider fact. 200 for all four.
     // `not-found` only arises from a race between the tenancy check above
     // and the claim itself (the interview vanished mid-request); it is

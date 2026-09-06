@@ -68,7 +68,8 @@ Hosted study create/delete is a durable cross-database operation. Preserve the o
 - Opaque participant links: `src/lib/participantLinks.ts`
 - Server-recorded consent: `src/lib/participantConsent.ts`
 - Canonical study loading: `src/lib/canonicalStudy.ts`
-- Synthesis/save binding: `src/lib/synthesisReceipt.ts`, `src/lib/interviewSubmission.ts`
+- Save validation and deferred analysis: `src/lib/interviewSubmission.ts`, `src/lib/interviewAnalysis.ts`, `src/lib/analysisState.ts`
+- Server-generated synthesis provenance: `src/lib/synthesisProvenance.ts`
 - Bounded request parsing: `src/lib/requestBody.ts`
 - Providers and prompts: `src/lib/providers/`, `src/lib/prompts/`, `src/lib/ai.ts`
 - Transport selection and Gateway model mapping: `src/lib/aiTransport.ts`, `src/lib/providers/gateway.ts`
@@ -78,7 +79,7 @@ Hosted study create/delete is a durable cross-database operation. Preserve the o
 - Browser API clients: `src/services/`
 - Session-scoped workflow state: `src/store.ts`
 
-The participant sequence is link exchange -> HttpOnly participant session -> consent -> greeting/interview -> synthesis receipt -> immutable save. Every participant route must re-resolve authority and the server-owned current study revision before provider use or persistence.
+The participant sequence is link exchange -> HttpOnly participant session -> consent -> greeting/interview -> transcript save -> deferred analysis. The saved transcript is immutable; analysis attaches under an atomic claim and can be retried by the researcher. Every participant route must re-resolve authority and the server-owned current study revision before provider use or persistence.
 
 ## Non-negotiable invariants
 
@@ -106,7 +107,7 @@ The participant sequence is link exchange -> HttpOnly participant session -> con
 | Auth/participant authority | `auth.ts`, `proxy.ts`, `researcherContext.ts`, participant libraries | matching auth/consent/link tests + `npm run check` |
 | Storage/tenancy | `kv.ts`, `kvClient.ts`, `platformDb.ts`, reconciler | atomicity/tenancy/saga tests + `npm run check` |
 | Providers/provenance | `aiTransport.ts`, `providers/`, `prompts/`, interview/synthesis routes | transport/provider/provenance tests + direct/Gateway build contracts + `npm run check` |
-| Completion and export | `Synthesis.tsx`, `synthesisReceipt.ts`, save/export routes, `storageService.ts` | receipt/lifecycle/save tests + `npm run test:e2e` through researcher and participant workflows |
+| Completion and export | `Synthesis.tsx`, `interviewAnalysis.ts`, save/analyze/export routes, `storageService.ts` | lifecycle/save/analysis tests + `npm run test:e2e` through researcher and participant workflows |
 | Structured request logs | `src/lib/requestLog.ts`, `providerErrors.ts`, API catch sites | `requestLog.test.ts` + `providerErrors.test.ts` + health/config contract tests |
 | Participant/preview headers | `src/services/participantHeaders.ts`, `interviewApi.ts`, `storageService.ts`, `Consent.tsx` | `participantHeaders.test.ts` + `participantSessionHeaders.test.ts` + consent/isolation suites |
 | Researcher UI | components, services, page entry | paired component/API tests; inspect 375px when layout changes |
@@ -114,7 +115,7 @@ The participant sequence is link exchange -> HttpOnly participant session -> con
 
 Vitest tests live in two tiers. `tests/unit/` runs under the base vitest config (jsdom) and mirrors the security or product boundary it protects; prefer a realistic regression at that boundary over snapshots of implementation detail. `tests/integration/` runs under `vitest.integration.config.mts` (node environment) against a runner-owned disposable `redis-server` via `tests/helpers/disposableRedis.ts` — it must never connect to an inherited, shared, or production Redis. Use `npm run test:redis-crash` and `npm run test:adversarial` for these suites; they need a local `redis-server` binary (or the CI container) and are the only place real-wire crash-cut and cross-tenant claims are actually exercised.
 
-`tests/e2e/` runs the browser journeys with real application API handlers and disposable Redis; only external provider HTTP responses are synthetic. `tests/e2e/server.mjs` builds and boots the production app with a blank, credential-free fixture environment (one server per transport) and `tests/e2e/workflow-fixture.ts` intercepts Upstash and provider HTTP at Next's test-mode boundary — together they are the sanctioned way to exercise the full researcher and participant workflow locally without any real credentials. Keep the Next test proxy confined to its test-only server launcher. Do not mock internal synthesis/save APIs in the successful completion regression: it must exercise receipt creation and verification across that boundary. The keyless demo regression still requires no API or external requests.
+`tests/e2e/` runs the browser journeys with real application API handlers and disposable Redis; only external provider HTTP responses are synthetic. `tests/e2e/server.mjs` builds and boots the production app with a blank, credential-free fixture environment (one server per transport) and `tests/e2e/workflow-fixture.ts` intercepts Upstash and provider HTTP at Next's test-mode boundary — together they are the sanctioned way to exercise the full researcher and participant workflow locally without any real credentials. Keep the Next test proxy confined to its test-only server launcher. Do not mock internal save/analyze APIs in the completion regression: it must exercise transcript persistence, deferred analysis, and researcher recovery across that boundary. The keyless demo regression still requires no API or external requests.
 
 ## Canonical commands
 

@@ -40,8 +40,8 @@ vi.mock('@/lib/providers', async (importOriginal) => {
 const platformRateLimitMock = vi.hoisted(() => ({ hostedAiRateLimitResponse: vi.fn() }));
 vi.mock('@/lib/platformAiRateLimit', () => platformRateLimitMock);
 
-const receiptMock = vi.hoisted(() => ({ aggregateProvenance: vi.fn() }));
-vi.mock('@/lib/synthesisReceipt', () => receiptMock);
+const provenanceMock = vi.hoisted(() => ({ aggregateProvenance: vi.fn() }));
+vi.mock('@/lib/synthesisProvenance', () => provenanceMock);
 
 import { POST } from '@/app/api/studies/[id]/generate-followup/route';
 
@@ -86,7 +86,7 @@ beforeEach(() => {
     () => contextMock.getRequestContext(),
   );
   platformRateLimitMock.hostedAiRateLimitResponse.mockResolvedValue(null);
-  receiptMock.aggregateProvenance.mockReturnValue({
+  provenanceMock.aggregateProvenance.mockReturnValue({
     aiProvider: 'gemini',
     aiModel: GEMINI_SYNTHESIS_MODEL,
     requestedAiModel: GEMINI_SYNTHESIS_MODEL,
@@ -246,7 +246,7 @@ describe('follow-up synthesis provenance', () => {
   });
 
   it('rejects a stored aggregate whose provenance is incomplete before calling a provider', async () => {
-    receiptMock.aggregateProvenance.mockReturnValueOnce(null);
+    provenanceMock.aggregateProvenance.mockReturnValueOnce(null);
 
     const response = await POST(request(), { params: Promise.resolve({ id: 'study-followup' }) });
 

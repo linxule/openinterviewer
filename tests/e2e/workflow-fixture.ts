@@ -124,7 +124,7 @@ export const test = nextTest.extend<{ workflow: Workflow }>({
       if (operation === 'synthesis' && workflow.failNextSynthesis) {
         workflow.failNextSynthesis = false;
         // A terminal 400 prevents the provider SDK's transport retry from hiding
-        // the user-facing retry. The user must explicitly retry finalization.
+        // researcher recovery. The participant's save remains successful.
         return Response.json({ error: { message: 'Synthetic unavailable synthesis model', type: 'invalid_request_error' } }, { status: 400 });
       }
       const text = operation === 'greeting' ? GREETING : JSON.stringify(

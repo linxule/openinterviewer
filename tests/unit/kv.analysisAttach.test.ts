@@ -24,7 +24,7 @@ function encodedInterview(overrides: Record<string, unknown> = {}) {
 
 describe('kv.analysisAttach: claimInterviewAnalysis', () => {
   it('sends one eval with exactly one key and the claim op', async () => {
-    const evalMock = vi.fn().mockResolvedValue(['oi:analysis-claimed', 'claim-1']);
+    const evalMock = vi.fn().mockResolvedValue(['oi:analysis-claimed', 'oi:count:3']);
     const client = {
       get: vi.fn().mockResolvedValue(encodedInterview()),
       eval: evalMock,
@@ -32,10 +32,8 @@ describe('kv.analysisAttach: claimInterviewAnalysis', () => {
 
     const result = await claimInterviewAnalysis('interview-a', client);
 
-    // The wire's `claimed` payload (the mock's 'claim-1') is what the caller
-    // gets back — the CAS token is authoritative from Redis, not the id the
-    // caller happened to generate for this attempt.
-    expect(result).toEqual({ status: 'claimed', claimId: 'claim-1', attempts: 1 });
+    expect(result).toEqual({ status: 'claimed', claimId: expect.any(String), attempts: 3 });
+    expect(client.get).not.toHaveBeenCalled();
     expect(evalMock).toHaveBeenCalledTimes(1);
     const [, keys, args] = evalMock.mock.calls[0] as [string, string[], string[]];
     expect(keys).toEqual(['interview:interview-a']);
@@ -43,6 +41,7 @@ describe('kv.analysisAttach: claimInterviewAnalysis', () => {
     expect(args[1]).toBe('interview-a');
     expect(typeof args[4]).toBe('string');
     expect(args[4].length).toBeGreaterThan(0);
+    expect(result.status === 'claimed' && result.claimId).toBe(args[4]);
   });
 
   it('maps each documented claim outcome', async () => {
@@ -77,11 +76,12 @@ describe('kv.analysisAttach: claimInterviewAnalysis', () => {
   });
 
   it('reports not-found when the interview does not exist', async () => {
-    const evalMock = vi.fn();
-    const client = { get: vi.fn().mockResolvedValue(null), eval: evalMock } as unknown as RedisPort;
+    const evalMock = vi.fn().mockResolvedValue(['oi:analysis-notfound']);
+    const client = { get: vi.fn(), eval: evalMock } as unknown as RedisPort;
 
     await expect(claimInterviewAnalysis('interview-a', client)).resolves.toEqual({ status: 'not-found' });
-    expect(evalMock).not.toHaveBeenCalled();
+    expect(evalMock).toHaveBeenCalledTimes(1);
+    expect(client.get).not.toHaveBeenCalled();
   });
 });
 
@@ -124,7 +124,9 @@ describe('kv.analysisAttach: attachInterviewAnalysis', () => {
       studyRevision: 1,
     };
 
-    await expect(attachInterviewAnalysis(input, client('oi:analysis-written'))).resolves.toEqual({ status: 'written' });
+    const writtenClient = client('oi:analysis-written');
+    await expect(attachInterviewAnalysis(input, writtenClient)).resolves.toEqual({ status: 'written' });
+    expect(writtenClient.get).not.toHaveBeenCalled();
     await expect(attachInterviewAnalysis(input, client('oi:analysis-done'))).resolves.toEqual({ status: 'already-complete' });
     await expect(attachInterviewAnalysis(input, client('oi:analysis-stale'))).resolves.toEqual({ status: 'stale' });
     await expect(attachInterviewAnalysis(input, client('oi:analysis-notfound'))).resolves.toEqual({ status: 'not-found' });
@@ -159,5 +161,6 @@ describe('kv.analysisAttach: recordInterviewAnalysisFailure', () => {
 
     await expect(recordInterviewAnalysisFailure('interview-a', 'claim-1', 'provider', client))
       .resolves.toEqual({ status: 'written' });
+    expect(client.get).not.toHaveBeenCalled();
   });
 });
