@@ -133,6 +133,9 @@ describe('StudySetup notice blocks (Notice primitive, C3)', () => {
     expect(status).toHaveClass('border-l-2', 'border-ink-500', 'bg-paper-2', 'px-4', 'py-3');
     expect(status).toHaveTextContent('Checking configured AI providers…');
 
+    // The status renders before the config request is issued; on a slow
+    // runner the gate is still unset here. Wait for the request, then open it.
+    await waitFor(() => expect(statusGate.resolve).not.toBeNull());
     statusGate.resolve?.();
     await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
   });
