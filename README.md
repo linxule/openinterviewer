@@ -300,7 +300,15 @@ git diff --check
 
 The browser suite covers the keyless demo plus standalone direct and Gateway research workflows: study creation, participant-link exchange, consent, interview, saving, deferred analysis, researcher recovery and review, and export. The workflow tests run the real application APIs with synthetic provider HTTP responses and a fresh disposable Redis instance per test. They require Docker or a local `redis-server`; inherited `REDIS_URL` or Redis attestation configuration is refused. Test-only servers use fixture credentials and Next's test proxy; the deployed application does not enable that proxy. These tests verify application behavior, not live provider availability, model quality, or hosted OAuth onboarding.
 
-Production logs are allowlisted JSON and never contain prompts, keys, or bodies. Real-Redis crash and shared-BYOS adversarial jobs also refuse inherited production Redis connections.
+Production logs are allowlisted JSON and never contain prompts, keys, or bodies. An `interview.analysis` event with `reason: corrupt-record` means a stored interview record was refused for structural reasons and left unchanged; it is not a Redis outage (`reason: unavailable`) and will not resolve by retrying. Real-Redis crash and shared-BYOS adversarial jobs also refuse inherited production Redis connections.
+
+Live-provider compatibility is a separate, paid check that the fixture suites cannot make. `tests/smoke/provider-provenance.smoke.test.ts` runs one real synthesis call through the direct adapter for a single provider and confirms the served response names a model:
+
+```bash
+SMOKE_PROVIDER=gemini GEMINI_API_KEY=... npx vitest run --config vitest.smoke.config.mts
+```
+
+It refuses to run with more than one provider credential present, writes nothing, and prints only provider, requested and served model, and a failure class.
 
 For ordinary updates to an already configured deployment, use a reviewed pull request, require the CI and preview checks, merge to `main`, then verify the exact Git-backed production deployment on the canonical domain and scan runtime errors. The longer runbook above is for the first hosted-mode infrastructure cutover, not every application release.
 
