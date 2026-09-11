@@ -240,10 +240,13 @@ export async function GET(request: Request) {
       return NextResponse.json({ valid: false, error: 'Study is no longer active.' }, { status: 403 });
     }
 
+    // Prompts are built server-side from the canonical study; the researcher's
+    // instructions to the interviewer never need to reach the participant's browser.
+    const { interviewerInstructions: _interviewerInstructions, ...participantStudyConfig } = live.study.config;
     const response = NextResponse.json({
       valid: true,
       data: {
-        studyConfig: live.study.config,
+        studyConfig: participantStudyConfig,
         sessionHandle,
         aiTransport: isHostedMode() ? 'direct' : resolveAITransport(),
       },

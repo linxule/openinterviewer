@@ -150,3 +150,11 @@ describe('InterviewDetail reading surface', () => {
     expect(screen.queryByRole('button', { name: 'Back to Dashboard' })).not.toBeInTheDocument();
   });
 });
+
+it.each([undefined, 'Historical instructions.\nKeep their words.'])('shows recorded manner without back-filling (%s)', async (conductedWithInstructions) => {
+  storageMock.getInterview.mockResolvedValue({ ...interview, conductedWithInstructions });
+  renderInterviewDetail();
+  expect(await screen.findByText('Instructions at save time')).toBeInTheDocument();
+  const label = screen.getByText('Instructions at save time');
+  expect(label.closest('dt')?.nextElementSibling).toHaveTextContent(conductedWithInstructions?.replace('\n', ' ') ?? 'Default manner (none recorded)');
+});

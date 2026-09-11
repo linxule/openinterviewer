@@ -40,6 +40,7 @@ const Export: React.FC = () => {
         name: studyConfig?.name,
         researchQuestion: studyConfig?.researchQuestion,
         aiBehavior: studyConfig?.aiBehavior,
+        interviewerInstructions: studyConfig?.interviewerInstructions,
         coreQuestions: studyConfig?.coreQuestions,
         topicAreas: studyConfig?.topicAreas
       },
@@ -51,6 +52,10 @@ const Export: React.FC = () => {
         }
       },
       interview: {
+        // This is a local session export, not a historical-record read. The
+        // session uses its pinned study config; researcher downloads serialize
+        // StoredInterview.conductedWithInstructions without back-filling it.
+        conductedWithInstructions: studyConfig?.interviewerInstructions,
         messageCount: interviewHistory.length,
         questionsAsked: questionProgress.questionsAsked,
         totalQuestions: studyConfig?.coreQuestions.length || 0,

@@ -17,6 +17,7 @@ export interface StudyDraft {
   aiBehavior: AIBehavior; aiProvider: AIProviderType; aiModel: string;
   enableReasoning: boolean | undefined; linkExpiration: LinkExpirationOption;
   consentText: string; researcherContact: string; thankYouText: string;
+  interviewerInstructions: string;
 
   savedStudyId: string | null;
   parentStudyInfo: { id: string; name: string } | null;
@@ -33,6 +34,7 @@ export interface StudyDraft {
   setLinkExpiration(value: LinkExpirationOption): void;
   setConsentText(value: string): void;
   setThankYouText(value: string): void;
+  setInterviewerInstructions(value: string): void;
   addQuestion(): void; removeQuestion(index: number): void;
   updateQuestion(index: number, value: string): void;
   addTopic(): void; removeTopic(index: number): void;
@@ -47,7 +49,7 @@ export interface StudyDraft {
   setIsDirty(value: boolean): void;
   hydratePrefill(config: Partial<StudyConfig>): void;   // not dirtying
   syncFromStudyConfig(config: StudyConfig): void;       // not dirtying
-  buildConfig(): StudyConfig;
+  buildConfig(mode: 'create' | 'update'): StudyConfig;
 }
 
 export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
@@ -81,6 +83,7 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
   const [consentText, setConsentTextState] = useState(studyConfig?.consentText ?? '');
   const [researcherContact, setResearcherContactState] = useState(studyConfig?.researcherContact ?? '');
   const [thankYouText, setThankYouTextState] = useState(studyConfig?.thankYouText ?? '');
+  const [interviewerInstructions, setInterviewerInstructionsState] = useState(studyConfig?.interviewerInstructions ?? '');
 
   const [savedStudyId, setSavedStudyId] = useState<string | null>(null);
   const [parentStudyInfo, setParentStudyInfo] = useState<{ id: string; name: string } | null>(null);
@@ -103,6 +106,7 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
   const setLinkExpiration = (value: LinkExpirationOption) => { setLinkExpirationState(value); setIsDirty(true); };
   const setConsentText = (value: string) => { setConsentTextState(value); setIsDirty(true); };
   const setThankYouText = (value: string) => { setThankYouTextState(value); setIsDirty(true); };
+  const setInterviewerInstructions = (value: string) => { setInterviewerInstructionsState(value); setIsDirty(true); };
 
   // Question management
   const addQuestion = () => { setCoreQuestions([...coreQuestions, '']); setIsDirty(true); };
@@ -191,6 +195,7 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
     if (config.consentText) setConsentTextState(config.consentText);
     if (config.researcherContact) setResearcherContactState(config.researcherContact);
     if (config.thankYouText) setThankYouTextState(config.thankYouText);
+    if (config.interviewerInstructions) setInterviewerInstructionsState(config.interviewerInstructions);
   };
 
   const syncFromStudyConfig = (config: StudyConfig) => {
@@ -209,9 +214,10 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
     setConsentTextState(config.consentText);
     setResearcherContactState(config.researcherContact ?? '');
     setThankYouTextState(config.thankYouText ?? '');
+    setInterviewerInstructionsState(config.interviewerInstructions ?? '');
   };
 
-  const buildConfig = (): StudyConfig => ({
+  const buildConfig = (mode: 'create' | 'update'): StudyConfig => ({
     id: savedStudyId || studyConfig?.id || `study-${Date.now()}`,
     name: name || 'Untitled Study',
     description,
@@ -232,7 +238,8 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
     // fallback text is applied at render time instead, not frozen into the
     // record — no consent hash binds it, so improving the fallback improves
     // every study that never overrode it (P12.3).
-    ...(thankYouText.trim() ? { thankYouText: thankYouText.trim() } : {}),
+    ...(mode === 'update' || thankYouText.trim() ? { thankYouText: thankYouText.trim() } : {}),
+    ...(mode === 'update' || interviewerInstructions.trim() ? { interviewerInstructions: interviewerInstructions.trim() } : {}),
     // Include parent study info if this is a follow-up
     ...(parentStudyInfo && {
       parentStudyId: parentStudyInfo.id,
@@ -247,12 +254,14 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
     aiBehavior, aiProvider, aiModel,
     enableReasoning, linkExpiration,
     consentText, researcherContact, thankYouText,
+    interviewerInstructions,
 
     savedStudyId, parentStudyInfo, isDirty,
 
     setName, setDescription, setResearchQuestion, setResearcherContact,
     selectProvider, setAiModel, setAiBehavior, setEnableReasoning, setLinkExpiration, setConsentText,
     setThankYouText,
+    setInterviewerInstructions,
     addQuestion, removeQuestion, updateQuestion,
     addTopic, removeTopic, updateTopic,
     addProfileField, removeProfileField, updateProfileField, toggleFieldRequired,

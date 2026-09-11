@@ -6,6 +6,7 @@ import { makeStoredStudy } from '../fixtures/models';
 const kvMock = vi.hoisted(() => ({ getStudy: vi.fn() }));
 vi.mock('@/lib/kv', () => kvMock);
 
+import { validateStudyConfigUpdate } from '@/lib/studyConfigValidation';
 import { loadCanonicalStudy } from '@/lib/canonicalStudy';
 
 beforeEach(() => vi.clearAllMocks());
@@ -40,4 +41,27 @@ describe('canonical study validation', () => {
     if (!result.ok) expect(result.response.status).toBe(503);
     expect(errorSpy).toHaveBeenCalled();
   });
+});
+
+it('serves participants after clearing instructions, with no stored empty-string field', async () => {
+  const study = makeStoredStudy();
+  study.config.interviewerInstructions = 'Use plain language.';
+  const updated = validateStudyConfigUpdate(study.config, { interviewerInstructions: '' }, undefined);
+  expect(updated.ok).toBe(true);
+  if (!updated.ok) throw new Error(updated.error);
+  expect(updated.config).not.toHaveProperty('interviewerInstructions');
+  study.config = JSON.parse(JSON.stringify(updated.config));
+  kvMock.getStudy.mockResolvedValue(study);
+  const result = await loadCanonicalStudy({ kvClient: {} as never, tokenStudyId: study.id });
+  expect(result.ok).toBe(true);
+  if (result.ok) expect(result.study.config.interviewerInstructions).toBeUndefined();
+});
+
+it('fails closed if a malformed stored empty instruction field is encountered', async () => {
+  const study = makeStoredStudy();
+  study.config.interviewerInstructions = '';
+  kvMock.getStudy.mockResolvedValue(study);
+  const result = await loadCanonicalStudy({ kvClient: {} as never, tokenStudyId: study.id });
+  expect(result.ok).toBe(false);
+  if (!result.ok) expect(result.response.status).toBe(503);
 });

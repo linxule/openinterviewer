@@ -859,9 +859,16 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
 
             <div className="grid grid-cols-1 gap-1 py-4 md:grid-cols-[12rem_1fr] md:gap-6">
               <dt>
-                <Label>AI Interview Style</Label>
+                <Label>Interview Structure</Label>
               </dt>
               <dd className="font-sans text-[15px] leading-[24px] capitalize text-ink-900">{study.config.aiBehavior}</dd>
+            </div>
+
+            <div className="grid grid-cols-1 gap-1 py-4 md:grid-cols-[12rem_1fr] md:gap-6">
+              <dt><Label>Interviewer Manner</Label></dt>
+              <dd className="font-sans text-[15px] leading-[24px] text-ink-700 whitespace-pre-wrap">
+                {study.config.interviewerInstructions || <span className="text-ink-500">Default</span>}
+              </dd>
             </div>
           </dl>
 

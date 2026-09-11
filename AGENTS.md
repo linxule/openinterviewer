@@ -73,7 +73,7 @@ Hosted study create/delete is a durable cross-database operation. Preserve the o
 - Save validation and deferred analysis: `src/lib/interviewSubmission.ts`, `src/lib/interviewAnalysis.ts`, `src/lib/analysisState.ts`
 - Server-generated synthesis provenance: `src/lib/synthesisProvenance.ts`
 - Bounded request parsing: `src/lib/requestBody.ts`
-- Providers and prompts: `src/lib/providers/`, `src/lib/prompts/`, `src/lib/ai.ts`
+- Providers and prompts: `src/lib/providers/`, `src/lib/prompts/`, `src/lib/ai.ts`, `src/lib/interviewerManner.ts`
 - Transport selection and Gateway model mapping: `src/lib/aiTransport.ts`, `src/lib/providers/gateway.ts`
 - Provider result validation/errors: `src/lib/providerValidation.ts`, `src/lib/providerErrors.ts`
 - Evidence citation matching (render-time classification; verdicts never stored): `src/lib/evidence.ts`
@@ -145,6 +145,7 @@ For a hosted build, use the non-secret fixture environment from `.github/workflo
 - `.vercel/project.json` is an ignored local project link, not deployment truth.
 - `.next/`, `next-env.d.ts`, `tsconfig.tsbuildinfo`, `playwright-report/`, `test-results/`, and `node_modules/` are generated.
 - Keep the Next-managed block in `CLAUDE.md`; `next dev` may restore it.
+- The checkout lives in iCloud Drive, which leaves sync-conflict copies named `<file> 2.<ext>` anywhere, including `.next/types/` and `tests/`. `npm run check` starts with `scripts/check-sync-artifacts.mjs`, which fails on any such file; delete them, never commit them.
 
 ## Definition of done
 

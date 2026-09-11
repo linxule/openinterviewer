@@ -189,6 +189,11 @@ describe('StudySetup create idempotency', () => {
     expect(fetchMock.posts[1].method).toBe('POST');
     expect(fetchMock.posts[1].headers['Idempotency-Key']).toBe(UUID_A);
     expect(crypto.randomUUID).toHaveBeenCalledTimes(1);
+    // The retry is still a create: blank optional text must stay omitted, not
+    // arrive as '' (which only the update path may use to clear a field).
+    const retryConfig = (fetchMock.posts[1].body as { config: Record<string, unknown> }).config;
+    expect(retryConfig).not.toHaveProperty('interviewerInstructions');
+    expect(retryConfig).not.toHaveProperty('thankYouText');
   });
 
   it('restores the same key across remounts of the same create intent', async () => {

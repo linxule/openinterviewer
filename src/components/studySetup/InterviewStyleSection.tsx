@@ -6,18 +6,18 @@ import type { StudyDraft } from './useStudyDraft';
 const behaviorOptions: { id: AIBehavior; label: string; desc: string }[] = [
   {
     id: 'structured',
-    label: 'Focus on covering all questions (Structured)',
-    desc: 'Prioritize completion. Minimal follow-ups, redirect tangents.'
+    label: 'Cover every question (Structured)',
+    desc: 'Minimal follow-ups; tangents are redirected.'
   },
   {
     id: 'standard',
     label: 'Balance coverage and depth (Standard)',
-    desc: 'Default mode. Follow up on key insights, then move on.'
+    desc: 'Default. One or two follow-ups on key insights, then move on.'
   },
   {
     id: 'exploratory',
-    label: 'Focus on uncovering new insights (Exploratory)',
-    desc: 'Prioritize depth. Chase interesting threads, probe emotions.'
+    label: 'Go deep (Exploratory)',
+    desc: 'Follows threads and probes motivations; the script is a guide.'
   }
 ];
 
@@ -32,8 +32,8 @@ export function InterviewStyleSection({ draft, editing, onEdit }: InterviewStyle
 
   return (
     <Section
-      id="ai-interview-style"
-      label="AI Interview Style"
+      id="interview-structure"
+      label="Interview Structure"
       editing={editing}
       onEdit={onEdit}
       read={

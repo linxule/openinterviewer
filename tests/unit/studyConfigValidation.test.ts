@@ -314,3 +314,43 @@ describe('readStudyMutationBody', () => {
     });
   });
 });
+
+
+describe('interviewerInstructions (Slice Q)', () => {
+  it.each(['Use everyday words.', 'x'.repeat(4000), 'Use [their words].'])('accepts bounded instructions, including brackets', (interviewerInstructions) => {
+    const config = makeStudyConfig({ interviewerInstructions });
+    expect(validateStudyConfig(config)).toEqual({ ok: true, config });
+    expect(validateStudyConfigForCreate(config, { id: config.id, createdAt: config.createdAt })).toMatchObject({ ok: true });
+    expect(validateStudyConfigUpdate(makeStudyConfig(), { interviewerInstructions }, undefined)).toMatchObject({ ok: true });
+  });
+
+  it.each(['x'.repeat(4001), '', '  \n ', 42, null, {}, []])('rejects invalid instructions (%j)', (interviewerInstructions) => {
+    const config = { ...makeStudyConfig(), interviewerInstructions };
+    const error = { ok: false, error: 'Interviewer instructions must be 4000 characters or fewer' };
+    expect(validateStudyConfig(config)).toEqual(error);
+    expect(validateStudyConfigForCreate(config, { id: config.id, createdAt: config.createdAt })).toEqual(error);
+    if (interviewerInstructions !== '') {
+      expect(validateStudyConfigUpdate(makeStudyConfig(), { interviewerInstructions }, undefined)).toEqual(error);
+    }
+  });
+
+  it('accepts omission on all entry points', () => {
+    const config = makeStudyConfig();
+    expect(validateStudyConfig(config)).toMatchObject({ ok: true });
+    expect(validateStudyConfigForCreate(config, { id: config.id, createdAt: config.createdAt })).toMatchObject({ ok: true });
+    expect(validateStudyConfigUpdate(config, {}, undefined)).toMatchObject({ ok: true });
+  });
+
+  it.each(['thankYouText', 'interviewerInstructions'] as const)('%s preserves omission and deletes the field on an empty-string wire update', (field) => {
+    const config = makeStudyConfig({ [field]: 'Existing text.' });
+    expect(validateStudyConfigUpdate(config, {}, undefined)).toMatchObject({ ok: true, config: { [field]: 'Existing text.' } });
+    expect(validateStudyConfigUpdate(config, { [field]: undefined }, undefined)).toMatchObject({ ok: true, config: { [field]: undefined } });
+    const cleared = validateStudyConfigUpdate(config, JSON.parse(JSON.stringify({ [field]: '' })), undefined);
+    expect(cleared.ok).toBe(true);
+    if (cleared.ok) expect(cleared.config).not.toHaveProperty(field);
+    expect(validateStudyConfigForCreate({ ...config, [field]: '' }, { id: config.id, createdAt: config.createdAt }).ok).toBe(false);
+    // JSON omits undefined: the existing wire contract cannot clear by omission.
+    expect(validateStudyConfigUpdate(config, JSON.parse(JSON.stringify({ [field]: undefined })), undefined))
+      .toMatchObject({ ok: true, config: { [field]: 'Existing text.' } });
+  });
+});

@@ -262,6 +262,17 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId,
         </div>
       </div>
 
+      <dl aria-label="Interview conducting provenance" className="mb-8 border-t border-ink-300 pt-4">
+        <dt><Label>Conducting provider and model</Label></dt>
+        <dd className="mt-2 font-mono text-[13px] text-ink-500 break-words">
+          {interview.conductedByProvider ?? 'not recorded'} · {interview.conductedByModel ?? 'not recorded'}
+        </dd>
+        <dt className="mt-4"><Label>Instructions at save time</Label></dt>
+        <dd className="mt-2 font-sans text-[15px] leading-[24px] text-ink-700 whitespace-pre-wrap max-w-measure break-words">
+          {interview.conductedWithInstructions ?? 'Default manner (none recorded)'}
+        </dd>
+      </dl>
+
       {/* Participant Profile */}
       {interview.participantProfile && interview.participantProfile.fields.length > 0 && (
         <div className="mb-8 border-t border-ink-300 pt-4">

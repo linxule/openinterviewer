@@ -53,6 +53,21 @@ beforeEach(() => {
 });
 
 describe('StudyDetail register table', () => {
+  it.each([undefined, 'Use everyday words.\nDo not comment on answers.'])('shows the configured manner or Default (%s)', async (interviewerInstructions) => {
+    const config = makeStudyConfig({ id: 'study-manner', name: 'Manner study', interviewerInstructions });
+    storageMock.getStudy.mockResolvedValue(makeStoredStudy({ id: config.id, config }));
+    storageMock.getStudyInterviews.mockResolvedValue([]);
+    renderStudyDetail(config.id);
+    await screen.findByRole('heading', { name: 'Manner study' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Study settings' }));
+    expect(screen.getByText('Interview Structure')).toBeInTheDocument();
+    const row = screen.getByText('Interviewer Manner').closest('dt')!.parentElement!;
+    const value = row.querySelector('dd')!;
+    expect(value.textContent?.trim()).toBe(interviewerInstructions ?? 'Default');
+    expect(value).toHaveClass('font-sans', 'whitespace-pre-wrap');
+    if (!interviewerInstructions) expect(value.querySelector('span')).toHaveClass('text-ink-500');
+  });
+
   it('lists interview rows with keyboard-navigable row buttons and no ancestor measure', async () => {
     const config = makeStudyConfig({ id: 'study-b', name: 'Register Study' });
     storageMock.getStudy.mockResolvedValue(makeStoredStudy({ id: 'study-b', config, revision: 1 }));

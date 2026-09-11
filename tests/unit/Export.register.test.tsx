@@ -15,7 +15,7 @@ function seedStore(viewMode: 'participant' | 'preview') {
   useStore.setState(useStore.getInitialState(), true);
   useStore.setState({
     viewMode,
-    studyConfig: makeStudyConfig({ id: 'study-register' }),
+    studyConfig: makeStudyConfig({ id: 'study-register', interviewerInstructions: 'Use everyday words.\nNo small talk.' }),
     interviewHistory: [{ id: 'm-1', role: 'user', content: 'My response', timestamp: Date.now() }],
   });
 }
@@ -68,6 +68,8 @@ describe('Export register styling', () => {
     expect(writeText).toHaveBeenCalledTimes(1);
     const parsed = JSON.parse(writeText.mock.calls[0][0]);
     expect(parsed.study.id).toBe('study-register');
+    expect(parsed.study.interviewerInstructions).toBe('Use everyday words.\nNo small talk.');
+    expect(parsed.interview.conductedWithInstructions).toBe('Use everyday words.\nNo small talk.');
   });
 
   it('carries no icons in participant mode', () => {

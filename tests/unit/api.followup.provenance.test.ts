@@ -123,6 +123,17 @@ afterEach(() => {
 });
 
 describe('follow-up synthesis provenance', () => {
+  it.each([undefined, 'Use everyday words.\nAsk one question.'])('inherits the parent manner (%s)', async (interviewerInstructions) => {
+    parentStudy.config.interviewerInstructions = interviewerInstructions;
+    const response = await POST(request(), { params: Promise.resolve({ id: parentStudy.id }) });
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.followUpConfig.interviewerInstructions).toBe(interviewerInstructions);
+    if (interviewerInstructions === undefined) {
+      expect(body.followUpConfig).not.toHaveProperty('interviewerInstructions');
+    }
+  });
+
   it('accepts only current-revision interview provenance', async () => {
     const response = await POST(request(), { params: Promise.resolve({ id: 'study-followup' }) });
 

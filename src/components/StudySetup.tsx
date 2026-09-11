@@ -33,6 +33,7 @@ import { StudyDetailsSection } from '@/components/studySetup/StudyDetailsSection
 import { ProfileFieldsSection } from '@/components/studySetup/ProfileFieldsSection';
 import { PromptListSection } from '@/components/studySetup/PromptListSection';
 import { ProviderSection } from '@/components/studySetup/ProviderSection';
+import { InterviewerMannerSection } from '@/components/studySetup/InterviewerMannerSection';
 import { InterviewStyleSection } from '@/components/studySetup/InterviewStyleSection';
 import { LinkSettingsSection } from '@/components/studySetup/LinkSettingsSection';
 import { ConsentSection } from '@/components/studySetup/ConsentSection';
@@ -518,7 +519,7 @@ const StudySetup: React.FC = () => {
     };
 
     try {
-      const config = draft.buildConfig();
+      const config = draft.buildConfig(isUpdate ? 'update' : 'create');
       if (CONSENT_TEXT_PLACEHOLDER.test(config.consentText)) {
         setSaveError(CONSENT_TEXT_PLACEHOLDER_ERROR);
         return;
@@ -630,7 +631,8 @@ const StudySetup: React.FC = () => {
     { id: 'core-questions', label: 'Core Questions' },
     { id: 'topic-areas', label: 'Topic Areas' },
     { id: 'ai-provider', label: 'AI Provider' },
-    { id: 'ai-interview-style', label: 'AI Interview Style' },
+    { id: 'interview-structure', label: 'Interview Structure' },
+    { id: 'interviewer-manner', label: 'Interviewer Manner' },
     { id: 'link-settings', label: 'Link Settings' },
     { id: 'consent-text', label: 'Consent Text' },
     { id: 'thank-you-text', label: 'Thank-You Screen' },
@@ -780,8 +782,15 @@ const StudySetup: React.FC = () => {
 
           <InterviewStyleSection
             draft={draft}
-            editing={isEditing('ai-interview-style')}
-            onEdit={() => openSection('ai-interview-style')}
+            editing={isEditing('interview-structure')}
+            onEdit={() => openSection('interview-structure')}
+          />
+          <Rule />
+
+          <InterviewerMannerSection
+            draft={draft}
+            editing={isEditing('interviewer-manner')}
+            onEdit={() => openSection('interviewer-manner')}
           />
           <Rule />
 

@@ -4,6 +4,8 @@
  * This file contains the main system prompt that controls AI interviewer behavior.
  *
  * CUSTOMIZATION GUIDE:
+ * - Start with Interviewer Manner in study setup: presets or your own instructions.
+ * - Self-hosters can then edit this file for deeper prompt customization.
  * - Modify `getAIBehaviorInstruction()` to change how the AI responds in different modes
  * - Edit the main prompt in `buildInterviewSystemPrompt()` to adjust:
  *   - Interview phases and flow
@@ -17,6 +19,29 @@
  */
 
 import { StudyConfig, ParticipantProfile, QuestionProgress } from '@/types';
+
+// Slice Q wording lives in single constants so it can be reviewed and edited directly.
+export const QUESTION_CRAFT = `QUESTION CRAFT:
+- Ask ONE question per turn. Never stack two questions, and never offer either/or alternatives inside a question. (Exception: a profile field that has preset options may be asked as a closed question listing those options.)
+- Keep each turn short: at most one brief sentence before the question, then the question in a single sentence.
+- Ask open, non-leading questions. Do not suggest an answer, offer example answers, or embed your own interpretation in the question. Prefer "What was that like?" over "Was that frustrating?"
+- Do not evaluate answers. No "great point", "interesting", "that makes sense". A brief acknowledgement ("Thank you.") is enough.
+- Do not summarise or paraphrase what the participant said before the next question, except briefly to check your understanding at a natural transition. To anchor a follow-up, quote their own words exactly and briefly.
+- Follow the participant's vocabulary. Use their terms for things, not yours.
+- Use plain language. No jargon from the research question or topic areas unless the participant used it first.
+- If the participant seems distressed or reluctant, say so plainly, remind them they may skip any question, and do not press.
+- Do not ask for personal identifying information beyond the profile fields listed.`;
+
+export const INTERVIEWER_MANNER_PRECEDENCE = `Where INTERVIEWER MANNER conflicts with QUESTION CRAFT, follow INTERVIEWER MANNER. It does not change the INTERVIEW FLOW phases, when the interview concludes (shouldConclude), the profile fields to collect, or the response format.`;
+
+export const INTERVIEWER_MANNER_HEADER = 'INTERVIEWER MANNER (written by the researcher for this study):';
+
+/** No placeholder block when the optional, server-validated field is absent. */
+export function buildInterviewerMannerBlock(studyConfig: StudyConfig, precedence = INTERVIEWER_MANNER_PRECEDENCE): string {
+  return studyConfig.interviewerInstructions === undefined
+    ? ''
+    : `${INTERVIEWER_MANNER_HEADER}\n${studyConfig.interviewerInstructions}\n\n${precedence}\n\n`;
+}
 
 /**
  * AI Behavior Modes
@@ -32,7 +57,7 @@ export const getAIBehaviorInstruction = (behavior: StudyConfig['aiBehavior']): s
       return `BEHAVIOR MODE: Structured
 - Prioritize brevity and script completion
 - Ask only clarifying follow-ups (0-1 per question)
-- Redirect tangents: "That's interesting, but let's focus on..."`;
+- Redirect tangents briefly: "Let's come back to..."`;
 
     case 'exploratory':
       return `BEHAVIOR MODE: Exploratory
@@ -118,16 +143,15 @@ PARTICIPANT CONTEXT:
 ${participantProfile?.rawContext || 'No background gathered yet.'}
 
 INTERVIEW FLOW INSTRUCTIONS:
-1. BACKGROUND PHASE: Gather profile fields naturally. Bundle related questions. If answer is vague, ask one clarifying follow-up. If user refuses, mark as refused and move on.
+1. BACKGROUND PHASE: Gather profile fields naturally, one question at a time. If answer is vague, ask one clarifying follow-up. If user refuses, mark as refused and move on.
 2. CORE QUESTIONS PHASE: Work through remaining core questions. Weave them naturally - don't follow strict order. Probe deeper on interesting responses.
 3. EXPLORATION PHASE: After all core questions, ask: "Is there anything else about [topic] you'd like to explore or share?"
 4. FEEDBACK PHASE: Ask: "As a final question - do you have any feedback for the researchers about this study or interview experience?"
-5. WRAP-UP PHASE: Thank them warmly and signal that the interview is complete.
+5. WRAP-UP PHASE: Thank them and signal that the interview is complete.
 
-RULES:
-- Ask ONE question at a time
-- Use active listening - reflect back what you hear
-- Keep responses concise (2-3 sentences typical)
+${QUESTION_CRAFT}
+
+${buildInterviewerMannerBlock(studyConfig)}OUTPUT CONTRACT:
 - When a core question is substantially addressed, note its index
 - Extract profile data from user responses when mentioned
 - Signal shouldConclude=true only after feedback phase is complete
