@@ -29,7 +29,7 @@
     "test:redis-crash": "vitest run --config vitest.integration.config.mts tests/integration/redis.crashCuts.test.ts",
     "test:adversarial": "vitest run --config vitest.integration.config.mts tests/unit/hosted.sharedByos.adversarial.test.ts tests/integration/hosted.sharedByos.realredis.test.ts",
     "setup:check": "node scripts/check-setup.mjs",
-    "check": "npm run lint && npm run typecheck && npm run test"
+    "check": "node scripts/check-sync-artifacts.mjs && npm run lint && npm run typecheck && npm run test"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",

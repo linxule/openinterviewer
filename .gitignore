@@ -39,3 +39,7 @@ Thumbs.db
 # TypeScript
 *.tsbuildinfo
 next-env.d.ts
+
+# iCloud Drive sync-conflict copies ("file 2.ts"); scripts/check-sync-artifacts.mjs fails the gate on them
+* 2
+* 2.*
