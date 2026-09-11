@@ -363,6 +363,7 @@ src/
 └── types.ts             Shared domain types
 
 scripts/check-setup.mjs  Redacted local setup diagnostics
+scripts/check-sync-artifacts.mjs  Fails the check gate on iCloud sync-conflict copies
 tests/                   Unit and browser regressions
 ```
 
