@@ -126,3 +126,16 @@ describe('GET /api/interviews/export summary.csv formula neutralization', () => 
     expect(cells[1]).toBe('Plain Study Name');
   });
 });
+
+it('exports each recorded manner unchanged, including absence on older interviews', async () => {
+  kvMock.getAllInterviewsChecked.mockResolvedValue({ status: 'ok', items: [
+    makeStoredInterview({ id: 'recorded', conductedWithInstructions: 'Instructions at collection.' }),
+    makeStoredInterview({ id: 'legacy' }),
+  ] });
+  const response = await GET();
+  expect(response.status).toBe(200);
+  const zip = await JSZip.loadAsync(await response.arrayBuffer());
+  const records = await Promise.all(Object.values(zip.files).filter(file => file.name.endsWith('.json')).map(async file => JSON.parse(await file.async('string'))));
+  expect(records.find(record => record.id === 'recorded').conductedWithInstructions).toBe('Instructions at collection.');
+  expect(records.find(record => record.id === 'legacy')).not.toHaveProperty('conductedWithInstructions');
+});

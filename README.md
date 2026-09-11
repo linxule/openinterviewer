@@ -221,7 +221,7 @@ It validates the Node version, required variable names, URL/key shapes, OAuth pa
 For researchers:
 
 1. Create and save a study.
-2. Configure questions, profile fields, provider/model, consent text, and link expiry.
+2. Configure questions, profile fields, provider/model, interviewer structure and manner, consent text, and link expiry.
 3. Generate an opaque participant link from the saved revision.
 4. Share the link and collect interviews.
 5. Review individual transcripts and synthesis.
@@ -236,6 +236,42 @@ For participants:
 4. Choose **Continue to save interview** and wait for **Your responses have been saved. It is now safe to close this tab.** before closing the tab.
 
 Finishing saves the transcript before starting analysis in the background. If the save fails, keep the tab open and use **Retry save**. Once the save is confirmed, the participant can close the tab even if analysis is still pending or fails. Researchers can use **Run analysis** on an interview or the pending-analysis batch action on a study to recover unfinished analysis. The saved transcript and JSON remain available from the interview detail view. Researchers can also customize the participant thank-you text in study setup.
+
+### How the interviewer is controlled
+
+**Interview Structure** balances coverage and depth through three modes: Structured, Standard, and Exploratory.
+**Interviewer Manner** controls phrasing and carriage through Neutral, Warm, Formal, Plain language, and Concrete incidents presets or your own editable instructions, injected verbatim into the interview and greeting prompts.
+**The prompt itself**, in `src/lib/prompts/`, is a further customization layer for self-hosters only.
+
+The default is brief, open, non-leading questions, one at a time, with no praise and no routine paraphrase (a brief check of understanding at a natural transition is allowed). Leading and evaluative turns can shape participants' answers.
+
+Your manner instructions can override the default question craft, including brevity and how many questions to ask per turn. The prompt tells the model not to change the interview phases, ending, profile fields to collect, or response format. This is the only study field explicitly allowed to override question craft: read pasted instructions carefully.
+
+Test with **Preview**, which runs the saved study, so save first, before sharing a link. Editing manner advances the revision and invalidates issued links like any other edit. Tune it before collection or on a scratch study.
+
+The built-in question craft, for reference or a methods appendix:
+
+```
+QUESTION CRAFT:
+- Ask ONE question per turn. Never stack two questions, and never offer either/or alternatives inside a question. (Exception: a profile field that has preset options may be asked as a closed question listing those options.)
+- Keep each turn short: at most one brief sentence before the question, then the question in a single sentence.
+- Ask open, non-leading questions. Do not suggest an answer, offer example answers, or embed your own interpretation in the question. Prefer "What was that like?" over "Was that frustrating?"
+- Do not evaluate answers. No "great point", "interesting", "that makes sense". A brief acknowledgement ("Thank you.") is enough.
+- Do not summarise or paraphrase what the participant said before the next question, except briefly to check your understanding at a natural transition. To anchor a follow-up, quote their own words exactly and briefly.
+- Follow the participant's vocabulary. Use their terms for things, not yours.
+- Use plain language. No jargon from the research question or topic areas unless the participant used it first.
+- If the participant seems distressed or reluctant, say so plainly, remind them they may skip any question, and do not press.
+- Do not ask for personal identifying information beyond the profile fields listed.
+```
+
+Instructions steer a model; they do not bind it. The response format is enforced by code; the phases and ending are not. Model and provider choice matter, so review early transcripts.
+
+Two worked examples to paste into Interviewer Manner:
+
+- Language: "Conduct the entire interview in Japanese, using polite (desu/masu) register." Language is an instruction, not a separate setting. It reaches only the interviewer's questions and greeting: consent text is the researcher's own, while the fixed participant chrome (phase sentences, buttons, receipt) and analysis prompts stay in English.
+- A short screening study: "Ask two short, open questions per turn. Do not suggest answers or evaluate responses." This overrides the default one-question rule; save and Preview to check the result.
+
+Instructions ride every turn: a long manner costs tokens under hosted quotas. Each interview record snapshots the instructions in force when it was saved, so later study edits do not rewrite its record.
 
 Analysis uses the study's current configured provider and model, including when the study was edited after collection; the result records the study revision used. Each interview separately records the provider and model configured when it was saved. Researcher previews do not store research records; if preview analysis fails, **Export transcript** still opens the transcript download.
 

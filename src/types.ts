@@ -141,6 +141,12 @@ export interface StudyConfig {
    * deployment's default forever.
    */
   thankYouText?: string;
+  /**
+   * Optional. Researcher-authored instructions that shape how the interviewer
+   * phrases questions and carries itself; injected verbatim into the interview
+   * and greeting prompts. Absent means the QUESTION CRAFT defaults alone.
+   */
+  interviewerInstructions?: string;
   createdAt: number;
   // Follow-up study lineage
   parentStudyId?: string;         // ID of parent study if this is a follow-up
@@ -323,6 +329,8 @@ export interface StoredInterview {
    */
   conductedByProvider?: AIProviderType;
   conductedByModel?: string;
+  /** Researcher instructions in force at save time; never back-filled. */
+  conductedWithInstructions?: string;
 
   /**
    * Absent on every record written before Slice P. Read it through

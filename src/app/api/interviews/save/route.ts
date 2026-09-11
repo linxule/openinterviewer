@@ -206,6 +206,9 @@ export async function POST(request: Request) {
       // copy, which drops any client-asserted conducting model.
       conductedByProvider: canonical.study.config.aiProvider,
       conductedByModel: canonical.study.config.aiModel,
+      ...(canonical.study.config.interviewerInstructions !== undefined
+        ? { conductedWithInstructions: canonical.study.config.interviewerInstructions }
+        : {}),
       analysis: { status: 'pending', attempts: 0, lastAttemptAt: now },
       participantLinkId: linkId,
     };
@@ -226,6 +229,9 @@ export async function POST(request: Request) {
       consentAcceptedAt: consentRecord!.acceptedAt,
       conductedByProvider: canonical.study.config.aiProvider,
       conductedByModel: canonical.study.config.aiModel,
+      ...(canonical.study.config.interviewerInstructions !== undefined
+        ? { conductedWithInstructions: canonical.study.config.interviewerInstructions }
+        : {}),
     });
 
     if (persistRepairOnly) {

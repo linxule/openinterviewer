@@ -7,6 +7,8 @@ import { isKnownProviderModel } from './providerRegistry';
 import { CONSENT_TEXT_PLACEHOLDER, CONSENT_TEXT_PLACEHOLDER_ERROR } from './consentText';
 import { BRACKETED_PLACEHOLDER, THANK_YOU_TEXT_PLACEHOLDER_ERROR } from './thankYouText';
 
+import { MAX_INTERVIEWER_INSTRUCTIONS_LENGTH } from './interviewerManner';
+
 export const STUDY_MUTATION_MAX_BYTES = 128 * 1024;
 
 const MAX_NAME_LENGTH = 200;
@@ -42,6 +44,7 @@ const STUDY_CONFIG_FIELDS = new Set([
   'consentText',
   'researcherContact',
   'thankYouText',
+  'interviewerInstructions',
   'createdAt',
   'parentStudyId',
   'parentStudyName',
@@ -208,6 +211,10 @@ export function validateStudyConfig(value: unknown): ValidationResult {
     && !isBoundedString(value.thankYouText, MAX_THANK_YOU_TEXT_LENGTH, true)) {
     return { ok: false, error: 'Thank-you screen must be 4000 characters or fewer' };
   }
+  if (value.interviewerInstructions !== undefined
+    && !isBoundedString(value.interviewerInstructions, MAX_INTERVIEWER_INSTRUCTIONS_LENGTH, true)) {
+    return { ok: false, error: 'Interviewer instructions must be 4000 characters or fewer' };
+  }
   if (value.linksEnabled !== undefined && typeof value.linksEnabled !== 'boolean') {
     return { ok: false, error: 'Invalid participant link status' };
   }
@@ -253,13 +260,17 @@ export function validateStudyConfigUpdate(
   }
 
   const { id: _id, createdAt: _createdAt, linksEnabled: _embeddedLinkStatus, ...editable } = patch;
-  const result = validateStudyConfig({
+  const merged = {
     ...current,
     ...editable,
     id: current.id,
     createdAt: current.createdAt,
     linksEnabled: linksEnabled ?? current.linksEnabled,
-  });
+  };
+  for (const field of ['interviewerInstructions', 'thankYouText'] as const) {
+    if (editable[field] === '') delete merged[field];
+  }
+  const result = validateStudyConfig(merged);
   if (result.ok && CONSENT_TEXT_PLACEHOLDER.test(result.config.consentText)) {
     return { ok: false, error: CONSENT_TEXT_PLACEHOLDER_ERROR };
   }

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
+import { render, renderHook, act, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import { makeStudyConfig } from '../fixtures/models';
 
 /**
@@ -30,6 +30,8 @@ vi.mock('next/navigation', () => ({
 }));
 
 import StudySetup from '@/components/StudySetup';
+import { useStudyDraft } from '@/components/studySetup/useStudyDraft';
+import { INTERVIEWER_MANNER_NEUTRAL, INTERVIEWER_MANNER_WARM } from '@/lib/interviewerManner';
 
 const SECTION_IDS = [
   'study-details',
@@ -37,7 +39,8 @@ const SECTION_IDS = [
   'core-questions',
   'topic-areas',
   'ai-provider',
-  'ai-interview-style',
+  'interview-structure',
+  'interviewer-manner',
   'link-settings',
   'consent-text',
   'thank-you-text',
@@ -151,7 +154,7 @@ describe('StudySetup document mode (F1: read-mode for saved studies)', () => {
     });
   }
 
-  it('exposes all nine sections in the index, and each behind its own Edit control that reveals its fields independently', () => {
+  it('exposes all ten sections in the index, and each behind its own Edit control that reveals its fields independently', () => {
     seedSavedStudy();
     render(<StudySetup />);
 
@@ -164,7 +167,7 @@ describe('StudySetup document mode (F1: read-mode for saved studies)', () => {
 
     for (const label of [
       'Study Details', 'Profile Fields', 'Core Questions', 'Topic Areas',
-      'AI Provider', 'AI Interview Style', 'Link Settings', 'Consent Text', 'Thank-You Screen',
+      'AI Provider', 'Interview Structure', 'Interviewer Manner', 'Link Settings', 'Consent Text', 'Thank-You Screen',
     ]) {
       expect(screen.getByRole('button', { name: `Edit ${label}` })).toBeInTheDocument();
     }
@@ -336,4 +339,123 @@ describe('StudySetup Thank-You Screen section (slice P §P12.5)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Update Study' }));
     expect(await screen.findByText(/cannot contain a bracketed placeholder/i)).toBeInTheDocument();
   });
+});
+
+
+describe('StudySetup interviewer manner', () => {
+  it('indexes structure and manner and replaces instructions with editable presets', () => {
+    render(<StudySetup />);
+    const nav = screen.getByRole('navigation', { name: 'Study sections' });
+    expect(within(nav).getByRole('link', { name: 'Interview Structure' })).toHaveAttribute('href', '#interview-structure');
+    expect(within(nav).getByRole('link', { name: 'Interviewer Manner' })).toHaveAttribute('href', '#interviewer-manner');
+    expect(screen.queryByText('Default manner: brief, open, non-leading questions, one at a time.')).not.toBeInTheDocument();
+    expect(screen.getByText('Start from a preset')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Use the Concrete incidents preset' })).toHaveClass('underline', 'min-h-11');
+    const textarea = screen.getByLabelText('Instructions to the interviewer');
+    expect(textarea).toHaveAttribute('rows', '6');
+    expect(textarea).toHaveAttribute('maxlength', '4000');
+    fireEvent.click(screen.getByRole('button', { name: 'Use the Neutral preset' }));
+    expect(textarea).toHaveValue(INTERVIEWER_MANNER_NEUTRAL);
+    expect(screen.queryByText(INTERVIEWER_MANNER_NEUTRAL, { selector: 'p' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Use the Warm preset' }));
+    expect(textarea).toHaveValue(INTERVIEWER_MANNER_WARM);
+    expect(screen.getByText(new RegExp(`${INTERVIEWER_MANNER_WARM.length} of 4000 characters`))).toBeInTheDocument();
+    fireEvent.change(textarea, { target: { value: 'Ask in everyday words.' } });
+    expect(screen.queryByText('Ask in everyday words.', { selector: 'p' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Use the Neutral preset' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(textarea).toHaveValue('Ask in everyday words.');
+    expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Use the Warm preset' }));
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument();
+    fireEvent.change(textarea, { target: { value: '' } });
+    expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Default manner: brief, open, non-leading questions, one at a time.')).not.toBeInTheDocument();
+  });
+
+  it('shows the default read sheet for a saved study without instructions', () => {
+    storeMock.state.studyConfig = makeStudyConfig({ id: '4e52c093-96b2-4b56-88a9-330d740a42ea' });
+    render(<StudySetup />);
+    expect(screen.getByText('Your instructions to the interviewer')).toBeInTheDocument();
+    expect(screen.getByText('Default manner: brief, open, non-leading questions, one at a time.')).toHaveClass('font-sans', 'text-ink-500');
+  });
+
+  it('loads saved manner into the read sheet and dirties the draft only when edited', () => {
+    storeMock.state.studyConfig = makeStudyConfig({
+      id: '4e52c093-96b2-4b56-88a9-330d740a42ea', interviewerInstructions: 'Use everyday words.',
+    });
+    render(<StudySetup />);
+    expect(screen.getByText('Use everyday words.', { selector: 'p' })).toHaveClass('font-sans');
+    expect(screen.queryByLabelText('Instructions to the interviewer')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Interviewer Manner' }));
+    expect(screen.getByLabelText('Instructions to the interviewer')).toHaveValue('Use everyday words.');
+    expect(screen.getByRole('button', { name: 'Saved' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Use the Warm preset' }));
+    expect(screen.getByRole('button', { name: 'Update Study' })).toBeInTheDocument();
+  });
+});
+
+
+describe('interviewer manner draft lifecycle mirrors thankYouText', () => {
+  it('loads, prefills, resets, trims payloads, and omits blank text identically', () => {
+    const { result } = renderHook(() => useStudyDraft(makeStudyConfig({
+      thankYouText: 'Initial text.', interviewerInstructions: 'Initial text.',
+    })));
+    expect(result.current.interviewerInstructions).toBe(result.current.thankYouText);
+    expect(result.current.isDirty).toBe(false);
+    act(() => result.current.hydratePrefill({ thankYouText: 'Prefill.', interviewerInstructions: 'Prefill.' }));
+    expect(result.current.interviewerInstructions).toBe('Prefill.');
+    expect(result.current.interviewerInstructions).toBe(result.current.thankYouText);
+    act(() => result.current.hydratePrefill({ thankYouText: '', interviewerInstructions: '' }));
+    expect(result.current.interviewerInstructions).toBe('Prefill.');
+    expect(result.current.isDirty).toBe(false);
+    act(() => result.current.syncFromStudyConfig(makeStudyConfig()));
+    expect(result.current.interviewerInstructions).toBe('');
+    expect(result.current.interviewerInstructions).toBe(result.current.thankYouText);
+    expect(result.current.buildConfig('create')).not.toHaveProperty('interviewerInstructions');
+    act(() => {
+      result.current.setThankYouText('  Edited text.  ');
+      result.current.setInterviewerInstructions('  Edited text.  ');
+    });
+    expect(result.current.isDirty).toBe(true);
+    expect(result.current.buildConfig('create')).toMatchObject({ thankYouText: 'Edited text.', interviewerInstructions: 'Edited text.' });
+    act(() => {
+      result.current.setThankYouText('  ');
+      result.current.setInterviewerInstructions('  ');
+    });
+    expect(result.current.buildConfig('create')).not.toHaveProperty('interviewerInstructions');
+    expect(result.current.buildConfig('create')).not.toHaveProperty('thankYouText');
+    expect(result.current.buildConfig('create')).not.toHaveProperty('researcherContact');
+    expect(result.current.buildConfig('update')).toMatchObject({ interviewerInstructions: '', thankYouText: '' });
+  });
+});
+
+it('sends empty strings when clearing saved text and disables Preview until saved', async () => {
+  const config = makeStudyConfig({
+    id: '4e52c093-96b2-4b56-88a9-330d740a42ea',
+    interviewerInstructions: 'Old manner.', thankYouText: 'Old thanks.',
+  });
+  storeMock.state.studyConfig = config;
+  let sentConfig: Record<string, unknown> | undefined;
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    const path = new URL(url, 'http://localhost').pathname;
+    if (path === '/api/auth') return new Response(JSON.stringify({ authenticated: true }));
+    if (path === '/api/config/status') return new Response(JSON.stringify({
+      mode: 'hosted', aiTransport: 'direct', hasGeminiKey: true, hasAnthropicKey: true, hasOpenAiKey: true, hasOpenRouterKey: true,
+    }));
+    if (path === `/api/studies/${config.id}`) {
+      if (init?.method === 'PUT') sentConfig = JSON.parse(String(init.body)).config;
+      return new Response(JSON.stringify({ study: { id: config.id, config, revision: 1 } }));
+    }
+    return new Response('{}', { status: 404 });
+  }));
+  render(<StudySetup />);
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Preview Saved Study' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Interviewer Manner' }));
+  fireEvent.change(screen.getByLabelText('Instructions to the interviewer'), { target: { value: '  ' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Thank-You Screen' }));
+  fireEvent.change(screen.getByLabelText('Thank-You Screen'), { target: { value: '  ' } });
+  expect(screen.getByRole('button', { name: 'Preview Saved Study' })).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', { name: 'Update Study' }));
+  await waitFor(() => expect(sentConfig).toMatchObject({ interviewerInstructions: '', thankYouText: '' }));
 });

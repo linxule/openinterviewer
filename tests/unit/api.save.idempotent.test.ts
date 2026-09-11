@@ -390,6 +390,68 @@ describe('POST /api/interviews/save idempotency', () => {
     expect(kvMock.persistCompletedInterview).toHaveBeenCalledOnce();
   });
 
+  it('binds the interviewer instructions in force into the submission identity, like conductedBy*', async () => {
+    // The instructions cannot change inside one participant session (the
+    // session is pinned to a study revision), so a retry with the same
+    // canonical config must still match its own guard; and a study without
+    // instructions keeps the pre-slice fingerprint byte for byte (the test
+    // above). Both halves of that contract are asserted here.
+    canonicalMock.loadCanonicalStudy.mockResolvedValue({
+      ok: true,
+      study: {
+        id: 'study-a',
+        revision: 1,
+        config: {
+          name: 'Canonical Study', aiProvider: 'gemini', aiModel: GEMINI_MODEL,
+          interviewerInstructions: 'Ask one short question at a time.',
+        },
+      },
+    });
+    const get = vi.fn().mockResolvedValue('oi:pguard:{}');
+    contextMock.getParticipantRequestContext.mockResolvedValue({
+      valid: true,
+      context: { kvClient: { get } },
+      studyId: 'study-a',
+      isAdmin: false,
+      linkId: 'a'.repeat(64),
+      participantSessionId: 'session-a',
+      studyRevision: 1,
+      persistRepairOnly: true,
+    });
+    const interview = makeStoredInterview({ id: 'interview-x', studyId: 'study-a' });
+    const base = {
+      id: 'session-session-a',
+      studyId: 'study-a',
+      participantProfile: interview.participantProfile,
+      transcript: interview.transcript,
+      behaviorData: interview.behaviorData,
+      createdAt: interview.createdAt ?? null,
+      consentHash: 'a'.repeat(64),
+      consentAcceptedAt: 1_700_000_000_000,
+      conductedByProvider: 'gemini',
+      conductedByModel: GEMINI_MODEL,
+    };
+    const withInstructions = submissionFingerprint({
+      ...base, conductedWithInstructions: 'Ask one short question at a time.',
+    });
+    expect(withInstructions).not.toBe(submissionFingerprint(base));
+
+    kvMock.parsePersistingGuard.mockReturnValue({
+      interviewId: 'session-session-a',
+      studyId: 'study-a',
+      fingerprint: withInstructions,
+      identity: { participantSessionId: 'session-a', linkId: 'a'.repeat(64) },
+    });
+    kvMock.persistCompletedInterview.mockReset().mockResolvedValue({ status: 'created' });
+
+    const response = await POST(makeRequest(interview));
+
+    expect(response.status).toBe(200);
+    expect(kvMock.persistCompletedInterview).toHaveBeenCalledOnce();
+    const record = kvMock.persistCompletedInterview.mock.calls[0][0] as { conductedWithInstructions?: string };
+    expect(record.conductedWithInstructions).toBe('Ask one short question at a time.');
+  });
+
   it('returns opaque 404 and does not persist when persist-repair has no matching guard', async () => {
     const get = vi.fn().mockResolvedValue(null);
     contextMock.getParticipantRequestContext.mockResolvedValue({

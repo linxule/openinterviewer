@@ -131,3 +131,16 @@ describe('POST /api/interviews/save — provider down, participant saved', () =>
     expect(synthesizeInterview).not.toHaveBeenCalled();
   });
 });
+
+it.each([undefined, 'Use their own words.\nAsk one question.'])('snapshots only canonical instructions (%s)', async (interviewerInstructions) => {
+  const canonical = await canonicalMock.loadCanonicalStudy();
+  canonical.study.config.interviewerInstructions = interviewerInstructions;
+  const response = await POST(makeRequest({
+    ...makeStoredInterview({ studyId: 'study-a' }),
+    conductedWithInstructions: 'Untrusted client instruction',
+  }));
+  expect(response.status).toBe(200);
+  const record = kvMock.persistCompletedInterview.mock.calls[0][0];
+  if (interviewerInstructions === undefined) expect(record).not.toHaveProperty('conductedWithInstructions');
+  else expect(record.conductedWithInstructions).toBe(interviewerInstructions);
+});

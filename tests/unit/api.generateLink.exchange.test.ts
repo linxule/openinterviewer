@@ -84,7 +84,7 @@ const link = {
   expiresAt: null,
   revokedAt: null,
 };
-const studyConfig = makeStudyConfig({ id: 'study-a' });
+const studyConfig = makeStudyConfig({ id: 'study-a', interviewerInstructions: 'Be terse.' });
 
 beforeEach(() => {
   process.env.PARTICIPANT_TOKEN_SECRET = 'participant-test-secret-value-1234567890';
@@ -133,6 +133,10 @@ describe('GET /api/generate-link participant-session exchange', () => {
     expect(bodyA.data.sessionHandle).toBe(handleA);
     expect(bodyB.data.sessionHandle).toBe(handleB);
     expect(bodyA.data.aiTransport).toBe('direct');
+    // The researcher's instructions to the interviewer are applied server-side
+    // and never shipped to the participant's browser.
+    expect(bodyA.data.studyConfig).not.toHaveProperty('interviewerInstructions');
+    expect(bodyA.data.studyConfig.researchQuestion).toBe(studyConfig.researchQuestion);
     expect(cookieA).toContain(`participant-session-${handleA}=`);
     expect(cookieB).toContain(`participant-session-${handleB}=`);
     expect(cookieA).toContain('HttpOnly');

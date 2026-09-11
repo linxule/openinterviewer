@@ -2,7 +2,8 @@
  * OpenInterviewer AI Prompts
  *
  * This folder contains all AI prompts used by the interview system.
- * Users can modify these files to customize AI behavior.
+ * Start with Interviewer Manner in study setup: presets or your own instructions.
+ * Self-hosters can then modify these files for deeper prompt customization.
  *
  * FILES:
  * - interview.ts: Main interviewer system prompt and behavior modes
