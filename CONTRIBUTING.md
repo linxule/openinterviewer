@@ -8,6 +8,10 @@ Read [`AGENTS.md`](AGENTS.md) first for the architecture map, security invariant
 
 Use Node 24 and npm:
 
+Typechecking uses TypeScript 7 through the `@typescript/native` npm alias. The
+`typescript` alias supplies the TypeScript 6 API needed by ESLint and Next.js
+tooling; keep both aliases when updating the compiler.
+
 ```bash
 npm ci
 cp .env.example .env.local
