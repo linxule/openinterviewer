@@ -2,6 +2,9 @@
 
 OpenInterviewer is an open-source platform for adaptive, AI-assisted qualitative interviews. Researchers configure a study, share an opaque participant link, and review transcripts and synthesis in a dashboard.
 
+See the [v3.0.0 release and upgrade notes](docs/releases/v3.0.0.md) for save-first
+completion, deferred analysis, and changes for custom clients upgrading from v2.0.0.
+
 Contributing or working with a coding agent? Start with [`CONTRIBUTING.md`](CONTRIBUTING.md) and the repository map in [`AGENTS.md`](AGENTS.md).
 
 There are three deliberately different ways to use it:
@@ -103,7 +106,7 @@ Do not use `NEXT_PUBLIC_` for credentials or signing keys. `APP_BASE_URL` is int
 
 ### Requirements
 
-- Node.js 24.15 or newer (`.nvmrc` and `.node-version` are included)
+- Node.js 24.19 or newer (`.nvmrc` and `.node-version` are included)
 - either Vercel AI Gateway authentication or one Google Gemini, Anthropic Claude, OpenAI, or OpenRouter API key
 - one Upstash Redis database with its REST URL and write-capable REST token
 - a stable HTTPS origin for production
