@@ -64,7 +64,7 @@
     "jsdom": "^30.0.1",
     "postcss": "^8",
     "redis": "^6.2.1",
-    "tailwindcss": "^3.4.0",
+    "tailwindcss": "^4.3.3",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
     "vitest": "^4.1.10"
   }
