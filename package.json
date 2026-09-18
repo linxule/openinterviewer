@@ -34,9 +34,9 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
     "@google/genai": "^2.22.0",
-    "@openrouter/sdk": "1.2.117",
+    "@openrouter/sdk": "1.2.123",
     "@upstash/redis": "^1.38.4",
-    "ai": "^7.0.99",
+    "ai": "^7.0.101",
     "arctic": "^3.7.0",
     "clsx": "^2.1.1",
     "jose": "^5.9.0",
