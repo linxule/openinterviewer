@@ -25,6 +25,8 @@ The canonical site is [openinterviewer.vercel.app](https://openinterviewer.verce
 - `/api/config/readiness` exposes the same safe configuration contract for setup UI; and
 - `/api/health/ready` additionally checks the mode-specific database and returns `503` when the application cannot serve persistent researcher workflows.
 
+Deployments are created by Vercel's Git integration: pushes to `main` go to production and other branches get previews, except `dependabot/**`, which `vercel.json` excludes so dependency PRs do not build. Vercel retains deployments for one day (with its ten-deployment floor). If a push shows no deployment, check [vercel-status.com](https://www.vercel-status.com/) and allow 30 minutes before assuming the integration failed; do not submit a CLI deployment for a commit that already has one.
+
 ## 1. Try the keyless demo
 
 Open `/demo` on a running instance. No login, provider key, or database is required.
