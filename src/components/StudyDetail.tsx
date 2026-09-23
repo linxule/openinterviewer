@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { StoredStudy, StoredInterview, AggregateSynthesisResult } from '@/types';
 import type { ParticipantLinkMetadata } from '@/lib/participantLinks';
@@ -12,13 +12,25 @@ import {
   ResearcherStorageUnavailableError,
   StudyOperationPendingError,
 } from '@/services/storageService';
-import { analyzeInterview } from '@/services/analysisApi';
+import { loadAnalysisExecution } from '@/services/analysisExecution';
 import { Button, Coordinate, Icon, Label, Notice, Rule, Tabs } from '@/components/ui';
 import { AggregateReading, ProvenanceFooter } from '@/components/SynthesisReading';
 import { shortInterviewId } from '@/lib/interviewId';
 import { buildAggregateInterviewIndex } from '@/lib/evidence';
-import { analysisStatus, isAwaitingAnalysis } from '@/lib/analysisState';
+import {
+  analysisStatus,
+  confirmedAnalysisFromRecord,
+  hasScheduledAnalysis,
+  isAwaitingAnalysis,
+  needsAnalysisRecovery,
+} from '@/lib/analysisState';
 import { useSetTrailingCrumb } from '@/components/shell/breadcrumb';
+import { AnalysisActionKeys } from '@/components/analysis/actionKeys';
+import {
+  runAnalysisBatch,
+  type AnalysisBatchProgress,
+  type AnalysisBatchStopReason,
+} from '@/components/analysis/analysisBatch';
 
 interface StudyDetailProps {
   studyId: string;
@@ -61,8 +73,27 @@ function ConductingModelsNotice({
 function analysisCellContent(interview: StoredInterview) {
   const status = analysisStatus(interview);
   if (status === 'complete') return <span className="text-ink-500">analyzed</span>;
+  if (needsAnalysisRecovery(interview)) return <span className="text-error">needs recovery</span>;
   if (status === 'failed') return <span className="text-error">analysis failed</span>;
+  if (hasScheduledAnalysis(interview)) {
+    return <span className="text-ink-700">{status === 'running' ? 'analysis running' : 'analysis queued'}</span>;
+  }
   return <span className="text-ink-900">awaiting analysis</span>;
+}
+
+function batchCounts(progress: AnalysisBatchProgress) {
+  const failed = progress.failed > 0 ? ` · ${progress.failed} failed` : '';
+  return `${progress.finished} of ${progress.total} finished${failed}`;
+}
+
+function scheduledCount(count: number) {
+  return `Analysis queued or running for ${count} interview${count === 1 ? '' : 's'}. It finishes in the background and is not part of the batch.`;
+}
+
+function recoveryDisclosure(count: number) {
+  return count === 1
+    ? '1 interview in this batch is saved, but we could not confirm its earlier analysis result. Running the batch analyzes it again, which may make another paid provider request.'
+    : `${count} interviews in this batch are saved, but we could not confirm their earlier analysis results. Running the batch analyzes them again, which may make another paid provider request for each.`;
 }
 
 function isStudyOperationPending(response: Response, data: { code?: string }) {
@@ -130,37 +161,43 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
     () => interviews.filter(isAwaitingAnalysis).slice().sort((a, b) => a.createdAt - b.createdAt),
     [interviews],
   );
+  // Durable work already queued or running is only counted: a batch requests
+  // unscheduled, failed and recovery-required interviews (F8). Node records
+  // never carry a generation, so their selection is unchanged.
+  const scheduledAnalysisCount = useMemo(
+    () => pendingAnalysisInterviews.filter(hasScheduledAnalysis).length,
+    [pendingAnalysisInterviews],
+  );
+  const batchSelection = useMemo(
+    () => pendingAnalysisInterviews.filter((interview) => !hasScheduledAnalysis(interview)).slice(0, ANALYSIS_BATCH_LIMIT),
+    [pendingAnalysisInterviews],
+  );
+  // Recovery-required interviews may cost another paid request; the batch
+  // action must disclose that before it is pressed (UI-CF-04).
+  const recoveryInBatch = batchSelection.filter(needsAnalysisRecovery).length;
+  const recoveryDisclosureId = useId();
   const [isBatchAnalyzing, setIsBatchAnalyzing] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
-  const [batchError, setBatchError] = useState<string | null>(null);
+  const [batchError, setBatchError] = useState<{ message: string; reason: AnalysisBatchStopReason } | null>(null);
+  const [batchStillPending, setBatchStillPending] = useState<string | null>(null);
+  const [batchStatus, setBatchStatus] = useState('');
+  const [batchKeys] = useState(() => new AnalysisActionKeys());
+  const batchAbortRef = useRef<AbortController | null>(null);
 
-  const handleAnalyzeBatch = async () => {
-    if (operationPending || isBatchAnalyzing) return;
-    const batch = pendingAnalysisInterviews.slice(0, ANALYSIS_BATCH_LIMIT);
-    if (batch.length === 0) return;
-    setIsBatchAnalyzing(true);
+  // Leaving the study (or the page) stops observing; server work carries on.
+  useEffect(() => {
+    const batches = batchAbortRef;
+    batchKeys.clear();
+    setIsBatchAnalyzing(false);
+    setBatchProgress(null);
     setBatchError(null);
-    setBatchProgress({ done: 0, total: batch.length });
-    try {
-      for (let i = 0; i < batch.length; i++) {
-        const result = await analyzeInterview(batch[i].id, studyId);
-        if (!result.ok) {
-          setBatchError(result.error);
-          if (result.kind === 'pending') setOperationPending(true);
-          // Retain the loaded register and its error during an outage: a
-          // follow-up read could fail too and replace it with an empty state.
-          return;
-        }
-        // A recorded provider failure is a completed request. Keep going;
-        // only a request-level failure stops this user-triggered batch.
-        setBatchProgress({ done: i + 1, total: batch.length });
-      }
-      await loadStudyData();
-    } finally {
-      setIsBatchAnalyzing(false);
-      setBatchProgress(null);
-    }
-  };
+    setBatchStillPending(null);
+    setBatchStatus('');
+    return () => {
+      batches.current?.abort();
+      batches.current = null;
+    };
+  }, [studyId, batchKeys]);
 
   const loadParticipantLinks = useCallback(async () => {
     setLinksLoading(true);
@@ -192,8 +229,9 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
     }
   }, [studyId]);
 
-  const loadStudyData = useCallback(async () => {
-    setLoading(true);
+  // A quiet reload keeps the page (and the loaded register) on screen.
+  const loadStudyData = useCallback(async (options?: { quiet?: boolean }) => {
+    if (!options?.quiet) setLoading(true);
     try {
       const [studyData, interviewData, aggregateData] = await Promise.all([
         getStudy(studyId),
@@ -208,7 +246,8 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
     } catch (error) {
       if (error instanceof StudyOperationPendingError) {
         setOperationPending(true);
-        setInterviews([]);
+        // A failed refresh keeps the register already on screen (UI-CF-04).
+        if (!options?.quiet) setInterviews([]);
       } else if (error instanceof ResearcherStorageUnavailableError) {
         setStorageUnavailable(error.message);
         setLinksError(error.message);
@@ -216,9 +255,64 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
         console.error('Error loading study:', error);
       }
     } finally {
-      setLoading(false);
+      if (!options?.quiet) setLoading(false);
     }
   }, [studyId]);
+
+  const handleAnalyzeBatch = async () => {
+    if (operationPending || isBatchAnalyzing) return;
+    const batch = batchSelection;
+    if (batch.length === 0) return;
+    const controller = new AbortController();
+    batchAbortRef.current = controller;
+    setIsBatchAnalyzing(true);
+    setBatchError(null);
+    setBatchStillPending(null);
+    setBatchProgress({ done: 0, total: batch.length });
+    setBatchStatus(`Analyzing ${batch.length} interview${batch.length === 1 ? '' : 's'}.`);
+    try {
+      const mode = await loadAnalysisExecution();
+      if (controller.signal.aborted) return;
+      const items = batch.map((interview, index) => ({
+        interviewId: interview.id,
+        label: `Interview ${interviewIndex.get(interview.id)?.participantNumber ?? index + 1}`,
+        confirmed: confirmedAnalysisFromRecord(interview),
+      }));
+      const onProgress = (progress: AnalysisBatchProgress) => {
+        setBatchProgress({ done: progress.finished, total: progress.total });
+        setBatchStatus(`${batchCounts(progress)}.`);
+      };
+      // `unknown` runs the legacy way: a durable server refuses it before any work.
+      const result = mode === 'queued-v2'
+        ? await runAnalysisBatch({ protocol: 'queued-v2', keys: batchKeys, studyId, items, signal: controller.signal, onProgress })
+        : await runAnalysisBatch({ protocol: 'synchronous', studyId, items, signal: controller.signal, onProgress });
+      if (result.kind === 'cancelled' || controller.signal.aborted) return;
+
+      if (result.kind === 'stopped') {
+        setBatchError({ message: result.error, reason: result.reason });
+        setBatchStatus(`Batch stopped: ${batchCounts(result.progress)}.`);
+        if (result.reason === 'pending') setOperationPending(true);
+        // Retain the loaded register and its error during an outage: a
+        // follow-up read could fail too. Only a changed state is re-read.
+        if (result.reason === 'state-changed') await loadStudyData({ quiet: true });
+        return;
+      }
+      if (result.kind === 'awaiting') {
+        // Accepted work is never counted as analyzed, and nothing after it was requested.
+        setBatchStillPending(result.item.label);
+        setBatchStatus(`Batch stopped: ${batchCounts(result.progress)}. ${result.item.label} is still pending.`);
+      } else {
+        setBatchStatus(`Batch complete: ${batchCounts(result.progress)}.`);
+      }
+      await loadStudyData({ quiet: true });
+    } finally {
+      if (batchAbortRef.current === controller) batchAbortRef.current = null;
+      if (!controller.signal.aborted) {
+        setIsBatchAnalyzing(false);
+        setBatchProgress(null);
+      }
+    }
+  };
 
   const runReconciliation = async () => {
     setIsReconciling(true);
@@ -661,24 +755,57 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
 
             {batchError && (
               <Notice tone="error" eyebrow="Analysis batch stopped" role="alert" className="mb-4">
-                <p className="mt-1 text-[13px] text-ink-700">{batchError}</p>
+                <p className="mt-1 text-[13px] text-ink-700">{batchError.message}</p>
+                {batchError.reason === 'update-required' && (
+                  <Button type="button" variant="quiet" className="mt-3 min-h-11" onClick={() => window.location.reload()}>
+                    Reload page
+                  </Button>
+                )}
+              </Notice>
+            )}
+
+            {batchStillPending && (
+              <Notice tone="neutral" eyebrow="Analysis still pending" className="mb-4">
+                <p className="mt-1 text-[13px] text-ink-700">
+                  {`The analysis of ${batchStillPending} is still pending, so the batch stopped before the remaining interviews. You can leave this page and check again later.`}
+                </p>
               </Notice>
             )}
 
             {pendingAnalysisInterviews.length > 0 && (
               <div className="mb-4">
-                <Button
-                  type="button"
-                  variant="primary"
-                  onClick={() => void handleAnalyzeBatch()}
-                  disabled={operationPending || isBatchAnalyzing}
-                >
-                  {isBatchAnalyzing && batchProgress
-                    ? `Analyzing ${batchProgress.done} of ${batchProgress.total}…`
-                    : `Analyze ${Math.min(pendingAnalysisInterviews.length, ANALYSIS_BATCH_LIMIT)} pending`}
-                </Button>
+                {recoveryInBatch > 0 && (
+                  <Notice tone="neutral" eyebrow="Analysis needs recovery" id={recoveryDisclosureId} className="mb-3">
+                    <p className="mt-1 text-[13px] text-ink-700">{recoveryDisclosure(recoveryInBatch)}</p>
+                  </Notice>
+                )}
+                {(batchSelection.length > 0 || isBatchAnalyzing) && (
+                  <Button
+                    type="button"
+                    variant="primary"
+                    className="min-h-11"
+                    onClick={() => void handleAnalyzeBatch()}
+                    disabled={operationPending || isBatchAnalyzing}
+                    aria-describedby={recoveryInBatch > 0 ? recoveryDisclosureId : undefined}
+                  >
+                    {isBatchAnalyzing && batchProgress
+                      ? `Analyzing ${batchProgress.done} of ${batchProgress.total}…`
+                      : `Analyze ${batchSelection.length} pending`}
+                  </Button>
+                )}
+                {scheduledAnalysisCount > 0 && (
+                  <p className="mt-2 text-[13px] text-ink-500">{scheduledCount(scheduledAnalysisCount)}</p>
+                )}
               </div>
             )}
+
+            <p
+              role="status"
+              aria-live="polite"
+              className={batchStatus ? 'mb-4 text-[13px] text-ink-500' : 'sr-only'}
+            >
+              {batchStatus}
+            </p>
 
             <div className="overflow-x-auto">
               <table className="w-full border-collapse text-left">

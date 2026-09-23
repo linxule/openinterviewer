@@ -18,8 +18,15 @@ vi.mock('@/services/storageService', async (importOriginal) => {
   };
 });
 
+// This suite is the Node deployment: its readiness advertises synchronous
+// analysis. The durable protocol is covered in StudyDetail.durableBatch.
+vi.mock('@/services/analysisExecution', () => ({
+  loadAnalysisExecution: async () => 'synchronous',
+}));
+
 import { BreadcrumbProvider } from '@/components/shell/breadcrumb';
 import StudyDetail from '@/components/StudyDetail';
+import { StudyOperationPendingError } from '@/services/storageService';
 
 function renderStudyDetail(studyId: string) {
   return render(
@@ -211,5 +218,89 @@ describe('StudyDetail — analysis batch action', () => {
     await waitFor(() => expect(storageMock.getStudyInterviews).toHaveBeenCalledTimes(2));
     expect(analyzedIds).toHaveLength(2);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  // API-04 changes the earlier behavior, where `busy` counted as progress and
+  // the batch moved on: a busy interview is awaiting, not analyzed.
+  it('API-04: a busy interview stops the Node batch as awaiting and is not counted', async () => {
+    storageMock.getStudyInterviews.mockResolvedValue([1, 2].map(index => makeStoredInterview({
+      id: `interview-${index}`, studyId: 'study-batch', createdAt: index * 1_000,
+    })));
+    const analyzedIds: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (!url.includes('/analyze')) return new Response('{}', { status: 404 });
+      analyzedIds.push(url);
+      return new Response(JSON.stringify({ status: 'busy' }));
+    }));
+    renderStudyDetail('study-batch');
+    await screen.findByRole('heading', { name: 'Batch Study' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Interviews' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze 2 pending' }));
+
+    expect(await screen.findByText('Analysis still pending')).toBeInTheDocument();
+    expect(screen.getByText(/^The analysis of Interview 1 is still pending, so the batch stopped/)).toBeInTheDocument();
+    expect(analyzedIds).toHaveLength(1);
+    expect(analyzedIds[0]).toContain('interview-1');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText('Batch stopped: 0 of 2 finished. Interview 1 is still pending.')).toHaveAttribute('role', 'status');
+  });
+
+  it('UI-CF-04: a busy stop whose refresh meets a pending study operation keeps the loaded register', async () => {
+    storageMock.getStudyInterviews
+      .mockResolvedValueOnce([1, 2].map(index => makeStoredInterview({
+        id: `interview-${index}`, studyId: 'study-batch', createdAt: index * 1_000,
+      })))
+      .mockRejectedValue(new StudyOperationPendingError());
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (!url.includes('/analyze')) return new Response('{}', { status: 404 });
+      return new Response(JSON.stringify({ status: 'busy' }));
+    }));
+    renderStudyDetail('study-batch');
+    await screen.findByRole('heading', { name: 'Batch Study' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Interviews' }));
+    expect(screen.getAllByRole('button', { name: /^View interview/ })).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze 2 pending' }));
+
+    expect(await screen.findByText('Pending reconciliation')).toBeInTheDocument();
+    expect(storageMock.getStudyInterviews).toHaveBeenCalledTimes(2);
+    expect(screen.getAllByRole('button', { name: /^View interview/ })).toHaveLength(2);
+    expect(screen.getByText('Analysis still pending')).toBeInTheDocument();
+  });
+
+  it('API-04: a Node running interview stays in the batch selection (legacy eligibility unchanged)', async () => {
+    storageMock.getStudyInterviews.mockResolvedValue([
+      makeStoredInterview({
+        id: 'interview-running', studyId: 'study-batch', createdAt: 1_000,
+        analysis: { status: 'running', attempts: 1, lastAttemptAt: 1, claimId: 'c', claimedAt: 1 },
+      }),
+      makeStoredInterview({ id: 'interview-pending', studyId: 'study-batch', createdAt: 2_000 }),
+    ]);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 404 })));
+    renderStudyDetail('study-batch');
+    await screen.findByRole('heading', { name: 'Batch Study' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Interviews' }));
+
+    expect(screen.getByRole('button', { name: 'Analyze 2 pending' })).toBeInTheDocument();
+    expect(screen.queryByText(/queued or running/)).not.toBeInTheDocument();
+  });
+
+  it('API-04: a finished Node batch reports persisted outcomes and refreshes the register in place', async () => {
+    storageMock.getStudyInterviews.mockResolvedValue([1, 2].map(index => makeStoredInterview({
+      id: `interview-${index}`, studyId: 'study-batch', createdAt: index * 1_000,
+    })));
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (!url.includes('/analyze')) return new Response('{}', { status: 404 });
+      return url.includes('interview-1')
+        ? new Response(JSON.stringify({ status: 'complete' }))
+        : new Response(JSON.stringify({ status: 'failed', failureKind: 'too-large' }));
+    }));
+    renderStudyDetail('study-batch');
+    await screen.findByRole('heading', { name: 'Batch Study' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Interviews' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze 2 pending' }));
+
+    expect(await screen.findByText('Batch complete: 2 of 2 finished · 1 failed.')).toHaveAttribute('aria-live', 'polite');
+    expect(storageMock.getStudyInterviews).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
   });
 });

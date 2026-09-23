@@ -2,38 +2,14 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { InterviewAnalysisFailureKind, StoredInterview } from '@/types';
+import { StoredInterview } from '@/types';
 import { getInterview, StudyOperationPendingError } from '@/services/storageService';
-import { analyzeInterview } from '@/services/analysisApi';
 import ReactMarkdown from 'react-markdown';
-import { Button, Coordinate, Label, Notice, Tabs, Turn, type TabItem } from '@/components/ui';
-import { SynthesisReading, ProvenanceFooter } from '@/components/SynthesisReading';
-import { analysisStatus } from '@/lib/analysisState';
+import { Button, Coordinate, Label, Tabs, Turn, type TabItem } from '@/components/ui';
+import { InterviewAnalysisPanel } from '@/components/analysis/InterviewAnalysisPanel';
+import { useInterviewAnalysis } from '@/components/analysis/useInterviewAnalysis';
 import { useSetTrailingCrumb } from '@/components/shell/breadcrumb';
 import { cn } from '@/lib/cn';
-
-// Mirrors ANALYSIS_CLAIM_LEASE_MS in src/lib/kv.ts — duplicated rather than
-// imported because that module pulls in server-only Redis client code that
-// must never reach a 'use client' bundle.
-const ANALYSIS_CLAIM_LEASE_MS = 180_000;
-
-const FAILURE_COPY: Record<InterviewAnalysisFailureKind, string> = {
-  provider: 'The model provider did not return an analysis. This is not an analysis — run it again.',
-  'invalid-output': 'The model returned something this study could not read as an analysis. Run it again.',
-  'too-large': 'The analysis was too large to store. Run it again, or shorten the study’s topic areas.',
-  timeout: 'The analysis did not finish in time. Run it again.',
-  storage: 'The analysis could not be saved. Run it again.',
-};
-
-function relativeTimeFrom(ms: number, nowMs: number): string {
-  const elapsed = nowMs - ms;
-  const minutes = Math.round(elapsed / 60_000);
-  if (minutes < 1) return 'less than a minute ago';
-  if (minutes === 1) return '1 minute ago';
-  if (minutes < 60) return `${minutes} minutes ago`;
-  const hours = Math.round(minutes / 60);
-  return hours === 1 ? '1 hour ago' : `${hours} hours ago`;
-}
 
 interface InterviewDetailProps {
   interviewId: string;
@@ -54,20 +30,8 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId,
   const [operationPending, setOperationPending] = useState(false);
   const [tracedTurn, setTracedTurn] = useState<number | null>(null);
   const [openNotes, setOpenNotes] = useState<Record<string, boolean>>({});
-  const [isRunningAnalysis, setIsRunningAnalysis] = useState(false);
-  const [analysisRequestError, setAnalysisRequestError] = useState<string | null>(null);
-  // `Date.now()` is impure and may not be called during render; a running
-  // analysis's lease elapsing is exactly the kind of clock-driven UI change
-  // that needs its own tick, polled while (and only while) a claim is live.
-  const [nowMs, setNowMs] = useState(() => Date.now());
 
   useSetTrailingCrumb(interview?.studyName ?? null);
-
-  useEffect(() => {
-    if (!interview || analysisStatus(interview) !== 'running') return;
-    const interval = setInterval(() => setNowMs(Date.now()), 5_000);
-    return () => clearInterval(interval);
-  }, [interview]);
 
   const setNoteOpen = (themeIndex: number, refIndex: number, next: boolean) =>
     setOpenNotes((prev) => ({ ...prev, [`${themeIndex}:${refIndex}`]: next }));
@@ -105,46 +69,48 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId,
     void loadInterview();
   }, [loadInterview]);
 
+  // A refresh keeps the page (and the last confirmed record) on screen: only
+  // a successful read replaces it, and never with a different interview.
+  const refreshInterview = useCallback(async () => {
+    try {
+      const data = await getInterview(interviewId, studyId);
+      if (!data) return false;
+      setInterview((current) => (current && current.id === data.id ? data : current));
+      return true;
+    } catch {
+      return false;
+    }
+  }, [interviewId, studyId]);
+
+  const analysis = useInterviewAnalysis({ interview, refreshRecord: refreshInterview });
+
   // A different interview must not inherit this one's note/trace state: the App
   // Router reconciles param changes in place, so state does not reset by remount.
   useEffect(() => {
     setOpenNotes({});
     setTracedTurn(null);
-    setAnalysisRequestError(null);
   }, [interviewId]);
 
   // Landing on a cited turn from an aggregate citation's link (L11). Declared
   // after the reset effect above so that on the commit where a record first
   // arrives, the reset runs first and this focus runs second. An absent,
   // non-numeric, or out-of-range `turn` is ignored silently — a stale link
-  // should land on the transcript, not on an error.
+  // should land on the transcript, not on an error. Keyed on the record's
+  // identity, not the object: a background refresh of the same record (e.g.
+  // after a polled completion) must not move the tab or focus (UI-CF-05).
+  const landingRecordId = interview?.id ?? null;
+  const landingTranscriptLength = interview?.transcript.length ?? 0;
   useEffect(() => {
-    if (!interview) return;
+    if (!landingRecordId) return;
     const requested = Number(turn);
-    if (!Number.isInteger(requested) || requested < 1 || requested > interview.transcript.length) return;
+    if (!Number.isInteger(requested) || requested < 1 || requested > landingTranscriptLength) return;
     setActiveTab('transcript');
     setTracedTurn(requested);
     const frame = requestAnimationFrame(() => {
       document.getElementById(`turn-${requested}`)?.focus();
     });
     return () => cancelAnimationFrame(frame);
-  }, [interview, turn]);
-
-  const handleRunAnalysis = async () => {
-    if (!interview || isRunningAnalysis) return;
-    setIsRunningAnalysis(true);
-    setAnalysisRequestError(null);
-    try {
-      const result = await analyzeInterview(interview.id, interview.studyId);
-      if (result.ok) {
-        await loadInterview();
-      } else {
-        setAnalysisRequestError(result.error);
-      }
-    } finally {
-      setIsRunningAnalysis(false);
-    }
-  };
+  }, [landingRecordId, landingTranscriptLength, turn]);
 
   const handleDownloadJSON = () => {
     if (!interview) return;
@@ -238,6 +204,7 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId,
 
   return (
     <div>
+      <p role="status" aria-live="polite" className="sr-only">{analysis.announcement}</p>
       {/* Header */}
       <div className="mb-8">
         <h1 className="font-sans text-[24px] font-semibold leading-[32px] text-ink-900">{interview.studyName}</h1>
@@ -327,97 +294,14 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId,
             ))}
           </ol>
         ) : (
-          <div>
-            {analysisRequestError && (
-              <Notice tone="error" eyebrow="Analysis request failed" role="alert" className="mb-6">
-                <p className="mt-1 text-[13px] text-ink-700">{analysisRequestError}</p>
-              </Notice>
-            )}
-            {(() => {
-              const status = analysisStatus(interview);
-              if (status === 'complete' && interview.synthesis) {
-                const analysisRevision = interview.analysis?.studyRevision;
-                const note = analysisRevision !== undefined && analysisRevision !== interview.studyRevision
-                  ? `analyzed at study rev ${analysisRevision}`
-                  : undefined;
-                return (
-                  <div className="space-y-6">
-                    <SynthesisReading
-                      synthesis={interview.synthesis}
-                      transcript={interview.transcript}
-                      openNotes={openNotes}
-                      onNoteOpenChange={setNoteOpen}
-                      onTraceToTurn={traceToTurn}
-                    />
-                    <ProvenanceFooter
-                      model={interview.aiModel}
-                      conductedBy={interview.conductedByModel ?? 'not recorded'}
-                      studyRevision={interview.studyRevision}
-                      timestamp={savedAt}
-                      verb="saved"
-                      note={note}
-                    />
-                  </div>
-                );
-              }
-              if (status === 'pending') {
-                return (
-                  <Notice tone="neutral" eyebrow="Analysis pending">
-                    <p className="mt-1 text-[13px] text-ink-700">
-                      This interview was saved. Its analysis has not run yet.
-                    </p>
-                    <Button
-                      variant="primary"
-                      className="mt-3 min-h-11"
-                      disabled={isRunningAnalysis}
-                      onClick={() => void handleRunAnalysis()}
-                    >
-                      {isRunningAnalysis ? 'Running…' : 'Run analysis'}
-                    </Button>
-                  </Notice>
-                );
-              }
-              if (status === 'running') {
-                const claimedAt = interview.analysis?.claimedAt;
-                const leaseElapsed = claimedAt !== undefined
-                  && nowMs - claimedAt >= ANALYSIS_CLAIM_LEASE_MS;
-                return (
-                  <Notice tone="neutral" eyebrow="Analysis running">
-                    <p className="mt-1 text-[13px] text-ink-700">
-                      {claimedAt !== undefined
-                        ? `An analysis started ${relativeTimeFrom(claimedAt, nowMs)}. Give it a moment, then reload.`
-                        : 'An analysis is running. Give it a moment, then reload.'}
-                    </p>
-                    <Button
-                      variant="primary"
-                      className="mt-3 min-h-11"
-                      disabled={!leaseElapsed || isRunningAnalysis}
-                      onClick={() => void handleRunAnalysis()}
-                    >
-                      {isRunningAnalysis ? 'Running…' : 'Run analysis'}
-                    </Button>
-                  </Notice>
-                );
-              }
-              // 'failed'
-              const failureKind = interview.analysis?.failureKind;
-              return (
-                <Notice tone="error" eyebrow="Analysis failed">
-                  <p className="mt-1 text-[13px] text-ink-700" role="alert">
-                    {failureKind ? FAILURE_COPY[failureKind] : 'This is not an analysis — run it again.'}
-                  </p>
-                  <Button
-                    variant="primary"
-                    className="mt-3 min-h-11"
-                    disabled={isRunningAnalysis}
-                    onClick={() => void handleRunAnalysis()}
-                  >
-                    {isRunningAnalysis ? 'Running…' : 'Run analysis'}
-                  </Button>
-                </Notice>
-              );
-            })()}
-          </div>
+          <InterviewAnalysisPanel
+            interview={interview}
+            controller={analysis}
+            savedAt={savedAt}
+            openNotes={openNotes}
+            onNoteOpenChange={setNoteOpen}
+            onTraceToTurn={traceToTurn}
+          />
         )}
       </Tabs>
     </div>
