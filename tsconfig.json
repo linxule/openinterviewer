@@ -38,6 +38,7 @@
   "exclude": [
     "node_modules",
     "cloudflare",
+    "tests/workers",
     ".open-next",
     ".wrangler"
   ]

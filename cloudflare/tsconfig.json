@@ -1,7 +1,9 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2023"],
+    "lib": [
+      "ES2023"
+    ],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
@@ -11,9 +13,20 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "allowJs": false,
-    "types": ["node"],
-    "paths": { "@/*": ["../src/*"] }
+    "types": [
+      "node",
+      "@cloudflare/vitest-plugin/types"
+    ],
+    "paths": {
+      "@/*": [
+        "../src/*"
+      ]
+    }
   },
-  "include": ["./**/*.ts", "./worker-configuration.d.ts"],
+  "include": [
+    "./**/*.ts",
+    "./worker-configuration.d.ts",
+    "../tests/workers/**/*.ts"
+  ],
   "exclude": []
 }

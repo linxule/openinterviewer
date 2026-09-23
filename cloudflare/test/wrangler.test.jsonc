@@ -1,0 +1,26 @@
+// Test-only configuration (vitest.workers.config.mts). Synthetic values only;
+// never deployed. Jurisdiction stays empty: workerd does not implement DO
+// jurisdictions locally.
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "openinterviewer-test",
+  "main": "entry.ts",
+  "compatibility_date": "2026-09-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "DEPLOYMENT_TARGET": "cloudflare",
+    "DEPLOYMENT_MODE": "standalone",
+    "AI_TRANSPORT": "direct",
+    "AI_PROVIDER": "openai",
+    "APP_BASE_URL": "https://workflow.example.test",
+    "WORKSPACE_ID": "ws_00000000000000000000000000000001",
+    "WORKSPACE_JURISDICTION": "",
+    "ANALYSIS_RECOVERY_EPOCH": "ep_00000000000000000000000000000001"
+  },
+  "durable_objects": { "bindings": [{ "name": "WORKSPACE_STORE", "class_name": "WorkspaceStore" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["WorkspaceStore"] }],
+  "queues": {
+    "producers": [{ "binding": "ANALYSIS_QUEUE", "queue": "oi-test-analysis" }],
+    "consumers": [{ "queue": "oi-test-analysis", "max_batch_size": 1, "max_concurrency": 1, "max_retries": 3, "retry_delay": 30, "dead_letter_queue": "oi-test-analysis-dlq" }]
+  }
+}
