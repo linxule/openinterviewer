@@ -12,5 +12,8 @@ const config = defineCloudflareConfig({});
 // other field still equals defineCloudflareConfig({}).
 config.default.override!.wrapper = async () => (await import('./cloudflare/opennext/backpressureWrapper')).default;
 config.cloudflare = { ...config.cloudflare, dangerousDisableConfigValidation: true };
+// The config (and so the wrapper) is compiled as edge code: keep the Node
+// built-in the wrapper imports external, as the adapter does for node:crypto.
+config.edgeExternals = [...(config.edgeExternals ?? []), 'node:stream'];
 
 export default config;

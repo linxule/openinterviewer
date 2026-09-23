@@ -19,16 +19,18 @@ function withoutFunctions(value: unknown): unknown {
 }
 
 describe('open-next.config.ts', () => {
-  it('equals the adapter default except for the server wrapper and the disabled name check', () => {
+  it('equals the adapter default except for the server wrapper, its node:stream external and the disabled name check', () => {
     const expected = defineCloudflareConfig({});
     expect(expected.default.override?.wrapper).toBe('cloudflare-node');
     const actual = withoutFunctions({
       ...config,
       default: { ...config.default, override: { ...config.default.override, wrapper: 'cloudflare-node' } },
       cloudflare: { ...config.cloudflare, dangerousDisableConfigValidation: undefined },
+      edgeExternals: config.edgeExternals?.filter((name) => name !== 'node:stream'),
     });
     expect(actual).toEqual(withoutFunctions(expected));
     expect(config.cloudflare?.dangerousDisableConfigValidation).toBe(true);
+    expect(config.edgeExternals).toContain('node:stream');
     expect(config.middleware && 'override' in config.middleware ? config.middleware.override?.wrapper : undefined).toBe('cloudflare-edge');
   });
 
