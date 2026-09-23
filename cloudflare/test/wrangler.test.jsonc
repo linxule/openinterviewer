@@ -15,6 +15,7 @@
     "APP_BASE_URL": "https://workflow.example.test",
     "WORKSPACE_ID": "ws_00000000000000000000000000000001",
     "WORKSPACE_JURISDICTION": "",
+    "WORKSPACE_BOOTSTRAP": "open",
     "ANALYSIS_RECOVERY_EPOCH": "ep_00000000000000000000000000000001",
     "RATE_LIMIT_SALT": "synthetic-rate-limit-salt-0123456789abcdef",
     "SESSION_SECRET": "synthetic-session-secret-0123456789abcdefgh",

@@ -1,9 +1,69 @@
+// OpenInterviewer on Cloudflare: one Worker = OpenNext fetch + analysis Queue
+// consumer + WorkspaceStore Durable Object (docs/operations/cloudflare-migration).
+//
+// This is the generic template. It contains no account or installation
+// identifiers. `npm run setup:cloudflare` derives per-installation resource
+// names, generates WORKSPACE_ID / ANALYSIS_RECOVERY_EPOCH once, sets secrets
+// through stdin and writes an installation-specific configuration; it never
+// edits this file. With the empty values below the deployment reports
+// not-ready and refuses research writes.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "openinterviewer-local",
+  "name": "openinterviewer",
   "main": "cloudflare/worker.ts",
   "compatibility_date": "2026-09-15",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
-  "services": [{ "binding": "WORKER_SELF_REFERENCE", "service": "openinterviewer-local" }]
+
+  // Release isolation (SETUP-05): no Version URLs; staging is a separately
+  // named Worker with its own Durable Object namespace, Queue and secrets.
+  "workers_dev": true,
+  "preview_urls": false,
+
+  // RT-10: invocation logs capture raw request URLs, including /p/<code> and
+  // /api/generate-link?token=<code>; keep only allowlisted application events.
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "redact_query_string": true,
+    "logs": { "enabled": true, "invocation_logs": false },
+    "traces": { "enabled": false }
+  },
+
+  "vars": {
+    "DEPLOYMENT_TARGET": "cloudflare",
+    "DEPLOYMENT_MODE": "standalone",
+    "AI_TRANSPORT": "direct",
+    "AI_PROVIDER": "",
+    "APP_BASE_URL": "",
+    "WORKSPACE_ID": "",
+    "WORKSPACE_JURISDICTION": "",
+    // Set to "open" (or "recovery" for an import target) only by the installer
+    // while it initializes a fresh workspace object; empty afterwards.
+    "WORKSPACE_BOOTSTRAP": ""
+  },
+  // Secrets (never in this file): ADMIN_PASSWORD, SESSION_SECRET,
+  // PARTICIPANT_TOKEN_SECRET, RATE_LIMIT_SALT, OPERATOR_TOKEN, the selected
+  // provider key, and ANALYSIS_RECOVERY_EPOCH. The epoch is a secret binding
+  // only so that `wrangler rollback` cannot silently reinstate an older epoch
+  // (its value is not sensitive).
+
+  "durable_objects": {
+    "bindings": [{ "name": "WORKSPACE_STORE", "class_name": "WorkspaceStore" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["WorkspaceStore"] }],
+
+  "queues": {
+    "producers": [{ "binding": "ANALYSIS_QUEUE", "queue": "openinterviewer-analysis" }],
+    "consumers": [
+      {
+        "queue": "openinterviewer-analysis",
+        "max_batch_size": 1,
+        "max_concurrency": 1,
+        "max_retries": 3,
+        "retry_delay": 30,
+        "dead_letter_queue": "openinterviewer-analysis-dlq"
+      }
+    ]
+  }
 }

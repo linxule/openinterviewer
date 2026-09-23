@@ -58,6 +58,7 @@ export type WorkspaceHoldReason =
   | 'maintenance'
   | 'schema-unsupported'
   | 'workspace-identity-mismatch'
+  | 'workspace-uninitialized'
   | 'recovery-epoch-mismatch';
 
 export type StoreReadiness =

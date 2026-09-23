@@ -1,0 +1,31 @@
+// Test-only configuration for production-artifact tests (VERIFY-01/02). Same
+// shape as wrangler.jsonc, but it loads the prebuilt bundle from
+// dist/cloudflare/artifact (via createTestHarness prebuiltWorkerDir) with
+// synthetic values. Never deployed.
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "openinterviewer-artifact-test",
+  "main": "../worker.ts",
+  "compatibility_date": "2026-09-15",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": { "directory": "../../dist/cloudflare/artifact/assets", "binding": "ASSETS" },
+  "workers_dev": true,
+  "preview_urls": false,
+  "vars": {
+    "DEPLOYMENT_TARGET": "cloudflare",
+    "DEPLOYMENT_MODE": "standalone",
+    "AI_TRANSPORT": "direct",
+    "AI_PROVIDER": "openai",
+    "APP_BASE_URL": "https://workflow.example.test",
+    "WORKSPACE_ID": "ws_0000000000000000000000000000a001",
+    "WORKSPACE_JURISDICTION": "",
+    "WORKSPACE_BOOTSTRAP": "open",
+    "ANALYSIS_RECOVERY_EPOCH": "ep_0000000000000000000000000000a001"
+  },
+  "durable_objects": { "bindings": [{ "name": "WORKSPACE_STORE", "class_name": "WorkspaceStore" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["WorkspaceStore"] }],
+  "queues": {
+    "producers": [{ "binding": "ANALYSIS_QUEUE", "queue": "oi-artifact-analysis" }],
+    "consumers": [{ "queue": "oi-artifact-analysis", "max_batch_size": 1, "max_concurrency": 1, "max_retries": 3, "retry_delay": 30, "dead_letter_queue": "oi-artifact-analysis-dlq" }]
+  }
+}

@@ -52,8 +52,8 @@ Cloudflare configuration (non-secret `vars` unless noted):
 | `AI_PROVIDER` | the installation's default provider (sample seed, legacy studies) |
 | `WORKSPACE_ID` | stable installation workspace identity, `ws_` + 32 hex; selects the DO by name |
 | `WORKSPACE_JURISDICTION` | `eu`, `fedramp` or empty; applied in every stub lookup |
-| `ANALYSIS_RECOVERY_EPOCH` | `ep_` + 32 hex; external recovery epoch (JOB-10) |
-| secrets | `ADMIN_PASSWORD`, `SESSION_SECRET`, `PARTICIPANT_TOKEN_SECRET`, `RATE_LIMIT_SALT`, selected provider key |
+| `WORKSPACE_BOOTSTRAP` | `open` or `recovery` only while the installer initializes a fresh object; empty otherwise |
+| secrets | `ADMIN_PASSWORD`, `SESSION_SECRET`, `PARTICIPANT_TOKEN_SECRET`, `RATE_LIMIT_SALT`, `OPERATOR_TOKEN`, the selected provider key, and `ANALYSIS_RECOVERY_EPOCH` (`ep_` + 32 hex; a secret binding only so `wrangler rollback` cannot silently reinstate an older epoch — its value is not sensitive) |
 | bindings | `WORKSPACE_STORE` (DO), `ANALYSIS_QUEUE` (producer) |
 
 Readiness: `/api/config/readiness` keeps its 200 contract and gains `analysisExecution`; `/api/health/ready` returns 503 when configuration, bindings or the bounded (2 s) DO readiness RPC fail. Cloudflare health adds `checks.workspaceStore` and `checks.analysisQueue` (binding presence only) and never reports Redis. Readiness never dispatches, writes or calls a provider.
@@ -119,6 +119,27 @@ Provider outcome classification under the queued policy:
 
 Operator actions (maintenance transitions, operational backup export/import, recovery-epoch activation) are served by `/api/operator/*` on the Cloudflare target only. Authority: a standalone researcher session issued within the last 15 minutes plus `X-OpenInterviewer-Operator: 1`; no new secret is introduced. Every transition is a compare-and-set on `{state, version}`, audit-logged without content. `scripts/cloudflare/operator.mjs` reads the admin password from stdin, signs in and drives these endpoints. There is no unauthenticated maintenance route.
 
-## 7. Deviations register
+## 7. Decisions from the independent gap review
+
+An adversarial review of the specification against code and platform facts (23 September 2026) found no blocker and twelve major gaps. Decisions:
+
+| Gap | Decision |
+| --- | --- |
+| Fresh-object bootstrap (F2) | An empty object initializes only when `WORKSPACE_BOOTSTRAP` is `open` or `recovery`. Otherwise every call is held with `workspace-uninitialized`, so identity, jurisdiction or Worker-name drift can never create an empty writable workspace. The installer sets it for the first deployment (or an import target) and clears it afterwards. |
+| Epoch rollback (F4) | `ANALYSIS_RECOVERY_EPOCH` is a secret binding; wrangler refuses rollback across modified secrets without confirmation. |
+| Operator credential (F5) | Operator routes require a constant-time match of a separate installer-generated `OPERATOR_TOKEN` secret **and** a researcher session issued within 15 minutes. Cloudflare adds a DO-backed login attempt budget and a bounded login body. |
+| Deploy provisioning (F3) | `deploy:cloudflare` uploads the prebuilt `--dry-run` bundle with `no_bundle` + `find_additional_modules` (the same derivation `createTestHarness` uses), passes `--config` (bypassing OpenNext delegation), `--experimental-provision=false --experimental-auto-create=false --strict`. Locally proven by wrangler dry run; real upload is a remote gate. |
+| Dispatch budget vs backlog (F6) | The watchdog charges the dispatch budget only if no consumer contact has been recorded since the job's last send; healthy backlog defers without charging. The 24-hour pre-start cap remains. |
+| Export livelock (F1) | Export captures the ordered interview key set and each row's analysis state at start. Pages overlay the captured analysis state (analysis only moves forward; transcripts are immutable; syntheses are write-once), and invalidate only on deletion of a captured row or replacement of a captured aggregate. Streaming ZIP; an invalidated stream errors, never closes cleanly. |
+| Batch eligibility (F8) | Cloudflare batches select generation-0 `not-scheduled`, persisted `failed` and recovery-required items (with the disclosure); active generations are shown as a separate queued/running count. The durable projection omits claim fields. |
+| Not-ready gate (F10) | Mutating and provider routes on the Cloudflare target call one readiness gate (configuration, including runtime placeholder-secret detection) before storage or provider use; the DO gate repeats identity/epoch/maintenance checks. |
+| Backup watermark (F11) | `frozen` and `recovery` suspend all alarm work (dispatch, watchdog and cleanup) except re-arming, so `(maintenance_version, mutation_seq)` is a complete watermark while held. |
+| Queue graph (F12) | `providerErrorResponse` moves to a route-only module so the Queue bundle never imports `next/*`; an import-boundary test covers `cloudflare/worker.ts`. |
+| Poison job rows (F13) | Corrupt due job rows are quarantined out of the due scan (the row itself is never patched) with count-only telemetry. |
+| Lease clock (F14) | Claim, start and finish decisions use the object's own clock; caller time is advisory. |
+| Maintenance for paid no-write calls (F26) | Researcher preview and follow-up generation are allowed in `draining`, refused in `frozen`/`recovery`; link exchange is refused in `draining`. |
+| Import mapping (F7) | Any importer maps Node analysis states: none/`pending` with 0 attempts → generation 0 not-scheduled; synthesis/`complete` → generation 0 complete; `failed` → generation-0 synthetic terminal failed job (never enqueued); `running` or `pending` with attempts → generation-0 synthetic recovery-required. Attempts copy verbatim. |
+
+## 8. Deviations register
 
 Maintained in [`evidence/DEVIATIONS.md`](evidence/DEVIATIONS.md). Each entry states the requirement, the evidence and the chosen alternative.

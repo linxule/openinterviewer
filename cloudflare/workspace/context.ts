@@ -15,6 +15,8 @@ import type { MaintenanceState, WorkspaceHoldReason } from '../../src/lib/storag
 export type WorkspaceEnv = {
   WORKSPACE_ID?: string;
   ANALYSIS_RECOVERY_EPOCH?: string;
+  /** 'open' | 'recovery' only while an installer initializes a fresh object. */
+  WORKSPACE_BOOTSTRAP?: string;
   ANALYSIS_QUEUE?: Queue<unknown>;
   [key: string]: unknown;
 };

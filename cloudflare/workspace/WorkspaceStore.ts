@@ -24,7 +24,8 @@ import type * as Rpc from './rpcTypes';
 type InitState =
   | { status: 'ready' }
   | { status: 'schema-unsupported' }
-  | { status: 'unconfigured' };
+  | { status: 'unconfigured' }
+  | { status: 'uninitialized' };
 
 export class WorkspaceStore extends DurableObject<WorkspaceEnv> {
   private initState: InitState = { status: 'unconfigured' };
@@ -77,17 +78,23 @@ export class WorkspaceStore extends DurableObject<WorkspaceEnv> {
     if (!readMeta(sql)) {
       const workspaceId = this.env.WORKSPACE_ID;
       const epoch = this.env.ANALYSIS_RECOVERY_EPOCH;
-      // A fresh object adopts its deployment's identity and epoch exactly once.
-      // An object selected under another name never initializes as this one.
+      const bootstrap = this.env.WORKSPACE_BOOTSTRAP;
+      // A fresh object initializes only under an explicit installer-set
+      // bootstrap state. Without it, an empty object reached through identity,
+      // jurisdiction or Worker-name drift stays uninitialized and refuses all
+      // writes instead of silently becoming an empty writable workspace. An
+      // object selected under another name never initializes as this one.
       if (!isValidWorkspaceId(workspaceId) || !isValidRecoveryEpoch(epoch)) return { status: 'unconfigured' };
       if (this.ctx.id.name !== undefined && this.ctx.id.name !== workspaceId) return { status: 'unconfigured' };
+      if (bootstrap !== 'open' && bootstrap !== 'recovery') return { status: 'uninitialized' };
       const now = Date.now();
       sql.exec(
         `INSERT INTO workspace_meta (singleton, workspace_id, activated_epoch, maintenance_state,
            maintenance_version, mutation_seq, created_at, updated_at)
-         VALUES (1, ?, ?, 'open', 0, 0, ?, ?)`,
+         VALUES (1, ?, ?, ?, 0, 0, ?, ?)`,
         workspaceId,
         epoch,
+        bootstrap,
         now,
         now,
       );
@@ -101,7 +108,9 @@ export class WorkspaceStore extends DurableObject<WorkspaceEnv> {
     // Configuration may have been supplied after the first attempt.
     this.initState = this.initialize();
     if (this.initState.status === 'ready') return null;
-    return this.initState.status === 'schema-unsupported' ? 'schema-unsupported' : 'workspace-identity-mismatch';
+    if (this.initState.status === 'schema-unsupported') return 'schema-unsupported';
+    if (this.initState.status === 'uninitialized') return 'workspace-uninitialized';
+    return 'workspace-identity-mismatch';
   }
 
   // ---------- Readiness ----------
