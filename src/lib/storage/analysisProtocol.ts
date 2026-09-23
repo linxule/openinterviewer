@@ -4,7 +4,10 @@
 
 import type {
   AIProviderType,
+  BehaviorData,
   InterviewAnalysisFailureKind,
+  InterviewMessage,
+  ParticipantProfile,
   StudyConfig,
   SynthesisResult,
 } from '@/types';
@@ -25,6 +28,8 @@ export const ANALYSIS_RETRY_RECEIPT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const ANALYSIS_TERMINAL_JOB_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export const ANALYSIS_POLL_AFTER_MS = 2_000;
 export const ANALYSIS_INPUT_SCHEMA_VERSION = 1;
+/** Serialized synthesis ceiling shared by both backends (kv.ts MAX_ATTACHED_SYNTHESIS_BYTES). */
+export const MAX_ATTACHED_SYNTHESIS_BYTES = 256_000;
 
 /** Backoff before re-dispatching an unacknowledged send (attempt ≥ 1). */
 export function dispatchBackoffMs(attempt: number): number {
@@ -177,9 +182,9 @@ export type ClaimedAnalysisInputs = {
   interview: {
     id: string;
     studyId: string;
-    transcript: unknown;
-    participantProfile: unknown;
-    behaviorData: unknown;
+    transcript: InterviewMessage[];
+    participantProfile: ParticipantProfile | null;
+    behaviorData: BehaviorData;
   };
   leaseExpiresAt: number;
 };
