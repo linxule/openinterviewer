@@ -4,94 +4,23 @@
 // synthetic.
 import { readFile } from 'node:fs/promises';
 import JSZip from 'jszip';
-import { expect, test, type APIRequestContext, type Browser, type Page } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { AGGREGATE, ANSWER, GREETING, INSIGHT } from './fixtureData.mjs';
-
-const ADMIN_PASSWORD = 'e2e-cloudflare-admin-password';
-// Researcher copy from src/components/analysis/InterviewAnalysisPanel.tsx.
-const PROVIDER_FAILURE_COPY = 'The model provider did not return an analysis. This is not an analysis — run it again.';
-const RECOVERY_COPY =
-  'This interview is saved, but we could not confirm the analysis result. Running it again may make another paid provider request.';
-const RUNNING_COPY = 'This interview is saved. Analysis is in progress.';
-
-type FixtureState = {
-  calls: Array<{ operation: string; model: string; status: number }>;
-  refused: string[];
-  pendingSynthesisFailures: number;
-  heldSynthesis: number;
-};
-
-async function fixtureState(request: APIRequestContext): Promise<FixtureState> {
-  return (await request.get('/__fixture/state')).json();
-}
-
-async function count(request: APIRequestContext, operation: string): Promise<number> {
-  return (await fixtureState(request)).calls.filter((call) => call.operation === operation).length;
-}
-
-async function control(request: APIRequestContext, action: string): Promise<void> {
-  const response = await request.post(`/__fixture/${action}`);
-  expect(response.ok()).toBe(true);
-}
-
-async function signIn(page: Page): Promise<void> {
-  await page.goto('/login');
-  await page.getByLabel('Password').fill(ADMIN_PASSWORD);
-  await page.getByRole('button', { name: 'Login', exact: true }).click();
-  await expect(page).toHaveURL(/\/studies$/);
-}
-
-async function createStudy(page: Page): Promise<{ studyUrl: string; studyId: string }> {
-  await signIn(page);
-  await page.goto('/setup');
-  await page.getByLabel('Study Name *', { exact: true }).fill('Cloudflare workflow study');
-  await page.getByLabel('Research Question *', { exact: true }).fill('How do people resume research?');
-  await page.getByPlaceholder('Question 1...', { exact: true }).fill('How do you return to a saved document?');
-  await page.getByRole('radio', { name: /OpenAI/ }).check();
-  await page.getByRole('button', { name: 'Save Study', exact: true }).click();
-  await expect(page).toHaveURL(/\/studies\/[0-9a-f-]+$/);
-  const studyUrl = page.url();
-  return { studyUrl, studyId: new URL(studyUrl).pathname.split('/').pop()! };
-}
-
-async function generateLink(page: Page): Promise<string> {
-  await page.getByRole('tab', { name: 'Study settings' }).click();
-  await page.getByRole('button', { name: 'Generate New Link' }).click();
-  const linkInput = page.locator('input[readonly]');
-  await expect(linkInput).toHaveValue(/\/p\/[A-Za-z0-9_-]{43}$/);
-  const participantLink = await linkInput.inputValue();
-  expect(new URL(participantLink).origin).toBe('https://workflow.example.test');
-  return new URL(participantLink).pathname;
-}
-
-async function participantCompletes(browser: Browser, linkPath: string): Promise<Page> {
-  const context = await browser.newContext();
-  const participant = await context.newPage();
-  await participant.goto(linkPath);
-  await participant.getByRole('button', { name: 'I consent — begin the interview' }).click();
-  await expect(participant.getByText(GREETING, { exact: true })).toBeVisible();
-  await participant.getByLabel('Your response').fill(ANSWER);
-  await participant.getByRole('button', { name: 'Send', exact: true }).click();
-  await expect(participant.getByRole('heading', { name: /conversation complete/ })).toBeVisible();
-  return participant;
-}
-
-async function saveAndClose(participant: Page): Promise<void> {
-  await participant.getByRole('button', { name: 'Continue to save interview' }).click();
-  await expect(participant.getByRole('heading', { name: 'Thank you' })).toBeVisible();
-  await expect(participant.getByText('Your responses have been saved. It is now safe to close this tab.')).toBeVisible();
-  await participant.context().close();
-}
-
-/** Opens participant `number`'s interview from the study table on its Analysis tab; returns its URL. */
-async function openInterviewAnalysis(page: Page, studyUrl: string, number: number): Promise<string> {
-  await page.goto(studyUrl);
-  await page.getByRole('tab', { name: 'Interviews', exact: true }).click();
-  await page.getByRole('button', { name: `View interview ${number}`, exact: true }).click();
-  await expect(page).toHaveURL(/\/dashboard\/interview\/[^/?]+\?studyId=/);
-  await page.getByRole('tab', { name: 'Analysis', exact: true }).click();
-  return page.url();
-}
+import {
+  PROVIDER_FAILURE_COPY,
+  RECOVERY_COPY,
+  RUNNING_COPY,
+  control,
+  count,
+  createStudy,
+  fixtureState,
+  generateLink,
+  isAnalyzePost,
+  openInterviewAnalysis,
+  participantCompletes,
+  readAnalysisStatus,
+  saveAndClose,
+} from './journey';
 
 /** 375px layout: no horizontal page scroll. Restores the desktop viewport. */
 async function expectNoHorizontalScrollAt375(page: Page, screenshotPath?: string): Promise<void> {
@@ -99,21 +28,6 @@ async function expectNoHorizontalScrollAt375(page: Page, screenshotPath?: string
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   if (screenshotPath) await page.screenshot({ path: screenshotPath, fullPage: true });
   await page.setViewportSize({ width: 1280, height: 720 });
-}
-
-/** The researcher analysis status read (API-02), through the browser's own session cookie. */
-async function readAnalysisStatus(page: Page): Promise<{ status: number; cacheControl: string | null; body: string }> {
-  const detail = new URL(page.url());
-  const interviewId = detail.pathname.split('/').pop()!;
-  const studyId = detail.searchParams.get('studyId')!;
-  return page.evaluate(async (url) => {
-    const response = await fetch(url, { cache: 'no-store' });
-    return { status: response.status, cacheControl: response.headers.get('cache-control'), body: await response.text() };
-  }, `/api/interviews/${encodeURIComponent(interviewId)}/analyze?studyId=${encodeURIComponent(studyId)}`);
-}
-
-function isAnalyzePost(url: string, method: string): boolean {
-  return method === 'POST' && /\/api\/interviews\/[^/]+\/analyze$/.test(new URL(url).pathname);
 }
 
 /**

@@ -8,7 +8,10 @@
 // proxied through this Node process: only the synthetic OpenAI Responses
 // fixture answers; everything else (including any *.upstash.io request) is
 // recorded and refused. Test-only control endpoints live under /__fixture/ on
-// this proxy, never in the deployable Worker.
+// this proxy, never in the deployable Worker. Inbound, the proxy records each
+// browser request to /api/* and each researcher analysis request with its
+// action key and the Worker's reply; it can also withhold one analysis
+// acknowledgement after the Worker has answered (a lost reply).
 //
 // Usage: node tests/e2e-cloudflare/server.mjs <port>
 
@@ -53,7 +56,26 @@ const fixture = {
   holdSynthesis: false,
   heldReleases: [],
   synthesisDelayMs: 0,
+  // Browser requests this proxy forwarded to the Worker's /api/* routes.
+  inbound: [],
+  // Researcher analysis requests (API-01/02) at the network boundary: the
+  // action key and body the browser sent, and the Worker's closed reply.
+  analyze: [],
+  // Replace the next N analysis POST replies with a retryable 503 after the
+  // Worker has answered: a start whose commit the browser never learns of.
+  lostAnalyzeReplies: 0,
+  droppedAnalyzeRequests: 0,
 };
+
+const ANALYZE_PATH = /^\/api\/interviews\/([^/]+)\/analyze$/;
+
+function parseJson(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
 
 function operationOf(body) {
   const properties = body?.text?.format?.schema?.properties ?? {};
@@ -141,11 +163,34 @@ function control(req, res, pathname) {
       refused: fixture.refused,
       pendingSynthesisFailures: fixture.synthesisFailures.length,
       heldSynthesis: fixture.heldReleases.length,
+      inbound: fixture.inbound,
+      analyze: fixture.analyze,
     });
   }
   if (pathname === '/__fixture/reset') {
-    Object.assign(fixture, { calls: [], refused: [], synthesisFailures: [], holdSynthesis: false, synthesisDelayMs: 0 });
+    Object.assign(fixture, {
+      calls: [],
+      refused: [],
+      synthesisFailures: [],
+      holdSynthesis: false,
+      synthesisDelayMs: 0,
+      inbound: [],
+      analyze: [],
+      lostAnalyzeReplies: 0,
+  droppedAnalyzeRequests: 0,
+    });
     for (const release of fixture.heldReleases.splice(0)) release();
+    return send(200, { ok: true });
+  }
+  // The next analysis start never reaches the Worker: the browser gets a
+  // generic 503 for a request nothing committed (a genuinely unknown outcome
+  // from the client's side that a status read settles as unchanged).
+  if (pathname === '/__fixture/drop-next-analyze-request') {
+    fixture.droppedAnalyzeRequests += 1;
+    return send(200, { ok: true });
+  }
+  if (pathname === '/__fixture/lose-next-analyze-reply') {
+    fixture.lostAnalyzeReplies += 1;
     return send(200, { ok: true });
   }
   if (pathname === '/__fixture/fail-next-synthesis') {
@@ -176,11 +221,30 @@ const server = http.createServer(async (req, res) => {
     if (value === undefined || name === 'host' || name === 'connection') continue;
     headers.set(name, Array.isArray(value) ? value.join(', ') : value);
   }
+  if (incoming.pathname.startsWith('/api/')) fixture.inbound.push(`${req.method} ${incoming.pathname}`);
+  const analyzed = ANALYZE_PATH.exec(incoming.pathname);
+  if (analyzed && req.method === 'POST' && fixture.droppedAnalyzeRequests > 0) {
+    fixture.droppedAnalyzeRequests -= 1;
+    fixture.analyze.push({
+      method: req.method,
+      interviewId: decodeURIComponent(analyzed[1]),
+      idempotencyKey: headers.get('idempotency-key'),
+      request: chunks.length > 0 ? parseJson(Buffer.concat(chunks).toString('utf8')) : null,
+      status: 503,
+      reply: null,
+      replyLost: false,
+      dropped: true,
+    });
+    res.writeHead(503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    res.end(JSON.stringify({ error: 'Synthetic dropped request', retryable: true }));
+    return;
+  }
   try {
+    const requestBody = ['GET', 'HEAD'].includes(req.method ?? 'GET') ? undefined : Buffer.concat(chunks);
     const upstream = await realFetch(new URL(incoming.pathname + incoming.search, harnessUrl), {
       method: req.method,
       headers,
-      body: ['GET', 'HEAD'].includes(req.method ?? 'GET') ? undefined : Buffer.concat(chunks),
+      body: requestBody,
       redirect: 'manual',
     });
     const outHeaders = {};
@@ -190,6 +254,30 @@ const server = http.createServer(async (req, res) => {
     });
     const cookies = upstream.headers.getSetCookie();
     if (cookies.length > 0) outHeaders['set-cookie'] = cookies;
+    if (analyzed) {
+      // The closed projection carries no research content (API-02), so the
+      // whole reply is recorded; the Worker has finished with it either way.
+      const text = await upstream.text();
+      const lost = req.method === 'POST' && fixture.lostAnalyzeReplies > 0;
+      if (lost) fixture.lostAnalyzeReplies -= 1;
+      fixture.analyze.push({
+        method: req.method,
+        interviewId: decodeURIComponent(analyzed[1]),
+        idempotencyKey: headers.get('idempotency-key'),
+        request: requestBody ? parseJson(requestBody.toString('utf8')) : null,
+        status: upstream.status,
+        reply: parseJson(text),
+        replyLost: lost,
+      });
+      if (lost) {
+        res.writeHead(503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        res.end(JSON.stringify({ error: 'Synthetic lost acknowledgement', retryable: true }));
+        return;
+      }
+      res.writeHead(upstream.status, outHeaders);
+      res.end(text);
+      return;
+    }
     res.writeHead(upstream.status, outHeaders);
     if (upstream.body) {
       for await (const chunk of upstream.body) res.write(chunk);

@@ -84,7 +84,9 @@ Every place the implementation departs from, tightens, or decides something the 
 | API-04 | deviation (Node behavior) | On Node, a `busy` result now stops the researcher batch as awaiting | API-04 requires it; previously `busy` counted as progress. |
 | UI-CF-04 | decision | The Cloudflare batch observes (GET) already-active work instead of POSTing it | Closes a race in which active work turns recovery-required and a POST at the same expected generation would start an unseen paid retry (gap F8). |
 
-## Pending (to be resolved before the review packet)
+## Pending and open questions
+
+The final-revision release matrix and the requirement-to-evidence map are in [REVIEW-PACKET.md](REVIEW-PACKET.md).
 
 | Ref | Kind | What | Why |
 | --- | --- | --- | --- |
@@ -94,6 +96,5 @@ Every place the implementation departs from, tightens, or decides something the 
 | OPS-03 | remote gate | Rehearse a real point-in-time restore in staging: a time resolving to a bookmark, the restore and reopen, undo, a lost reply, the back-out, and wrangler's behavior around the epoch secret | Local workerd refuses `getBookmarkForTime` and `onNextSessionRestoreBookmark`, so the local tests stub them. The platform behavior is unexercised. |
 | SETUP-05 | remote gate | Run the CI promotion once against staging, including a deliberately failing release check that leaves the installation unchanged (VERIFY-04). Record the API token's minimal permission set | The workflow is checked only statically (`tests/setup-cloudflare/ci-workflow.test.mjs`). |
 | OPS-04 | remote gate / conditional | Run the inventory against the real Upstash database (authorized). Rehearse the old-writer barrier on an old-stack staging deployment. Build the Upstash importer only if the inventory finds data to preserve | Whether Upstash accepts `EVAL_RO` and `MEMORY USAGE` with a Read Only token, and whether the Vercel integration copies reset credentials into a project, are unverified. The tool itself is tested only on a local disposable `redis-server` (`npm run test:inventory:redis`, the `redis-inventory` lane of `check:cloudflare`). |
-| F4 / F5 | follow-up | Correct two code comments that still state superseded facts. `wrangler.jsonc:48` says the epoch is a secret "only so that `wrangler rollback` cannot silently reinstate an older epoch"; wrangler confirms that prompt by itself without a TTY or in CI (F4). The header of `src/lib/loginBody.ts` says the bound is shared with the Login form and describes `MAX_LOGIN_PASSWORD_LENGTH` as an input's `maxLength`; the form has no limit (F5, Login form) | Comments only; behavior and tests are correct. Editing `wrangler.jsonc` changes `templateConfigSha256`, so do it before the final artifact is built (VERIFY-05). |
-| VERIFY-05 | release gate | The review packet records one complete release matrix (`npm run check:cloudflare` plus the CI-equivalent lanes) on the final committed revision, with the commit, each lane's exit code and the receipt | The local receipt from earlier revisions (for example at `e42be63`) predates the review fixes and is git-ignored local state. No final-revision result exists yet, and this document does not claim one. |
+| UI-CF-05 | design question | After a study edit, "Re-analyze All Interviews" can be disabled (fewer than 2 analyzed interviews at the current revision) with no visible reason, because design rule N7.3 hides the "Need at least 2…" sentence once an aggregate exists | Changing it is a design decision (slice N), not a test-driven fix; every other disabled analysis control states its reason (tests/e2e-cloudflare/analysis-controls.spec.ts). |
 
