@@ -55,17 +55,26 @@ function installGuard(): void {
   }) as typeof fetch;
 }
 
-export async function startArtifact(overrides: { vars?: Record<string, string>; secrets?: Record<string, string> } = {}): Promise<ArtifactHarness> {
+export type StartOptions = {
+  vars?: Record<string, string>;
+  secrets?: Record<string, string>;
+  /** Default synthetic secrets to leave out (applied before `secrets`), e.g. the OpenAI key. */
+  omitSecrets?: ReadonlyArray<keyof typeof SYNTHETIC_SECRETS>;
+};
+
+export async function startArtifact(overrides: StartOptions = {}): Promise<ArtifactHarness> {
   if (!existsSync(ARTIFACT_WORKER_DIR)) {
     throw new Error('Build the artifact first: npm run build:cloudflare');
   }
   installGuard();
+  const base: Record<string, string> = { ...SYNTHETIC_SECRETS };
+  for (const name of overrides.omitSecrets ?? []) delete base[name];
   const harness = await createTestHarness({
     workers: [{
       configPath: ARTIFACT_CONFIG,
       prebuiltWorkerDir: ARTIFACT_WORKER_DIR,
       vars: overrides.vars,
-      secrets: { ...SYNTHETIC_SECRETS, ...overrides.secrets },
+      secrets: { ...base, ...overrides.secrets },
     }],
   });
   const listened = await harness.listen();
