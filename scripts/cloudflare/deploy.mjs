@@ -37,8 +37,6 @@ const confirm = args.includes('--confirm');
 const dryRun = args.includes('--dry-run') || !confirm;
 const allowDirtyForDryRun = args.includes('--allow-dirty-dry-run');
 
-if (!installPath) fail('--install <installation wrangler config> is required');
-
 // Fields an installation may set; everything else must equal the template.
 const INSTALLATION_OWNED = new Set(['name', 'vars', 'routes', 'workers_dev', 'account_id', 'queues']);
 const QUEUE_NAME_FIELDS = new Set(['queue', 'dead_letter_queue']);
@@ -86,51 +84,66 @@ function verifyArtifact() {
   return { manifest, problems };
 }
 
-const template = readJsonc(path.join(ROOT, 'wrangler.jsonc'));
-const install = readJsonc(path.resolve(ROOT, installPath));
-const drift = configDrift(template, install);
-const { manifest, problems } = verifyArtifact();
-if (drift.length > 0) problems.push(`installation config drifts from wrangler.jsonc in: ${drift.join(', ')}`);
-for (const required of ['APP_BASE_URL', 'WORKSPACE_ID', 'AI_PROVIDER']) {
-  if (!install.vars?.[required]) problems.push(`installation var ${required} is empty`);
-}
-if (problems.length > 0 && !(dryRun && allowDirtyForDryRun && problems.every((p) => /dirty|receipt/.test(p)))) {
-  for (const problem of problems) console.error(`  ✗ ${problem}`);
-  fail('deploy preconditions failed; nothing was uploaded');
+/**
+ * Installation vars that must be set. APP_BASE_URL may be empty only in a
+ * bootstrap configuration (WORKSPACE_BOOTSTRAP open|recovery): the installer's
+ * first deploy discovers the workers.dev origin, and until an origin is set
+ * the Worker reports not-ready and refuses participant and researcher writes.
+ */
+export function missingInstallationVars(vars = {}) {
+  const bootstrapping = vars.WORKSPACE_BOOTSTRAP === 'open' || vars.WORKSPACE_BOOTSTRAP === 'recovery';
+  const required = bootstrapping ? ['WORKSPACE_ID', 'AI_PROVIDER'] : ['APP_BASE_URL', 'WORKSPACE_ID', 'AI_PROVIDER'];
+  return required.filter((name) => !vars[name]);
 }
 
-// Deploy exactly the prebuilt bundle (same derivation as createTestHarness's
-// prebuiltWorkerDir): no bundling, additional modules found in the bundle dir.
-const deployDir = path.join(ROOT, 'dist', 'cloudflare', 'deploy');
-mkdirSync(deployDir, { recursive: true });
-const derived = {
-  ...install,
-  main: path.join(artifactDir, 'worker', manifest.artifact.main),
-  base_dir: path.join(artifactDir, 'worker'),
-  no_bundle: true,
-  find_additional_modules: true,
-  rules: [{ type: 'CompiledWasm', globs: ['**/*.wasm'], fallthrough: true }],
-  assets: { ...install.assets, directory: path.join(artifactDir, 'assets') },
-};
-delete derived.$schema;
-const derivedPath = path.join(deployDir, `${install.name}.deploy.json`);
-writeFileSync(derivedPath, `${JSON.stringify(derived, null, 2)}\n`);
+async function main() {
+  if (!installPath) fail('--install <installation wrangler config> is required');
+  const template = readJsonc(path.join(ROOT, 'wrangler.jsonc'));
+  const install = readJsonc(path.resolve(ROOT, installPath));
+  const drift = configDrift(template, install);
+  const { manifest, problems } = verifyArtifact();
+  if (drift.length > 0) problems.push(`installation config drifts from wrangler.jsonc in: ${drift.join(', ')}`);
+  for (const name of missingInstallationVars(install.vars)) problems.push(`installation var ${name} is empty`);
+  if (problems.length > 0 && !(dryRun && allowDirtyForDryRun && problems.every((p) => /dirty|receipt/.test(p)))) {
+    for (const problem of problems) console.error(`  ✗ ${problem}`);
+    fail('deploy preconditions failed; nothing was uploaded');
+  }
 
-const wranglerArgs = [
-  'deploy',
-  '--config', derivedPath,
-  // Deploy never provisions: resources are created by setup:cloudflare apply.
-  '--experimental-provision=false',
-  '--experimental-auto-create=false',
-  '--strict',
-  '--message', `openinterviewer ${manifest.source.commit.slice(0, 12)}`,
-];
-if (dryRun) wranglerArgs.push('--dry-run');
+  // Deploy exactly the prebuilt bundle (same derivation as createTestHarness's
+  // prebuiltWorkerDir): no bundling, additional modules found in the bundle dir.
+  const deployDir = path.join(ROOT, 'dist', 'cloudflare', 'deploy');
+  mkdirSync(deployDir, { recursive: true });
+  const derived = {
+    ...install,
+    main: path.join(artifactDir, 'worker', manifest.artifact.main),
+    base_dir: path.join(artifactDir, 'worker'),
+    no_bundle: true,
+    find_additional_modules: true,
+    rules: [{ type: 'CompiledWasm', globs: ['**/*.wasm'], fallthrough: true }],
+    assets: { ...install.assets, directory: path.join(artifactDir, 'assets') },
+  };
+  delete derived.$schema;
+  const derivedPath = path.join(deployDir, `${install.name}.deploy.json`);
+  writeFileSync(derivedPath, `${JSON.stringify(derived, null, 2)}\n`);
 
-console.log(`• ${dryRun ? 'Validating (dry run)' : 'Deploying'} ${install.name} from artifact ${manifest.artifact.workerSha256.slice(0, 12)}`);
-const env = minimalEnv({ OPEN_NEXT_DEPLOY: 'true' });
-for (const name of ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID']) {
-  if (!dryRun && process.env[name]) env[name] = process.env[name];
+  const wranglerArgs = [
+    'deploy',
+    '--config', derivedPath,
+    // Deploy never provisions: resources are created by setup:cloudflare apply.
+    '--experimental-provision=false',
+    '--experimental-auto-create=false',
+    '--strict',
+    '--message', `openinterviewer ${manifest.source.commit.slice(0, 12)}`,
+  ];
+  if (dryRun) wranglerArgs.push('--dry-run');
+
+  console.log(`• ${dryRun ? 'Validating (dry run)' : 'Deploying'} ${install.name} from artifact ${manifest.artifact.workerSha256.slice(0, 12)}`);
+  const env = minimalEnv({ OPEN_NEXT_DEPLOY: 'true' });
+  for (const name of ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID']) {
+    if (!dryRun && process.env[name]) env[name] = process.env[name];
+  }
+  await run(binPath('wrangler'), wranglerArgs, { env });
+  console.log(dryRun ? '• Dry run complete; nothing was uploaded.' : '• Deploy complete. Run setup:cloudflare verify next.');
 }
-await run(binPath('wrangler'), wranglerArgs, { env });
-console.log(dryRun ? '• Dry run complete; nothing was uploaded.' : '• Deploy complete. Run setup:cloudflare verify next.');
+
+if (import.meta.main) await main();
