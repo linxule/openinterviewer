@@ -18,6 +18,7 @@ import {
   type WorkerInvocation,
 } from '../src/lib/runtime/workerInvocation';
 import { handleAnalysisBatch, type ConsumerEnv } from './analysis/consumer';
+import { withoutInternalHeaders } from './internalHeaders';
 
 export { WorkspaceStore } from './workspace/WorkspaceStore';
 
@@ -30,24 +31,6 @@ function currentInvocation(): WorkerInvocation | null {
   return invocations.getStore() ?? null;
 }
 runtimeGlobals[WORKER_INVOCATION_ACCESSOR] = currentInvocation;
-
-const INTERNAL_HEADER_PREFIX = 'x-openinterviewer-internal-';
-
-function withoutInternalHeaders(request: Request): Request {
-  let reserved = false;
-  for (const name of request.headers.keys()) {
-    if (name.toLowerCase().startsWith(INTERNAL_HEADER_PREFIX)) {
-      reserved = true;
-      break;
-    }
-  }
-  if (!reserved) return request;
-  const headers = new Headers(request.headers);
-  for (const name of [...headers.keys()]) {
-    if (name.toLowerCase().startsWith(INTERNAL_HEADER_PREFIX)) headers.delete(name);
-  }
-  return new Request(request, { headers });
-}
 
 function misconfigured(): Response {
   return new Response(
