@@ -16,7 +16,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { createTestHarness } from 'wrangler';
+import { scrubCredentials, scrubNotice } from '../../scripts/cloudflare/credential-env.mjs';
 import { AGGREGATE, GREETING, SYNTHESIS } from './fixtureData.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -24,10 +24,18 @@ const PORT = Number(process.argv[2] || 3200);
 const ARTIFACT_WORKER_DIR = path.join(ROOT, 'dist/cloudflare/artifact/worker');
 const CONFIG = path.join(ROOT, 'cloudflare/test/wrangler.artifact.jsonc');
 
+// VERIFY-01: no inherited provider or cloud credential reaches wrangler, the
+// runtime or a fixture. They are removed from this process's environment
+// before wrangler is loaded (the shared rule in credential-env.mjs); the
+// Worker receives only the synthetic secrets below.
+const scrubbed = scrubCredentials(process.env);
+if (scrubbed.length > 0) console.error(scrubNotice('cloudflare e2e server', scrubbed));
+
 if (!existsSync(ARTIFACT_WORKER_DIR)) {
   console.error('Build the Cloudflare artifact first: npm run build:cloudflare');
   process.exit(2);
 }
+const { createTestHarness } = await import('wrangler');
 
 // Queued synthesis outcomes, consumed in arrival order by the next synthesis
 // requests: 'reject' is a known provider failure (HTTP 400 before generation);

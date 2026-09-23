@@ -21,11 +21,13 @@ import {
   EPOCH_SECRET,
   GENERATED_SECRETS,
   InstallerError,
+  MAX_LOGIN_BODY_BYTES,
   MIN_PASSWORD_LENGTH,
   PASSWORD_SECRET,
   PROVIDER_KEYS,
   REFUSED,
   SECRET_PLACEHOLDERS,
+  loginBodyBytes,
 } from './model.mjs';
 
 export const generateWorkspaceId = () => `ws_${randomBytes(16).toString('hex')}`;
@@ -48,6 +50,12 @@ export function validateSuppliedSecret(name, value) {
   if (SECRET_PLACEHOLDERS.test(value)) throw refuse(`${name} still contains a template placeholder`);
   if (name === PASSWORD_SECRET && value.length < MIN_PASSWORD_LENGTH) {
     throw refuse(`${PASSWORD_SECRET} must contain at least ${MIN_PASSWORD_LENGTH} characters`);
+  }
+  if (name === PASSWORD_SECRET && loginBodyBytes(value) > MAX_LOGIN_BODY_BYTES) {
+    throw refuse(
+      `${PASSWORD_SECRET} is too long: its sign-in request body would be ${loginBodyBytes(value)} bytes and Cloudflare sign-in accepts at most `
+        + `${MAX_LOGIN_BODY_BYTES} (about 1,000 ASCII characters; fewer with multi-byte characters or characters JSON must escape)`,
+    );
   }
   return value;
 }

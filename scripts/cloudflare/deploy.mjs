@@ -10,13 +10,21 @@
 //    check (npm run check:cloudflare) for this exact artifact;
 //  - the installation config differs from wrangler.jsonc only in
 //    installation-owned fields (names, vars values, routes);
+//  - WORKSPACE_BOOTSTRAP is empty unless --bootstrap is given, which only the
+//    installer passes, for the deploys that initialize a fresh workspace
+//    (gap review F2): any other deploy of a bootstrap config could make an
+//    empty writable workspace after an identity or jurisdiction change;
 //  - --confirm is given (otherwise --dry-run semantics apply).
 //
 // Usage:
-//   node scripts/cloudflare/deploy.mjs --install <installation wrangler.jsonc> [--dry-run | --confirm]
+//   node scripts/cloudflare/deploy.mjs --install <installation wrangler.jsonc> [--dry-run | --confirm] [--artifact <dir>]
+//   node scripts/cloudflare/deploy.mjs --install <installation wrangler.jsonc> --check-config
+// --check-config validates only the installation config (template drift,
+// required vars, bootstrap) and needs no artifact; nothing is uploaded.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { parseArgs } from 'node:util';
 import {
   ROOT,
   binPath,
@@ -27,19 +35,42 @@ import {
   run,
   sha256File,
   sha256Tree,
+  isMain,
 } from './lib.mjs';
-
-const args = process.argv.slice(2);
-const option = (name) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
-const installPath = option('--install');
-const artifactDir = path.resolve(ROOT, option('--artifact') ?? 'dist/cloudflare/artifact');
-const confirm = args.includes('--confirm');
-const dryRun = args.includes('--dry-run') || !confirm;
-const allowDirtyForDryRun = args.includes('--allow-dirty-dry-run');
 
 // Fields an installation may set; everything else must equal the template.
 const INSTALLATION_OWNED = new Set(['name', 'vars', 'routes', 'workers_dev', 'account_id', 'queues']);
 const QUEUE_NAME_FIELDS = new Set(['queue', 'dead_letter_queue']);
+
+/** WORKSPACE_BOOTSTRAP values that initialize a fresh workspace object. */
+export const BOOTSTRAP_VALUES = ['open', 'recovery'];
+
+export function parseDeployArgs(argv) {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      install: { type: 'string' },
+      artifact: { type: 'string' },
+      confirm: { type: 'boolean' },
+      'dry-run': { type: 'boolean' },
+      'allow-dirty-dry-run': { type: 'boolean' },
+      bootstrap: { type: 'boolean' },
+      'check-config': { type: 'boolean' },
+    },
+    strict: true,
+    allowPositionals: false,
+  });
+  if (!values.install) throw new Error('--install <installation wrangler config> is required');
+  const dryRun = Boolean(values['dry-run']) || !values.confirm;
+  return {
+    installPath: values.install,
+    artifactDir: path.resolve(ROOT, values.artifact ?? 'dist/cloudflare/artifact'),
+    dryRun,
+    allowDirtyForDryRun: Boolean(values['allow-dirty-dry-run']),
+    bootstrap: Boolean(values.bootstrap),
+    checkConfig: Boolean(values['check-config']),
+  };
+}
 
 export function configDrift(template, install) {
   const diffs = [];
@@ -57,33 +88,6 @@ export function configDrift(template, install) {
   return diffs;
 }
 
-function verifyArtifact() {
-  const manifestPath = path.join(artifactDir, 'manifest.json');
-  const receiptPath = path.join(artifactDir, 'receipt.json');
-  if (!existsSync(manifestPath)) fail('no artifact manifest; run npm run build:cloudflare');
-  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-  const problems = [];
-  const git = gitState();
-  if (manifest.source.commit !== git.commit) problems.push('artifact was built from a different commit');
-  if (manifest.source.dirty) problems.push('artifact was built from a dirty tree');
-  if (git.dirty && !(dryRun && allowDirtyForDryRun)) problems.push('checkout has uncommitted tracked changes');
-  if (manifest.lockfileSha256 !== sha256File(path.join(ROOT, 'package-lock.json'))) problems.push('package-lock.json changed since build');
-  if (manifest.templateConfigSha256 !== sha256File(path.join(ROOT, 'wrangler.jsonc'))) problems.push('wrangler.jsonc changed since build');
-  const worker = sha256Tree(path.join(artifactDir, 'worker'));
-  const assets = sha256Tree(path.join(artifactDir, 'assets'));
-  if (worker.sha256 !== manifest.artifact.workerSha256) problems.push('worker bundle differs from manifest');
-  if (assets.sha256 !== manifest.artifact.assetsSha256) problems.push('assets differ from manifest');
-  if (!existsSync(receiptPath)) {
-    problems.push('no passing release-check receipt; run npm run check:cloudflare');
-  } else {
-    const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
-    if (receipt.status !== 'passed') problems.push('release-check receipt is not passing');
-    if (receipt.artifact?.workerSha256 !== manifest.artifact.workerSha256) problems.push('receipt belongs to another artifact');
-    if (receipt.source?.commit !== manifest.source.commit) problems.push('receipt belongs to another commit');
-  }
-  return { manifest, problems };
-}
-
 /**
  * Installation vars that must be set. APP_BASE_URL may be empty only in a
  * bootstrap configuration (WORKSPACE_BOOTSTRAP open|recovery): the installer's
@@ -91,26 +95,136 @@ function verifyArtifact() {
  * the Worker reports not-ready and refuses participant and researcher writes.
  */
 export function missingInstallationVars(vars = {}) {
-  const bootstrapping = vars.WORKSPACE_BOOTSTRAP === 'open' || vars.WORKSPACE_BOOTSTRAP === 'recovery';
+  const bootstrapping = BOOTSTRAP_VALUES.includes(vars.WORKSPACE_BOOTSTRAP);
   const required = bootstrapping ? ['WORKSPACE_ID', 'AI_PROVIDER'] : ['APP_BASE_URL', 'WORKSPACE_ID', 'AI_PROVIDER'];
   return required.filter((name) => !vars[name]);
 }
 
-async function main() {
-  if (!installPath) fail('--install <installation wrangler config> is required');
-  const template = readJsonc(path.join(ROOT, 'wrangler.jsonc'));
-  const install = readJsonc(path.resolve(ROOT, installPath));
+/** WORKSPACE_BOOTSTRAP must be empty unless this is an installer bootstrap deploy (--bootstrap). */
+export function bootstrapProblems(vars = {}, { bootstrap = false } = {}) {
+  const value = vars.WORKSPACE_BOOTSTRAP ?? '';
+  if (value === '') return [];
+  if (!BOOTSTRAP_VALUES.includes(value)) {
+    return [`installation var WORKSPACE_BOOTSTRAP is ${JSON.stringify(value)}; it must be empty (or open|recovery in an installer bootstrap deploy)`];
+  }
+  if (!bootstrap) {
+    return [
+      `installation var WORKSPACE_BOOTSTRAP is "${value}": only the installer's bootstrap deploys (--bootstrap) may set it; `
+        + 'deploy the installer-generated config from after bootstrap-clear, where it is empty',
+    ];
+  }
+  return [];
+}
+
+/** Every precondition on the installation config itself (no artifact, no git). */
+export function installationConfigProblems(template, install, { bootstrap = false } = {}) {
+  const problems = [];
   const drift = configDrift(template, install);
-  const { manifest, problems } = verifyArtifact();
   if (drift.length > 0) problems.push(`installation config drifts from wrangler.jsonc in: ${drift.join(', ')}`);
   for (const name of missingInstallationVars(install.vars)) problems.push(`installation var ${name} is empty`);
-  if (problems.length > 0 && !(dryRun && allowDirtyForDryRun && problems.every((p) => /dirty|receipt/.test(p)))) {
-    for (const problem of problems) console.error(`  ✗ ${problem}`);
-    fail('deploy preconditions failed; nothing was uploaded');
+  problems.push(...bootstrapProblems(install.vars, { bootstrap }));
+  return problems;
+}
+
+function readJsonFile(file) {
+  try {
+    return { value: JSON.parse(readFileSync(file, 'utf8')) };
+  } catch {
+    return { value: null };
+  }
+}
+
+/**
+ * Artifact preconditions against a checkout (`root`) and its git state
+ * (`git` = { commit, dirty }). Returns the manifest (null when unreadable)
+ * and every problem found; an empty list means the artifact may be deployed.
+ * `allowDirtyCheckout` waives only the checkout's own dirty state.
+ */
+export function verifyArtifact({ root = ROOT, artifactDir, git, allowDirtyCheckout = false }) {
+  const problems = [];
+  if (git.dirty && !allowDirtyCheckout) problems.push('checkout has uncommitted or untracked files');
+  const manifestPath = path.join(artifactDir, 'manifest.json');
+  if (!existsSync(manifestPath)) {
+    problems.push('no artifact manifest; run npm run build:cloudflare');
+    return { manifest: null, problems };
+  }
+  const manifest = readJsonFile(manifestPath).value;
+  if (!manifest || typeof manifest !== 'object') {
+    problems.push('artifact manifest is not valid JSON');
+    return { manifest: null, problems };
+  }
+  if (manifest.source?.commit !== git.commit) problems.push('artifact was built from a different commit');
+  if (manifest.source?.dirty) problems.push('artifact was built from a dirty tree');
+  if (manifest.lockfileSha256 !== sha256File(path.join(root, 'package-lock.json'))) problems.push('package-lock.json changed since build');
+  if (manifest.templateConfigSha256 !== sha256File(path.join(root, 'wrangler.jsonc'))) problems.push('wrangler.jsonc changed since build');
+  for (const [dir, field, label] of [['worker', 'workerSha256', 'worker bundle differs'], ['assets', 'assetsSha256', 'assets differ']]) {
+    const full = path.join(artifactDir, dir);
+    if (!existsSync(full)) problems.push(`artifact ${dir}/ directory is missing`);
+    else if (sha256Tree(full).sha256 !== manifest.artifact?.[field]) problems.push(`${label} from manifest`);
+  }
+  const receiptPath = path.join(artifactDir, 'receipt.json');
+  if (!existsSync(receiptPath)) {
+    problems.push('no passing release-check receipt; run npm run check:cloudflare');
+  } else {
+    const receipt = readJsonFile(receiptPath).value;
+    if (!receipt || typeof receipt !== 'object') {
+      problems.push('release-check receipt is not valid JSON');
+    } else {
+      if (receipt.status !== 'passed') problems.push('release-check receipt is not passing');
+      if (receipt.artifact?.workerSha256 !== manifest.artifact?.workerSha256) problems.push('receipt belongs to another artifact');
+      if (receipt.source?.commit !== manifest.source?.commit) problems.push('receipt belongs to another commit');
+    }
+  }
+  return { manifest, problems };
+}
+
+/** --dry-run --allow-dirty-dry-run validates a work-in-progress build: only dirty-tree and receipt problems are waived. */
+export function waivedForDryRun(problems) {
+  return problems.every((problem) => /dirty|receipt/.test(problem));
+}
+
+function refuse(problems) {
+  for (const problem of problems) console.error(`  ✗ ${problem}`);
+  fail('deploy preconditions failed; nothing was uploaded');
+}
+
+async function main(argv) {
+  let options;
+  try {
+    options = parseDeployArgs(argv);
+  } catch (error) {
+    fail(error.message);
+  }
+  const template = readJsonc(path.join(ROOT, 'wrangler.jsonc'));
+  const installFile = path.resolve(ROOT, options.installPath);
+  let install;
+  try {
+    install = readJsonc(installFile);
+  } catch (error) {
+    fail(`installation config ${installFile} is not readable JSONC (${error.code ?? error.name})`);
+  }
+  if (!install || typeof install !== 'object' || Array.isArray(install)) fail(`installation config ${installFile} is not a JSON object`);
+  const configProblems = installationConfigProblems(template, install, { bootstrap: options.bootstrap });
+  if (options.checkConfig) {
+    if (configProblems.length > 0) refuse(configProblems);
+    console.log(`• Installation config for ${install.name} passes the deploy preconditions (template, vars${options.bootstrap ? '' : ', no bootstrap'}).`);
+    return;
+  }
+
+  const { manifest, problems } = verifyArtifact({
+    root: ROOT,
+    artifactDir: options.artifactDir,
+    git: gitState(),
+    allowDirtyCheckout: options.dryRun && options.allowDirtyForDryRun,
+  });
+  problems.push(...configProblems);
+  if (!manifest || (problems.length > 0 && !(options.dryRun && options.allowDirtyForDryRun && waivedForDryRun(problems)))) {
+    refuse(problems);
   }
 
   // Deploy exactly the prebuilt bundle (same derivation as createTestHarness's
   // prebuiltWorkerDir): no bundling, additional modules found in the bundle dir.
+  const { artifactDir, dryRun } = options;
   const deployDir = path.join(ROOT, 'dist', 'cloudflare', 'deploy');
   mkdirSync(deployDir, { recursive: true });
   const derived = {
@@ -146,4 +260,4 @@ async function main() {
   console.log(dryRun ? '• Dry run complete; nothing was uploaded.' : '• Deploy complete. Run setup:cloudflare verify next.');
 }
 
-if (import.meta.main) await main();
+if (isMain(import.meta)) await main(process.argv.slice(2));

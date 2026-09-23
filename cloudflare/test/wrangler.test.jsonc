@@ -1,12 +1,13 @@
 // Test-only configuration (vitest.workers.config.mts). Synthetic values only;
 // never deployed. Jurisdiction stays empty: workerd does not implement DO
-// jurisdictions locally.
+// jurisdictions locally. The compatibility flags match production
+// (wrangler.jsonc), including global_fetch_strictly_public (VERIFY-01).
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "openinterviewer-test",
   "main": "entry.ts",
   "compatibility_date": "2026-09-15",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "vars": {
     "DEPLOYMENT_TARGET": "cloudflare",
     "DEPLOYMENT_MODE": "standalone",

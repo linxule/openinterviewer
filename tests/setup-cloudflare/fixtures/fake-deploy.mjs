@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Stand-in for scripts/cloudflare/deploy.mjs. It applies the same config
-// checks as the real script (its configDrift() and missingInstallationVars()), records what it was given, marks the Worker deployed in the fake
+// checks as the real script (its configDrift(), missingInstallationVars() and
+// bootstrapProblems(), so a set WORKSPACE_BOOTSTRAP needs --bootstrap),
+// records what it was given, marks the Worker deployed in the fake
 // account (with deploy.mjs's `openinterviewer <commit12>` message) and prints
 // wrangler 4.136.3-shaped output: the bindings table, which echoes var
 // values truncated at 40 characters (printBindings), then the
@@ -13,7 +15,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { ROOT, parseJsonc } from '../../../scripts/cloudflare/lib.mjs';
-import { missingInstallationVars, realConfigDrift } from './deploy-config-drift.mjs';
+import { bootstrapProblems, missingInstallationVars, realConfigDrift } from './deploy-config-drift.mjs';
 import { invocation, readState, takeFailure, writeState } from './fake-state.mjs';
 
 const argv = process.argv.slice(2);
@@ -39,6 +41,7 @@ if (drift.length > 0) problems.push(`installation config drifts from wrangler.js
 const missing = missingInstallationVars(install.vars);
 if (state.deploy.refusePendingOrigin && !install.vars?.APP_BASE_URL && !missing.includes('APP_BASE_URL')) missing.unshift('APP_BASE_URL');
 for (const name of missing) problems.push(`installation var ${name} is empty`);
+problems.push(...bootstrapProblems(install.vars, { bootstrap: argv.includes('--bootstrap') }));
 if (problems.length > 0) {
   finish(1, '', `${problems.map((problem) => `  ✗ ${problem}`).join('\n')}\nerror: deploy preconditions failed; nothing was uploaded`);
 }

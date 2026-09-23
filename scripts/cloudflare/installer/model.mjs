@@ -37,6 +37,20 @@ export const EPOCH_SECRET = 'ANALYSIS_RECOVERY_EPOCH';
 export const PASSWORD_SECRET = 'ADMIN_PASSWORD';
 export const MIN_PASSWORD_LENGTH = 16;
 
+/**
+ * On Cloudflare, POST /api/auth refuses a body over this many bytes before
+ * it compares the password (MAX_CLOUDFLARE_LOGIN_BODY_BYTES in
+ * src/lib/loginBody.ts; tests/unit/adminPasswordLimit.test.ts keeps the two
+ * equal). The Login page and the operator CLI both send
+ * JSON.stringify({ password }), so a longer password could never sign in.
+ */
+export const MAX_LOGIN_BODY_BYTES = 1024;
+
+/** UTF-8 size of the sign-in body the clients send for this password. */
+export function loginBodyBytes(password) {
+  return Buffer.byteLength(JSON.stringify({ password }), 'utf8');
+}
+
 /** Same template-value pattern as scripts/check-setup.mjs and src/lib/hostedConfig.ts. */
 export const SECRET_PLACEHOLDERS = /^(?:change[-_ ]?me|replace[-_ ]?me|your[-_ ]|example|todo|secret$)/i;
 

@@ -36,6 +36,7 @@ describe('setup:cloudflare update and verify', { concurrency: 6 }, () => {
     assert.deepEqual(latest.vars, previous.vars);
     assert.deepEqual(latest.queues, previous.queues);
     assert.equal(latest.vars.WORKSPACE_BOOTSTRAP, '');
+    assert.equal(latest.argv.includes('--bootstrap'), false, 'an update never passes --bootstrap');
     assert.deepEqual(after.secretBulkCalls, before.secretBulkCalls);
     assert.deepEqual(after.workers['oi-acme'].secrets, before.workers['oi-acme'].secrets);
     assert.deepEqual(after.queueCreates, before.queueCreates);
@@ -263,6 +264,100 @@ describe('setup:cloudflare update and verify', { concurrency: 6 }, () => {
     const result = JSON.parse(run.stdout);
     assert.equal(result.status, 'not-ready');
     assert.equal(result.checks.find((check) => check.id === 'worker.url').ok, false);
+  });
+
+  test('update never deploys a bootstrap config, even from a receipt whose phases are inconsistent', async (t) => {
+    const sandbox = await installed(t);
+    const file = path.join(sandbox.installDir(), 'receipt.json');
+    const receipt = JSON.parse(readFileSync(file, 'utf8'));
+    delete receipt.phases['workspace-init'];
+    writeFileSync(file, `${JSON.stringify(receipt, null, 2)}\n`);
+    const configText = readFileSync(path.join(sandbox.installDir(), 'wrangler.jsonc'), 'utf8');
+    sandbox.newCommit(NEXT_COMMIT);
+    const deploys = sandbox.state().deploys.length;
+    const run = await sandbox.run('update', UPDATE);
+    assert.equal(run.code, 2, run.output);
+    assert.match(run.stderr, /refusing to deploy \(update\) with WORKSPACE_BOOTSTRAP 'open'/);
+    assert.equal(sandbox.state().deploys.length, deploys);
+    assert.equal(readFileSync(path.join(sandbox.installDir(), 'wrangler.jsonc'), 'utf8'), configText, 'the installation config is left as it was');
+  });
+
+  // verify --config: the receipt-less check the CI promotion job runs after
+  // deploying vars.CLOUDFLARE_INSTALL_CONFIG.
+  const promoted = (sandbox, mutate = () => {}) => {
+    const config = sandbox.config();
+    mutate(config);
+    const file = path.join(sandbox.dir, 'promoted wrangler.json');
+    writeFileSync(file, JSON.stringify(config));
+    return file;
+  };
+
+  test('verify --config probes the configured APP_BASE_URL like verify, without reading or writing a receipt', async (t) => {
+    const sandbox = await installed(t);
+    const receiptText = readFileSync(path.join(sandbox.installDir(), 'receipt.json'), 'utf8');
+    const before = sandbox.state();
+    const run = await sandbox.run('verify', ['--config', promoted(sandbox), '--json'], { extraArgs: false });
+    assert.equal(run.code, 0, run.output);
+    const result = JSON.parse(run.stdout);
+    assert.equal(result.source, 'config');
+    assert.equal(result.status, 'ready');
+    assert.equal(result.worker, 'oi-acme');
+    assert.deepEqual(result.targets, [{ role: 'origin', url: ORIGIN, status: 'ready' }]);
+    assert.deepEqual(result.config, { ok: true, diffs: [], templateDrift: [] });
+    assert.deepEqual(result.checks.filter((check) => !check.ok), []);
+    assert.deepEqual(result.checks.map((check) => check.id).sort(), [
+      'health.analysisQueue', 'health.configuration', 'health.noRedis', 'health.ready', 'health.response', 'health.target', 'health.workspaceStore',
+      'mode.matches', 'mode.response', 'readiness.analysisExecution', 'readiness.mode', 'readiness.noRedisErrors', 'readiness.ready', 'readiness.response',
+    ]);
+    assert.ok(result.limitations.some((line) => /no installer receipt is read or updated/.test(line)));
+    assert.ok(result.limitations.some((line) => /Only APP_BASE_URL is probed/.test(line)));
+    assert.match(run.stderr, /from .*promoted wrangler\.json \(no receipt\)/);
+    assert.equal(readFileSync(path.join(sandbox.installDir(), 'receipt.json'), 'utf8'), receiptText);
+    const after = sandbox.state();
+    assert.equal(mutations(after).length, mutations(before).length);
+    assert.deepEqual(
+      after.http.requests.slice(before.http.requests.length).map((request) => [request.origin, request.path]),
+      [[ORIGIN, '/api/health/ready'], [ORIGIN, '/api/config/readiness'], [ORIGIN, '/api/config/mode']],
+    );
+  });
+
+  for (const [label, prepare, mutate, code, status, detail] of [
+    ['a bootstrap config', null, (config) => { config.vars.WORKSPACE_BOOTSTRAP = 'open'; }, 1, 'config-mismatch', /WORKSPACE_BOOTSTRAP is "open"/],
+    ['a config without an origin', null, (config) => { config.vars.APP_BASE_URL = ''; }, 1, 'config-mismatch', /vars\.APP_BASE_URL is empty/],
+    ['a non-HTTPS origin', null, (config) => { config.vars.APP_BASE_URL = 'http://interviews.example.org'; }, 1, 'config-mismatch', /vars\.APP_BASE_URL: /],
+    ['a Node deployment target', null, (config) => { config.vars.DEPLOYMENT_TARGET = 'node'; }, 1, 'config-mismatch', /vars\.DEPLOYMENT_TARGET: expected "cloudflare"/],
+    ['a malformed workspace id', null, (config) => { config.vars.WORKSPACE_ID = 'ws_nope'; }, 1, 'config-mismatch', /vars\.WORKSPACE_ID is not ws_/],
+    ['an unsupported jurisdiction', null, (config) => { config.vars.WORKSPACE_JURISDICTION = 'us'; }, 1, 'config-mismatch', /vars\.WORKSPACE_JURISDICTION "us" is not eu, fedramp or empty/],
+    ['a not-ready deployment', (state) => { state.http.forceNotReady = true; }, null, 1, 'not-ready', null],
+    ['an origin no Worker answers', null, (config) => { config.vars.APP_BASE_URL = 'https://elsewhere.example.org'; }, 1, 'not-ready', null],
+    ['a held (drained) workspace', (state) => { for (const object of Object.values(state.objects)) object.maintenance = 'draining'; }, null, 3, 'held-maintenance', null],
+  ]) {
+    test(`verify --config reports ${label}`, async (t) => {
+      const sandbox = await installed(t);
+      if (prepare) sandbox.update(prepare);
+      const before = sandbox.state().http.requests.length;
+      const run = await sandbox.run('verify', ['--config', promoted(sandbox, mutate ?? undefined), '--wait-seconds', '2', '--json'], { extraArgs: false });
+      assert.equal(run.code, code, run.output);
+      const result = JSON.parse(run.stdout);
+      assert.equal(result.status, status);
+      if (detail) assert.match(result.config.diffs.join('\n'), detail);
+      if (status === 'held-maintenance') {
+        assert.equal(sandbox.state().http.requests.length - before, 3, 'a held workspace settles the wait after one probe');
+      }
+    });
+  }
+
+  test('verify --config refuses a missing config and options that need a receipt', async (t) => {
+    const sandbox = await installed(t);
+    const missing = await sandbox.run('verify', ['--config', path.join(sandbox.dir, 'absent.json')], { extraArgs: false });
+    assert.equal(missing.code, 2, missing.output);
+    assert.match(missing.stderr, /absent\.json does not exist/);
+    const mixed = await sandbox.run('verify', ['--config', promoted(sandbox), '--install', 'acme', '--env', 'production'], { extraArgs: false });
+    assert.equal(mixed.code, 2, mixed.output);
+    assert.match(mixed.stderr, /takes no --install, --env/);
+    const other = await sandbox.run('plan', ['--config', promoted(sandbox), '--install', 'acme', '--env', 'production'], { extraArgs: false });
+    assert.equal(other.code, 2, other.output);
+    assert.match(other.stderr, /--config is only valid with verify/);
   });
 
   test('verify refuses an installation without an origin or receipt', async (t) => {

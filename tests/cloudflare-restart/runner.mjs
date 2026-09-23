@@ -47,7 +47,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { appendFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { unstable_readConfig, unstable_startWorker } from 'wrangler';
+import { scrubCredentials, scrubNotice } from '../../scripts/cloudflare/credential-env.mjs';
 import { GREETING, SYNTHESIS } from '../e2e-cloudflare/fixtureData.mjs';
 import { FAILED_PREFIX, HELD_PREFIX, READY_PREFIX, SECRETS, SERVED_MODEL } from './synthetic.mjs';
 
@@ -78,10 +78,12 @@ if (workerKind === 'artifact' && !existsSync(path.join(ARTIFACT_WORKER_DIR, 'wor
 }
 
 // VERIFY-01: no inherited provider/cloud credentials. The test spawns this
-// runner with an allowlisted environment; this is the backstop.
-const CREDENTIAL_NAME = /(API_KEY|API_TOKEN|ACCOUNT_ID|_TOKEN$|SECRET|PASSWORD|KV_REST|UPSTASH|OIDC)/i;
-const inherited = Object.keys(process.env).filter((name) => CREDENTIAL_NAME.test(name));
-if (inherited.length > 0) refuse(`credential-like environment variables present: ${inherited.join(', ')}`);
+// runner with an allowlisted environment; as a backstop for a direct run,
+// credential-like variables are removed (shared rule, credential-env.mjs)
+// before wrangler is loaded.
+const scrubbed = scrubCredentials(process.env);
+if (scrubbed.length > 0) process.stderr.write(`${scrubNotice('restart runner', scrubbed)}\n`);
+const { unstable_readConfig, unstable_startWorker } = await import('wrangler');
 
 const persistDir = path.join(stateDir, 'persist');
 const workDir = path.join(stateDir, 'wrangler');

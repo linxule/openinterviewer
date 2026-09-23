@@ -8,18 +8,30 @@
 // Worker serves it.
 
 import { setTimeout as sleep } from 'node:timers/promises';
-import { isOwnWorkersDevHost } from './model.mjs';
+import { bootstrapProblems, missingInstallationVars } from '../deploy.mjs';
+import { InstallerError, JURISDICTIONS, PROVIDER_KEYS, REFUSED, isOwnWorkersDevHost, validateOrigin } from './model.mjs';
 import { buildInstallationConfig, configDrift, identityDiff, installationIdentity, readInstallationConfig } from './state.mjs';
 
 /** Remote gates this command cannot establish (04-verification-and-cutover.md, VERIFY-04). */
-export const LIMITATIONS = [
+const REMOTE_GATES = [
   'analysisQueue is binding presence only: it does not prove the Queue consumer is registered or consuming messages.',
   'Durable Object alarm wake-up after inactivity is not exercised.',
   'Protected logs (no invocation logs or raw participant URLs) are not inspected.',
   'Point-in-time recovery and operational restore are not rehearsed.',
   'No provider call is made: live provider compatibility needs a separately authorized smoke.',
   'Canonical-origin cookies, sign-in and the participant flow are not exercised.',
+];
+
+export const LIMITATIONS = [
+  ...REMOTE_GATES,
   'The deployed version and remote vars/secrets are not read back: the version shown is the last deploy this installer recorded, so a wrangler rollback or dashboard deploy is not detected.',
+];
+
+/** verify --config: no receipt, so no recorded version and no workers.dev URL to tie the origin to. */
+export const CONFIG_LIMITATIONS = [
+  ...REMOTE_GATES,
+  'The deployed version and remote vars/secrets are not read back, and no installer receipt is read or updated: the receipt\'s deployments and its verify Version do not include this deploy.',
+  'Only APP_BASE_URL is probed: without a receipt the Worker\'s own workers.dev URL is unknown, so another Worker answering that origin would look the same.',
 ];
 
 export const CUSTOM_ORIGIN_LIMITATION = 'Routing of the custom origin to this Worker is not proven: the Worker is checked through its own workers.dev URL and the origin separately, and another Worker answering the origin would look the same.';
@@ -220,6 +232,89 @@ export async function verifyInstallation({ template, receipt, configPath, waitSe
     terminal,
     config,
     limitations: limitationsFor(receipt),
+    verifiedAt: new Date().toISOString(),
+  };
+}
+
+const WORKSPACE_ID = /^ws_[a-f0-9]{32}$/;
+
+/**
+ * Receipt-less local check of an installation config about to be (or just)
+ * deployed by another owner, such as the CI promotion job: the deploy.mjs
+ * preconditions a finished installation must meet (template, required vars,
+ * WORKSPACE_BOOTSTRAP empty) plus the fixed Cloudflare capability vars and
+ * well-formed identity values. Returns { ok, diffs, templateDrift, origin }.
+ */
+export function checkDeployedConfig({ template, config }) {
+  const vars = config.vars ?? {};
+  const diffs = [];
+  for (const name of missingInstallationVars(vars)) diffs.push(`vars.${name} is empty`);
+  diffs.push(...bootstrapProblems(vars));
+  for (const [name, expected] of [['DEPLOYMENT_TARGET', 'cloudflare'], ['DEPLOYMENT_MODE', 'standalone'], ['AI_TRANSPORT', 'direct']]) {
+    if (vars[name] !== expected) diffs.push(`vars.${name}: expected "${expected}", found ${JSON.stringify(vars[name])}`);
+  }
+  if (vars.AI_PROVIDER && !Object.hasOwn(PROVIDER_KEYS, vars.AI_PROVIDER)) diffs.push(`vars.AI_PROVIDER ${JSON.stringify(vars.AI_PROVIDER)} is not a supported provider`);
+  if (vars.WORKSPACE_ID && !WORKSPACE_ID.test(vars.WORKSPACE_ID)) diffs.push('vars.WORKSPACE_ID is not ws_ followed by 32 hex characters');
+  if (!Object.values(JURISDICTIONS).includes(vars.WORKSPACE_JURISDICTION ?? '')) diffs.push(`vars.WORKSPACE_JURISDICTION ${JSON.stringify(vars.WORKSPACE_JURISDICTION)} is not eu, fedramp or empty`);
+  let origin = null;
+  if (vars.APP_BASE_URL) {
+    try {
+      origin = validateOrigin(vars.APP_BASE_URL);
+    } catch (error) {
+      diffs.push(`vars.APP_BASE_URL: ${error.message.replace(/^invalid --origin: /, '')}`);
+    }
+  }
+  return { ok: diffs.length === 0, diffs, templateDrift: configDrift(template, config), origin };
+}
+
+/**
+ * verify --config: readiness of the origin an installation config names,
+ * judged exactly as verifyInstallation() judges each target (evaluateProbe),
+ * without a receipt. A held workspace settles the wait (as for update) and is
+ * reported as held-maintenance. Nothing is authenticated or written.
+ */
+export async function verifyConfiguredOrigin({ template, configPath, waitSeconds = 0 }) {
+  let config;
+  try {
+    config = readInstallationConfig(configPath);
+  } catch {
+    throw new InstallerError(`installation config ${configPath} is not valid JSONC`, { exitCode: REFUSED });
+  }
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    throw new InstallerError(`installation config ${configPath} ${config ? 'is not a JSON object' : 'does not exist'}`, { exitCode: REFUSED });
+  }
+  const local = checkDeployedConfig({ template, config });
+  const accept = (evaluation) => evaluation.status === 'ready' || evaluation.status === 'held-maintenance';
+  const targets = [];
+  const checks = [];
+  let readinessErrors = [];
+  let terminal = null;
+  let probed = null;
+  if (local.origin) {
+    probed = await pollDeployment(local.origin, { waitSeconds, accept });
+    targets.push({ role: 'origin', url: local.origin, status: probed.status });
+    checks.push(...probed.checks);
+    readinessErrors = probed.errors;
+    terminal = probed.terminal;
+  }
+  const status = local.ok ? probed.status : 'config-mismatch';
+  return {
+    command: 'verify',
+    source: 'config',
+    configPath,
+    install: null,
+    env: null,
+    origin: local.origin,
+    workersDevUrl: null,
+    worker: typeof config.name === 'string' ? config.name : null,
+    status,
+    ok: local.ok && accept({ status }),
+    targets,
+    checks,
+    readinessErrors,
+    terminal,
+    config: { ok: local.ok, diffs: local.diffs, templateDrift: local.templateDrift },
+    limitations: [...CONFIG_LIMITATIONS],
     verifiedAt: new Date().toISOString(),
   };
 }

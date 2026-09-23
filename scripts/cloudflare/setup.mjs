@@ -2,31 +2,41 @@
 // setup:cloudflare (SETUP-01, SETUP-02, SETUP-03, SETUP-05, SETUP-07): the
 // deterministic installer for Cloudflare standalone installations.
 //
-//   npm run setup:cloudflare -- <plan|apply|resume|verify|update> --install <name> --env <production|staging> [options]
+//   npm run setup:cloudflare -- <plan|apply|resume|verify|update|config> --install <name> --env <production|staging> [options]
+//   npm run setup:cloudflare -- verify --config <installation wrangler.jsonc> [--wait-seconds <n>] [--json]
 //
 // Secrets are generated here or read from stdin JSON / a hidden prompt, and
 // reach Cloudflare only through `wrangler secret bulk` on stdin. They are
 // never written to the receipt, the installation config, logs or argv.
 // Reference: docs/operations/cloudflare-migration/INSTALLER.md
 
+import path from 'node:path';
 import { parseArgs } from 'node:util';
+import { ROOT, readJsonc } from './lib.mjs';
 import { applyCommand } from './installer/apply.mjs';
-import { createContext } from './installer/context.mjs';
+import { configCommand } from './installer/config.mjs';
+import { Reporter, createContext, parseWaitSeconds } from './installer/context.mjs';
 import { InstallerError, HELD, REFUSED } from './installer/model.mjs';
 import { planCommand } from './installer/plan.mjs';
 import { printVerification } from './installer/report.mjs';
 import { readReceipt } from './installer/state.mjs';
 import { updateCommand } from './installer/update.mjs';
-import { verifyInstallation } from './installer/verify.mjs';
+import { verifyConfiguredOrigin, verifyInstallation } from './installer/verify.mjs';
 
 const USAGE = `Usage: npm run setup:cloudflare -- <command> --install <name> --env <production|staging> [options]
+       npm run setup:cloudflare -- verify --config <installation wrangler.jsonc> [--wait-seconds <n>] [--json]
 
 Commands
   plan      read-only: resources, vars, secret names, billing, jurisdiction, artifact readiness
   apply     fresh installation (needs --provider, --jurisdiction, --yes); on an existing receipt behaves as resume
   resume    continue an interrupted apply from its first incomplete phase (--yes)
-  verify    read-only readiness check of the deployed installation (--json for machine output)
+  verify    read-only readiness check of the deployed installation (--json for machine output);
+            with --config and no --install/--env: the config's APP_BASE_URL, without a receipt
+            (for a deploy made outside the installer, such as the CI promotion job)
   update    deploy the current checked artifact to an existing installation (--yes)
+  config    local only: (re)write cloudflare/installations/<install>-<env>/wrangler.jsonc from
+            the receipt and print its path; refused until the bootstrap was cleared. This is the
+            file to store as CLOUDFLARE_INSTALL_CONFIG for the CI promotion job
 
 Options
   --install <name>              installation name: 1-24 of [a-z0-9-] (required)
@@ -42,7 +52,8 @@ Options
   --change-provider             update only: switch AI_PROVIDER (adds that provider's key if absent)
   --yes                         confirm the reviewed plan (apply, resume, update)
   --json                        machine-readable result on stdout (progress goes to stderr)
-  --wait-seconds <n>            readiness wait budget (default 180)
+  --wait-seconds <n>            readiness wait budget (default 180; verify: 0)
+  --config <path>               verify only: an installation config to check without a receipt
   --state-dir <dir>             installation state (default cloudflare/installations, gitignored)
   --artifact-dir <dir>          release artifact (default dist/cloudflare/artifact)
   --wrangler <path>             wrangler executable (default node_modules/.bin/wrangler)
@@ -65,6 +76,7 @@ const OPTIONS = {
   yes: { type: 'boolean' },
   json: { type: 'boolean' },
   'wait-seconds': { type: 'string' },
+  config: { type: 'string' },
   'state-dir': { type: 'string' },
   'artifact-dir': { type: 'string' },
   wrangler: { type: 'string' },
@@ -94,12 +106,36 @@ async function verifyCommand(ctx) {
   return result.status === 'held-maintenance' ? HELD : 1;
 }
 
+// Options verify --config accepts; everything else needs a receipt.
+const CONFIG_VERIFY_OPTIONS = new Set(['config', 'json', 'wait-seconds']);
+
+async function verifyConfigCommand(values) {
+  const extra = Object.keys(values).filter((name) => values[name] !== undefined && !CONFIG_VERIFY_OPTIONS.has(name));
+  if (extra.length > 0) {
+    throw new InstallerError(`verify --config checks a config file without a receipt; it takes no ${extra.map((name) => `--${name}`).join(', ')}`, {
+      exitCode: REFUSED,
+      hints: ['For an installation with a receipt, run verify --install <name> --env <env> instead.'],
+    });
+  }
+  const out = new Reporter({ json: Boolean(values.json) });
+  const result = await verifyConfiguredOrigin({
+    template: readJsonc(path.join(ROOT, 'wrangler.jsonc')),
+    configPath: path.resolve(values.config),
+    waitSeconds: values['wait-seconds'] === undefined ? 0 : parseWaitSeconds(values['wait-seconds']),
+  });
+  printVerification(out, result);
+  out.result(result);
+  if (result.status === 'ready') return 0;
+  return result.status === 'held-maintenance' ? HELD : 1;
+}
+
 const COMMANDS = {
   plan: planCommand,
   apply: applyCommand,
   resume: applyCommand,
   verify: verifyCommand,
   update: updateCommand,
+  config: configCommand,
 };
 
 async function main(argv) {
@@ -117,6 +153,10 @@ async function main(argv) {
   const [command, ...extra] = positionals;
   if (!Object.hasOwn(COMMANDS, command) || extra.length > 0) {
     throw new InstallerError(`unknown command "${positionals.join(' ')}"\n\n${USAGE}`, { exitCode: REFUSED });
+  }
+  if (values.config !== undefined) {
+    if (command !== 'verify') throw new InstallerError('--config is only valid with verify', { exitCode: REFUSED });
+    return verifyConfigCommand(values);
   }
   return COMMANDS[command](createContext(command, values));
 }

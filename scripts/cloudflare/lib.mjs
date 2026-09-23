@@ -3,10 +3,30 @@
 
 import { createHash } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-export const ROOT = path.resolve(new URL('../..', import.meta.url).pathname);
+// Decoded: URL.pathname keeps percent-encoding (a space is %20), which would
+// name a directory that does not exist when the checkout path needs encoding.
+export const ROOT = path.resolve(fileURLToPath(new URL('../..', import.meta.url)));
+
+/**
+ * True when `meta` belongs to the script Node was asked to run. Uses
+ * import.meta.main (Node 24.2+) and falls back to comparing real paths, so an
+ * older Node, a symlinked path or a percent-encoded checkout path never makes
+ * a check script skip its work and exit 0.
+ */
+export function isMain(meta) {
+  if (typeof meta.main === 'boolean') return meta.main;
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(meta.url));
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Parse JSON with line comments, block comments and trailing commas (wrangler.jsonc).
@@ -115,9 +135,16 @@ export function git(args, cwd = ROOT) {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 }
 
+/**
+ * HEAD and whether the working tree differs from it. Untracked files that are
+ * not ignored count as dirty: the build compiles and serves the working tree
+ * (a new route under src/app, a file in public/), so they would ship in an
+ * artifact recorded as that commit. The mode is explicit so a user's
+ * status.showUntrackedFiles=no cannot hide them.
+ */
 export function gitState(cwd = ROOT) {
   const commit = git(['rev-parse', 'HEAD'], cwd);
-  const dirty = git(['status', '--porcelain', '--untracked-files=no'], cwd).length > 0;
+  const dirty = git(['status', '--porcelain', '--untracked-files=normal'], cwd).length > 0;
   return { commit, dirty };
 }
 

@@ -20,16 +20,22 @@ export function summarizeVerification(result) {
 }
 
 export function printVerification(out, result) {
+  const fromConfig = result.source === 'config';
   out.line('');
-  out.line(`Verification of ${result.install} (${result.env}) at ${result.origin}`);
+  out.line(fromConfig
+    ? `Verification of ${result.worker ?? 'the Worker'} at ${result.origin ?? '(no valid APP_BASE_URL)'} from ${result.configPath} (no receipt)`
+    : `Verification of ${result.install} (${result.env}) at ${result.origin}`);
   for (const target of result.targets ?? []) {
     out.line(`  ${target.role === 'worker' ? 'Worker (workers.dev)' : 'Origin'.padEnd(20)} ${target.url}  ${LABELS[target.status] ?? target.status}`);
   }
   for (const check of result.checks) out.line(`  ${check.ok ? '✓' : '✗'} ${check.id.padEnd(30)} ${check.detail}`);
-  out.line(`  ${result.config.ok ? '✓' : '✗'} ${'config.identity'.padEnd(30)} installation config matches receipt names and vars`);
+  out.line(fromConfig
+    ? `  ${result.config.ok ? '✓' : '✗'} ${'config.deployable'.padEnd(30)} installation config is complete, Cloudflare standalone and has no bootstrap`
+    : `  ${result.config.ok ? '✓' : '✗'} ${'config.identity'.padEnd(30)} installation config matches receipt names and vars`);
   for (const diff of result.config.diffs) out.line(`      ${diff}`);
   if (result.config.templateDrift.length > 0) {
-    out.line(`  i ${'config.template'.padEnd(30)} differs from the current wrangler.jsonc in ${result.config.templateDrift.join(', ')} (run update to deploy the current template)`);
+    const remedy = fromConfig ? 'deploy.mjs refuses it until it is regenerated from the current template' : 'run update to deploy the current template';
+    out.line(`  i ${'config.template'.padEnd(30)} differs from the current wrangler.jsonc in ${result.config.templateDrift.join(', ')} (${remedy})`);
   }
   out.line(`Result: ${LABELS[result.status] ?? result.status}`);
   if (result.status === 'held-maintenance') {

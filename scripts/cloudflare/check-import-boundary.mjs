@@ -7,7 +7,7 @@
 
 import { build } from 'esbuild';
 import path from 'node:path';
-import { ROOT } from './lib.mjs';
+import { ROOT, isMain } from './lib.mjs';
 
 const ENTRIES = ['cloudflare/analysis/consumer.ts', 'cloudflare/workspace/WorkspaceStore.ts'];
 const FORBIDDEN = [
@@ -48,7 +48,10 @@ export async function inspectBoundary() {
   return violations;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// import.meta.main, not a comparison of import.meta.url (percent-encoded)
+// with argv[1] (raw): that comparison is false for a checkout path with a
+// space, '#' or non-ASCII characters, and the lane then passed unchecked.
+if (isMain(import.meta)) {
   const violations = await inspectBoundary();
   if (violations.length > 0) {
     for (const violation of violations) {

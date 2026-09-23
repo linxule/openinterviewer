@@ -2,15 +2,17 @@
 // real deploy.mjs configDrift(), secret validation and readiness evaluation.
 
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { ROOT, readJsonc } from '../../scripts/cloudflare/lib.mjs';
 import { resolveAccount } from '../../scripts/cloudflare/installer/context.mjs';
 import {
+  MAX_LOGIN_BODY_BYTES,
   SECRET_PLACEHOLDERS,
   deriveNames,
+  loginBodyBytes,
   requiredSecretNames,
   validateInstallName,
   validateOrigin,
@@ -174,6 +176,44 @@ test('supplied credentials are validated without echoing values', () => {
   }
   assert.equal(validateSuppliedSecret('ADMIN_PASSWORD', 'a-long-enough-password'), 'a-long-enough-password');
   assert.throws(() => assertIndependent({ ADMIN_PASSWORD: 'same-value-0123456789', GEMINI_API_KEY: 'same-value-0123456789' }), /reuses the value of ADMIN_PASSWORD/);
+});
+
+test('the installer password cap is the Cloudflare sign-in body cap', () => {
+  // The route refuses a larger body with 413 before it compares the password.
+  const definitions = [];
+  for (const entry of readdirSync(path.join(ROOT, 'src'), { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile() || !/\.tsx?$/.test(entry.name)) continue;
+    const source = readFileSync(path.join(entry.parentPath, entry.name), 'utf8');
+    for (const match of source.matchAll(/\bMAX_CLOUDFLARE_LOGIN_BODY_BYTES\s*(?::\s*number\s*)?=\s*([\d_]+)/g)) {
+      definitions.push(Number(match[1].replaceAll('_', '')));
+    }
+  }
+  assert.deepEqual(definitions, [MAX_LOGIN_BODY_BYTES]);
+  // The Login page and the operator CLI send exactly this body.
+  for (const file of ['src/components/Login.tsx', 'scripts/cloudflare/operator.mjs']) {
+    assert.match(readFileSync(path.join(ROOT, file), 'utf8'), /JSON\.stringify\(\{ password(?:: [\w.]+)? \}\)/, file);
+  }
+});
+
+test('an ADMIN_PASSWORD whose sign-in body exceeds 1 KiB is refused, measured in UTF-8 after JSON escaping', () => {
+  for (const [label, fits, overflows] of [
+    ['ASCII', 'A'.repeat(1009), 'A'.repeat(1010)],
+    ['3-byte characters', '\u20ac'.repeat(336), '\u20ac'.repeat(337)],
+    ['characters JSON escapes', '"'.repeat(504), '"'.repeat(505)],
+    ['lone surrogates (escaped as \\uXXXX)', '\ud800'.repeat(168), '\ud800'.repeat(169)],
+  ]) {
+    assert.ok(loginBodyBytes(fits) <= MAX_LOGIN_BODY_BYTES, label);
+    assert.equal(validateSuppliedSecret('ADMIN_PASSWORD', fits), fits, label);
+    assert.ok(loginBodyBytes(overflows) > MAX_LOGIN_BODY_BYTES, label);
+    assert.throws(
+      () => validateSuppliedSecret('ADMIN_PASSWORD', overflows),
+      (error) => /ADMIN_PASSWORD is too long: .* at most 1024/.test(error.message) && !error.message.includes(overflows),
+      label,
+    );
+  }
+  assert.equal(loginBodyBytes('A'.repeat(1009)), 1024);
+  // Other credentials keep the 4096-character limit.
+  assert.equal(validateSuppliedSecret('GEMINI_API_KEY', 'k'.repeat(2000)), 'k'.repeat(2000));
 });
 
 test('the placeholder pattern matches check-setup.mjs and hostedConfig.ts', () => {

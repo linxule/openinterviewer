@@ -58,6 +58,9 @@ describe('setup:cloudflare plan, apply and resume', { concurrency: 6 }, () => {
       [ORIGIN, 'open'],
       [ORIGIN, ''],
     ]);
+    // deploy.mjs accepts a set WORKSPACE_BOOTSTRAP only with --bootstrap, which
+    // the installer passes for exactly the deploys whose config carries one.
+    assert.deepEqual(state.deploys.map((deploy) => deploy.argv.includes('--bootstrap')), [true, true, false]);
     for (const deploy of state.deploys) {
       assert.equal(deploy.name, 'oi-acme');
       assert.equal(deploy.account_id, 'a'.repeat(32));
@@ -287,10 +290,12 @@ describe('setup:cloudflare plan, apply and resume', { concurrency: 6 }, () => {
   }
 
   for (const [label, change, pattern, secretOverrides = {}] of [
-    ['an unready artifact', (sandbox) => sandbox.update((state) => { state.git.dirty = true; }), /uncommitted tracked changes/],
+    ['an unready artifact', (sandbox) => sandbox.update((state) => { state.git.dirty = true; }), /checkout has uncommitted or untracked files/],
+    ['an untracked source file in the checkout', (sandbox) => sandbox.update((state) => { state.git.untracked = ['src/app/api/debug/route.ts']; }), /checkout has uncommitted or untracked files/],
     ['an artifact built from another commit', (sandbox) => sandbox.update((state) => { state.git.commit = '2'.repeat(40); }), /different commit/],
     ['a failed release check', (sandbox) => buildArtifact(sandbox.artifactDir, sandbox.state().git.commit, { status: 'failed' }), /release-check receipt is not passing/],
     ['a short password', null, /at least 16/, { ADMIN_PASSWORD: 'too-short' }],
+    ['a password Cloudflare sign-in would reject (body over 1 KiB)', null, /ADMIN_PASSWORD is too long/, { ADMIN_PASSWORD: 'p'.repeat(1010) }],
     ['a template password', null, /placeholder/, { ADMIN_PASSWORD: 'changeme-changeme-changeme' }],
     ['a reused credential', null, /reuses the value of ADMIN_PASSWORD/, { GEMINI_API_KEY: PASSWORD }],
     ['an unexpected credential name', null, /unexpected names: OPENAI_API_KEY/, { OPENAI_API_KEY: 'sk-fixture-0123456789abcdef' }],
@@ -352,7 +357,11 @@ describe('setup:cloudflare plan, apply and resume', { concurrency: 6 }, () => {
     assert.match(run.stdout, /held in recovery awaiting import/);
     const state = sandbox.state();
     assert.deepEqual(Object.values(state.objects).map((object) => object.maintenance), ['recovery']);
-    assert.equal(state.deploys.at(-1).vars.WORKSPACE_BOOTSTRAP, '');
+    assert.deepEqual(state.deploys.map((deploy) => [deploy.vars.WORKSPACE_BOOTSTRAP, deploy.argv.includes('--bootstrap')]), [
+      ['recovery', true],
+      ['recovery', true],
+      ['', false],
+    ]);
     assert.equal(sandbox.receipt().bootstrap, 'recovery');
     const verify = await sandbox.run('verify', ['--install', 'acme', '--env', 'production']);
     assert.equal(verify.code, 3, verify.output);
@@ -598,7 +607,7 @@ describe('setup:cloudflare origin binding and tool environment', { concurrency: 
     const resumed = await sandbox.run('resume', ['--install', 'acme', '--env', 'production', '--yes']);
     assert.equal(resumed.code, 0, resumed.output);
     const after = sandbox.state();
-    assert.deepEqual(after.deploys.slice(before.deploys.length).map((deploy) => deploy.vars.WORKSPACE_BOOTSTRAP), ['open', '']);
+    assert.deepEqual(after.deploys.slice(before.deploys.length).map((deploy) => [deploy.vars.WORKSPACE_BOOTSTRAP, deploy.argv.includes('--bootstrap')]), [['open', true], ['', false]]);
     assert.equal(Object.keys(after.objects).length, 1);
     assert.deepEqual(after.secretBulkCalls, before.secretBulkCalls, 'no secret or epoch was regenerated');
     assert.deepEqual(sandbox.receipt().deployments.slice(-2).map((entry) => entry.purpose), ['workspace-init', 'bootstrap-clear']);

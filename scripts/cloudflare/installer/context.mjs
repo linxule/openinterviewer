@@ -44,15 +44,20 @@ export class Reporter {
   }
 }
 
+export function parseWaitSeconds(raw) {
+  const waitSeconds = Number(raw);
+  if (raw === '' || !Number.isFinite(waitSeconds) || waitSeconds < 0 || waitSeconds > 3600) {
+    throw new InstallerError('--wait-seconds must be between 0 and 3600', { exitCode: REFUSED });
+  }
+  return waitSeconds;
+}
+
 export function createContext(command, options) {
   const install = validateInstallName(options.install);
   const environment = validateEnvironment(options.env);
   if (options['account-id'] !== undefined) validateAccountId(options['account-id']);
   const stateDir = path.resolve(options['state-dir'] ?? path.join(ROOT, 'cloudflare', 'installations'));
-  const waitSeconds = Number(options['wait-seconds'] ?? 180);
-  if (!Number.isFinite(waitSeconds) || waitSeconds < 0 || waitSeconds > 3600) {
-    throw new InstallerError('--wait-seconds must be between 0 and 3600', { exitCode: REFUSED });
-  }
+  const waitSeconds = parseWaitSeconds(options['wait-seconds'] ?? '180');
   const templatePath = path.join(ROOT, 'wrangler.jsonc');
   return {
     command,
@@ -175,15 +180,28 @@ export function ensureConfigFile(ctx, receipt) {
 
 const NOTHING_UPLOADED = /deploy preconditions failed; nothing was uploaded/;
 
+/** The only deploys whose config may carry WORKSPACE_BOOTSTRAP (before workspace-init completes). */
+export const BOOTSTRAP_PURPOSES = ['initial', 'origin', 'workspace-init'];
+
 /**
  * Regenerate the installation config from the current template + receipt,
  * run the deploy script and record the deployment. The deploy script
- * enforces the artifact, clean-checkout and config-drift preconditions.
+ * enforces the artifact, clean-checkout and config-drift preconditions,
+ * and accepts a set WORKSPACE_BOOTSTRAP only with --bootstrap, which is
+ * passed exactly when this config carries one.
  * A failure carries `nothingUploaded` when deploy.mjs refused locally,
  * before wrangler ran.
  */
 export async function deployInstallation(ctx, receipt, { purpose, artifact, provider = receipt.provider }) {
+  // Checked before the config is rewritten, so a refusal leaves it untouched.
+  if (bootstrapFor(receipt) !== '' && !BOOTSTRAP_PURPOSES.includes(purpose)) {
+    throw new InstallerError(`refusing to deploy (${purpose}) with WORKSPACE_BOOTSTRAP '${bootstrapFor(receipt)}': the receipt records no workspace-init phase`, {
+      exitCode: REFUSED,
+      hints: ['Only the initial, origin and workspace-init deploys may bootstrap a workspace. Check the receipt phases (INSTALLER.md, re-bootstrap).'],
+    });
+  }
   const config = writeConfig(ctx, receipt, { provider });
+  const bootstrap = config.vars.WORKSPACE_BOOTSTRAP !== '';
   ctx.out.step(`Deploying ${config.name} (${purpose}; APP_BASE_URL ${config.vars.APP_BASE_URL || 'not set yet'}, WORKSPACE_BOOTSTRAP '${config.vars.WORKSPACE_BOOTSTRAP}')`);
   const result = await runDeploy({
     script: ctx.deployScript,
@@ -191,6 +209,7 @@ export async function deployInstallation(ctx, receipt, { purpose, artifact, prov
     artifactDir: ctx.options['artifact-dir'] ? ctx.artifactDir : undefined,
     cwd: ctx.root,
     accountId: receipt.accountId,
+    bootstrap,
   });
   const output = `${result.stdout}\n${result.stderr}`;
   if (result.code !== 0) {

@@ -9,9 +9,12 @@
 // Usage: node scripts/cloudflare/check.mjs [--skip-build] [--only <lane,...>] [--list]
 // Lanes that need a local redis-server (or Docker) and Playwright browsers are
 // included; a failing prerequisite fails the check rather than being skipped.
+// Every lane (and the build) runs without credential-like environment
+// variables (credential-env.mjs); their names are printed once.
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { withoutCredentials } from './credential-env.mjs';
 import { ROOT, fail, gitState, run, sha256Tree } from './lib.mjs';
 
 const args = process.argv.slice(2);
@@ -53,6 +56,7 @@ const LANES = [
   { name: 'redis-contract', cmd: ['npm', 'run', 'test:contract:redis'] },
   { name: 'redis-crash', cmd: ['npm', 'run', 'test:redis-crash'], env: { REDIS_URL: '' } },
   { name: 'adversarial', cmd: ['npm', 'run', 'test:adversarial'], env: { REDIS_URL: '' } },
+  { name: 'redis-inventory', cmd: ['npm', 'run', 'test:inventory:redis'], env: { REDIS_URL: '' } },
   ...Object.entries(NODE_BUILD_FIXTURES).map(([name, env]) => ({ name, cmd: ['npm', 'run', 'build'], env })),
   { name: 'node-browser', cmd: ['npm', 'run', 'test:e2e'] },
   { name: 'cloudflare-artifact', cmd: ['npm', 'run', 'test:cloudflare:artifact'], needsArtifact: true },
@@ -66,11 +70,19 @@ if (args.includes('--list')) {
 }
 
 const git = gitState();
-if (git.dirty) fail('check:cloudflare requires a clean checkout (commit or stash tracked changes first)');
+if (git.dirty) fail('check:cloudflare requires a clean checkout: commit, stash (git stash -u) or remove uncommitted and untracked files first');
+
+// Lanes keep what they need (PATH, HOME, TMPDIR, CI, locale, PLAYWRIGHT_*,
+// REDIS_URL unless a lane overrides it) and never need a credential: build
+// lanes add only their synthetic fixture values below.
+const { env: laneBase, removed } = withoutCredentials(process.env);
+if (removed.length > 0) {
+  console.log(`• Lanes run without credential-like environment variables; removed (names only): ${removed.join(', ')}`);
+}
 
 if (!skipBuild) {
   console.log('• Building the artifact');
-  await run('node', ['scripts/cloudflare/build.mjs']);
+  await run('node', ['scripts/cloudflare/build.mjs'], { env: laneBase });
 }
 const artifactDir = path.join(ROOT, 'dist', 'cloudflare', 'artifact');
 const manifestPath = path.join(artifactDir, 'manifest.json');
@@ -89,10 +101,7 @@ for (const lane of LANES) {
   const started = Date.now();
   console.log(`\n• ${lane.name}: ${lane.cmd.join(' ')}`);
   try {
-    // Lanes inherit the environment deliberately: Playwright/Redis need PATH,
-    // HOME and CI flags. They never need credentials; build lanes add only
-    // their synthetic fixture values.
-    await run(lane.cmd[0], lane.cmd.slice(1), { env: { ...process.env, ...(lane.env ?? {}) } });
+    await run(lane.cmd[0], lane.cmd.slice(1), { env: { ...laneBase, ...(lane.env ?? {}) } });
     results.push({ lane: lane.name, command: lane.cmd.join(' '), exitCode: 0, durationMs: Date.now() - started });
   } catch (error) {
     failed = true;

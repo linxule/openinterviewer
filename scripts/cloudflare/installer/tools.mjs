@@ -228,11 +228,12 @@ export class Wrangler {
   }
 }
 
+/** Same rule as lib.mjs gitState(): untracked, non-ignored files make the checkout dirty. */
 export async function gitState(executable, cwd) {
   const env = minimalEnv();
   const head = await execTool(executable, ['rev-parse', 'HEAD'], { cwd, env });
   if (head.code !== 0) throw new InstallerError('git rev-parse HEAD failed; run setup from a git checkout');
-  const status = await execTool(executable, ['status', '--porcelain', '--untracked-files=no'], { cwd, env });
+  const status = await execTool(executable, ['status', '--porcelain', '--untracked-files=normal'], { cwd, env });
   if (status.code !== 0) throw new InstallerError('git status failed');
   return { commit: head.stdout.trim(), dirty: status.stdout.trim().length > 0 };
 }
@@ -241,9 +242,12 @@ export async function gitState(executable, cwd) {
  * Run the checked-in deploy script (or a substitute) for one installation
  * config. Output is streamed to stderr for the operator and returned. The
  * environment is the same allowlist the installer's own wrangler calls get.
+ * `bootstrap` passes --bootstrap, without which deploy.mjs refuses a config
+ * whose WORKSPACE_BOOTSTRAP is set (gap review F2).
  */
-export async function runDeploy({ script, configPath, artifactDir, cwd, accountId }) {
+export async function runDeploy({ script, configPath, artifactDir, cwd, accountId, bootstrap = false }) {
   const args = ['--install', configPath, '--confirm'];
+  if (bootstrap) args.push('--bootstrap');
   if (artifactDir) args.push('--artifact', artifactDir);
   return execTool(script, args, {
     cwd,
