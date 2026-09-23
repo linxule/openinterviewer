@@ -8,7 +8,7 @@ import { DurableObject } from 'cloudflare:workers';
 import type * as Port from '../../src/lib/storage/types';
 import type * as Protocol from '../../src/lib/storage/analysisProtocol';
 import { isValidRecoveryEpoch, isValidWorkspaceId } from '../../src/lib/storage/analysisProtocol';
-import { CURRENT_SCHEMA_VERSION, MIGRATIONS, migrationChecksum } from './schema';
+import { applyMigrations } from './migrate';
 import { readMeta, type WorkspaceContext, type WorkspaceEnv } from './context';
 import * as studies from './studies';
 import * as participants from './participants';
@@ -21,6 +21,9 @@ import * as exporter from './exports';
 import * as operator from './operator';
 import * as login from './login';
 import type * as Rpc from './rpcTypes';
+
+/** Wake-up interval an alarm keeps while the object is held (see alarm()). */
+const HELD_ALARM_RETRY_MS = 60 * 60 * 1000;
 
 type InitState =
   | { status: 'ready' }
@@ -50,32 +53,9 @@ export class WorkspaceStore extends DurableObject<WorkspaceEnv> {
 
   private initialize(): InitState {
     const sql = this.ctx.storage.sql;
-    sql.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
-      version INTEGER PRIMARY KEY,
-      checksum TEXT NOT NULL,
-      applied_at INTEGER NOT NULL
-    )`);
-    const applied = sql
-      .exec<{ version: number; checksum: string }>(`SELECT version, checksum FROM schema_migrations ORDER BY version`)
-      .toArray();
-    const highest = applied.length > 0 ? applied[applied.length - 1].version : 0;
-    if (highest > CURRENT_SCHEMA_VERSION) return { status: 'schema-unsupported' };
-    for (const record of applied) {
-      const known = MIGRATIONS.find((migration) => migration.version === record.version);
-      if (!known || migrationChecksum(known) !== record.checksum) return { status: 'schema-unsupported' };
-    }
-    for (const migration of MIGRATIONS) {
-      if (migration.version <= highest) continue;
-      this.ctx.storage.transactionSync(() => {
-        for (const statement of migration.statements) sql.exec(statement);
-        sql.exec(
-          `INSERT INTO schema_migrations (version, checksum, applied_at) VALUES (?, ?, ?)`,
-          migration.version,
-          migrationChecksum(migration),
-          Date.now(),
-        );
-      });
-    }
+    // Each migration and its ledger row commit together; a throw here resets
+    // the object and the next start retries (ST-09, migrate.ts).
+    if (applyMigrations(this.ctx.storage).status !== 'ready') return { status: 'schema-unsupported' };
     if (!readMeta(sql)) {
       const workspaceId = this.env.WORKSPACE_ID;
       const epoch = this.env.ANALYSIS_RECOVERY_EPOCH;
@@ -347,7 +327,12 @@ export class WorkspaceStore extends DurableObject<WorkspaceEnv> {
   // ---------- The single alarm (JOB-06/07) ----------
 
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    if (this.requireInitialized()) return;
+    if (this.requireInitialized()) {
+      // A held object keeps one hourly wake-up so a compatible redeploy or a
+      // completed bootstrap resumes dispatch without waiting for a request.
+      await this.ctx.storage.setAlarm(Date.now() + HELD_ALARM_RETRY_MS);
+      return;
+    }
     await scheduler.runAlarm(this.ws, alarmInfo);
   }
 }
