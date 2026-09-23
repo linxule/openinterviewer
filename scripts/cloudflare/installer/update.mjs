@@ -1,7 +1,9 @@
 // update (SETUP-01, SETUP-05): deploy a new checked artifact to an existing
 // installation. Regenerates the installation config from the current
 // template + receipt, refuses on drift, never rotates secrets or the epoch
-// and never deletes resources.
+// and never deletes resources. A provider change is recorded in the receipt
+// as pendingProviderChange before its first remote write and finalized only
+// after its deploy succeeded, so rerunning the same update finishes it.
 
 import { artifactStatus } from './artifact.mjs';
 import { checkToolEnvironment, deployInstallation, ensureConfigFile, resolveAccount, saveReceipt, wranglerFor } from './context.mjs';
@@ -16,7 +18,7 @@ import {
   validateProvider,
 } from './model.mjs';
 import { readProtectedInput } from './secrets.mjs';
-import { acquireLock, buildInstallationConfig, identityDiff, installationIdentity, readInstallationConfig, readReceipt } from './state.mjs';
+import { acquireLock, assertNoPendingProviderChange, buildInstallationConfig, identityDiff, installationIdentity, readInstallationConfig, readReceipt } from './state.mjs';
 import { printVerification, summarizeVerification } from './report.mjs';
 import { verifyInstallation } from './verify.mjs';
 
@@ -38,6 +40,9 @@ export async function updateCommand(ctx) {
   if (options.provider !== undefined) validateProvider(options.provider);
   if (options.jurisdiction !== undefined) validateJurisdiction(options.jurisdiction);
   if (options['change-provider'] && !options.provider) throw refuse('--change-provider requires --provider <name>');
+  const pending = assertNoPendingProviderChange(receipt, {
+    finishing: Boolean(options['change-provider']) && options.provider === receipt.pendingProviderChange?.to,
+  });
 
   const requested = [];
   if (options.jurisdiction && options.jurisdiction !== receipt.jurisdiction) {
@@ -94,11 +99,15 @@ export async function updateCommand(ctx) {
       if (!bound?.has(name)) drift.push(`secret ${name}: missing on ${names.worker}`);
     }
     if (onDisk) {
-      const expected = buildInstallationConfig(ctx.template, receipt, { bootstrap: '' });
-      const vars = Object.keys(expected.vars).filter((name) => Object.hasOwn(onDisk.vars ?? {}, name));
-      const pick = (identity) => ({ ...identity, vars: Object.fromEntries(vars.map((name) => [name, identity.vars[name]])) });
-      for (const diff of identityDiff(pick(installationIdentity(expected)), pick(installationIdentity(onDisk)))) {
-        drift.push(`installation config ${diff}`);
+      // An interrupted provider change may have left the config on either side.
+      const sides = [receipt.provider, ...(pending ? [pending.to] : [])].map((side) => {
+        const expected = buildInstallationConfig(ctx.template, receipt, { bootstrap: '', provider: side });
+        const vars = Object.keys(expected.vars).filter((name) => Object.hasOwn(onDisk.vars ?? {}, name));
+        const pick = (identity) => ({ ...identity, vars: Object.fromEntries(vars.map((name) => [name, identity.vars[name]])) });
+        return identityDiff(pick(installationIdentity(expected)), pick(installationIdentity(onDisk)));
+      });
+      if (!sides.some((diffs) => diffs.length === 0)) {
+        for (const diff of sides[0]) drift.push(`installation config ${diff}`);
       }
     }
     if (drift.length > 0) {
@@ -115,19 +124,34 @@ export async function updateCommand(ctx) {
       ]);
     }
 
+    // The key is read and validated before anything is recorded or uploaded.
+    let supplied = null;
     if (newKey && !bound.has(newKey)) {
       out.step(`Adding ${newKey} for provider ${provider} (no other secret changes)`);
-      const supplied = await readProtectedInput([newKey], { fromStdin: Boolean(options['secrets-stdin']) });
+      supplied = await readProtectedInput([newKey], { fromStdin: Boolean(options['secrets-stdin']) });
       for (const value of Object.values(supplied)) ctx.registry.add(value);
-      await wrangler.putSecrets(names.worker, ctx.paths.config, supplied);
-      const after = await wrangler.secretNames(names.worker, ctx.paths.config);
-      if (!after?.has(newKey)) throw new InstallerError(`${newKey} not observed after upload; rerun update`);
     }
-
-    await deployInstallation(ctx, receipt, { purpose: 'update', artifact, provider });
-    if (provider !== receipt.provider) {
+    if (newKey && !pending) {
+      receipt.pendingProviderChange = { from: receipt.provider, to: provider, startedAt: new Date().toISOString() };
+      saveReceipt(ctx, receipt);
+    }
+    try {
+      if (supplied) {
+        await wrangler.putSecrets(names.worker, ctx.paths.config, supplied);
+        const after = await wrangler.secretNames(names.worker, ctx.paths.config);
+        if (!after?.has(newKey)) throw new InstallerError(`${newKey} not observed after upload`);
+      }
+      await deployInstallation(ctx, receipt, { purpose: 'update', artifact, provider });
+    } catch (error) {
+      if (newKey && error instanceof InstallerError) {
+        error.hints = [...error.hints, `The provider change to ${provider} is recorded as pending in the receipt; rerun this update (--provider ${provider} --change-provider) to finish it.`];
+      }
+      throw error;
+    }
+    if (newKey) {
       receipt.providerHistory = [...(receipt.providerHistory ?? []), { from: receipt.provider, to: provider, at: new Date().toISOString() }];
       receipt.provider = provider;
+      delete receipt.pendingProviderChange;
       saveReceipt(ctx, receipt);
     }
 

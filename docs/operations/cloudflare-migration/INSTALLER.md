@@ -118,7 +118,7 @@ The installer never re-bootstraps a completed installation on its own: F2 exists
 
 `<state-dir>/<install>-<env>/` (default `cloudflare/installations/`, gitignored) holds no secret values. Back it up: the receipt is the existing-install identity that `update` and `resume` require.
 
-- `receipt.json`: `formatVersion`, `install`, `env`, `accountId`, `names`, `workspaceId`, `jurisdiction`, `provider`, `bootstrap`, `origin`/`originSource`, `workersDevUrl`, `epochFingerprint` (`sha256:` + 16 hex of the epoch), `resources` (per name: `kind`, `attempts` [`at`, and `commit` for the Worker], queue `id`, `createdAt`, `observedAt`), `secrets` (`attemptedAt`, `epochGeneratedAt`), `operatorToken` (destination, path only, `writtenAt`), `providerHistory` (after `--change-provider`), `phases`, `deployments` (`purpose`: `initial`, `origin`, `workspace-init`, `bootstrap-clear`, `update`; `commit`, `workerSha256`, `appBaseUrl`, `bootstrap`, `provider`, `at`), `lastVerification` (status, failed check ids, targets), timestamps.
+- `receipt.json`: `formatVersion`, `install`, `env`, `accountId`, `names`, `workspaceId`, `jurisdiction`, `provider`, `bootstrap`, `origin`/`originSource`, `workersDevUrl`, `epochFingerprint` (`sha256:` + 16 hex of the epoch), `resources` (per name: `kind`, `attempts` [`at`, and `commit` for the Worker], queue `id`, `createdAt`, `observedAt`), `secrets` (`attemptedAt`, `epochGeneratedAt`), `operatorToken` (destination, path only, `writtenAt`), `providerHistory` (after `--change-provider`), `pendingProviderChange` (`from`, `to`, `startedAt`; only while a provider change is unfinished), `phases`, `deployments` (`purpose`: `initial`, `origin`, `workspace-init`, `bootstrap-clear`, `update`; `commit`, `workerSha256`, `appBaseUrl`, `bootstrap`, `provider`, `at`), `lastVerification` (status, failed check ids, targets), timestamps.
 - `wrangler.jsonc`: the current template with installation-owned fields only (`name`, `account_id`, vars values, queue names). It passes `deploy.mjs`'s `configDrift()`. Do not edit it; `update` regenerates it and refuses if it was changed, and `config` rewrites it without deploying.
 
 After an operator rotates the epoch during a restore (RUNBOOK, OPS-03), `epochFingerprint` no longer describes the bound epoch; the installer never reads or changes the epoch.
@@ -144,6 +144,8 @@ It refuses without deploying:
 
 It never creates, deletes or rotates anything. The one exception: `--change-provider --provider <name>` uploads the new provider's key alone when it is not yet bound.
 
+A provider change is resumable. After the checks above and after reading the new key, `update` records `pendingProviderChange` in the receipt, before it uploads the key or deploys. The receipt's `provider` and `providerHistory` change only after the deploy succeeds, in the same write that clears the record. If the change stops part way (a failed upload, a failed deploy, or a lost reply after the upload landed), rerun the same command, `update --provider <name> --change-provider --yes`. The installation config may then name either provider of the pending change. Any other difference is still drift. A key that is already bound is not asked for again, and the redeploy is safe after a lost reply. The history gets one entry. While a change is pending, `update` refuses every other request (a plain update, another provider or the old one), and so do `resume`, `apply` and `config`, with the command that finishes it. `plan` lists it in `notes`. To go back, finish the change, then run `update --change-provider` to the old provider. Both keys stay bound, so no key is asked for.
+
 After the deploy:
 
 - A workspace the operator left `draining`, `frozen` or in `recovery` gives exit 3 with the deployed version. The RUNBOOK drains before a deploy. Run `verify` after reopening.
@@ -165,6 +167,7 @@ It refuses (exit 2) and writes nothing:
 - when the receipt lacks `bootstrap-clear`, or records it without `workspace-init` (`installation <install> (<env>) is not complete: WORKSPACE_BOOTSTRAP has not been cleared`). Finish the installation with `resume` first;
 - with any option that asks for a change: `--provider`, `--jurisdiction`, `--origin`, `--account-id`, `--import-target`, `--secrets-stdin`, `--operator-token-file`, `--reveal-operator-token`, `--change-provider` or `--yes`;
 - when the generated config fails the local check that `verify --config` applies.
+- while a provider change is pending (`pendingProviderChange` in the receipt): finish it with `update --provider <to> --change-provider --yes` first.
 
 Use it to produce `CLOUDFLARE_INSTALL_CONFIG` for the CI promotion ([below](#maintained-instance-ci-promotion)), and to replace a lost or hand-edited config without deploying.
 
@@ -280,7 +283,8 @@ Locally (`npm run test:setup:cloudflare`, simulated account):
 - `update`:
   - keeps names, vars and secret digests;
   - regenerates a lost config;
-  - reports a drained or frozen workspace as held.
+  - reports a drained or frozen workspace as held;
+  - finishes an interrupted `--change-provider` when rerun (deploy failed before upload, lost reply after it, lost key-upload reply) with one history entry, refuses other commands while it is pending, and still refuses unrelated drift.
 - Refused before any write: collisions, drift (including a recreated queue), jurisdiction, provider, origin and account changes, invalid credentials, and a non-public compliance region.
 - Staging is isolated.
 - Generated configs pass the real `deploy.mjs` `configDrift()`.

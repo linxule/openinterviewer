@@ -129,6 +129,124 @@ describe('setup:cloudflare update and verify', { concurrency: 6 }, () => {
     assertNoSecretLeak(sandbox, [run], ['sk-ant-fixture-0123456789abcdef']);
   });
 
+  // An interrupted --change-provider: the receipt records the pending change
+  // before any remote write, and rerunning the same update finishes it.
+  const CLAUDE_KEY = 'sk-ant-fixture-0123456789abcdef';
+  const CHANGE = [...UPDATE, '--provider', 'claude', '--change-provider', '--secrets-stdin'];
+  async function interruptedChange(t, when, at = 'deploy') {
+    const sandbox = await installed(t);
+    sandbox.newCommit(NEXT_COMMIT);
+    sandbox.update((state) => { state.failures.push({ at, when }); });
+    const run = await sandbox.run('update', CHANGE, { input: JSON.stringify({ ANTHROPIC_API_KEY: CLAUDE_KEY }) });
+    assert.equal(run.code, 1, run.output);
+    assert.match(run.stderr, /rerun this update \(--provider claude --change-provider\)/);
+    const receipt = sandbox.receipt();
+    assert.equal(receipt.provider, 'gemini');
+    assert.equal(receipt.providerHistory, undefined);
+    assert.deepEqual([receipt.pendingProviderChange.from, receipt.pendingProviderChange.to], ['gemini', 'claude']);
+    return { sandbox, run };
+  }
+
+  for (const [label, at, when, deployed, config] of [
+    ['a deploy that failed before upload', 'deploy', 'before', 'gemini', 'claude'],
+    ['a lost reply after the upload landed', 'deploy', 'after', 'claude', 'claude'],
+    ['a lost reply from the key upload', 'secret bulk', 'after', 'gemini', 'gemini'],
+  ]) {
+    test(`update --change-provider resumes after ${label} and records the change once`, async (t) => {
+      const { sandbox, run: first } = await interruptedChange(t, when, at);
+      assert.equal(sandbox.state().workers['oi-acme'].vars.AI_PROVIDER, deployed);
+      assert.equal(sandbox.config().vars.AI_PROVIDER, config);
+      const bulk = sandbox.state().secretBulkCalls.length;
+      const deploys = sandbox.state().deploys.length;
+
+      const again = await sandbox.run('update', CHANGE);
+      assert.equal(again.code, 0, again.output);
+      assert.doesNotMatch(again.output, /drift detected/);
+      const state = sandbox.state();
+      assert.equal(state.secretBulkCalls.length, bulk, 'the bound key is not uploaded again');
+      assert.equal(state.deploys.length, deploys + 1);
+      assert.equal(state.deploys.at(-1).vars.AI_PROVIDER, 'claude');
+      const receipt = sandbox.receipt();
+      assert.equal(receipt.provider, 'claude');
+      assert.equal(receipt.pendingProviderChange, undefined);
+      assert.deepEqual(receipt.providerHistory.map(({ from, to }) => [from, to]), [['gemini', 'claude']]);
+
+      const plain = await sandbox.run('update', UPDATE);
+      assert.equal(plain.code, 0, plain.output);
+      assert.equal(sandbox.receipt().providerHistory.length, 1, 'no duplicate history entry');
+      assertNoSecretLeak(sandbox, [first, again, plain], [CLAUDE_KEY]);
+    });
+  }
+
+  test('a pending provider change refuses any other change or command until it is finished', async (t) => {
+    const { sandbox } = await interruptedChange(t, 'after');
+    const configText = readFileSync(path.join(sandbox.installDir(), 'wrangler.jsonc'), 'utf8');
+    const receiptText = readFileSync(path.join(sandbox.installDir(), 'receipt.json'), 'utf8');
+    const deploys = sandbox.state().deploys.length;
+    const bulk = sandbox.state().secretBulkCalls.length;
+    for (const [command, args] of [
+      ['update', [...UPDATE, '--provider', 'openai', '--change-provider', '--secrets-stdin']],
+      ['update', [...UPDATE, '--provider', 'gemini', '--change-provider']],
+      ['update', UPDATE],
+      ['resume', ['--install', 'acme', '--env', 'production', '--yes']],
+      ['config', ['--install', 'acme', '--env', 'production']],
+    ]) {
+      const run = await sandbox.run(command, args, { input: JSON.stringify({ OPENAI_API_KEY: 'sk-fixture-openai-0123456789' }) });
+      assert.equal(run.code, 2, `${command} ${args.join(' ')}\n${run.output}`);
+      assert.match(run.stderr, /provider change from gemini to claude .*has not finished/);
+      assert.match(run.stderr, /update --provider claude --change-provider/);
+    }
+    const plan = await sandbox.run('plan', ['--install', 'acme', '--env', 'production', '--json']);
+    assert.equal(plan.code, 0, plan.output);
+    assert.ok(JSON.parse(plan.stdout).notes.some((note) => /change from gemini to claude has not finished/.test(note)));
+    assert.equal(sandbox.state().deploys.length, deploys);
+    assert.equal(sandbox.state().secretBulkCalls.length, bulk);
+    assert.equal(readFileSync(path.join(sandbox.installDir(), 'wrangler.jsonc'), 'utf8'), configText);
+    assert.equal(readFileSync(path.join(sandbox.installDir(), 'receipt.json'), 'utf8'), receiptText);
+  });
+
+  for (const [label, edit] of [
+    ['an unrelated hand edit', (text) => text.replace(/"WORKSPACE_ID": "ws_[a-f0-9]+"/, `"WORKSPACE_ID": "ws_${'0'.repeat(32)}"`)],
+    ['a provider on neither side of the change', (text) => text.replace('"AI_PROVIDER": "claude"', '"AI_PROVIDER": "openai"')],
+  ]) {
+    test(`a pending provider change still refuses ${label} in the installation config`, async (t) => {
+      const { sandbox } = await interruptedChange(t, 'before');
+      const file = path.join(sandbox.installDir(), 'wrangler.jsonc');
+      writeFileSync(file, edit(readFileSync(file, 'utf8')));
+      const deploys = sandbox.state().deploys.length;
+      const run = await sandbox.run('update', CHANGE);
+      assert.equal(run.code, 2, run.output);
+      assert.match(run.stderr, /drift detected; nothing was changed:\n\s+- installation config vars\.(WORKSPACE_ID|AI_PROVIDER)/);
+      assert.equal(sandbox.state().deploys.length, deploys);
+      assert.equal(sandbox.receipt().provider, 'gemini');
+    });
+  }
+
+  test('without a pending change, a config already switched to another provider is drift', async (t) => {
+    const sandbox = await installed(t);
+    const file = path.join(sandbox.installDir(), 'wrangler.jsonc');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('"AI_PROVIDER": "gemini"', '"AI_PROVIDER": "claude"'));
+    sandbox.newCommit(NEXT_COMMIT);
+    const deploys = sandbox.state().deploys.length;
+    const run = await sandbox.run('update', CHANGE, { input: JSON.stringify({ ANTHROPIC_API_KEY: CLAUDE_KEY }) });
+    assert.equal(run.code, 2, run.output);
+    assert.match(run.stderr, /installation config vars\.AI_PROVIDER: expected "gemini", found "claude"/);
+    assert.equal(sandbox.state().deploys.length, deploys);
+    assert.equal(sandbox.receipt().pendingProviderChange, undefined, 'a refused update records no pending change');
+  });
+
+  test('a provider change whose key input is rejected records nothing and changes nothing', async (t) => {
+    const sandbox = await installed(t);
+    sandbox.newCommit(NEXT_COMMIT);
+    const receiptText = readFileSync(path.join(sandbox.installDir(), 'receipt.json'), 'utf8');
+    const deploys = sandbox.state().deploys.length;
+    const run = await sandbox.run('update', CHANGE, { input: JSON.stringify({}) });
+    assert.notEqual(run.code, 0, run.output);
+    assert.match(run.stderr, /ANTHROPIC_API_KEY/);
+    assert.equal(readFileSync(path.join(sandbox.installDir(), 'receipt.json'), 'utf8'), receiptText);
+    assert.equal(sandbox.state().deploys.length, deploys);
+  });
+
   test('plan on an installed system reports reuse, refused changes and drift without writing', async (t) => {
     const sandbox = await installed(t);
     const before = sandbox.state();

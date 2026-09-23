@@ -6,7 +6,7 @@
 
 import { bootstrapFor } from './context.mjs';
 import { InstallerError, REFUSED } from './model.mjs';
-import { acquireLock, buildInstallationConfig, readReceipt, writeInstallationConfig } from './state.mjs';
+import { acquireLock, assertNoPendingProviderChange, buildInstallationConfig, readReceipt, writeInstallationConfig } from './state.mjs';
 import { checkDeployedConfig } from './verify.mjs';
 
 /** Options that request a change; config never changes an installation. */
@@ -30,6 +30,8 @@ export async function configCommand(ctx) {
       hints: ['config needs the installation receipt; pass --state-dir if it lives elsewhere.'],
     });
   }
+  // Its config could deploy either provider; CI must not guess.
+  assertNoPendingProviderChange(receipt);
   if (!receipt.phases?.['bootstrap-clear'] || bootstrapFor(receipt) !== '') {
     throw new InstallerError(`installation ${ctx.install} (${ctx.environment}) is not complete: WORKSPACE_BOOTSTRAP has not been cleared`, {
       exitCode: REFUSED,

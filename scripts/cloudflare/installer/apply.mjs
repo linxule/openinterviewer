@@ -38,7 +38,7 @@ import {
   writeOperatorTokenFile,
 } from './secrets.mjs';
 import { dropAttempt, queueOwnership, recordAttempt, workerOwnership } from './ownership.mjs';
-import { acquireLock, firstIncompletePhase, markPhase, newReceipt, readReceipt } from './state.mjs';
+import { acquireLock, assertNoPendingProviderChange, firstIncompletePhase, markPhase, newReceipt, readReceipt } from './state.mjs';
 import { ownWorkerUrl, pollDeployment, verifyInstallation } from './verify.mjs';
 import { printVerification, summarizeVerification } from './report.mjs';
 
@@ -63,6 +63,7 @@ function checkArguments(ctx, receipt) {
     }
     return origin;
   }
+  assertNoPendingProviderChange(receipt);
   if (options.provider && options.provider !== receipt.provider) {
     throw refuse(`--provider ${options.provider} differs from the installed provider ${receipt.provider}`, [
       'Switch providers on a completed installation with update --change-provider.',

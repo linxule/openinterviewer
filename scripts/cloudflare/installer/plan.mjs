@@ -62,6 +62,10 @@ export async function planCommand(ctx) {
   if (receipt && options.provider && options.provider !== receipt.provider) {
     notes.push(`provider: installed ${receipt.provider}; switching to ${options.provider} needs update --change-provider`);
   }
+  if (receipt?.pendingProviderChange) {
+    const { from, to } = receipt.pendingProviderChange;
+    notes.push(`provider: a change from ${from} to ${to} has not finished; finish it with update --provider ${to} --change-provider`);
+  }
   if (receipt && options.jurisdiction && options.jurisdiction !== receipt.jurisdiction) {
     notes.push(`jurisdiction: installed ${receipt.jurisdiction}; changing it is a data migration that update refuses`);
   }

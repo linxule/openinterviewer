@@ -9,6 +9,7 @@ import {
   InstallerError,
   JURISDICTIONS,
   PHASES,
+  PROVIDER_KEYS,
   RECEIPT_FORMAT_VERSION,
   REFUSED,
   installationKey,
@@ -94,6 +95,32 @@ export function newReceipt({ install, environment, accountId, names, workspaceId
     createdAt: now,
     updatedAt: now,
   };
+}
+
+/**
+ * An update --change-provider records its change here before its first
+ * remote write and clears it after its deploy. While it is set, only the
+ * update that finishes it (`finishing`) may run; returns the pending record.
+ */
+export function assertNoPendingProviderChange(receipt, { finishing = false } = {}) {
+  const pending = receipt.pendingProviderChange;
+  if (!pending) return null;
+  if (pending.from !== receipt.provider || pending.to === pending.from || !Object.hasOwn(PROVIDER_KEYS, pending.to ?? '')) {
+    throw new InstallerError(`the receipt's pendingProviderChange ${JSON.stringify(pending)} is inconsistent with its provider ${receipt.provider}`, {
+      exitCode: REFUSED,
+      hints: ['Restore the receipt from your records before continuing.'],
+    });
+  }
+  if (!finishing) {
+    throw new InstallerError(`the provider change from ${pending.from} to ${pending.to} started at ${pending.startedAt} has not finished`, {
+      exitCode: REFUSED,
+      hints: [
+        `Finish it first: update --provider ${pending.to} --change-provider --yes (it is safe to rerun; an already bound key is not requested again).`,
+        `To go back to ${pending.from} afterwards, run update --provider ${pending.from} --change-provider --yes.`,
+      ],
+    });
+  }
+  return pending;
 }
 
 export function markPhase(receipt, phase) {
