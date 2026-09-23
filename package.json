@@ -34,7 +34,10 @@
     "test:contract:redis": "vitest run --config vitest.integration.config.mts tests/integration/workspaceStore.redis.contract.test.ts",
     "typegen:cloudflare": "wrangler types cloudflare/worker-configuration.d.ts",
     "build:cloudflare": "node scripts/cloudflare/build.mjs",
-    "test:cloudflare:artifact": "vitest run --config vitest.artifact.config.mts"
+    "test:cloudflare:artifact": "vitest run --config vitest.artifact.config.mts",
+    "setup:cloudflare": "node scripts/cloudflare/setup.mjs",
+    "deploy:cloudflare": "node scripts/cloudflare/deploy.mjs",
+    "test:setup:cloudflare": "node --test tests/setup-cloudflare/*.test.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
