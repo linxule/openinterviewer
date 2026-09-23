@@ -5,6 +5,10 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # Tailwind 4 needs a deliberate migration; keep security updates eligible.
+      - dependency-name: tailwindcss
+        update-types: [version-update:semver-major]
     groups:
       # Provider upgrades also need the explicitly authorized live smoke tier.
       providers:
