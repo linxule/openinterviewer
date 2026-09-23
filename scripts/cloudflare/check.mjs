@@ -56,6 +56,7 @@ const LANES = [
   ...Object.entries(NODE_BUILD_FIXTURES).map(([name, env]) => ({ name, cmd: ['npm', 'run', 'build'], env })),
   { name: 'node-browser', cmd: ['npm', 'run', 'test:e2e'] },
   { name: 'cloudflare-artifact', cmd: ['npm', 'run', 'test:cloudflare:artifact'], needsArtifact: true },
+  { name: 'cloudflare-restart', cmd: ['npm', 'run', 'test:cloudflare:restart'], needsArtifact: true },
   { name: 'cloudflare-browser', cmd: ['npm', 'run', 'test:e2e:cloudflare'], needsArtifact: true },
 ];
 

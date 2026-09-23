@@ -1,0 +1,10 @@
+// Restart-lane transaction probe (tests/cloudflare-restart/txProbe.worker.js).
+// Test-only and never deployed; same compatibility date as production.
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "openinterviewer-restart-txprobe",
+  "main": "txProbe.worker.js",
+  "compatibility_date": "2026-09-15",
+  "durable_objects": { "bindings": [{ "name": "TX_PROBE", "class_name": "TxProbe" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TxProbe"] }]
+}

@@ -35,6 +35,7 @@
     "typegen:cloudflare": "wrangler types cloudflare/worker-configuration.d.ts",
     "build:cloudflare": "node scripts/cloudflare/build.mjs",
     "test:cloudflare:artifact": "vitest run --config vitest.artifact.config.mts",
+    "test:cloudflare:restart": "vitest run --config vitest.restart.config.mts",
     "setup:cloudflare": "node scripts/cloudflare/setup.mjs",
     "deploy:cloudflare": "node scripts/cloudflare/deploy.mjs",
     "preview:cloudflare": "node scripts/cloudflare/preview.mjs",
