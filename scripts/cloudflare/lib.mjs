@@ -8,44 +8,65 @@ import path from 'node:path';
 
 export const ROOT = path.resolve(new URL('../..', import.meta.url).pathname);
 
-/** Parse JSON with // and /* comments and trailing commas (wrangler.jsonc). */
+/**
+ * Parse JSON with line comments, block comments and trailing commas (wrangler.jsonc).
+ * Comments and trailing commas are removed only outside strings; an
+ * unterminated string or block comment is an error.
+ */
 export function parseJsonc(text) {
   let out = '';
-  let inString = false;
-  let quote = '';
-  for (let i = 0; i < text.length; i += 1) {
+  let i = 0;
+  const n = text.length;
+  while (i < n) {
     const char = text[i];
     const next = text[i + 1];
-    if (inString) {
-      out += char;
-      if (char === '\\') {
-        out += next ?? '';
-        i += 1;
-      } else if (char === quote) {
-        inString = false;
+    if (char === '"') {
+      let j = i + 1;
+      while (j < n && text[j] !== '"') {
+        if (text[j] === '\\') j += 1;
+        j += 1;
       }
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      inString = true;
-      quote = char;
-      out += char;
+      if (j >= n) throw new SyntaxError('Unterminated string in JSONC');
+      out += text.slice(i, j + 1);
+      i = j + 1;
       continue;
     }
     if (char === '/' && next === '/') {
-      while (i < text.length && text[i] !== '\n') i += 1;
-      out += '\n';
+      while (i < n && text[i] !== '\n') i += 1;
       continue;
     }
     if (char === '/' && next === '*') {
-      i += 2;
-      while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i += 1;
-      i += 1;
+      const close = text.indexOf('*/', i + 2);
+      if (close === -1) throw new SyntaxError('Unterminated block comment in JSONC');
+      i = close + 2;
       continue;
     }
+    if (char === ',') {
+      let j = i + 1;
+      // Look past whitespace and comments for a closing bracket.
+      for (;;) {
+        while (j < n && /\s/.test(text[j])) j += 1;
+        if (text[j] === '/' && text[j + 1] === '/') {
+          while (j < n && text[j] !== '\n') j += 1;
+          continue;
+        }
+        if (text[j] === '/' && text[j + 1] === '*') {
+          const close = text.indexOf('*/', j + 2);
+          if (close === -1) throw new SyntaxError('Unterminated block comment in JSONC');
+          j = close + 2;
+          continue;
+        }
+        break;
+      }
+      if (text[j] === '}' || text[j] === ']') {
+        i += 1;
+        continue;
+      }
+    }
     out += char;
+    i += 1;
   }
-  return JSON.parse(out.replace(/,(\s*[}\]])/g, '$1'));
+  return JSON.parse(out);
 }
 
 export function readJsonc(file) {
