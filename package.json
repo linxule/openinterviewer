@@ -38,7 +38,8 @@
     "setup:cloudflare": "node scripts/cloudflare/setup.mjs",
     "deploy:cloudflare": "node scripts/cloudflare/deploy.mjs",
     "test:setup:cloudflare": "node --test tests/setup-cloudflare/*.test.mjs",
-    "test:e2e:cloudflare": "playwright test --config playwright.cloudflare.config.ts"
+    "test:e2e:cloudflare": "playwright test --config playwright.cloudflare.config.ts",
+    "check:cloudflare": "node scripts/cloudflare/check.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
