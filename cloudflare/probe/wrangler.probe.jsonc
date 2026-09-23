@@ -1,0 +1,15 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "openinterviewer-probe",
+  "main": "probe-worker.ts",
+  "compatibility_date": "2026-08-15",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": { "directory": "../../.open-next/assets", "binding": "ASSETS" },
+  "services": [{ "binding": "WORKER_SELF_REFERENCE", "service": "openinterviewer-probe" }],
+  "durable_objects": { "bindings": [{ "name": "PROBE_STORE", "class_name": "ProbeStore" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ProbeStore"] }],
+  "queues": {
+    "producers": [{ "binding": "PROBE_QUEUE", "queue": "oi-probe" }],
+    "consumers": [{ "queue": "oi-probe", "max_batch_size": 1, "max_concurrency": 1, "max_retries": 3, "retry_delay": 30 }]
+  }
+}
