@@ -71,11 +71,13 @@ export const RESTORE_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 const ISO_TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?(Z|[+-]\d{2}:\d{2})$/;
 
 export class OperatorError extends Error {
-  constructor(message, { exitCode = EXIT_FAILED, detail } = {}) {
+  constructor(message, { exitCode = EXIT_FAILED, detail, transport = false } = {}) {
     super(message);
     this.name = 'OperatorError';
     this.exitCode = exitCode;
     this.detail = detail;
+    /** An operator request was sent but no complete reply came back: the server may have acted. */
+    this.transport = transport;
   }
 }
 
@@ -326,15 +328,24 @@ export async function readCredentials() {
 
 // ---------- HTTP ----------
 
-function networkFailure(error) {
-  const code = error?.cause?.code ?? error?.code ?? error?.name ?? 'network-error';
-  return new OperatorError(`request failed (${String(code)})`, { detail: { network: String(code) } });
+function networkFailure(error, { transport = false } = {}) {
+  // A timeout rejects with a DOMException, whose numeric legacy `code` (23) says nothing: use its name.
+  const code = [error?.cause?.code, error?.code].find((value) => typeof value === 'string') ?? error?.name ?? 'network-error';
+  return new OperatorError(`request failed (${String(code)})`, { detail: { network: String(code) }, transport });
+}
+
+function parseJsonObject(text) {
+  try {
+    const value = JSON.parse(text);
+    return value && typeof value === 'object' ? value : {};
+  } catch {
+    return {};
+  }
 }
 
 async function readJson(response) {
   try {
-    const value = await response.json();
-    return value && typeof value === 'object' ? value : {};
+    return parseJsonObject(await response.text());
   } catch {
     return {};
   }
@@ -350,11 +361,12 @@ function safeDetail(status, body) {
 }
 
 export class OperatorClient {
-  constructor(origin, credentials) {
+  constructor(origin, credentials, { timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
     this.origin = origin;
     this.credentials = credentials;
     this.cookie = null;
     this.signedInAt = 0;
+    this.timeoutMs = timeoutMs;
   }
 
   async signIn() {
@@ -365,7 +377,7 @@ export class OperatorClient {
         headers: { 'content-type': 'application/json', accept: 'application/json' },
         body: JSON.stringify({ password: this.credentials.ADMIN_PASSWORD }),
         redirect: 'manual',
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (error) {
       throw networkFailure(error);
@@ -391,7 +403,11 @@ export class OperatorClient {
     if (!this.cookie || Date.now() - this.signedInAt > SESSION_REFRESH_MS) await this.signIn();
   }
 
-  /** One operator API call. Returns { status, body }; never throws on an HTTP status. */
+  /**
+   * One operator API call. Returns { status, body }; never throws on an HTTP
+   * status. A request that was sent but got no complete reply (reset, timeout,
+   * body cut off) throws an OperatorError with `transport` set.
+   */
   async call(method, pathname, { query, body } = {}) {
     await this.ensureSession();
     const send = async () => {
@@ -412,12 +428,13 @@ export class OperatorClient {
           headers,
           body: body === undefined ? undefined : body,
           redirect: 'manual',
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+          signal: AbortSignal.timeout(this.timeoutMs),
         });
+        // The timeout signal also bounds reading the body.
+        return { status: response.status, body: parseJsonObject(await response.text()) };
       } catch (error) {
-        throw networkFailure(error);
+        throw networkFailure(error, { transport: true });
       }
-      return { status: response.status, body: await readJson(response) };
     };
     let result = await send();
     // Operator authority needs a sign-in from the last 15 minutes; refusals
@@ -466,6 +483,35 @@ async function currentStatus(client) {
     return statusSummary(await client.status());
   } catch (error) {
     return { unavailable: error instanceof OperatorError ? error.message : 'status could not be read' };
+  }
+}
+
+/**
+ * A state-changing request that may or may not have committed: the Worker
+ * said so (OUTCOME_UNKNOWN, an unrecognized 5xx), the reply was lost, or a 2xx
+ * carried no recognizable result. The request is never repeated here; the
+ * report carries `outcome: "unknown"` and a fresh status read, or says that
+ * status could not be read either.
+ */
+async function outcomeUnknown(client, action, reason, detail, next = '') {
+  const status = await currentStatus(client);
+  const statusNote = status.unavailable === undefined
+    ? 'current status is reported below'
+    : 'status could not be read either: run status before anything else and decide from the state it reports (RUNBOOK "Operator CLI")';
+  return new OperatorError(`${action} outcome unknown (${reason}); ${statusNote}${next ? `. ${next}` : ''}`, {
+    detail: { ...detail, outcome: 'unknown', status },
+  });
+}
+
+/** Sends a state-changing request once; a lost reply becomes an unknown outcome, never a resend. */
+async function sendMutation(client, action, pathname, body) {
+  try {
+    return await client.call('POST', pathname, { body });
+  } catch (error) {
+    if (error instanceof OperatorError && error.transport) {
+      throw await outcomeUnknown(client, action, `no reply: ${error.detail.network}`, error.detail);
+    }
+    throw error;
   }
 }
 
@@ -742,7 +788,14 @@ async function loadBackupDirectory(format, raw) {
   return { directory, chunksDir, manifest, importManifest, expected, counts: validation.counts };
 }
 
-async function importCall(client, body) {
+const RESUME_IMPORT = 'Accepted chunks are kept; re-run the same command to resume.';
+
+/**
+ * Import chunks and finalize are idempotent under one manifest digest (a
+ * replayed finalize answers `finalized` again), so these are the only
+ * state-changing requests the CLI resends.
+ */
+async function importCall(client, body, action) {
   let last = null;
   for (let attempt = 1; attempt <= IMPORT_ATTEMPTS; attempt += 1) {
     try {
@@ -755,7 +808,11 @@ async function importCall(client, body) {
       }
       return result;
     } catch (error) {
-      if (!(error instanceof OperatorError) || error.exitCode !== EXIT_FAILED || !error.detail?.network || attempt === IMPORT_ATTEMPTS) throw error;
+      if (!(error instanceof OperatorError) || error.exitCode !== EXIT_FAILED || !error.detail?.network) throw error;
+      if (attempt === IMPORT_ATTEMPTS) {
+        if (error.transport) throw await outcomeUnknown(client, action, `no reply: ${error.detail.network}`, error.detail, RESUME_IMPORT);
+        throw error;
+      }
       await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
     }
   }
@@ -780,11 +837,12 @@ async function importBackup(client, backup) {
       manifest: backup.importManifest,
       chunk: { family: record.family, index: record.index, sha256: record.sha256, rows: record.rows },
     });
-    const result = await importCall(client, body);
+    const action = `import of ${entry.family} #${entry.index}`;
+    const result = await importCall(client, body, action);
     if (result.status !== 200 || result.body.status !== 'accepted' || result.body.family !== entry.family || result.body.index !== entry.index) {
+      if (isUnknownReply(result)) throw await outcomeUnknown(client, action, unknownSummary(result), safeDetail(result.status, result.body), RESUME_IMPORT);
       throw new OperatorError(
-        `import of ${entry.family} #${entry.index} refused (HTTP ${result.status}${result.body.code ? ` ${result.body.code}` : ''}). `
-          + 'Accepted chunks are kept; re-run the same command to resume.',
+        `${action} refused (HTTP ${result.status}${result.body.code ? ` ${result.body.code}` : ''}). ${RESUME_IMPORT}`,
         { detail: { ...safeDetail(result.status, result.body), status: await currentStatus(client) } },
       );
     }
@@ -792,8 +850,11 @@ async function importBackup(client, backup) {
     if (result.body.duplicate === true) duplicates += 1;
   }
 
-  const finalized = await importCall(client, JSON.stringify({ manifest: backup.importManifest, chunk: null, finalize: true }));
+  const finalized = await importCall(client, JSON.stringify({ manifest: backup.importManifest, chunk: null, finalize: true }), 'import finalize');
   if (finalized.status !== 200 || finalized.body.status !== 'finalized') {
+    if (isUnknownReply(finalized)) {
+      throw await outcomeUnknown(client, 'import finalize', unknownSummary(finalized), safeDetail(finalized.status, finalized.body), RESUME_IMPORT);
+    }
     throw new OperatorError(
       `import finalize refused (HTTP ${finalized.status}${finalized.body.code ? ` ${finalized.body.code}` : ''})`,
       { detail: { ...safeDetail(finalized.status, finalized.body), status: await currentStatus(client) } },
@@ -829,33 +890,41 @@ function isDefiniteRefusal(result) {
   return result.status === 503 && DEFINITE_REFUSAL_CODES.has(result.body.code);
 }
 
+/**
+ * A reply that does not settle a state-changing request: OUTCOME_UNKNOWN, a
+ * 5xx that is not a definite refusal, or a 2xx without the expected result
+ * (callers check the expected result first).
+ */
+function isUnknownReply(result) {
+  if (result.status >= 200 && result.status < 300) return true;
+  return !isDefiniteRefusal(result) && (result.body.code === 'OUTCOME_UNKNOWN' || result.status >= 500);
+}
+
+function unknownSummary(result) {
+  return result.status >= 200 && result.status < 300 ? `HTTP ${result.status} without a recognizable result` : refusalSummary(result);
+}
+
 async function maintenance(client, options) {
-  const result = await client.call('POST', '/api/operator/maintenance', {
-    body: JSON.stringify({
-      expectedState: options.expectedState,
-      expectedVersion: options.expectedVersion,
-      nextState: options.nextState,
-      ...(options.classifyInFlight ? { classifyInFlight: true } : {}),
-    }),
-  });
-  if (result.status === 200) {
+  const result = await sendMutation(client, 'maintenance', '/api/operator/maintenance', JSON.stringify({
+    expectedState: options.expectedState,
+    expectedVersion: options.expectedVersion,
+    nextState: options.nextState,
+    ...(options.classifyInFlight ? { classifyInFlight: true } : {}),
+  }));
+  if (result.status === 200 && (result.body.status === 'transitioned' || result.body.status === 'already')) {
     return { command: 'maintenance', status: result.body.status, state: result.body.state, version: result.body.version };
   }
   const detail = safeDetail(result.status, result.body);
-  if (!isDefiniteRefusal(result) && (result.body.code === 'OUTCOME_UNKNOWN' || result.status >= 500)) {
-    // A lost reply is resolved by reading status, never by repeating blindly.
-    throw new OperatorError(`maintenance outcome unknown (${refusalSummary(result)}); current status is reported below`, {
-      detail: { ...detail, status: await currentStatus(client) },
-    });
-  }
+  // A lost reply is resolved by reading status, never by repeating blindly.
+  if (isUnknownReply(result)) throw await outcomeUnknown(client, 'maintenance', unknownSummary(result), detail);
   throw refuse(`maintenance transition refused (${refusalSummary(result)})`, detail);
 }
 
 async function activate(client, options) {
-  const result = await client.call('POST', '/api/operator/recovery/activate', {
-    body: JSON.stringify({ expectedActivatedEpoch: options.expectedEpoch }),
-  });
-  if (result.status === 200) {
+  const result = await sendMutation(client, 'activation', '/api/operator/recovery/activate', JSON.stringify({
+    expectedActivatedEpoch: options.expectedEpoch,
+  }));
+  if (result.status === 200 && (result.body.status === 'activated' || result.body.status === 'already-active')) {
     return {
       command: 'recovery activate',
       status: result.body.status,
@@ -864,22 +933,16 @@ async function activate(client, options) {
     };
   }
   const detail = safeDetail(result.status, result.body);
-  if (!isDefiniteRefusal(result) && (result.body.code === 'OUTCOME_UNKNOWN' || result.status >= 500)) {
-    throw new OperatorError(`activation outcome unknown (${refusalSummary(result)}); current status is reported below`, {
-      detail: { ...detail, status: await currentStatus(client) },
-    });
-  }
+  if (isUnknownReply(result)) throw await outcomeUnknown(client, 'activation', unknownSummary(result), detail);
   throw refuse(`activation refused (${refusalSummary(result)})`, detail);
 }
 
 async function restore(client, options) {
-  const result = await client.call('POST', '/api/operator/recovery/restore', {
-    body: JSON.stringify({
-      expectedState: options.expectedState,
-      expectedVersion: options.expectedVersion,
-      ...(options.bookmark !== null ? { bookmark: options.bookmark } : { at: options.at }),
-    }),
-  });
+  const result = await sendMutation(client, 'restore', '/api/operator/recovery/restore', JSON.stringify({
+    expectedState: options.expectedState,
+    expectedVersion: options.expectedVersion,
+    ...(options.bookmark !== null ? { bookmark: options.bookmark } : { at: options.at }),
+  }));
   if (result.status === 200 && result.body.status === 'scheduled') {
     return {
       command: 'recovery restore',
@@ -892,13 +955,29 @@ async function restore(client, options) {
     };
   }
   const detail = safeDetail(result.status, result.body);
-  if (!isDefiniteRefusal(result) && (result.body.code === 'OUTCOME_UNKNOWN' || result.status >= 500)) {
-    // The object may have restarted on the restored storage before replying.
-    throw new OperatorError(`restore outcome unknown (${refusalSummary(result)}); current status is reported below`, {
-      detail: { ...detail, status: await currentStatus(client) },
-    });
-  }
+  // The object may have restarted on the restored storage before replying.
+  if (isUnknownReply(result)) throw await outcomeUnknown(client, 'restore', unknownSummary(result), detail);
   throw refuse(`restore refused (${refusalSummary(result)})`, detail);
+}
+
+/** Runs a parsed command with a signed-in client. */
+export async function runCommand(client, options, backup = null) {
+  switch (options.command) {
+    case 'status':
+      return { command: 'status', ...(await client.status()) };
+    case 'maintenance':
+      return maintenance(client, options);
+    case 'backup export':
+      return exportBackup(client, options);
+    case 'backup import':
+      return importBackup(client, backup);
+    case 'recovery activate':
+      return activate(client, options);
+    case 'recovery restore':
+      return restore(client, options);
+    default:
+      throw refuse('unknown command');
+  }
 }
 
 export async function runOperator(argv) {
@@ -918,22 +997,7 @@ export async function runOperator(argv) {
   const credentials = await readCredentials();
   const client = new OperatorClient(options.origin, credentials);
   await client.signIn();
-  switch (options.command) {
-    case 'status':
-      return { command: 'status', ...(await client.status()) };
-    case 'maintenance':
-      return maintenance(client, options);
-    case 'backup export':
-      return exportBackup(client, options);
-    case 'backup import':
-      return importBackup(client, backup);
-    case 'recovery activate':
-      return activate(client, options);
-    case 'recovery restore':
-      return restore(client, options);
-    default:
-      throw refuse('unknown command');
-  }
+  return runCommand(client, options, backup);
 }
 
 async function main() {

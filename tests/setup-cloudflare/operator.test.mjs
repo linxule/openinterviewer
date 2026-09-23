@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { ROOT } from '../../scripts/cloudflare/lib.mjs';
-import { parseRestoreTime, RESTORE_BOOKMARK, RESTORE_WINDOW_MS } from '../../scripts/cloudflare/operator.mjs';
+import { OperatorClient, parseCommand, parseRestoreTime, RESTORE_BOOKMARK, RESTORE_WINDOW_MS, runCommand } from '../../scripts/cloudflare/operator.mjs';
 
 const CLI = path.join(ROOT, 'scripts', 'cloudflare', 'operator.mjs');
 const PASSWORD = 'synthetic-admin-password-4471';
@@ -100,6 +100,38 @@ function send(response, status, body, headers = {}) {
   response.end(JSON.stringify(body));
 }
 
+/**
+ * Stands in for the reply after the handler has acted, so the request commits
+ * and then the reply is lost: `reset` destroys the socket before any byte,
+ * `truncate` sends the status and half the body, `html` answers 200 with a
+ * body that is not JSON, and `hang` sends the headers and never the body.
+ */
+function lostReply(response, mode) {
+  let status = 200;
+  let headers = {};
+  return {
+    writeHead(code, values) {
+      status = code;
+      headers = values;
+      return this;
+    },
+    end(text) {
+      if (mode === 'reset') {
+        response.socket.destroy();
+      } else if (mode === 'truncate') {
+        response.writeHead(status, { ...headers, 'content-length': String(Buffer.byteLength(text)) });
+        response.write(text.slice(0, Math.floor(text.length / 2)), () => response.socket.destroy());
+      } else if (mode === 'html') {
+        response.writeHead(200, { 'content-type': 'text/html' });
+        response.end('<html><body>upstream</body></html>');
+      } else if (mode === 'hang') {
+        response.writeHead(status, headers);
+        response.flushHeaders();
+      }
+    },
+  };
+}
+
 async function fakeInstallation(t, overrides = {}) {
   const state = {
     maintenance: { state: 'frozen', version: 4 },
@@ -132,6 +164,12 @@ async function fakeInstallation(t, overrides = {}) {
       authorization: request.headers.authorization ?? null,
       cookie: request.headers.cookie ?? null,
     });
+    // faults.lostReplies: [{ path, mode, times, when?(body) }], each rule used up to `times` requests.
+    const lost = state.faults.lostReplies?.find((rule) => rule.path === url.pathname && rule.times > 0 && (!rule.when || rule.when(body)));
+    if (lost) {
+      lost.times -= 1;
+      response = lostReply(response, lost.mode);
+    }
 
     if (url.pathname === '/api/auth' && request.method === 'POST') {
       // Like the Worker: a body over 1 KiB is refused before any comparison.
@@ -272,7 +310,10 @@ async function fakeInstallation(t, overrides = {}) {
     return send(response, 404, { error: 'Not found' });
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise((resolve) => server.close(resolve)));
+  t.after(() => new Promise((resolve) => {
+    server.closeAllConnections();
+    server.close(resolve);
+  }));
   const { port } = server.address();
   return { state, origin: `http://127.0.0.1:${port}` };
 }
@@ -764,6 +805,119 @@ test('OPS-03 recovery restore reports a definite refusal as exit 2 and an unknow
   assert.equal(unknown.code, 1);
   assert.match(unknown.stderr, /restore outcome unknown/);
   assert.equal(unknown.json.detail.status.maintenance.state, 'frozen');
+});
+
+// ---------- Lost replies ----------
+
+const MUTATIONS = [
+  {
+    name: 'maintenance',
+    path: '/api/operator/maintenance',
+    args: ['maintenance', 'recovery', '--expected-state', 'frozen', '--expected-version', '4'],
+    committed: (json) => assert.deepEqual(json.detail.status.maintenance, { state: 'recovery', version: 5 }),
+  },
+  {
+    name: 'activation',
+    path: '/api/operator/recovery/activate',
+    overrides: { maintenance: { state: 'recovery', version: 6 } },
+    args: ['recovery', 'activate', '--expected-epoch', SOURCE_EPOCH],
+    committed: (json) => assert.equal(json.detail.status.epoch.activated, `ep_${'b'.repeat(32)}`),
+  },
+  {
+    name: 'restore',
+    path: '/api/operator/recovery/restore',
+    args: ['recovery', 'restore', '--expected-state', 'frozen', '--expected-version', '4', '--bookmark', BOOKMARK],
+    committed: (json) => assert.deepEqual(json.detail.status.maintenance, { state: 'frozen', version: 4 }),
+  },
+];
+
+for (const mutation of MUTATIONS) {
+  for (const mode of ['reset', 'truncate', 'html']) {
+    test(`OPS-01 ${mutation.name}: a reply lost after the commit (${mode}) is an unknown outcome with the status read afterwards, never resent`, async (t) => {
+      const { state, origin } = await fakeInstallation(t, {
+        ...mutation.overrides,
+        faults: { lostReplies: [{ path: mutation.path, mode, times: 1 }] },
+      });
+      const result = await runCli([...mutation.args, '--origin', origin]);
+      assert.equal(result.code, 1, result.stderr);
+      assert.match(result.stderr, new RegExp(`${mutation.name} outcome unknown \\((no reply|HTTP 200 without a recognizable result)`));
+      assert.match(result.stderr, /current status is reported below/);
+      assert.equal(result.json.ok, false);
+      assert.equal(result.json.detail.outcome, 'unknown');
+      if (mode !== 'html') assert.equal(typeof result.json.detail.network, 'string');
+      mutation.committed(result.json);
+      assert.equal(state.requests.filter((request) => request.path === mutation.path).length, 1, 'the mutation was resent');
+      assertNoSecretsOrContent(result);
+    });
+  }
+}
+
+test('OPS-02 import finalize: replies lost after the commit are an unknown outcome with the status read afterwards; a re-run resumes', async (t) => {
+  const backup = await exportFixture(t);
+  const target = await fakeInstallation(t, {
+    maintenance: { state: 'recovery', version: 1 },
+    faults: { lostReplies: [{ path: '/api/operator/backup/import', mode: 'reset', times: Infinity, when: (body) => JSON.parse(body).finalize === true }] },
+  });
+  const lost = await runCli(['backup', 'import', '--in', backup, '--origin', target.origin]);
+  assert.equal(lost.code, 1, lost.stderr);
+  assert.match(lost.stderr, /import finalize outcome unknown \(no reply: /);
+  assert.match(lost.stderr, /re-run the same command to resume/);
+  assert.equal(lost.json.detail.outcome, 'unknown');
+  assert.equal(lost.json.detail.status.maintenance.state, 'recovery');
+  assert.deepEqual(target.state.finalized, ROW_COUNTS);
+  assertNoSecretsOrContent(lost);
+
+  target.state.faults = {};
+  const resumed = await runCli(['backup', 'import', '--in', backup, '--origin', target.origin]);
+  assert.equal(resumed.code, 0, resumed.stderr);
+  assert.equal(resumed.json.finalized, true);
+});
+
+test('OPS-01 an unknown outcome whose status read also fails says so and names the next step', async (t) => {
+  const { state, origin } = await fakeInstallation(t, {
+    faults: {
+      lostReplies: [
+        { path: '/api/operator/maintenance', mode: 'reset', times: 1 },
+        { path: '/api/operator/status', mode: 'reset', times: Infinity },
+      ],
+    },
+  });
+  const result = await runCli(['maintenance', 'recovery', '--expected-state', 'frozen', '--expected-version', '4', '--origin', origin]);
+  assert.equal(result.code, 1, result.stderr);
+  assert.match(result.stderr, /maintenance outcome unknown \(no reply: [^)]+\); status could not be read either: run status before anything else/);
+  assert.match(result.stderr, /RUNBOOK/);
+  assert.equal(result.json.detail.outcome, 'unknown');
+  assert.match(result.json.detail.status.unavailable, /^request failed \(/);
+  assert.deepEqual(state.maintenance, { state: 'recovery', version: 5 });
+  assert.equal(state.maintenanceBodies.length, 1);
+  assertNoSecretsOrContent(result);
+});
+
+test('OPS-01 a lost reply on a read-only command is a plain connection error, not an unknown outcome', async (t) => {
+  const { origin } = await fakeInstallation(t, { faults: { lostReplies: [{ path: '/api/operator/status', mode: 'reset', times: Infinity }] } });
+  const result = await runCli(['status', '--origin', origin]);
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /^error: request failed \(/);
+  assert.equal(typeof result.json.detail.network, 'string');
+  assert.equal(result.json.detail.outcome, undefined);
+  assertNoSecretsOrContent(result);
+});
+
+test('OPS-01 a mutation whose reply never finishes is bounded by the request timeout and reported as an unknown outcome', async (t) => {
+  const { state, origin } = await fakeInstallation(t, {
+    faults: { lostReplies: [{ path: '/api/operator/maintenance', mode: 'hang', times: 1 }] },
+  });
+  const options = parseCommand(['maintenance', 'recovery', '--expected-state', 'frozen', '--expected-version', '4', '--origin', origin]);
+  const client = new OperatorClient(options.origin, { ADMIN_PASSWORD: PASSWORD, OPERATOR_TOKEN: TOKEN }, { timeoutMs: 500 });
+  await client.signIn();
+  await assert.rejects(runCommand(client, options), (error) => {
+    assert.equal(error.exitCode, 1);
+    assert.match(error.message, /^maintenance outcome unknown \(no reply: TimeoutError\); current status is reported below$/);
+    assert.equal(error.detail.outcome, 'unknown');
+    assert.deepEqual(error.detail.status.maintenance, { state: 'recovery', version: 5 });
+    return true;
+  });
+  assert.equal(state.maintenanceBodies.length, 1);
 });
 
 // ---------- Sign-in body bound ----------
