@@ -10,7 +10,7 @@ vi.mock('next/navigation', () => ({
 const storageMock = vi.hoisted(() => ({
   readAllInterviews: vi.fn(),
   getAllStudies: vi.fn(),
-  getStudyInterviews: vi.fn(),
+  readStudyInterviews: vi.fn(),
   reconcileStudyOperations: vi.fn(),
   exportAllInterviews: vi.fn(),
 }));
@@ -20,7 +20,7 @@ vi.mock('@/services/storageService', async (importOriginal) => {
     ...actual,
     readAllInterviews: storageMock.readAllInterviews,
     getAllStudies: storageMock.getAllStudies,
-    getStudyInterviews: storageMock.getStudyInterviews,
+    readStudyInterviews: storageMock.readStudyInterviews,
     reconcileStudyOperations: storageMock.reconcileStudyOperations,
     exportAllInterviews: storageMock.exportAllInterviews,
   };

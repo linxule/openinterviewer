@@ -5,12 +5,11 @@ import { useRouter } from 'next/navigation';
 import { StoredStudy, StoredInterview, AggregateSynthesisResult } from '@/types';
 import type { ParticipantLinkMetadata } from '@/lib/participantLinks';
 import {
-  getStudy,
-  getStudyAggregate,
-  getStudyInterviews,
+  readStudy,
+  readStudyAggregate,
+  readStudyInterviews,
   reconcileStudyOperations,
-  ResearcherStorageUnavailableError,
-  StudyOperationPendingError,
+  type ResearcherStorageFailure,
 } from '@/services/storageService';
 import { loadAnalysisExecution } from '@/services/analysisExecution';
 import { Button, Coordinate, Icon, Label, Notice, Rule, Tabs } from '@/components/ui';
@@ -100,6 +99,12 @@ function isStudyOperationPending(response: Response, data: { code?: string }) {
   return response.status === 409 && data.code === 'STUDY_OPERATION_PENDING';
 }
 
+function storageFailureCopy(failure: ResearcherStorageFailure): string {
+  return failure.status === 'unauthorized'
+    ? 'Your researcher session has ended. Sign in again to continue.'
+    : failure.error;
+}
+
 const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
   const router = useRouter();
   const [study, setStudy] = useState<StoredStudy | null>(null);
@@ -120,7 +125,13 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
   const [linksError, setLinksError] = useState<string | null>(null);
   const [revokingLinkId, setRevokingLinkId] = useState<string | null>(null);
   const [operationPending, setOperationPending] = useState(false);
-  const [storageUnavailable, setStorageUnavailable] = useState<string | null>(null);
+  // Why a read did not confirm what the page shows (UI-CF-02/04): the study
+  // itself, the interview list (nothing listed), the aggregate, or a refresh
+  // that kept the state already on screen.
+  const [studyFailure, setStudyFailure] = useState<ResearcherStorageFailure | null>(null);
+  const [listFailure, setListFailure] = useState<string | null>(null);
+  const [aggregateFailure, setAggregateFailure] = useState<string | null>(null);
+  const [refreshFailure, setRefreshFailure] = useState<string | null>(null);
   const [isReconciling, setIsReconciling] = useState(false);
 
   useSetTrailingCrumb(study?.config.name ?? null);
@@ -229,33 +240,56 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
     }
   }, [studyId]);
 
-  // A quiet reload keeps the page (and the loaded register) on screen.
+  // A full load commits each read that succeeded and names each one that did
+  // not. A quiet reload (after a batch) commits the study and its register only
+  // when both reads succeed; otherwise it keeps everything on screen and says
+  // it could not refresh (UI-CF-04). A pending study operation commits nothing.
   const loadStudyData = useCallback(async (options?: { quiet?: boolean }) => {
-    if (!options?.quiet) setLoading(true);
+    const quiet = options?.quiet === true;
+    if (!quiet) setLoading(true);
     try {
-      const [studyData, interviewData, aggregateData] = await Promise.all([
-        getStudy(studyId),
-        getStudyInterviews(studyId),
-        getStudyAggregate(studyId),
+      const [studyRead, listRead, aggregateRead] = await Promise.all([
+        readStudy(studyId),
+        readStudyInterviews(studyId),
+        readStudyAggregate(studyId),
       ]);
-      setStudy(studyData);
-      setInterviews(interviewData);
-      setAggregateSynthesis(aggregateData);
-      setAggregateOpenNotes({});
-      setStorageUnavailable(null);
-    } catch (error) {
-      if (error instanceof StudyOperationPendingError) {
-        setOperationPending(true);
-        // A failed refresh keeps the register already on screen (UI-CF-04).
-        if (!options?.quiet) setInterviews([]);
-      } else if (error instanceof ResearcherStorageUnavailableError) {
-        setStorageUnavailable(error.message);
-        setLinksError(error.message);
-      } else {
-        console.error('Error loading study:', error);
+      const pending = [studyRead, listRead, aggregateRead].some((read) => read.status === 'pending');
+      if (pending) setOperationPending(true);
+
+      if (quiet) {
+        if (studyRead.status !== 'ok' || listRead.status !== 'ok') {
+          const failure = studyRead.status !== 'ok' ? studyRead : listRead;
+          if (failure.status !== 'ok' && failure.status !== 'pending') setRefreshFailure(storageFailureCopy(failure));
+          return;
+        }
+        setStudy(studyRead.value);
+        setInterviews(listRead.value);
+        setListFailure(null);
+        setRefreshFailure(null);
+        if (aggregateRead.status === 'ok') {
+          setAggregateSynthesis(aggregateRead.value);
+          setAggregateOpenNotes({});
+          setAggregateFailure(null);
+        }
+        return;
       }
+
+      if (pending) return;
+      setRefreshFailure(null);
+      if (studyRead.status !== 'ok') {
+        setStudy(null);
+        setStudyFailure(studyRead);
+        return;
+      }
+      setStudy(studyRead.value);
+      setStudyFailure(null);
+      setInterviews(listRead.status === 'ok' ? listRead.value : []);
+      setListFailure(listRead.status === 'ok' ? null : storageFailureCopy(listRead));
+      setAggregateSynthesis(aggregateRead.status === 'ok' ? aggregateRead.value : null);
+      setAggregateFailure(aggregateRead.status === 'ok' ? null : storageFailureCopy(aggregateRead));
+      setAggregateOpenNotes({});
     } finally {
-      if (!options?.quiet) setLoading(false);
+      if (!quiet) setLoading(false);
     }
   }, [studyId]);
 
@@ -566,10 +600,23 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
               {isReconciling ? 'Reconciling…' : 'Reconcile'}
             </Button>
           </>
-        ) : storageUnavailable ? (
+        ) : studyFailure?.status === 'unauthorized' ? (
+          <>
+            <h2 className="font-sans text-[18px] font-semibold text-ink-900">Sign in required</h2>
+            <p className="mt-2 font-sans text-[15px] text-ink-700">{storageFailureCopy(studyFailure)}</p>
+            <Button
+              type="button"
+              variant="primary"
+              onClick={() => router.push(`/login?redirect=${encodeURIComponent(`/studies/${studyId}`)}`)}
+              className="mt-4"
+            >
+              Sign in
+            </Button>
+          </>
+        ) : studyFailure && studyFailure.status !== 'not-found' ? (
           <>
             <h2 className="font-sans text-[18px] font-semibold text-ink-900">Workspace unavailable</h2>
-            <p className="mt-2 font-sans text-[15px] text-ink-700">{storageUnavailable}</p>
+            <p className="mt-2 font-sans text-[15px] text-ink-700">{storageFailureCopy(studyFailure)}</p>
           </>
         ) : (
           <>
@@ -635,6 +682,17 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
             className="mt-2"
           >
             Reconcile
+          </Button>
+        </Notice>
+      )}
+
+      {refreshFailure && (
+        <Notice tone="error" eyebrow="Not refreshed" role="status" className="mb-6">
+          <p className="mt-1 text-[13px] text-ink-700">
+            {`The study could not be refreshed, so what is shown may be out of date. ${refreshFailure}`}
+          </p>
+          <Button type="button" variant="quiet" onClick={() => void loadStudyData({ quiet: true })} className="mt-2">
+            Try again
           </Button>
         </Notice>
       )}
@@ -730,21 +788,40 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                   note={aggregateNote}
                 />
               </div>
-            ) : eligibleInterviewCount < 2 ? (
-              <p className="mt-3 text-[13px] text-ink-500">
-                Need at least 2 analyzed interviews to generate aggregate analysis.
-              </p>
             ) : (
-              <p className="mt-3 text-[13px] text-ink-500">
-                Click &quot;Analyze All Interviews&quot; to generate cross-interview insights.
-              </p>
+              <>
+                {aggregateFailure && (
+                  <Notice tone="error" className="mt-3">
+                    <p className="text-[13px] text-ink-700">
+                      {`The saved aggregate analysis could not be loaded. ${aggregateFailure}`}
+                    </p>
+                  </Notice>
+                )}
+                {eligibleInterviewCount < 2 ? (
+                  <p className="mt-3 text-[13px] text-ink-500">
+                    Need at least 2 analyzed interviews to generate aggregate analysis.
+                  </p>
+                ) : !aggregateFailure && (
+                  <p className="mt-3 text-[13px] text-ink-500">
+                    Click &quot;Analyze All Interviews&quot; to generate cross-interview insights.
+                  </p>
+                )}
+              </>
             )}
           </section>
         </div>
       )}
 
       {activeTab === 'interviews' && (
-        interviews.length === 0 ? (
+        interviews.length === 0 && listFailure ? (
+          <div className="max-w-measure">
+            <h3 className="font-sans text-[18px] font-semibold text-ink-900">Interviews could not be loaded</h3>
+            <p className="mt-2 font-sans text-[15px] text-ink-700">{listFailure}</p>
+            <Button type="button" variant="quiet" onClick={() => void loadStudyData()} className="mt-3">
+              Try again
+            </Button>
+          </div>
+        ) : interviews.length === 0 ? (
           <div className="max-w-measure">
             <h3 className="font-sans text-[18px] font-semibold text-ink-900">No Interviews Yet</h3>
             <p className="mt-2 font-sans text-[15px] text-ink-700">

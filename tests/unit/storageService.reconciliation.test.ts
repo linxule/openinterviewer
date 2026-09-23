@@ -4,7 +4,7 @@ import {
   exportAllInterviews,
   getAllStudies,
   getInterview,
-  getStudy,
+  readStudy,
   reconcileStudyOperations,
   ResearcherStorageUnavailableError,
   StudyOperationPendingError,
@@ -61,13 +61,16 @@ describe('hosted study operation client contract', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/studies/reconcile', { method: 'POST' });
   });
 
-  it('throws STUDY_OPERATION_PENDING from study and interview reads', async () => {
+  it('reports STUDY_OPERATION_PENDING from study and interview reads', async () => {
     vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({
       error: 'A study operation is already in progress.',
       code: 'STUDY_OPERATION_PENDING',
     }), { status: 409, headers: { 'Content-Type': 'application/json' } }))));
 
-    await expect(getStudy('study-a')).rejects.toBeInstanceOf(StudyOperationPendingError);
+    await expect(readStudy('study-a')).resolves.toEqual({
+      status: 'pending',
+      error: 'A study operation is already in progress.',
+    });
     await expect(getInterview('int-a', 'study-a')).rejects.toBeInstanceOf(StudyOperationPendingError);
   });
 

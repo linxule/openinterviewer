@@ -16,6 +16,8 @@ export type ResearcherStorageOutcome<T> =
   | { status: 'too-large'; error: string }
   | { status: 'error'; error: string };
 
+export type ResearcherStorageFailure = Exclude<ResearcherStorageOutcome<never>, { status: 'ok' }>;
+
 export class ResearcherStorageUnavailableError extends Error {
   readonly status = 503;
   readonly retryable = true as const;
@@ -302,7 +304,7 @@ export class StudyOperationPendingError extends Error {
 function classifyResearcherStorageFailure(
   response: Response,
   data: { code?: string; error?: string },
-): Exclude<ResearcherStorageOutcome<never>, { status: 'ok' }> {
+): ResearcherStorageFailure {
   if (response.status === 409 && data.code === 'STUDY_OPERATION_PENDING') {
     return { status: 'pending', error: data.error || 'A study operation is already in progress.' };
   }
@@ -339,29 +341,49 @@ function throwIfTypedStorageFailure(response: Response, data: { code?: string; e
   }
 }
 
-// Get interviews for a specific study
-export async function getStudyInterviews(studyId: string): Promise<StoredInterview[]> {
+/**
+ * The checked study readers below report every failure as a typed outcome and
+ * never as an empty value, so a caller can tell "no interviews" from "the list
+ * could not be read" and keep what it already shows (UI-CF-02/04).
+ */
+async function readResearcherResource<T, D>(
+  url: string,
+  init: RequestInit | undefined,
+  select: (data: D) => T | undefined,
+  messages: {
+    unreadable: string;
+    unavailable: string;
+    /** When set, a 403 is `not-found` with this text instead of the server's. */
+    forbiddenAsNotFound?: string;
+  },
+): Promise<ResearcherStorageOutcome<T>> {
   try {
-    const response = await fetch(`/api/interviews?studyId=${encodeURIComponent(studyId)}`);
-    const data = await response.json().catch(() => ({})) as {
-      interviews?: StoredInterview[];
-      code?: string;
-      error?: string;
-    };
-    throwIfTypedStorageFailure(response, data);
-
-    if (!response.ok) {
-      throw new Error(`API error: ${response.status}`);
+    const response = await fetch(url, init);
+    const data = await response.json().catch(() => ({})) as D & { code?: string; error?: string };
+    if (response.status === 403 && messages.forbiddenAsNotFound !== undefined) {
+      return { status: 'not-found', error: messages.forbiddenAsNotFound };
     }
-
-    return data.interviews || [];
+    if (!response.ok) return classifyResearcherStorageFailure(response, data);
+    const value = select(data);
+    if (value === undefined) return { status: 'error', error: messages.unreadable };
+    return { status: 'ok', value };
   } catch (error) {
-    if (error instanceof StudyOperationPendingError || error instanceof ResearcherStorageUnavailableError) {
-      throw error;
-    }
     logRequestFailure({ event: 'route.failure' }, error);
-    return [];
+    return { status: 'unavailable', error: messages.unavailable, retryable: true };
   }
+}
+
+/** One study's interviews; `ok` is a confirmed list (possibly empty). */
+export function readStudyInterviews(studyId: string): Promise<ResearcherStorageOutcome<StoredInterview[]>> {
+  return readResearcherResource(
+    `/api/interviews?studyId=${encodeURIComponent(studyId)}`,
+    undefined,
+    (data: { interviews?: StoredInterview[] }) => (Array.isArray(data.interviews) ? data.interviews : undefined),
+    {
+      unreadable: 'The interview list could not be read.',
+      unavailable: 'Interview storage is temporarily unavailable.',
+    },
+  );
 }
 
 // Get all studies (researcher only)
@@ -408,50 +430,35 @@ export async function getAllStudies(): Promise<{
   }
 }
 
-// Get single study by ID
-export async function getStudy(id: string): Promise<StoredStudy | null> {
-  try {
-    const response = await fetch(`/api/studies/${id}`);
-    const data = await response.json().catch(() => ({})) as {
-      study?: StoredStudy;
-      code?: string;
-      error?: string;
-    };
-    throwIfTypedStorageFailure(response, data);
-
-    if (!response.ok) {
-      return null;
-    }
-
-    return data.study || null;
-  } catch (error) {
-    if (error instanceof StudyOperationPendingError || error instanceof ResearcherStorageUnavailableError) {
-      throw error;
-    }
-    logRequestFailure({ event: 'route.failure' }, error);
-    return null;
-  }
+/**
+ * One study; `not-found` only when the server answered 404, or 403: hosted
+ * answers 403 for another researcher's study, which the page must show
+ * exactly as a missing one (the text a 404 carries, not the server's).
+ */
+export function readStudy(id: string): Promise<ResearcherStorageOutcome<StoredStudy>> {
+  return readResearcherResource(
+    `/api/studies/${encodeURIComponent(id)}`,
+    undefined,
+    (data: { study?: StoredStudy }) => data.study ?? undefined,
+    {
+      unreadable: 'The study could not be read.',
+      unavailable: 'Study storage is temporarily unavailable.',
+      forbiddenAsNotFound: 'Study not found',
+    },
+  );
 }
 
-// Get the stored aggregate synthesis for a study, or null if none exists yet.
-export async function getStudyAggregate(id: string): Promise<AggregateSynthesisResult | null> {
-  try {
-    const response = await fetch(`/api/studies/${encodeURIComponent(id)}/aggregate`, { cache: 'no-store' });
-    const data = await response.json().catch(() => ({})) as {
-      aggregate?: AggregateSynthesisResult | null;
-      code?: string;
-      error?: string;
-    };
-    throwIfTypedStorageFailure(response, data);
-    if (!response.ok) return null;
-    return data.aggregate ?? null;
-  } catch (error) {
-    if (error instanceof StudyOperationPendingError || error instanceof ResearcherStorageUnavailableError) {
-      throw error;
-    }
-    logRequestFailure({ event: 'route.failure' }, error);
-    return null;
-  }
+/** The stored aggregate synthesis; `ok` with null means none exists yet. */
+export function readStudyAggregate(id: string): Promise<ResearcherStorageOutcome<AggregateSynthesisResult | null>> {
+  return readResearcherResource(
+    `/api/studies/${encodeURIComponent(id)}/aggregate`,
+    { cache: 'no-store' },
+    (data: { aggregate?: AggregateSynthesisResult | null }) => data.aggregate ?? null,
+    {
+      unreadable: 'The aggregate analysis could not be read.',
+      unavailable: 'Analysis storage is temporarily unavailable.',
+    },
+  );
 }
 
 // Delete study

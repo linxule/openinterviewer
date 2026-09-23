@@ -6,21 +6,23 @@ const router = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
 
 const storageMock = vi.hoisted(() => ({
-  getStudy: vi.fn(),
-  getStudyInterviews: vi.fn(),
+  readStudy: vi.fn(),
+  readStudyInterviews: vi.fn(),
 }));
 vi.mock('@/services/storageService', async (importOriginal) => {
   const actual = (await importOriginal()) as typeof import('@/services/storageService');
   return {
     ...actual,
-    getStudy: storageMock.getStudy,
-    getStudyInterviews: storageMock.getStudyInterviews,
+    readStudy: storageMock.readStudy,
+    readStudyInterviews: storageMock.readStudyInterviews,
   };
 });
 
 // StudyDetail wires useSetTrailingCrumb, which requires a BreadcrumbProvider ancestor.
 import { BreadcrumbProvider } from '@/components/shell/breadcrumb';
 import StudyDetail from '@/components/StudyDetail';
+
+const ok = <T,>(value: T) => ({ status: 'ok' as const, value });
 
 function renderStudyDetail(studyId: string) {
   return render(
@@ -55,8 +57,8 @@ beforeEach(() => {
 describe('StudyDetail register table', () => {
   it.each([undefined, 'Use everyday words.\nDo not comment on answers.'])('shows the configured manner or Default (%s)', async (interviewerInstructions) => {
     const config = makeStudyConfig({ id: 'study-manner', name: 'Manner study', interviewerInstructions });
-    storageMock.getStudy.mockResolvedValue(makeStoredStudy({ id: config.id, config }));
-    storageMock.getStudyInterviews.mockResolvedValue([]);
+    storageMock.readStudy.mockResolvedValue(ok(makeStoredStudy({ id: config.id, config })));
+    storageMock.readStudyInterviews.mockResolvedValue(ok([]));
     renderStudyDetail(config.id);
     await screen.findByRole('heading', { name: 'Manner study' });
     fireEvent.click(screen.getByRole('tab', { name: 'Study settings' }));
@@ -70,10 +72,10 @@ describe('StudyDetail register table', () => {
 
   it('lists interview rows with keyboard-navigable row buttons and no ancestor measure', async () => {
     const config = makeStudyConfig({ id: 'study-b', name: 'Register Study' });
-    storageMock.getStudy.mockResolvedValue(makeStoredStudy({ id: 'study-b', config, revision: 1 }));
+    storageMock.readStudy.mockResolvedValue(ok(makeStoredStudy({ id: 'study-b', config, revision: 1 })));
     const interviewA = makeStoredInterview({ id: 'interview-a', studyId: 'study-b' });
     const interviewB = makeStoredInterview({ id: 'interview-b', studyId: 'study-b' });
-    storageMock.getStudyInterviews.mockResolvedValue([interviewA, interviewB]);
+    storageMock.readStudyInterviews.mockResolvedValue(ok([interviewA, interviewB]));
 
     renderStudyDetail('study-b');
 
@@ -110,12 +112,12 @@ describe('StudyDetail register table', () => {
 
   it('numbers rows by participant chronology (Ruling 2), not by newest-first array position', async () => {
     const config = makeStudyConfig({ id: 'study-reverse', name: 'Reverse Order Study' });
-    storageMock.getStudy.mockResolvedValue(makeStoredStudy({ id: 'study-reverse', config, revision: 1 }));
+    storageMock.readStudy.mockResolvedValue(ok(makeStoredStudy({ id: 'study-reverse', config, revision: 1 })));
     // Array order is [newer, older] (newest-first, as the real collection
     // loader returns it) — the reverse of chronological order.
     const newer = makeStoredInterview({ id: 'interview-newer', studyId: 'study-reverse', createdAt: 2_000 });
     const older = makeStoredInterview({ id: 'interview-older', studyId: 'study-reverse', createdAt: 1_000 });
-    storageMock.getStudyInterviews.mockResolvedValue([newer, older]);
+    storageMock.readStudyInterviews.mockResolvedValue(ok([newer, older]));
 
     renderStudyDetail('study-reverse');
     await screen.findByRole('heading', { name: 'Reverse Order Study' });
@@ -131,10 +133,10 @@ describe('StudyDetail register table', () => {
 
   it('carries no icons on any tab', async () => {
     const config = makeStudyConfig({ id: 'study-c', name: 'Icon-free Study' });
-    storageMock.getStudy.mockResolvedValue(makeStoredStudy({ id: 'study-c', config, revision: 1 }));
-    storageMock.getStudyInterviews.mockResolvedValue([
+    storageMock.readStudy.mockResolvedValue(ok(makeStoredStudy({ id: 'study-c', config, revision: 1 })));
+    storageMock.readStudyInterviews.mockResolvedValue(ok([
       makeStoredInterview({ id: 'interview-c', studyId: 'study-c' }),
-    ]);
+    ]));
 
     const { container } = renderStudyDetail('study-c');
     await screen.findByRole('heading', { name: 'Icon-free Study' });
@@ -151,8 +153,8 @@ describe('StudyDetail register table', () => {
 
   it('shows a Copy control with one aria-hidden icon that flips to Copied! after copying a generated link', async () => {
     const config = makeStudyConfig({ id: 'study-link', name: 'Link Study' });
-    storageMock.getStudy.mockResolvedValue(makeStoredStudy({ id: 'study-link', config, revision: 1 }));
-    storageMock.getStudyInterviews.mockResolvedValue([]);
+    storageMock.readStudy.mockResolvedValue(ok(makeStoredStudy({ id: 'study-link', config, revision: 1 })));
+    storageMock.readStudyInterviews.mockResolvedValue(ok([]));
 
     vi.stubGlobal(
       'fetch',
@@ -189,8 +191,8 @@ describe('StudyDetail register table', () => {
 
   it('renders the participant-access toggle as a switch reading ENABLED', async () => {
     const config = makeStudyConfig({ id: 'study-d', name: 'Toggle Study', linksEnabled: true });
-    storageMock.getStudy.mockResolvedValue(makeStoredStudy({ id: 'study-d', config, revision: 1 }));
-    storageMock.getStudyInterviews.mockResolvedValue([]);
+    storageMock.readStudy.mockResolvedValue(ok(makeStoredStudy({ id: 'study-d', config, revision: 1 })));
+    storageMock.readStudyInterviews.mockResolvedValue(ok([]));
 
     renderStudyDetail('study-d');
     await screen.findByRole('heading', { name: 'Toggle Study' });
@@ -203,10 +205,10 @@ describe('StudyDetail register table', () => {
 
   it('pluralizes a one-interview study header as "1 interview"', async () => {
     const config = makeStudyConfig({ id: 'study-single', name: 'Single Interview Study' });
-    storageMock.getStudy.mockResolvedValue(
+    storageMock.readStudy.mockResolvedValue(ok(
       makeStoredStudy({ id: 'study-single', config, revision: 1, interviewCount: 1 })
-    );
-    storageMock.getStudyInterviews.mockResolvedValue([
+    ));
+    storageMock.readStudyInterviews.mockResolvedValue(ok([
       // Analyzed, so the header's "N awaiting analysis" clause (P11.4) does
       // not append to the string this test is actually about: pluralization.
       makeStoredInterview({
@@ -216,7 +218,7 @@ describe('StudyDetail register table', () => {
           contradictions: [], keyInsights: [], bottomLine: 'Bottom line',
         },
       }),
-    ]);
+    ]));
 
     renderStudyDetail('study-single');
 

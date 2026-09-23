@@ -6,20 +6,22 @@ const router = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
 
 const storageMock = vi.hoisted(() => ({
-  getStudy: vi.fn(),
-  getStudyInterviews: vi.fn(),
+  readStudy: vi.fn(),
+  readStudyInterviews: vi.fn(),
 }));
 vi.mock('@/services/storageService', async (importOriginal) => {
   const actual = (await importOriginal()) as typeof import('@/services/storageService');
   return {
     ...actual,
-    getStudy: storageMock.getStudy,
-    getStudyInterviews: storageMock.getStudyInterviews,
+    readStudy: storageMock.readStudy,
+    readStudyInterviews: storageMock.readStudyInterviews,
   };
 });
 
 import { BreadcrumbProvider } from '@/components/shell/breadcrumb';
 import StudyDetail from '@/components/StudyDetail';
+
+const ok = <T,>(value: T) => ({ status: 'ok' as const, value });
 
 function renderStudyDetail(studyId: string) {
   return render(
@@ -46,14 +48,14 @@ beforeEach(() => {
   const config = makeStudyConfig({
     id: 'study-conducting', name: 'Conducting Models Study', aiProvider: 'gemini', aiModel: CONFIG_MODEL,
   });
-  storageMock.getStudy.mockResolvedValue(
+  storageMock.readStudy.mockResolvedValue(ok(
     makeStoredStudy({ id: 'study-conducting', config, revision: 1, interviewCount: 7 })
-  );
+  ));
 });
 
 describe('StudyDetail — ConductingModelsNotice', () => {
   it('fires with two recorded models, counts descending, on the Interviews tab', async () => {
-    storageMock.getStudyInterviews.mockResolvedValue([
+    storageMock.readStudyInterviews.mockResolvedValue(ok([
       ...repeat(0, 4).map((_, i) => makeStoredInterview({
         id: `interview-a${i}`, studyId: 'study-conducting',
         conductedByProvider: 'gemini', conductedByModel: 'gemini-3.7-flash',
@@ -62,7 +64,7 @@ describe('StudyDetail — ConductingModelsNotice', () => {
         id: `interview-b${i}`, studyId: 'study-conducting',
         conductedByProvider: 'gemini', conductedByModel: 'gemini-3.8-flash',
       })),
-    ]);
+    ]));
 
     renderStudyDetail('study-conducting');
     await screen.findByRole('heading', { name: 'Conducting Models Study' });
@@ -73,7 +75,7 @@ describe('StudyDetail — ConductingModelsNotice', () => {
   });
 
   it('fires on the Overview tab too, with identical copy (Ruling 1)', async () => {
-    storageMock.getStudyInterviews.mockResolvedValue([
+    storageMock.readStudyInterviews.mockResolvedValue(ok([
       ...repeat(0, 4).map((_, i) => makeStoredInterview({
         id: `interview-a${i}`, studyId: 'study-conducting',
         conductedByProvider: 'gemini', conductedByModel: 'gemini-3.7-flash',
@@ -82,7 +84,7 @@ describe('StudyDetail — ConductingModelsNotice', () => {
         id: `interview-b${i}`, studyId: 'study-conducting',
         conductedByProvider: 'gemini', conductedByModel: 'gemini-3.8-flash',
       })),
-    ]);
+    ]));
 
     renderStudyDetail('study-conducting');
     await screen.findByRole('heading', { name: 'Conducting Models Study' });
@@ -92,12 +94,12 @@ describe('StudyDetail — ConductingModelsNotice', () => {
   });
 
   it('renders no notice when the study spans exactly one model', async () => {
-    storageMock.getStudyInterviews.mockResolvedValue(
+    storageMock.readStudyInterviews.mockResolvedValue(ok(
       repeat(0, 7).map((_, i) => makeStoredInterview({
         id: `interview-${i}`, studyId: 'study-conducting',
         conductedByProvider: 'gemini', conductedByModel: 'gemini-3.7-flash',
       })),
-    );
+    ));
 
     renderStudyDetail('study-conducting');
     await screen.findByRole('heading', { name: 'Conducting Models Study' });
@@ -106,9 +108,9 @@ describe('StudyDetail — ConductingModelsNotice', () => {
   });
 
   it('renders no notice for seven legacy interviews with no conductedByModel, and never infers the study config model', async () => {
-    storageMock.getStudyInterviews.mockResolvedValue(
+    storageMock.readStudyInterviews.mockResolvedValue(ok(
       repeat(0, 7).map((_, i) => makeStoredInterview({ id: `interview-${i}`, studyId: 'study-conducting' })),
-    );
+    ));
 
     const { container } = renderStudyDetail('study-conducting');
     await screen.findByRole('heading', { name: 'Conducting Models Study' });
@@ -119,7 +121,7 @@ describe('StudyDetail — ConductingModelsNotice', () => {
   });
 
   it('ends the counts line with "not recorded ×1" for a mixed study with one legacy interview', async () => {
-    storageMock.getStudyInterviews.mockResolvedValue([
+    storageMock.readStudyInterviews.mockResolvedValue(ok([
       makeStoredInterview({
         id: 'interview-a', studyId: 'study-conducting',
         conductedByProvider: 'gemini', conductedByModel: 'gemini-3.7-flash',
@@ -129,7 +131,7 @@ describe('StudyDetail — ConductingModelsNotice', () => {
         conductedByProvider: 'claude', conductedByModel: 'claude-sonnet-5',
       }),
       makeStoredInterview({ id: 'interview-c', studyId: 'study-conducting' }),
-    ]);
+    ]));
 
     renderStudyDetail('study-conducting');
     await screen.findByRole('heading', { name: 'Conducting Models Study' });
@@ -139,7 +141,7 @@ describe('StudyDetail — ConductingModelsNotice', () => {
   });
 
   it('renders with a neutral tone, never the error border class', async () => {
-    storageMock.getStudyInterviews.mockResolvedValue([
+    storageMock.readStudyInterviews.mockResolvedValue(ok([
       makeStoredInterview({
         id: 'interview-a', studyId: 'study-conducting',
         conductedByProvider: 'gemini', conductedByModel: 'gemini-3.7-flash',
@@ -148,7 +150,7 @@ describe('StudyDetail — ConductingModelsNotice', () => {
         id: 'interview-b', studyId: 'study-conducting',
         conductedByProvider: 'claude', conductedByModel: 'claude-sonnet-5',
       }),
-    ]);
+    ]));
 
     renderStudyDetail('study-conducting');
     const eyebrow = await screen.findByText('Conducted with 2 models');

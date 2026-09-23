@@ -7,12 +7,12 @@ const router = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
 
 const storageMock = vi.hoisted(() => ({
-  getStudy: vi.fn(),
-  getStudyInterviews: vi.fn(),
+  readStudy: vi.fn(),
+  readStudyInterviews: vi.fn(),
 }));
 vi.mock('@/services/storageService', async (importOriginal) => {
   const actual = (await importOriginal()) as typeof import('@/services/storageService');
-  return { ...actual, getStudy: storageMock.getStudy, getStudyInterviews: storageMock.getStudyInterviews };
+  return { ...actual, readStudy: storageMock.readStudy, readStudyInterviews: storageMock.readStudyInterviews };
 });
 
 const execution = vi.hoisted(() => ({ mode: 'queued-v2' as 'queued-v2' | 'synchronous' | 'unknown' }));
@@ -22,7 +22,8 @@ vi.mock('@/services/analysisExecution', () => ({
 
 import { BreadcrumbProvider } from '@/components/shell/breadcrumb';
 import StudyDetail from '@/components/StudyDetail';
-import { StudyOperationPendingError } from '@/services/storageService';
+
+const ok = <T,>(value: T) => ({ status: 'ok' as const, value });
 
 const STUDY_ID = 'study-durable-batch';
 
@@ -60,12 +61,12 @@ beforeEach(() => {
   execution.mode = 'queued-v2';
   calls = [];
   script = {};
-  storageMock.getStudy.mockResolvedValue(makeStoredStudy({
+  storageMock.readStudy.mockResolvedValue(ok(makeStoredStudy({
     id: STUDY_ID,
     config: makeStudyConfig({ id: STUDY_ID, name: 'Durable Batch' }),
     revision: 1,
     interviewCount: 3,
-  }));
+  })));
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const match = url.match(/\/api\/interviews\/([^/]+)\/analyze/);
@@ -97,7 +98,7 @@ async function flush(ms = 0) {
 }
 
 async function renderStudy(interviews: StoredInterview[]) {
-  storageMock.getStudyInterviews.mockResolvedValue(interviews);
+  storageMock.readStudyInterviews.mockResolvedValue(ok(interviews));
   const view = render(
     <BreadcrumbProvider>
       <StudyDetail studyId={STUDY_ID} />
@@ -148,7 +149,7 @@ describe('StudyDetail — durable analysis batch (API-04, UI-CF-04)', () => {
     expect(batchStatus()).toHaveTextContent('Batch complete: 2 of 2 finished · 1 failed.');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
-    expect(storageMock.getStudyInterviews).toHaveBeenCalledTimes(2);
+    expect(storageMock.readStudyInterviews).toHaveBeenCalledTimes(2);
   });
 
   it('API-04: a request error stops immediately and keeps the loaded register', async () => {
@@ -165,7 +166,7 @@ describe('StudyDetail — durable analysis batch (API-04, UI-CF-04)', () => {
     expect(alert).toHaveTextContent('Analysis batch stopped');
     expect(alert).toHaveTextContent('The analysis request limit has been reached. Wait before trying again.');
     expect(posts('session-3')).toHaveLength(0);
-    expect(storageMock.getStudyInterviews).toHaveBeenCalledTimes(1);
+    expect(storageMock.readStudyInterviews).toHaveBeenCalledTimes(1);
     expect(screen.getAllByRole('button', { name: /^View interview/ })).toHaveLength(3);
     expect(batchStatus()).toHaveTextContent('Batch stopped: 1 of 3 finished.');
     expect(screen.queryByText('Private upstream details')).not.toBeInTheDocument();
@@ -273,13 +274,13 @@ describe('StudyDetail — durable analysis batch (API-04, UI-CF-04)', () => {
   it('UI-CF-04: a refresh that meets a pending study operation keeps the loaded register', async () => {
     script['session-1'] = { POST: [json({ status: 'already-complete', generation: 1 })] };
     await renderStudy([interview(1), interview(2, { status: 'running', attempts: 1, lastAttemptAt: 1, generation: 1 })]);
-    storageMock.getStudyInterviews.mockRejectedValue(new StudyOperationPendingError());
+    storageMock.readStudyInterviews.mockResolvedValue({ status: 'pending', error: 'A study operation is already in progress.' });
 
     fireEvent.click(screen.getByRole('button', { name: 'Analyze 1 pending' }));
     await flush();
     await flush();
 
-    expect(storageMock.getStudyInterviews).toHaveBeenCalledTimes(2);
+    expect(storageMock.readStudyInterviews).toHaveBeenCalledTimes(2);
     expect(screen.getAllByRole('button', { name: /^View interview/ })).toHaveLength(2);
     expect(screen.getByText('Pending reconciliation')).toBeInTheDocument();
     expect(batchStatus()).toHaveTextContent('Batch complete: 1 of 1 finished.');

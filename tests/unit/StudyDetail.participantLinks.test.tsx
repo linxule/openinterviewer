@@ -9,17 +9,19 @@ const router = { push: vi.fn() };
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
 
 const storageMock = vi.hoisted(() => ({
-  getStudy: vi.fn(),
-  getStudyInterviews: vi.fn(),
+  readStudy: vi.fn(),
+  readStudyInterviews: vi.fn(),
 }));
 vi.mock('@/services/storageService', async (importOriginal) => {
   const actual = (await importOriginal()) as typeof import('@/services/storageService');
   return {
     ...actual,
-    getStudy: storageMock.getStudy,
-    getStudyInterviews: storageMock.getStudyInterviews,
+    readStudy: storageMock.readStudy,
+    readStudyInterviews: storageMock.readStudyInterviews,
   };
 });
+
+const ok = <T,>(value: T) => ({ status: 'ok' as const, value });
 
 function renderStudyDetail(studyId: string) {
   return render(
@@ -35,10 +37,10 @@ const createdAt = new Date('2026-08-14T12:00:00Z').getTime();
 beforeEach(() => {
   vi.clearAllMocks();
   const config = makeStudyConfig({ id: 'study-a', name: 'Managed Links Study' });
-  storageMock.getStudy.mockResolvedValue(makeStoredStudy({
+  storageMock.readStudy.mockResolvedValue(ok(makeStoredStudy({
     id: 'study-a', config, revision: 2,
-  }));
-  storageMock.getStudyInterviews.mockResolvedValue([]);
+  })));
+  storageMock.readStudyInterviews.mockResolvedValue(ok([]));
   vi.spyOn(window, 'confirm').mockReturnValue(true);
   vi.spyOn(window, 'alert').mockImplementation(() => {});
 });
@@ -133,9 +135,9 @@ describe('StudyDetail participant-link management', () => {
   });
 
   it('keeps the study workspace compact on mobile and names interview controls', async () => {
-    storageMock.getStudyInterviews.mockResolvedValue([
+    storageMock.readStudyInterviews.mockResolvedValue(ok([
       makeStoredInterview({ id: 'interview-a', studyId: 'study-a' }),
-    ]);
+    ]));
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       if (String(input).endsWith('/api/studies/study-a/participant-links')) {
         return new Response(JSON.stringify({ links: [], truncated: false }), {
