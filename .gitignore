@@ -10,7 +10,7 @@ dist
 
 # Testing
 coverage
-playwright-report
+playwright-report*
 test-results
 
 # Env files
