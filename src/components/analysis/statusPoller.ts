@@ -15,6 +15,8 @@ export const POLL_FAST_INTERVAL_MS = 2_000;
 export const POLL_SLOW_INTERVAL_MS = 5_000;
 export const POLL_SUGGESTION_MIN_MS = 2_000;
 export const POLL_SUGGESTION_MAX_MS = 10_000;
+/** Least time any one read gets before it is aborted; inside a session the deadline may give more. */
+export const POLL_READ_TIMEOUT_MS = 30_000;
 
 export function clampSuggestedPollMs(value: unknown): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
@@ -35,7 +37,9 @@ export function nextPollDelayMs(elapsedMs: number, suggestedMs?: number): number
  * - idle: no polling session
  * - waiting / reading: a session is active
  * - paused: hidden or offline; one read follows the return
- * - exhausted: the budget ended with work still pending (reads on request only)
+ * - exhausted: the budget ended with work still pending (reads on request only);
+ *   an automatic read still outstanding at the deadline (or 30 s after it began,
+ *   if later) is aborted into this phase; other timed-out reads end halted
  * - halted: a read failed; the last confirmed state stands
  * - settled: nothing left to poll (persisted outcome or never scheduled)
  */
@@ -72,6 +76,13 @@ const unexpectedReadFailure: AnalysisRequestFailure = {
   error: 'The analysis status could not be checked. Try again.',
 };
 
+const readTimedOut: AnalysisRequestFailure = {
+  ok: false,
+  kind: 'network',
+  uncertain: false,
+  error: 'The analysis status could not be checked. Check your connection and try again.',
+};
+
 /**
  * Serial, bounded, read-only polling of one interview's analysis status.
  * It never starts work: the only request it makes is the status read.
@@ -86,6 +97,7 @@ export class AnalysisStatusPoller {
   private suggestion: number | undefined;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private inFlight: AbortController | null = null;
+  private readTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
   private emitted: PollerSnapshot | null = null;
   private readonly budgetMs: number;
@@ -194,6 +206,14 @@ export class AnalysisStatusPoller {
     if (this.disposed || this.inFlight) return;
     const controller = new AbortController();
     this.inFlight = controller;
+    // The session deadline also ends an outstanding read, so no read waits forever;
+    // every read gets at least POLL_READ_TIMEOUT_MS, so one started near the deadline can answer.
+    const inSession = this.deadline !== null && !this.budgetEnded;
+    const remaining = inSession && this.deadline !== null ? this.deadline - this.now() : 0;
+    this.readTimer = setTimeout(
+      () => this.readExpired(controller, inSession),
+      Math.max(remaining, POLL_READ_TIMEOUT_MS),
+    );
     this.phase = 'reading';
     this.emit();
     let result: AnalysisStatusResult;
@@ -205,6 +225,7 @@ export class AnalysisStatusPoller {
     // Superseded by dispose() or a new session: drop the answer.
     if (this.disposed || this.inFlight !== controller) return;
     this.inFlight = null;
+    this.clearReadTimer();
     if (!result.ok && result.kind === 'network' && this.deadline !== null && environmentSuspended()) {
       // Lost to going hidden/offline mid-read: pause; the return reads again.
       this.phase = 'paused';
@@ -221,6 +242,27 @@ export class AnalysisStatusPoller {
     this.status = adoptAnalysisStatus(this.status, confirmedAnalysisFromStatus(result.outcome));
     this.suggestion = result.outcome.status === 'pending' ? result.outcome.pollAfterMs : undefined;
     this.scheduleNext();
+  }
+
+  private readExpired(controller: AbortController, inSession: boolean): void {
+    this.readTimer = null;
+    if (this.disposed || this.inFlight !== controller) return;
+    this.abortInFlight();
+    // seed() already settled the poller on a confirmed outcome: the read no longer matters.
+    if (this.phase !== 'reading') return;
+    if (this.deadline !== null && environmentSuspended()) {
+      // As for a read lost to going hidden/offline: the return reads once.
+      this.phase = 'paused';
+    } else if (inSession && this.error === null && isActiveAnalysis(this.status)) {
+      // The same end as a budget that runs out between reads. A check after a
+      // failed read (error set) reports its own failure instead of the stale one.
+      this.phase = 'exhausted';
+      this.budgetEnded = true;
+    } else {
+      this.error = readTimedOut;
+      this.phase = 'halted';
+    }
+    this.emit();
   }
 
   private handleEnvironmentChange(): void {
@@ -244,7 +286,15 @@ export class AnalysisStatusPoller {
     }
   }
 
+  private clearReadTimer(): void {
+    if (this.readTimer) {
+      clearTimeout(this.readTimer);
+      this.readTimer = null;
+    }
+  }
+
   private abortInFlight(): void {
+    this.clearReadTimer();
     if (this.inFlight) {
       this.inFlight.abort();
       this.inFlight = null;

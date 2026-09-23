@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   AnalysisStatusPoller,
   nextPollDelayMs,
+  POLL_READ_TIMEOUT_MS,
   waitForAnalysisOutcome,
   type PollerSnapshot,
 } from '@/components/analysis/statusPoller';
@@ -261,6 +262,176 @@ describe('AnalysisStatusPoller (API-03)', () => {
     expect(read).toHaveBeenCalledTimes(1);
   });
 
+  function stalledReads() {
+    const signals: AbortSignal[] = [];
+    const read = vi.fn((signal: AbortSignal) => {
+      signals.push(signal);
+      return new Promise<AnalysisStatusResult>(() => {});
+    });
+    return { read, signals };
+  }
+
+  it('API-03: the deadline aborts a read that never answers, ends the budget, and a refresh reads again', async () => {
+    const { read, signals } = stalledReads();
+    const { poller, last } = makePoller(read);
+    poller.start();
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(last().phase).toBe('reading');
+    await vi.advanceTimersByTimeAsync(177_999);
+    expect(signals[0].aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(signals[0].aborted).toBe(true);
+    expect(last()).toMatchObject({ phase: 'exhausted', budgetEnded: true, error: null, status: queued3 });
+
+    read.mockResolvedValueOnce(pending3);
+    poller.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(last()).toMatchObject({ phase: 'exhausted', budgetEnded: true, status: { status: 'pending', phase: 'running' } });
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('API-03: a manual read after the budget that never answers is bounded, reports the failure, and can be retried', async () => {
+    const read = vi.fn<(signal: AbortSignal) => Promise<AnalysisStatusResult>>(async () => pending3);
+    const { poller, last } = makePoller(read);
+    poller.start();
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(last()).toMatchObject({ phase: 'exhausted', budgetEnded: true });
+    const reads = read.mock.calls.length;
+
+    const stalled = stalledReads();
+    read.mockImplementationOnce(stalled.read);
+    poller.refresh();
+    expect(last().phase).toBe('reading');
+    await vi.advanceTimersByTimeAsync(POLL_READ_TIMEOUT_MS);
+    expect(stalled.signals[0].aborted).toBe(true);
+    expect(last()).toMatchObject({ phase: 'halted', budgetEnded: true, error: { kind: 'network' } });
+
+    poller.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(read).toHaveBeenCalledTimes(reads + 2);
+    expect(last()).toMatchObject({ phase: 'exhausted', error: null });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('API-03: a read outstanding at the deadline while hidden pauses, and the return reads once', async () => {
+    const { read, signals } = stalledReads();
+    const { poller, last } = makePoller(read);
+    poller.start();
+    await vi.advanceTimersByTimeAsync(2_000);
+    setVisibility('hidden');
+    expect(last().phase).toBe('reading');
+
+    await vi.advanceTimersByTimeAsync(178_000);
+    expect(signals[0].aborted).toBe(true);
+    expect(last()).toMatchObject({ phase: 'paused', budgetEnded: false });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(read).toHaveBeenCalledTimes(1);
+
+    read.mockResolvedValueOnce(pending3);
+    setVisibility('visible');
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(last()).toMatchObject({ phase: 'exhausted', budgetEnded: true });
+  });
+
+  it('API-03: dispose and a new session clear the outstanding read bound', async () => {
+    const { read, signals } = stalledReads();
+    const { poller } = makePoller(read);
+    poller.start();
+    await vi.advanceTimersByTimeAsync(2_000);
+    poller.start();
+    expect(signals[0].aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(read).toHaveBeenCalledTimes(2);
+
+    poller.dispose();
+    expect(signals[1].aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  function answersAfter(ms: number, result: () => AnalysisStatusResult) {
+    return vi.fn(() => new Promise<AnalysisStatusResult>((resolve) => {
+      setTimeout(() => resolve(result()), ms);
+    }));
+  }
+
+  it('API-03: a read started just before the deadline still gets its answer', async () => {
+    // A 2.5 s budget: the first read starts at 2 s with 0.5 s left and answers after 1.5 s.
+    const read = answersAfter(1_500, () => ok({ status: 'complete', generation: 3 }));
+    const snapshots: PollerSnapshot[] = [];
+    const poller = new AnalysisStatusPoller({
+      read, initial: queued3, budgetMs: 2_500, onChange: (snapshot) => snapshots.push(snapshot),
+    });
+    livePollers.push(poller);
+    poller.start();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(read).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_500);
+
+    expect(snapshots[snapshots.length - 1]).toMatchObject({
+      phase: 'settled', error: null, status: { status: 'complete', generation: 3 },
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('API-03: a stalled read superseded by a stored outcome ends quietly and does not block a refresh', async () => {
+    const { read, signals } = stalledReads();
+    const { poller, last } = makePoller(read);
+    poller.start();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(last().phase).toBe('reading');
+
+    poller.seed({ status: 'complete', generation: 3 });
+    expect(last()).toMatchObject({ phase: 'settled', error: null });
+    await vi.advanceTimersByTimeAsync(200_000);
+    expect(signals[0].aborted).toBe(true);
+    expect(last()).toMatchObject({ phase: 'settled', error: null, status: { status: 'complete', generation: 3 } });
+    expect(vi.getTimerCount()).toBe(0);
+
+    read.mockResolvedValueOnce(ok({ status: 'complete', generation: 3 }));
+    poller.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(last()).toMatchObject({ phase: 'settled', error: null });
+  });
+
+  it('API-03: a check after a failed read near the deadline adopts its answer, and a stalled one reports its own failure', async () => {
+    const read = vi.fn<(signal: AbortSignal) => Promise<AnalysisStatusResult>>().mockResolvedValueOnce(unavailable);
+    const { poller, last } = makePoller(read);
+    poller.start();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(last()).toMatchObject({ phase: 'halted', error: unavailable, budgetEnded: false });
+
+    await vi.advanceTimersByTimeAsync(177_500);
+    read.mockImplementationOnce(answersAfter(2_000, () => pending3));
+    poller.refresh();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(last()).toMatchObject({
+      phase: 'exhausted', error: null, budgetEnded: true, status: { status: 'pending', phase: 'running' },
+    });
+
+    const stalled = stalledReads();
+    const secondRead = vi.fn<(signal: AbortSignal) => Promise<AnalysisStatusResult>>()
+      .mockResolvedValueOnce(unavailable)
+      .mockImplementationOnce(stalled.read);
+    const second = makePoller(secondRead);
+    second.poller.start();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(second.last()).toMatchObject({ phase: 'halted', error: unavailable });
+    await vi.advanceTimersByTimeAsync(177_500);
+    second.poller.refresh();
+    await vi.advanceTimersByTimeAsync(POLL_READ_TIMEOUT_MS - 1);
+    expect(stalled.signals[0].aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(stalled.signals[0].aborted).toBe(true);
+    expect(second.last()).toMatchObject({ phase: 'halted', error: { kind: 'network' }, budgetEnded: false });
+  });
+
   it('API-03: removes its visibility and network listeners on dispose', async () => {
     const read = vi.fn(async () => pending3);
     const { poller } = makePoller(read);
@@ -295,6 +466,36 @@ describe('waitForAnalysisOutcome (API-04)', () => {
     await vi.advanceTimersByTimeAsync(180_000);
 
     expect(await outcome).toEqual({ kind: 'exhausted', status: { status: 'pending', generation: 3, phase: 'running' } });
+  });
+
+  it('API-04: a read that never answers resolves as exhausted at the deadline', async () => {
+    const signals: AbortSignal[] = [];
+    const read = vi.fn((signal: AbortSignal) => {
+      signals.push(signal);
+      return new Promise<AnalysisStatusResult>(() => {});
+    });
+    let outcome: unknown;
+    void waitForAnalysisOutcome({ read, initial: queued3, signal: new AbortController().signal })
+      .then((value) => { outcome = value; });
+    await vi.advanceTimersByTimeAsync(179_999);
+    expect(outcome).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(outcome).toEqual({ kind: 'exhausted', status: queued3 });
+    expect(signals[0].aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('API-04: the last read, started just before the deadline, still settles the batch item', async () => {
+    const read = vi.fn(() => new Promise<AnalysisStatusResult>((resolve) => {
+      setTimeout(() => resolve(ok({ status: 'complete', generation: 3 })), 1_500);
+    }));
+    let outcome: unknown;
+    void waitForAnalysisOutcome({ read, initial: queued3, signal: new AbortController().signal, budgetMs: 2_500 })
+      .then((value) => { outcome = value; });
+    await vi.advanceTimersByTimeAsync(3_500);
+
+    expect(outcome).toEqual({ kind: 'settled', status: { status: 'complete', generation: 3 } });
   });
 
   it('API-04: resolves with the read failure', async () => {
