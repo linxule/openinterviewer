@@ -68,7 +68,8 @@ export async function startArtifact(overrides: { vars?: Record<string, string>; 
       secrets: { ...SYNTHETIC_SECRETS, ...overrides.secrets },
     }],
   });
-  const { url } = await harness.listen();
+  const listened = await harness.listen();
+  const url = String(listened.url);
   const origin = new URL(url).origin;
   harnessOrigins.add(origin);
   return {
