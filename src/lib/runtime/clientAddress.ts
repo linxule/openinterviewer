@@ -24,14 +24,15 @@ function parseIpv6Groups(value: string): number[] | null {
   const doubleColon = value.indexOf('::');
   if (doubleColon !== value.lastIndexOf('::')) return null;
 
-  const parseSide = (side: string): number[] | null => {
+  // An embedded IPv4 suffix is valid only at the very end of the address.
+  const parseSide = (side: string, allowIpv4Suffix: boolean): number[] | null => {
     if (side === '') return [];
     const pieces = side.split(':');
     const groups: number[] = [];
     for (let index = 0; index < pieces.length; index += 1) {
       const piece = pieces[index];
       if (piece.includes('.')) {
-        if (index !== pieces.length - 1) return null;
+        if (!allowIpv4Suffix || index !== pieces.length - 1) return null;
         const v4 = normalizeIpv4(piece);
         if (!v4) return null;
         const [a, b, c, d] = v4.split('.').map(Number);
@@ -45,11 +46,11 @@ function parseIpv6Groups(value: string): number[] | null {
   };
 
   if (doubleColon === -1) {
-    const groups = parseSide(value);
+    const groups = parseSide(value, true);
     return groups && groups.length === 8 ? groups : null;
   }
-  const head = parseSide(value.slice(0, doubleColon));
-  const tail = parseSide(value.slice(doubleColon + 2));
+  const head = parseSide(value.slice(0, doubleColon), false);
+  const tail = parseSide(value.slice(doubleColon + 2), true);
   if (!head || !tail) return null;
   const missing = 8 - head.length - tail.length;
   if (missing < 1) return null;

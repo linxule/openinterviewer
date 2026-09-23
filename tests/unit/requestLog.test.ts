@@ -134,6 +134,60 @@ describe('logRequestEvent allowlist', () => {
     expect(payload.status).toBe(503);
   });
 
+  it.each([
+    'analysis.job',
+    'workspace.store',
+    'admission.identity',
+    'operator.action',
+  ])('RT-10 accepts the Cloudflare event %s', (event) => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    logRequestEvent({ event, operation: 'claim', status: 409 });
+    expect(parseLogged(spy)).toMatchObject({ event, operation: 'claim', status: 409 });
+  });
+
+  it.each([
+    'binding-missing',
+    'schema-unsupported',
+    'epoch-mismatch',
+    'generation-stale',
+    'claim-lost',
+    'unknown-outcome',
+    'identity-missing',
+    'identity-invalid',
+    'subrequest-rejected',
+    'maintenance-hold',
+    'dispatch-exhausted',
+    'lease-expired',
+    'queue-send-failed',
+    'dead-letter',
+    'workspace-identity-mismatch',
+    'message-invalid',
+    'provider-key-missing',
+  ])('RT-10 accepts the Cloudflare reason %s', (reason) => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    logRequestEvent({ event: 'analysis.job', reason });
+    expect(parseLogged(spy).reason).toBe(reason);
+  });
+
+  it('RT-10 keeps Cloudflare events closed to addresses, message bodies and extra fields', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    logRequestEvent({
+      event: 'admission.identity',
+      reason: 'identity-invalid',
+      address: '203.0.113.7',
+      cfConnectingIp: '203.0.113.7',
+      body: '{"interviewId":"iv_secret"}',
+      workspaceId: 'ws_0123456789abcdef0123456789abcdef',
+    } as unknown as Parameters<typeof logRequestEvent>[0]);
+
+    const payload = parseLogged(spy);
+    expect(Object.keys(payload).sort()).toEqual(['event', 'reason', 'ts']);
+    const serialized = JSON.stringify(spy.mock.calls);
+    expect(serialized).not.toContain('203.0.113.7');
+    expect(serialized).not.toContain('iv_secret');
+    expect(serialized).not.toContain('ws_0123');
+  });
+
   it('rejects unknown event names and unknown reasons', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     logRequestEvent({ event: 'study.123@example.com', reason: 'please retry later' });

@@ -8,11 +8,15 @@ import { getPublicConfig } from '@/lib/hostedConfig';
 
 export async function GET() {
   const config = getPublicConfig();
-  return NextResponse.json({
-    mode: config.mode,
-    aiTransport: config.aiTransport,
-    oauth: config.oauth,
-    ready: config.ready,
-    errors: config.errors,
-  });
+  return NextResponse.json(
+    {
+      mode: config.mode,
+      aiTransport: config.aiTransport,
+      oauth: config.oauth,
+      ready: config.ready,
+      errors: config.errors,
+      analysisExecution: config.analysisExecution,
+    },
+    { headers: { 'Cache-Control': 'no-store' } },
+  );
 }

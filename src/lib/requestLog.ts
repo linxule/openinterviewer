@@ -27,6 +27,10 @@ export const REQUEST_LOG_EVENT_ALLOWLIST = [
   'route.failure',
   'synthesis.evidence',
   'interview.analysis',
+  'analysis.job',
+  'workspace.store',
+  'admission.identity',
+  'operator.action',
 ] as const;
 
 export const REQUEST_LOG_REASON_ALLOWLIST = [
@@ -45,6 +49,23 @@ export const REQUEST_LOG_REASON_ALLOWLIST = [
   'provider-failure',
   'timeout',
   'corrupt-record',
+  'binding-missing',
+  'schema-unsupported',
+  'epoch-mismatch',
+  'generation-stale',
+  'claim-lost',
+  'unknown-outcome',
+  'identity-missing',
+  'identity-invalid',
+  'subrequest-rejected',
+  'maintenance-hold',
+  'dispatch-exhausted',
+  'lease-expired',
+  'queue-send-failed',
+  'dead-letter',
+  'workspace-identity-mismatch',
+  'message-invalid',
+  'provider-key-missing',
 ] as const;
 
 export type RequestLogField = (typeof REQUEST_LOG_ALLOWLIST)[number];

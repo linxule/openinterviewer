@@ -13,6 +13,9 @@ const schemaMock = vi.hoisted(() => ({
 }));
 vi.mock('@/lib/platformSchema', () => schemaMock);
 
+const resolveMock = vi.hoisted(() => ({ resolveWorkspaceStore: vi.fn() }));
+vi.mock('@/lib/storage/resolve', () => resolveMock);
+
 import { GET } from '@/app/api/config/readiness/route';
 
 beforeEach(() => {
@@ -31,6 +34,7 @@ describe('public config readiness', () => {
 
     const response = await GET();
     expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
     expect(await response.json()).toEqual({
       mode: 'hosted',
       ready: false,
@@ -38,6 +42,25 @@ describe('public config readiness', () => {
       errors: ['weak_session_secret'],
     });
     expect(schemaMock.ensurePlatformSchemaLineage).not.toHaveBeenCalled();
+  });
+
+  it('RT-08 returns a ready Node standalone view unchanged without a workspace probe', async () => {
+    const view = {
+      mode: 'standalone',
+      aiTransport: 'direct',
+      ready: true,
+      oauth: { google: false, github: false },
+      errors: [],
+      analysisExecution: 'synchronous',
+    };
+    configMock.getPublicConfig.mockReturnValue(view);
+
+    const response = await GET();
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toEqual(view);
+    expect(resolveMock.resolveWorkspaceStore).not.toHaveBeenCalled();
+    expect(platformMock.getPlatformClient).not.toHaveBeenCalled();
   });
 
   it('marks hosted schema-hold as not ready without leaking Redis details', async () => {

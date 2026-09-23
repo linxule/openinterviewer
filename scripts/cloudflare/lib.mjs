@@ -38,6 +38,7 @@ export function parseJsonc(text) {
     if (char === '/' && next === '*') {
       const close = text.indexOf('*/', i + 2);
       if (close === -1) throw new SyntaxError('Unterminated block comment in JSONC');
+      out += ' ';
       i = close + 2;
       continue;
     }

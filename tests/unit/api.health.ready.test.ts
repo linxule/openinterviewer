@@ -16,6 +16,9 @@ const schemaMock = vi.hoisted(() => ({
 }));
 vi.mock('@/lib/platformSchema', () => schemaMock);
 
+const resolveMock = vi.hoisted(() => ({ resolveWorkspaceStore: vi.fn() }));
+vi.mock('@/lib/storage/resolve', () => resolveMock);
+
 import { GET } from '@/app/api/health/ready/route';
 
 beforeEach(() => {
@@ -37,6 +40,7 @@ describe('deployment readiness endpoint', () => {
     });
     expect(response.headers.get('cache-control')).toBe('no-store');
     expect(pingMock).toHaveBeenCalledTimes(1);
+    expect(resolveMock.resolveWorkspaceStore).not.toHaveBeenCalled();
   });
 
   it('requires a live hosted platform database', async () => {

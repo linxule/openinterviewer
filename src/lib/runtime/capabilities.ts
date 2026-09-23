@@ -6,6 +6,7 @@
 import { resolveAITransport, type AITransport } from '../aiTransport';
 import { resolveDeploymentMode, type DeploymentMode } from '../mode';
 import { resolveDeploymentTarget, type DeploymentTarget } from './target';
+import { isWorkerRuntime } from './workerInvocation';
 
 export type StorageBackendKind = 'redis' | 'redis-byos' | 'workspace-do';
 export type AnalysisExecution = 'synchronous' | 'queued-v2';
@@ -56,6 +57,10 @@ export function resolveCapabilities(env: CapabilityEnv = process.env): Capabilit
       },
     };
   }
+
+  // The backward-compatible Node default must never select Redis inside a
+  // Worker, e.g. when process.env was not populated from the Worker env.
+  if (isWorkerRuntime()) return { ok: false, error: 'invalid_deployment_target' };
 
   const mode = resolveDeploymentMode(env);
   if (!mode.ok) return { ok: false, error: mode.error };
