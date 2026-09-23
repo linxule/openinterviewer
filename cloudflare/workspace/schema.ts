@@ -31,6 +31,9 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
         sample_fixture INTEGER NOT NULL DEFAULT 0 CHECK (sample_fixture IN (0, 1))
       )`,
       `CREATE INDEX studies_by_created ON studies (created_at, id)`,
+      // study_revision is the record's own captured studyRevision, copied out
+      // of record_json for aggregate eligibility; NULL for legacy records
+      // without one (readers then fall back to the immutable record).
       `CREATE TABLE interviews (
         id TEXT PRIMARY KEY,
         study_id TEXT NOT NULL,
@@ -40,7 +43,8 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
         completed_at INTEGER NOT NULL,
         participant_session_id TEXT,
         link_id TEXT,
-        sample_fixture INTEGER NOT NULL DEFAULT 0 CHECK (sample_fixture IN (0, 1))
+        sample_fixture INTEGER NOT NULL DEFAULT 0 CHECK (sample_fixture IN (0, 1)),
+        study_revision INTEGER
       )`,
       `CREATE INDEX interviews_by_study ON interviews (study_id, created_at, id)`,
       `CREATE INDEX interviews_by_created ON interviews (created_at, id)`,
@@ -140,12 +144,15 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
       )`,
       `CREATE INDEX budget_members_by_expiry ON budget_members (expires_at)`,
       // Deleted targets stay fenced through the replay horizon: delayed
-      // messages, replays and imports can never recreate them.
+      // messages, replays and imports can never recreate them. A fence with
+      // sample_fixture = 1 was written by sample-workspace clear; only a later
+      // fixture seed may recreate those fixed ids.
       `CREATE TABLE deletion_fences (
         kind TEXT NOT NULL CHECK (kind IN ('study','interview')),
         target_id TEXT NOT NULL,
         deleted_at INTEGER NOT NULL,
         expires_at INTEGER NOT NULL,
+        sample_fixture INTEGER NOT NULL DEFAULT 0 CHECK (sample_fixture IN (0, 1)),
         PRIMARY KEY (kind, target_id)
       )`,
       `CREATE INDEX deletion_fences_by_expiry ON deletion_fences (expires_at)`,
