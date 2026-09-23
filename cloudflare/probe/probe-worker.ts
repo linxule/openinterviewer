@@ -100,7 +100,7 @@ export class ProbeStore extends DurableObject<Env> {
   }
 }
 
-export default {
+const probeWorker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
     if (url.pathname.startsWith('/__probe/')) {
@@ -131,3 +131,5 @@ export default {
     }
   },
 };
+
+export default probeWorker;

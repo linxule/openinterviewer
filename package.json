@@ -20,7 +20,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint . --max-warnings=0",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p cloudflare/tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:unit": "vitest run",
