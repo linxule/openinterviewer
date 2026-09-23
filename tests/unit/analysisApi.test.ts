@@ -161,6 +161,12 @@ describe('durable analysis start (API-01)', () => {
     [403, {}, 'unauthorized', false, 'Analysis could not be authorized. Reload the page and sign in if needed.'],
     [429, {}, 'rate-limited', false, 'The analysis request limit has been reached. Wait before trying again.'],
     [503, { retryable: true }, 'unavailable', true, 'Analysis is temporarily unavailable. Please try again.'],
+    // A 503 naming a workspace hold is a certain refusal (nothing was allocated).
+    [503, { retryable: true, reason: 'maintenance' }, 'held', false, 'Analysis is paused while this workspace is under maintenance. Nothing was started; try again later.'],
+    [503, { retryable: false, reason: 'workspace-unavailable' }, 'held', false, 'Analysis is unavailable because this workspace is unavailable. Nothing was started; its operator must restore it.'],
+    [503, { retryable: false, reason: 'not-configured' }, 'held', false, 'Analysis is unavailable because this workspace is unavailable. Nothing was started; its operator must restore it.'],
+    // An unrecognized reason stays uncertain: the same key is retried.
+    [503, { retryable: true, reason: 'something-else' }, 'unavailable', true, 'Analysis is temporarily unavailable. Please try again.'],
     [500, {}, 'request', true, 'The analysis request could not be completed. Please try again.'],
     [400, {}, 'request', false, 'The analysis request could not be completed. Please try again.'],
   ])('API-01: HTTP %s %j → %s (uncertain: %s) without server text', async (status, body, kind, uncertain, error) => {

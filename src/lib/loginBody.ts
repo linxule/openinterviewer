@@ -14,7 +14,8 @@ export function loginBodyBytes(password: string): number {
 }
 
 /**
- * Longest password, in UTF-16 code units (an input's maxLength unit), whose
- * sign-in body can fit: every code unit costs at least one byte of the body.
+ * Longest ASCII password, in UTF-16 code units, whose sign-in body can fit
+ * (every code unit costs at least one byte). A reference for tests only: the
+ * Login form deliberately sets no length limit, since Node targets have none.
  */
 export const MAX_LOGIN_PASSWORD_LENGTH = MAX_CLOUDFLARE_LOGIN_BODY_BYTES - loginBodyBytes('');

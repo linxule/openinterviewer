@@ -78,7 +78,8 @@ export type AnalysisRequestFailureKind =
   | 'not-found'        // 404
   | 'unauthorized'     // 401 / 403
   | 'rate-limited'     // 429
-  | 'unavailable'      // 503, retryable
+  | 'unavailable'      // 503, retryable: the start may have committed
+  | 'held'             // 503 naming a workspace hold: a certain refusal, nothing started
   | 'network'          // no response
   | 'unconfirmed'      // 2xx outside the closed projection
   | 'request';         // any other refusal
@@ -109,6 +110,7 @@ const START_MESSAGES: Record<AnalysisRequestFailureKind, string> = {
   unauthorized: 'Analysis could not be authorized. Reload the page and sign in if needed.',
   'rate-limited': 'The analysis request limit has been reached. Wait before trying again.',
   unavailable: 'Analysis is temporarily unavailable. Please try again.',
+  held: 'Analysis is paused while this workspace is under maintenance. Nothing was started; try again later.',
   network: 'The analysis request could not reach the server. Check your connection and try again.',
   unconfirmed: 'The analysis result could not be confirmed. Reload the page before trying again.',
   request: 'The analysis request could not be completed. Please try again.',
@@ -123,9 +125,15 @@ const STATUS_MESSAGES: Record<AnalysisRequestFailureKind, string> = {
   unauthorized: 'The analysis status could not be authorized. Reload the page and sign in if needed.',
   'rate-limited': 'The analysis status was checked too often. Wait before checking again.',
   unavailable: 'The analysis status is temporarily unavailable. Try again shortly.',
+  held: 'The analysis status is unavailable while this workspace is under maintenance. Try again later.',
   network: 'The analysis status could not be checked. Check your connection and try again.',
   unconfirmed: 'The analysis status could not be confirmed. Try again.',
   request: 'The analysis status could not be checked. Try again.',
+};
+
+const WORKSPACE_UNAVAILABLE_MESSAGES: Record<Method, string> = {
+  POST: 'Analysis is unavailable because this workspace is unavailable. Nothing was started; its operator must restore it.',
+  GET: 'The analysis status is unavailable because this workspace is unavailable. Its operator must restore it.',
 };
 
 function failure(method: Method, kind: AnalysisRequestFailureKind, uncertain: boolean): AnalysisRequestFailure {
@@ -200,8 +208,13 @@ function classifyRefusal(
   if (status === 404) return failure(method, 'not-found', false);
   if (status === 401 || status === 403) return failure(method, 'unauthorized', false);
   if (status === 429) return failure(method, 'rate-limited', false);
-  // Unknown allocation commit is 503 retryable; any other server error could
-  // equally have committed before failing.
+  // A 503 that names a workspace hold is a certain refusal made before any
+  // allocation (the route or the object refused it). Any other 503, including
+  // an allocation whose commit is unknown, is uncertain: retry the same key.
+  if (status === 503 && body?.reason === 'maintenance') return failure(method, 'held', false);
+  if (status === 503 && (body?.reason === 'workspace-unavailable' || body?.reason === 'not-configured')) {
+    return { ...failure(method, 'held', false), error: WORKSPACE_UNAVAILABLE_MESSAGES[method] };
+  }
   if (status === 503) return failure(method, 'unavailable', true);
   return failure(method, 'request', status >= 500);
 }

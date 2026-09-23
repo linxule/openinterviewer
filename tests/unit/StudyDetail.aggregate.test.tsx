@@ -261,7 +261,8 @@ describe('StudyDetail aggregate reading', () => {
     renderStudyDetail('study-aggregate');
     await screen.findByText('The aggregate bottom line.');
 
-    expect(screen.queryByText('Need at least 2 interviews to generate aggregate analysis.')).not.toBeInTheDocument();
+    // Matches the current copy ('Need at least 2 analyzed interviews ...') and any rewording of it.
+    expect(screen.queryByText(/Need at least 2/)).not.toBeInTheDocument();
   });
 
   it('issues a follow-up POST with no body when the aggregate is current', async () => {
