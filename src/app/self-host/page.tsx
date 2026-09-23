@@ -13,9 +13,12 @@ const cloudflareCommands = `npm ci
 npm run build:cloudflare
 npm run check:cloudflare -- --skip-build
 npm run setup:cloudflare -- plan --install <name> --env production --provider <provider> --jurisdiction eu
-# Review the plan, then apply it with the admin password and provider key on stdin:
-npm run setup:cloudflare -- apply --install <name> --env production --provider <provider> \\
-  --jurisdiction eu --secrets-stdin --yes --operator-token-file <path outside the repository>
+# Review the plan, then pipe the admin password and provider key from your secret
+# manager, or omit --secrets-stdin for a hidden prompt. Keep the template (op://
+# references only) outside the checkout: an untracked file there blocks apply.
+op inject -i ~/secure/secrets.tpl.json | npm run setup:cloudflare -- apply --install <name> \\
+  --env production --provider <provider> --jurisdiction eu --secrets-stdin --yes \\
+  --operator-token-file <path outside the repository>
 npm run setup:cloudflare -- verify --install <name> --env production`;
 
 export default function SelfHostPage() {
@@ -41,8 +44,9 @@ export default function SelfHostPage() {
           </p>
           <p className="max-w-measure font-sans text-[17px] leading-[28px] text-ink-700">
             On Cloudflare it runs as one Worker with a Durable Object for storage and a Queue for background
-            analysis. It needs an admin password, one provider key and no Redis; the installer generates the other
-            secrets and the recovery epoch.
+            analysis. It needs an admin password of 16 to 1,009 ASCII characters (sign-in requests are limited to
+            1 KiB, so multi-byte characters lower the maximum), one provider key and no Redis; the installer
+            generates the other secrets and the recovery epoch.
           </p>
         </section>
 

@@ -47,8 +47,8 @@ Commands: a `node -e` scan of `package-lock.json` for every instance of each pac
 | `@google/genai` | 2.22.0 | `^2.22.0` | |
 | `@openrouter/sdk` | 1.2.117 | `1.2.117` exact | Peer `zod ^3.25.0 \|\| ^4.0.0`; `zod` 4.4.3 installed |
 | `ai` (Gateway path, Node only) | 7.0.99 | `^7.0.99` | Present in the Cloudflare server handler; see section 3 |
-| Compatibility date | `2026-09-15` | `wrangler.jsonc:14` | The test configuration `cloudflare/test/wrangler.test.jsonc:8` uses the same date |
-| Compatibility flags | `nodejs_compat`, `global_fetch_strictly_public` | `wrangler.jsonc:15` | The test configuration (`:9`) sets only `nodejs_compat` |
+| Compatibility date | `2026-09-15` | `wrangler.jsonc:14` | The test configuration `cloudflare/test/wrangler.test.jsonc:9` uses the same date |
+| Compatibility flags | `nodejs_compat`, `global_fetch_strictly_public` | `wrangler.jsonc:15` | When measured, the test configuration set only `nodejs_compat`; it now sets both (`cloudflare/test/wrangler.test.jsonc:10`) |
 
 ## 2. Artifact size
 
@@ -60,7 +60,7 @@ Commands: a `node -e` scan of `package-lock.json` for every instance of each pac
 | Deploy-path dry run (this pass) | `Total Upload: 26761.19 KiB / gzip: 5387.01 KiB`. Attaches 2 additional modules: `resvg.wasm` 1346.05 KiB and `yoga.wasm` 70.05 KiB |
 | `wrangler check startup` (this pass, section 4) | `Bundle: 26761.19 KiB / gzip: 5386.17 KiB` |
 
-The deploy-path dry run used the same derivation as `scripts/cloudflare/deploy.mjs:116-124` (`no_bundle`, `find_additional_modules`, a `CompiledWasm` rule, and the artifact's `worker/` as `base_dir`), with synthetic installation variables. Command: `env -i PATH=… HOME=<scratch>/measure/dry/home WRANGLER_SEND_METRICS=false OPEN_NEXT_DEPLOY=true node_modules/.bin/wrangler deploy --config <scratch>/measure/dry/derived.json --dry-run --outdir <scratch>/measure/dry/out --experimental-provision=false --experimental-auto-create=false --strict`. Exit code 0. The `worker.js` in the outdir is byte-identical to the artifact's (`cmp`).
+The deploy-path dry run used the same derivation as `scripts/cloudflare/deploy.mjs:229-237` (at `:116-124` when measured) (`no_bundle`, `find_additional_modules`, a `CompiledWasm` rule, and the artifact's `worker/` as `base_dir`), with synthetic installation variables. Command: `env -i PATH=… HOME=<scratch>/measure/dry/home WRANGLER_SEND_METRICS=false OPEN_NEXT_DEPLOY=true node_modules/.bin/wrangler deploy --config <scratch>/measure/dry/derived.json --dry-run --outdir <scratch>/measure/dry/out --experimental-provision=false --experimental-auto-create=false --strict`. Exit code 0. The `worker.js` in the outdir is byte-identical to the artifact's (`cmp`).
 
 Arithmetic check: `worker.js` 25,953,368 + `resvg.wasm` 1,378,357 + `yoga.wasm` 71,736 = 27,403,461 bytes = 26,761.19 KiB (26.13 MiB). Wrangler's gzip figure is `zlib.gzipSync` over the concatenated modules (`node_modules/wrangler/wrangler-dist/cli.js`, `getSize`). The same computation in Node gives 5,386.17 KiB. The sub-KiB differences between the three runs come from module order.
 
@@ -96,7 +96,7 @@ Wrangler 4.136.3 uses the same bound: `MAX_UNCOMPRESSED_SIZE_BYTES = 64 * 1024 *
 
 ### Source maps
 
-- `upload_source_maps` is not set in `wrangler.jsonc`. `deploy.mjs` derives the upload configuration from the template plus the installation file. `configDrift` (`deploy.mjs:41-51`) refuses any key outside `INSTALLATION_OWNED`, so an installation cannot turn source maps on.
+- `upload_source_maps` is not set in `wrangler.jsonc`. `deploy.mjs` derives the upload configuration from the template plus the installation file. `configDrift` (`deploy.mjs:74-88`, with `INSTALLATION_OWNED` at `:41`) refuses any key outside `INSTALLATION_OWNED`, so an installation cannot turn source maps on.
 - Wrangler attaches source maps only when `upload_source_maps` is true: `sourceMaps: uploadSourceMaps ? loadSourceMaps(...) : void 0` in `wrangler-dist/cli.js`. The deploy-path dry-run outdir contains `worker.js`, the two `.wasm` files and `README.md`, and no map. Total Upload equals the three module sizes. The 41.66 MB (40,686.96 KiB) map is therefore **not uploaded**.
 - If source maps were enabled, the map compresses to 7.74 MB with gzip -9, under the 15 MB gzipped limit. The pages above do not say whether an uploaded map counts toward the 64 MiB limit. Wrangler's own `getSize` counts modules only.
 
@@ -226,7 +226,7 @@ Savings are from the measurements above; estimates are marked. All of these requ
 
 | # | Option | Saving | Risk and notes |
 | --- | --- | --- | --- |
-| R1 | Minify at the wrangler bundling step: `--minify` on `build.mjs:67` or `minify: true` in the template. The deploy step uses `no_bundle`, so minification must happen at build time. | **Estimate:** `esbuild 0.28.1 --minify --keep-names --target=es2024` on the artifact's `worker.js` gives 16,517,321 B, so Total Upload would be 17,546.30 KiB (−9,214.89 KiB, −34.4%) and gzip 4,682.15 KiB. Whitespace-only minification gives 19,813.40 KiB (−26.0%). | Low. It changes formatting and local names only (wrangler keeps names). Stack traces without an uploaded map become harder to read, but the local map is still produced. |
+| R1 | Minify at the wrangler bundling step: `--minify` on the `wrangler deploy --dry-run` call (`build.mjs:91`; `:67` when measured) or `minify: true` in the template. The deploy step uses `no_bundle`, so minification must happen at build time. | **Estimate:** `esbuild 0.28.1 --minify --keep-names --target=es2024` on the artifact's `worker.js` gives 16,517,321 B, so Total Upload would be 17,546.30 KiB (−9,214.89 KiB, −34.4%) and gzip 4,682.15 KiB. Whitespace-only minification gives 19,813.40 KiB (−26.0%). | Low. It changes formatting and local names only (wrangler keeps names). Stack traces without an uploaded map become harder to read, but the local map is still produced. |
 | R2 (implemented) | Load provider adapters lazily in `cloudflare/analysis/execute.ts` (dynamic `import()` inside the queued execution path) | Startup active CPU is the target: see section 4, where about 53 ms per run of `zod` schema construction from `@openrouter/sdk`, and the garbage collection that appeared with it (37.8 ms per run, against at most 1.5 ms at M0), runs on every isolate start. Size is not unchanged: the bundler check below puts the cost at about +0.48 MB of unminified `worker.js`. | Low. Only the Queue path changes. `jobFaults`, `consumer` and `analysis` pass (section 5). |
 | R3 | Collapse byte-identical Turbopack chunk copies after `next build`, for example by pointing duplicates at one canonical file, or fix this upstream | 7,057,121 `worker.js` bytes now. The same copies are 4,817,437 bytes in OpenNext's minified form, which roughly indicates the saving if R1 is also applied. | Moderate. It patches framework output. The chunk arrays contain only module ids and factories and no chunk path, which is why a re-export is plausible, but this is unverified. Report to Next and OpenNext. |
 | R4 | Alias `next/dist/compiled/@vercel/og/index.edge.js` to OpenNext's throw shim in the Node middleware bundle as well | 824,235 B JavaScript + 1,450,093 B wasm = 2,274,328 B (2,221.0 KiB, 8.3% of Total Upload) | Low to moderate. It needs an OpenNext patch or an upstream fix, and `src/` must keep not using `next/og`. It also removes the two wasm modules from the upload. |
@@ -235,7 +235,13 @@ Savings are from the measurements above; estimates are marked. All of these requ
 
 #### R2 status (lazy provider adapters)
 
-`cloudflare/analysis/execute.ts` no longer imports any adapter statically. Each adapter is reached through one literal `import()` in a per-provider loader. `createQueuedSynthesisProvider` stays synchronous, so the consumer is unchanged. Before any start marker, it still refuses an unknown provider, an empty key or a model that `isKnownProviderModel` rejects, which is the check the adapter constructors apply. It returns a deferred adapter that loads and constructs the frozen provider's adapter on its first call. A load or construction failure becomes `AdapterLoadError`. `classifyProviderException` maps that to `failed/provider` with log reason `provider-failure`, never to `uncertain`, because no adapter existed and so no request was sent. The load happens on the first provider call, after the start marker, so this failure is recorded on a started attempt. The SDK retry policy, the deadline (which bounds the provider request; the lease's 20 s attach margin covers the load) and every other classification are unchanged. The import boundary still covers the adapters: esbuild follows literal dynamic imports. A scratch-copy mutant that added `import('@upstash/redis')` to the loader table made `node scripts/cloudflare/check-import-boundary.mjs` exit 1 with `✗ cloudflare/analysis/consumer.ts reaches …/@upstash/redis/nodejs.mjs (Upstash client)`.
+`cloudflare/analysis/execute.ts` no longer imports any adapter statically. Each adapter is reached through one literal `import()` in a per-provider loader.
+
+- `createQueuedSynthesisProvider` stays synchronous. It refuses an unknown provider, an empty key or a model that `isKnownProviderModel` rejects, which is the check the adapter constructors apply. It returns a deferred adapter.
+- The consumer calls `loadQueuedSynthesisProvider` instead (`cloudflare/analysis/consumer.ts:181-186`). That function creates the deferred adapter, then loads and constructs the frozen provider's adapter, all before `markAnalysisStarted`.
+- A load or construction failure is recorded as `failed/provider` with log reason `provider-failure` (`consumer.ts:188-199`). There is no started attempt (`started_at` null), no provider request, no Queue retry, and one ack.
+- The deferred adapter caches its load promise. `AdapterLoadError` after a start marker is therefore reachable only by callers that use `createQueuedSynthesisProvider` directly, such as the `jobFaults` R2 test. `classifyProviderException` keeps mapping it to `failed/provider`, never to `uncertain`, as a defensive path, because no adapter existed and so no request was sent.
+- The SDK retry policy, the deadline, which bounds the provider request, and every other classification are unchanged. The import boundary still covers the adapters: esbuild follows literal dynamic imports. A scratch-copy mutant that added `import('@upstash/redis')` to the loader table made `node scripts/cloudflare/check-import-boundary.mjs` exit 1 with `✗ cloudflare/analysis/consumer.ts reaches …/@upstash/redis/nodejs.mjs (Upstash client)`.
 
 Bundler evidence, without a new build. `node scripts/cloudflare/measure/lazy-sdk.mjs` bundles `cloudflare/analysis/consumer.ts` with esbuild 0.28.1, the version wrangler 4.136.3 bundles with. It uses the import-boundary settings plus `format: 'esm'`. It then instruments esbuild's `__esm` and `__commonJS` helpers and imports the result in Node. It exits 1 if any provider SDK module is evaluated at import. On the current tree it exited 0. Run against a scratch copy of the tree with HEAD's `execute.ts`, it exited 1:
 
@@ -280,7 +286,7 @@ Top startup costs, as mean self time per run across the 6 current profiles (`nod
 | `(program)` | 14.4 | 14.1 at M0 |
 | Unmapped top-level code, including `__name` | 5.3 | |
 
-About 99 ms of the roughly 117 ms active time is new since M0. It comes from evaluating the Worker graph's provider SDKs at isolate start, mostly `zod` schemas built by `@openrouter/sdk`. The Next server handler is not evaluated at startup (dynamic import); the middleware is. R2 (section 3) removes the SDK evaluation from isolate start in the source; these numbers predate it and must be re-measured after the next build.
+About 99 ms of the roughly 117 ms active time is new since M0. It comes from evaluating the Worker graph's provider SDKs at isolate start, mostly `zod` schemas built by `@openrouter/sdk`. The Next server handler is not evaluated at startup (dynamic import); the middleware is. R2 (section 3) removes the SDK evaluation from isolate start; these numbers predate it. The re-measurement after R2 follows.
 
 ### Re-measured after R2 (commit 80ec88d, artifact built from a clean tree)
 
@@ -297,6 +303,8 @@ Local startup CPU is back within about 6 ms of M0 (18.0 ms): the provider SDKs a
 **Remote gate:** the real `startup_time_ms`, which `wrangler deploy` or `wrangler versions upload` reports according to the limits page, against the 1 s limit.
 
 ## 5. Evidence index for the review packet
+
+Every run below used an earlier revision of the tree. None of them is the final-revision release matrix that `VERIFY-05` requires: one complete `npm run check:cloudflare` plus the CI-equivalent lanes on the final committed revision. That result is recorded in the review packet with its commit, its lane exit codes and its receipt, not here (DEVIATIONS.md, Pending).
 
 ### Test runs in this pass
 
@@ -362,7 +370,7 @@ Other request-count assertions that establish "no second paid call":
 | `consumer.test.ts:79`, `:92` | JOB-02 frozen provider, model and revision (edit before claim; change between result and attachment) | 1 |
 | `consumer.test.ts:122` | JOB-02/RT-05 missing frozen provider key → failed/provider without any provider request | 0 |
 | `consumer.test.ts:132` | JOB-02 frozen model no longer supported → failed/provider before the start marker (`started_at` null) | 0 (`:142`) |
-| `consumer.test.ts:146` | JOB-09/R2 frozen adapter cannot be loaded → failed/provider on the started attempt, `recovery_required` 0, one ack, no Queue retry, `analysis.job` event `operation: execute`, `reason: provider-failure` | 0 (`:161`) |
+| `consumer.test.ts:146` | JOB-09/R2 frozen adapter cannot be loaded → failed/provider before the start marker (`started_at` null, `:165`), one ack, no Queue retry, `analysis.job` event `operation: execute`, `reason: provider-failure` | 0 (`:161`) |
 | `consumer.test.ts:183`, `:194`, `:442` | Unknown message version to dead-letter; malformed or foreign envelopes; frozen maintenance | 0 |
 | `consumer.test.ts:212` | JOB-06 duplicate and out-of-order deliveries without a second provider call | 1 then 1 (`:219`, `:237`) |
 | `consumer.test.ts:241`, `:303` | JOB-07/08 claim or start marker cannot be confirmed → no provider call | 0 |
@@ -403,7 +411,7 @@ Other request-count assertions that establish "no second paid call":
 - **No Cloudflare fault manifest.** VERIFY-01 (`04-verification-and-cutover.md:13`) asks for a manifest naming each cut, its durable evidence, expected reply and next action. Redis has one enforced by a test (`redis.crashCuts.test.ts:1180`). The Cloudflare tier has none; the tables above can seed one.
 - **Process kill of the production `WorkspaceStore`.** Only the M0 toy object has SIGKILL-and-restart evidence. Production-class restarts use `evictDurableObject` in the same process.
 - **Resolved: JOB-04 race without a provider count.** The race test asserted one active generation but did not count requests at the provider fixture, although the JOB-04 row in `03-analysis-jobs.md` names "at most one provider request". It now delivers the initial job concurrently with both retry keys and counts exactly one request (`analysis.test.ts:277`, `:301`). The terminal-failure race now pays for the winning generation 2 exactly once, despite a duplicate delivery and a late generation-1 message (`:306`, `:334`).
-- The workers test configuration omits `global_fetch_strictly_public`, which production sets. The fixture replaces `globalThis.fetch`, so the flag's egress behaviour is not exercised in this tier.
+- **Resolved: the workers test configuration omitted `global_fetch_strictly_public`**, which production sets. `cloudflare/test/wrangler.test.jsonc` now sets it, and `tests/setup-cloudflare/check-lanes.test.mjs` keeps `compatibility_date` and `compatibility_flags` in it and in `cloudflare/test/wrangler.artifact.jsonc` equal to `wrangler.jsonc`. The fixture still replaces `globalThis.fetch`, so the flag's egress behaviour is not exercised in this tier.
 
 ## 6. Unmeasured: remote gates
 
@@ -425,7 +433,7 @@ It addresses two gaps listed in section 5: "No Cloudflare fault manifest" and "P
 `npm run test:cloudflare:restart` runs `vitest.restart.config.mts` (Node environment, test files in parallel) over `tests/cloudflare-restart/*.restart.test.ts`. The release check lists it as lane `cloudflare-restart` (`node scripts/cloudflare/check.mjs --list`).
 
 - **Why not `createTestHarness`.** Its `resolveWorkerInputs` (`node_modules/wrangler/wrangler-dist/cli.js:368539`) hard-codes `persist: false` (`:368569`). `tests/cloudflare-restart/runner.mjs` calls `unstable_startWorker` with the same prebuilt derivation `createTestHarness` uses (`main` = the artifact's `worker.js`, `base_dir`, `no_bundle`, `find_additional_modules`, no build command, config `cloudflare/test/wrangler.artifact.jsonc`), plus `dev.persist`, `dev.outboundService`, `dev.server` on `127.0.0.1:0` and synthetic `secret_text` bindings (`tests/cloudflare-restart/synthetic.mjs`). No fallback was needed: the object's SQLite files and the alarm store (`metadata.sqlite`) are written under `<state>/persist/v3/do/openinterviewer-artifact-test-WorkspaceStore/`.
-- **Ownership and cleanup.** Each test file owns one `mkdtemp` directory `oi-restart-<label>-*` in `os.tmpdir()`. Persistence, `HOME`, `TMPDIR` and wrangler's scratch directory all live inside it. `userConfigPath` is pointed into it, so `.wrangler/tmp` and the `.dev.vars`/`.env` lookup directory are there too (`getLocalPersistencePath`, `resolveEntryWithMain`, `cli.js:196400`, `:198326`). The directory is removed in `afterAll`. The runner starts with an allowlisted environment and refuses to start if any credential-like variable name is present. The allowlist is `PATH`, `HOME`, `TMPDIR`, `WRANGLER_SEND_METRICS=false`, `WRANGLER_SEND_ERROR_REPORTS=false`, `WRANGLER_HIDE_BANNER=true`, `CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV=false`, `CLOUDFLARE_INCLUDE_PROCESS_ENV=false` and `NO_COLOR=1`.
+- **Ownership and cleanup.** Each test file owns one `mkdtemp` directory `oi-restart-<label>-*` in `os.tmpdir()`. Persistence, `HOME`, `TMPDIR` and wrangler's scratch directory all live inside it. `userConfigPath` is pointed into it, so `.wrangler/tmp` and the `.dev.vars`/`.env` lookup directory are there too (`getLocalPersistencePath`, `resolveEntryWithMain`, `cli.js:196400`, `:198326`). The directory is removed in `afterAll`. `lane.ts` spawns the runner with an allowlisted environment. As a backstop for a direct run, the runner also removes any credential-like variable from its own environment before it loads wrangler and prints the removed names, never values (the shared rule in `scripts/cloudflare/credential-env.mjs`; it refused to start instead when this lane was recorded). The allowlist is `PATH`, `HOME`, `TMPDIR`, `WRANGLER_SEND_METRICS=false`, `WRANGLER_SEND_ERROR_REPORTS=false`, `WRANGLER_HIDE_BANNER=true`, `CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV=false`, `CLOUDFLARE_INCLUDE_PROCESS_ENV=false` and `NO_COLOR=1`.
 - **Outbound.** Only `POST https://api.openai.com/v1/responses` answers, with the synthetic shapes from `tests/e2e-cloudflare/server.mjs` and `fixtureData.mjs`. Every other destination gets 599 and is recorded. Each outbound call is appended with `appendFileSync` to `<state>/events.jsonl` before it is answered, so the record survives the kill. Provider request counts are read from that file across both runtimes.
 - **Clients and control.** Clients reach the Worker through an HTTP proxy in the runner process. It logs each request's method and path, never the query. A separate control server in the runner, never in the Worker, can hold synthesis, hold a save reply, or freeze after forwarding one. "Freeze" means the runner sends SIGSTOP to its own children (wrangler's esbuild service and the two `workerd` processes) at the moment the Worker's save reply reaches the proxy. The test's SIGKILL then lands on a runtime that did nothing after the reply, whatever the machine load.
 - **Kill and restart.** The runner is spawned detached, so the test first sends SIGKILL to its process group, then to each PID recorded at startup (runner, esbuild, two `workerd`), and waits until none exists. A restart is a new runner on the same state directory.
@@ -470,7 +478,7 @@ Miniflare's local Queue broker keeps messages in memory (`#messages = []`, `node
 
 ### Fault manifest
 
-`tests/workers/faultManifest.ts` lists 46 cuts: 41 `CF-*` derived from the code and 5 `M0-*` from the crash probes. They carry 114 coverage references to 105 distinct tests in 23 files, and 21 surfaces are listed as non-cuts (read-only transactions and RPCs, helpers). `tests/unit/cloudflareFaultManifest.test.ts` runs in the Node environment under `npm run test`. Its 7 checks cover:
+`tests/workers/faultManifest.ts` listed 46 cuts when this was recorded: 41 `CF-*` derived from the code and 5 `M0-*` from the crash probes. They carried 114 coverage references to 105 distinct tests in 23 files, and 21 surfaces were listed as non-cuts (read-only transactions and RPCs, helpers). The manifest has since gained `CF-RESTORE-SCHEDULE`, the point-in-time restore entry point (OPS-03): it now lists 47 cuts (42 `CF-*`, 5 `M0-*`), and its 7 checks pass (`npx vitest run tests/unit/cloudflareFaultManifest.test.ts`). The source-scan counts in the item below predate that entry. `tests/unit/cloudflareFaultManifest.test.ts` runs in the Node environment under `npm run test`. Its 7 checks cover:
 
 - unique ids and non-empty fields;
 - at least one covering test per cut;
@@ -491,5 +499,5 @@ Miniflare's local Queue broker keeps messages in memory (`#messages = []`, `node
 
 - **A SIGKILL inside an open production transaction.** No production transaction can be held open from outside. This cut is covered only on the probe object, which uses the same storage API, and by the workers-tier rollback tests.
 - **Other providers.** The lane uses the OpenAI adapter only.
-- **CI.** `.github/workflows/ci.yml` does not run this lane.
+- **CI.** The per-push `cloudflare` job in `.github/workflows/ci.yml` does not run this lane. The manually dispatched `promote-cloudflare` job does, because it runs the whole `npm run check:cloudflare`.
 - **Real Cloudflare behavior.** Queue retention across a Worker restart and alarms after inactivity remain remote gates.
