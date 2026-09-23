@@ -29,10 +29,19 @@ if (!existsSync(ARTIFACT_WORKER_DIR)) {
   process.exit(2);
 }
 
+// Queued synthesis outcomes, consumed in arrival order by the next synthesis
+// requests: 'reject' is a known provider failure (HTTP 400 before generation);
+// 'server-error' is HTTP 500 after the request was received, which the queued
+// policy records as recovery-required (DEVIATIONS.md, JOB-03).
+const SYNTHESIS_FAILURES = {
+  reject: { status: 400, error: { message: 'Synthetic rejection', type: 'invalid_request_error' } },
+  'server-error': { status: 500, error: { message: 'Synthetic server error', type: 'server_error' } },
+};
+
 const fixture = {
   calls: [],
   refused: [],
-  failNextSynthesis: false,
+  synthesisFailures: [],
   holdSynthesis: false,
   heldReleases: [],
   synthesisDelayMs: 0,
@@ -49,15 +58,19 @@ function operationOf(body) {
 async function openAiResponse(request) {
   const body = await request.json();
   const operation = operationOf(body);
-  fixture.calls.push({ operation, model: body.model, at: Date.now() });
+  // The outcome is fixed when the request arrives, so a hold or a control
+  // call made while this request is in flight cannot change it.
+  const failure = operation === 'synthesis' ? fixture.synthesisFailures.shift() : undefined;
+  const call = { operation, model: body.model, at: Date.now(), status: SYNTHESIS_FAILURES[failure]?.status ?? 200 };
+  fixture.calls.push(call);
   if (operation === 'synthesis') {
     if (fixture.holdSynthesis) {
       await new Promise((resolve) => fixture.heldReleases.push(resolve));
     }
     if (fixture.synthesisDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, fixture.synthesisDelayMs));
-    if (fixture.failNextSynthesis) {
-      fixture.failNextSynthesis = false;
-      return Response.json({ error: { message: 'Synthetic rejection', type: 'invalid_request_error' } }, { status: 400 });
+    if (failure) {
+      const { status, error } = SYNTHESIS_FAILURES[failure];
+      return Response.json({ error }, { status });
     }
   }
   const text = operation === 'greeting'
@@ -114,13 +127,27 @@ function control(req, res, pathname) {
     res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
     res.end(JSON.stringify(body));
   };
-  if (pathname === '/__fixture/state') return send(200, { calls: fixture.calls, refused: fixture.refused });
+  if (pathname === '/__fixture/state') {
+    return send(200, {
+      calls: fixture.calls,
+      refused: fixture.refused,
+      pendingSynthesisFailures: fixture.synthesisFailures.length,
+      heldSynthesis: fixture.heldReleases.length,
+    });
+  }
   if (pathname === '/__fixture/reset') {
-    Object.assign(fixture, { calls: [], refused: [], failNextSynthesis: false, holdSynthesis: false, synthesisDelayMs: 0 });
+    Object.assign(fixture, { calls: [], refused: [], synthesisFailures: [], holdSynthesis: false, synthesisDelayMs: 0 });
     for (const release of fixture.heldReleases.splice(0)) release();
     return send(200, { ok: true });
   }
-  if (pathname === '/__fixture/fail-next-synthesis') { fixture.failNextSynthesis = true; return send(200, { ok: true }); }
+  if (pathname === '/__fixture/fail-next-synthesis') {
+    fixture.synthesisFailures.push('reject');
+    return send(200, { ok: true });
+  }
+  if (pathname === '/__fixture/server-error-next-synthesis') {
+    fixture.synthesisFailures.push('server-error');
+    return send(200, { ok: true });
+  }
   if (pathname === '/__fixture/hold-synthesis') { fixture.holdSynthesis = true; return send(200, { ok: true }); }
   if (pathname === '/__fixture/release-synthesis') {
     fixture.holdSynthesis = false;
@@ -161,8 +188,12 @@ const server = http.createServer(async (req, res) => {
     }
     res.end();
   } catch (error) {
-    // A Worker stream that errors must surface as a failed transfer, never
-    // as a clean end of body (export invalidation relies on this).
+    // Pass an errored Worker body on as a failed transfer, not a clean end.
+    // Export invalidation does not rely on this proxy: the Worker errors the
+    // body when an export stream fails (cloudflare/opennext/
+    // backpressureWrapper.ts), and the browser client refuses any archive
+    // without its closing ZIP records (isCompleteZipArchive in
+    // src/services/storageService.ts). The proxy must only not mask that.
     res.destroy(error instanceof Error ? error : new Error('upstream failed'));
   }
 });
