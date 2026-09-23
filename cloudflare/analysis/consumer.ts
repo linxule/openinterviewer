@@ -19,7 +19,7 @@ import {
 } from '../../src/lib/storage/analysisProtocol';
 import type { AIProvider } from '../../src/lib/ai';
 import type { WorkspaceStore } from '../workspace/WorkspaceStore';
-import { createQueuedSynthesisProvider, executeQueuedSynthesis, providerKeyFromEnv } from './execute';
+import { executeQueuedSynthesis, loadQueuedSynthesisProvider, providerKeyFromEnv } from './execute';
 import { logJobEvent } from './telemetry';
 
 export type ConsumerEnv = {
@@ -181,7 +181,8 @@ async function processJob(
   let provider: AIProvider | null = null;
   if (key) {
     try {
-      provider = createQueuedSynthesisProvider(frozen.requestedProvider, frozen.requestedModel, key);
+      // Validated, loaded and constructed before the start marker.
+      provider = await loadQueuedSynthesisProvider(frozen.requestedProvider, frozen.requestedModel, key);
     } catch {
       provider = null;
     }

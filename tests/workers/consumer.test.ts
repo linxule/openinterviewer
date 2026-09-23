@@ -128,6 +128,53 @@ describe('end-to-end durable analysis (JOB-01/02/05)', () => {
     expect(await jobRow(job.jobId)).toMatchObject({ state: 'failed', failure_kind: 'provider', started_at: null });
     expect(await analysisRow(job.interviewId)).toMatchObject({ status: 'failed', failure_kind: 'provider', recovery_required: 0, attempts: 1 });
   });
+
+  it('JOB-02 records failed/provider before the start marker, without any provider request, when the frozen model is no longer supported', async () => {
+    const job = await seedJob({ provider: 'openai' });
+    await sqlRun(
+      `UPDATE analysis_jobs SET input_json = json_set(input_json, '$.requestedModel', 'gpt-retired'), requested_model = 'gpt-retired'
+        WHERE job_id = ?`,
+      job.jobId,
+    );
+    const provider = installProviderFixture({ kind: 'success' });
+    const result = await deliver([job.message]);
+    expect(result.explicitAcks).toHaveLength(1);
+    expect(provider.requests).toHaveLength(0);
+    expect(await jobRow(job.jobId)).toMatchObject({ state: 'failed', failure_kind: 'provider', started_at: null });
+  });
+
+  it('JOB-09/R2 records failed/provider before the start marker, without any provider request, when the frozen adapter cannot be loaded', async () => {
+    const job = await seedJob({ provider: 'openrouter' });
+    const provider = installProviderFixture({ kind: 'success' });
+    const output = captureConsole();
+    vi.doMock('../../src/lib/providers/openrouter', () => {
+      throw new Error('synthetic adapter load failure');
+    });
+    let result: Awaited<ReturnType<typeof deliver>>;
+    try {
+      result = await deliver([job.message]);
+    } finally {
+      vi.doUnmock('../../src/lib/providers/openrouter');
+    }
+    expect(result.explicitAcks).toHaveLength(1);
+    expect(result.retryMessages).toEqual([]);
+    expect(provider.requests).toHaveLength(0);
+    expect(provider.unexpected).toEqual([]);
+    // The consumer loads the adapter before the start marker, so the known
+    // failure is recorded with no started attempt.
+    expect(await jobRow(job.jobId)).toMatchObject({ state: 'failed', failure_kind: 'provider', started_at: null });
+    expect(await analysisRow(job.interviewId)).toMatchObject({ status: 'failed', failure_kind: 'provider', recovery_required: 0, attempts: 1 });
+    const events = output.text().split('\n').flatMap((line) => {
+      try {
+        return [JSON.parse(line) as Record<string, unknown>];
+      } catch {
+        return [];
+      }
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      event: 'analysis.job', operation: 'execute', reason: 'provider-failure', provider: 'openrouter',
+    }));
+  });
 });
 
 describe('delivery envelopes (JOB-06/07)', () => {

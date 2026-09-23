@@ -394,12 +394,23 @@ export async function deliver(
 
 export type ProviderBehavior =
   | { kind: 'success'; synthesis?: unknown; servedModel?: string; routedProvider?: string | null }
-  | { kind: 'status'; status: number }
+  /** `failures` bounds the error responses; later requests succeed. Unbounded when absent. */
+  | { kind: 'status'; status: number; failures?: number }
   | { kind: 'network' }
   | { kind: 'hang' }
   | { kind: 'abort' };
 
-export type ProviderRequest = { provider: AIProviderType; url: string; body: unknown };
+export type ProviderRequest = { provider: AIProviderType; url: string; body: unknown; at: number };
+
+/**
+ * Sent with every error status. Every locked SDK honours `retry-after-ms`
+ * ahead of its own backoff (Stainless `retryRequest` in openai and
+ * @anthropic-ai/sdk; Speakeasy `retryIntervalFromResponse` in @openrouter/sdk
+ * and the @google/genai Interactions client), so an enabled SDK retry lands
+ * 1 ms later, well inside the 300 ms queued test deadline, instead of after a
+ * randomized backoff (OpenRouter's first one falls anywhere in 0–1000 ms).
+ */
+export const RETRY_AFTER_MS = '1';
 
 export type ProviderFixture = {
   requests: ProviderRequest[];
@@ -457,7 +468,9 @@ function successBody(provider: AIProviderType, requestedModel: string, behavior:
 
 /**
  * Count every outbound provider request and answer it per behavior. Requests
- * to any other origin are recorded as unexpected and rejected.
+ * to any other origin are recorded as unexpected and rejected. Like fetch, a
+ * request whose signal is already aborted is refused unsent, so a retry loop
+ * cannot outlive the caller's deadline.
  */
 export function installProviderFixture(behavior: ProviderBehavior): ProviderFixture {
   const fixture: ProviderFixture = { requests: [], unexpected: [], release: () => {} };
@@ -465,6 +478,9 @@ export function installProviderFixture(behavior: ProviderBehavior): ProviderFixt
   fixture.release = () => releases.splice(0).forEach((release) => release());
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
+    if (init?.signal?.aborted || (input instanceof Request && input.signal.aborted) || request.signal.aborted) {
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    }
     const url = new URL(request.url);
     const provider = providerFor(url);
     if (!provider) {
@@ -478,17 +494,19 @@ export function installProviderFixture(behavior: ProviderBehavior): ProviderFixt
     } catch {
       body = null;
     }
-    fixture.requests.push({ provider, url: `${url.origin}${url.pathname}`, body });
-    switch (behavior.kind) {
+    fixture.requests.push({ provider, url: `${url.origin}${url.pathname}`, body, at: Date.now() });
+    const recovered = behavior.kind === 'status' && fixture.requests.length > (behavior.failures ?? Infinity);
+    const answer: ProviderBehavior = recovered ? { kind: 'success' } : behavior;
+    switch (answer.kind) {
       case 'success': {
         const requestedModel = (body as { model?: string; chatRequest?: { model?: string } } | null)?.model
           ?? PROVIDER_MODELS[provider].requested;
-        return Response.json(successBody(provider, requestedModel, behavior));
+        return Response.json(successBody(provider, requestedModel, answer));
       }
       case 'status':
         return Response.json(
-          { error: { message: 'synthetic provider error', type: 'synthetic', code: behavior.status } },
-          { status: behavior.status, headers: { 'retry-after': '0' } },
+          { error: { message: 'synthetic provider error', type: 'synthetic', code: answer.status } },
+          { status: answer.status, headers: { 'retry-after': '0', 'retry-after-ms': RETRY_AFTER_MS } },
         );
       case 'network':
         throw new TypeError('synthetic network failure');

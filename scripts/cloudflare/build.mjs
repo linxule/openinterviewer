@@ -9,7 +9,7 @@
 //
 // Usage: node scripts/cloudflare/build.mjs [--config wrangler.jsonc] [--skip-next-build]
 
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   ROOT,
@@ -111,4 +111,21 @@ const manifest = {
   testReceipt: null,
 };
 writeFileSync(path.join(artifactDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
-console.log(`• Artifact ready: ${path.relative(ROOT, artifactDir)} (worker ${(manifest.artifact.workerBytes / 1048576).toFixed(1)} MiB, ${worker.files} files; source ${git.commit.slice(0, 12)}${git.dirty ? ' dirty' : ''})`);
+// The upload is the modules (wrangler's Total Upload, the size the 64 MiB limit
+// counts); the source map and wrangler's README stay local.
+const modules = { files: 0, bytes: 0 };
+let sourceMapBytes = 0;
+for (const entry of readdirSync(workerDir, { recursive: true, withFileTypes: true })) {
+  if (!entry.isFile()) continue;
+  const bytes = statSync(path.join(entry.parentPath, entry.name)).size;
+  if (entry.name.endsWith('.map')) sourceMapBytes += bytes;
+  else if (entry.name !== 'README.md') {
+    modules.files += 1;
+    modules.bytes += bytes;
+  }
+}
+const mib = (bytes) => `${(bytes / 1048576).toFixed(2)} MiB`;
+console.log(
+  `• Artifact ready: ${path.relative(ROOT, artifactDir)} (worker modules ${mib(modules.bytes)} in ${modules.files} files, `
+    + `source map ${mib(sourceMapBytes)} not uploaded; source ${git.commit.slice(0, 12)}${git.dirty ? ' dirty' : ''})`,
+);

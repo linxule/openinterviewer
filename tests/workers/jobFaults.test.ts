@@ -2,13 +2,16 @@
 // @google/genai resolves to its web build), under the queued-synthesis policy.
 // A request-counting fetch fixture proves exactly one outbound synthesis
 // request per fault, and the job settles per the classification table
-// (IMPLEMENTATION.md §5).
+// (IMPLEMENTATION.md §5). Error statuses carry `retry-after-ms: 1`, so an
+// enabled SDK retry would reach the fixture well inside the 300 ms deadline
+// and fail the count deterministically.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AIProviderType } from '../../src/types';
 import { ProviderTimeoutError } from '../../src/lib/providerErrors';
 import { ClaudeProvider } from '../../src/lib/providers/claude';
 import { GeminiProvider } from '../../src/lib/providers/gemini';
 import { OpenAIProvider } from '../../src/lib/providers/openai';
+import { OpenRouterProvider } from '../../src/lib/providers/openrouter';
 import { workspaceStub } from './helpers';
 import {
   analysisRow,
@@ -27,6 +30,8 @@ import {
 const PROVIDERS: AIProviderType[] = ['openai', 'claude', 'gemini', 'openrouter'];
 /** Short queued deadline so a hanging provider times out quickly in tests. */
 const TEST_DEADLINE_MS = 300;
+const HISTORY = [{ id: 'm1', role: 'user' as const, content: 'Hello', timestamp: 1 }];
+const BEHAVIOR = { timePerTopic: {}, messagesPerTopic: {}, topicsExplored: [], contradictions: [] };
 
 type Expected =
   | { job: 'complete' }
@@ -118,21 +123,57 @@ describe('JOB-09 provenance is mandatory', () => {
 });
 
 describe('JOB-09 control: the default policy keeps SDK retries for synchronous paths', () => {
-  const history = [{ id: 'm1', role: 'user' as const, content: 'Hello', timestamp: 1 }];
-  const behavior = { timePerTopic: {}, messagesPerTopic: {}, topicsExplored: [], contradictions: [] };
-
   it.each([
     ['openai', () => new OpenAIProvider(PROVIDER_MODELS.openai.requested, 'sk-synthetic'), 3],
     ['claude', () => new ClaudeProvider(PROVIDER_MODELS.claude.requested, 'sk-ant-synthetic'), 3],
     ['gemini', () => new GeminiProvider(PROVIDER_MODELS.gemini.requested, 'synthetic-gemini'), 5],
+    ['openrouter', () => new OpenRouterProvider(PROVIDER_MODELS.openrouter.requested, 'synthetic-openrouter'), 3],
   ] as const)('JOB-09 %s retries a 500 under the default policy but not under queued-synthesis', async (provider, make, defaultRequests) => {
-    const fixture = installProviderFixture({ kind: 'status', status: 500 });
+    // OpenRouter's default backoff has no retry count, only a one-hour budget,
+    // so its fixture recovers after two failures; the others exhaust maxRetries.
+    const recovers = provider === 'openrouter';
+    const fixture = installProviderFixture({ kind: 'status', status: 500, ...(recovers ? { failures: defaultRequests - 1 } : {}) });
     const config = studyConfig('study-control', provider);
-    await expect(make().synthesizeInterview(history, config, behavior, null)).rejects.not.toBeInstanceOf(ProviderTimeoutError);
+    const defaultCall = make().synthesizeInterview(HISTORY, config, BEHAVIOR, null);
+    if (recovers) await expect(defaultCall).resolves.toMatchObject({ execution: { provider } });
+    else await expect(defaultCall).rejects.not.toBeInstanceOf(ProviderTimeoutError);
     expect(fixture.requests).toHaveLength(defaultRequests);
+    // Every retry honoured retry-after-ms: all of them fit inside the queued
+    // test deadline. OpenRouter's own second retry would wait at least 500 ms.
+    expect(fixture.requests[defaultRequests - 1].at - fixture.requests[0].at).toBeLessThan(TEST_DEADLINE_MS);
     fixture.requests.length = 0;
-    await expect(make().synthesizeInterview(history, config, behavior, null, { kind: 'queued-synthesis', deadlineMs: 5_000 }))
+    await expect(make().synthesizeInterview(HISTORY, config, BEHAVIOR, null, { kind: 'queued-synthesis', deadlineMs: 5_000 }))
       .rejects.toThrow();
     expect(fixture.requests).toHaveLength(1);
   }, 30_000);
+});
+
+describe('R2: an adapter and its SDK load only when a queued job executes', () => {
+  const ADAPTER_MODULES = ['claude', 'openai', 'gemini', 'openrouter'].map((name) => `../../src/lib/providers/${name}`);
+
+  afterEach(() => {
+    for (const path of ADAPTER_MODULES) vi.doUnmock(path);
+  });
+
+  it('R2 evaluates no adapter when the execution module loads; a failed load is a known provider failure without a request', async () => {
+    for (const path of ADAPTER_MODULES) {
+      vi.doMock(path, () => {
+        throw new Error(`synthetic: ${path} evaluated`);
+      });
+    }
+    // A distinct module id evaluates a fresh copy, so the mocks above reach
+    // every import it makes: a static adapter import would reject here.
+    const fresh = '../../cloudflare/analysis/execute?r2';
+    const execute = await import(/* @vite-ignore */ fresh) as typeof import('../../cloudflare/analysis/execute');
+    const fixture = installProviderFixture({ kind: 'success' });
+    const provider = execute.createQueuedSynthesisProvider('openrouter', PROVIDER_MODELS.openrouter.requested, 'synthetic-openrouter');
+    const failure = await provider
+      .synthesizeInterview(HISTORY, studyConfig('study-r2', 'openrouter'), BEHAVIOR, null, { kind: 'queued-synthesis', deadlineMs: TEST_DEADLINE_MS })
+      .then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(execute.AdapterLoadError);
+    expect(execute.classifyProviderException(failure))
+      .toEqual({ outcome: { kind: 'failed', failureKind: 'provider' }, reason: 'provider-failure' });
+    expect(fixture.requests).toEqual([]);
+    expect(fixture.unexpected).toEqual([]);
+  });
 });

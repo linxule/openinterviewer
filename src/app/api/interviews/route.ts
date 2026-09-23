@@ -46,7 +46,7 @@ export async function GET(request: Request) {
         : await gated.context.store.listInterviews({ scope: 'study', studyId, maximum: 1_000 });
       const mapped = mapCollectionLoad(loaded, {
         unavailable: 'Interview storage is temporarily unavailable.',
-        tooLarge: 'This interview list is too large to load at once. Narrow it by study.',
+        tooLarge: 'This study has too much interview data to list at once.',
       });
       if (!mapped.ok) return NextResponse.json(mapped.body, { status: mapped.status });
       return NextResponse.json({ interviews: mapped.items });

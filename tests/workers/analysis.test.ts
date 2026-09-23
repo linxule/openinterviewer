@@ -1,8 +1,10 @@
 // Durable analysis RPCs in the real WorkspaceStore (workerd SQLite): researcher
 // retry/status (JOB-04, API-01/02) and the consumer's claim/start/finish
-// fences (JOB-03/08/10). Rows are seeded directly; no provider is involved.
+// fences (JOB-03/08/10). Rows are seeded directly; the JOB-04 races and the
+// JOB-07 cap deliver through the real consumer to a request-counting provider
+// fixture.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { evictDurableObject, runInDurableObject } from 'cloudflare:test';
+import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { ANALYSIS_COLUMNS, projectInterview, type AnalysisRow } from '../../cloudflare/workspace/projection';
 import {
   ANALYSIS_ATTACH_MARGIN_MS,
@@ -34,6 +36,7 @@ import {
   sqlRows,
   sqlRun,
   SYNTHESIS,
+  type QueueCapture,
   type SeededInterview,
 } from './jobFixtures';
 
@@ -62,9 +65,11 @@ function expectClosedBody(body: AnalysisStatusBody): void {
   }
 }
 
+let queue: QueueCapture;
+
 beforeEach(async () => {
   await resetWorkspace();
-  captureQueue();
+  queue = captureQueue();
 });
 
 afterEach(() => {
@@ -269,16 +274,33 @@ describe('acceptAnalysisRetry (JOB-04, API-01)', () => {
     expect(receipts).toEqual([{ disposition: 'existing', result_json: JSON.stringify({ generation: 1 }) }]);
   });
 
-  it('JOB-04 races an initial job and two retry keys to a single active generation', async () => {
+  it('JOB-04 races an initial job and two retry keys to a single active generation and one provider request', async () => {
     const job = await seedJob();
     const stub = workspaceStub();
-    const outcomes = await Promise.all([
+    const provider = installProviderFixture({ kind: 'success' });
+    // The automatic job executes while both retry keys arrive.
+    const [delivered, ...outcomes] = await Promise.all([
+      deliver([job.message]),
       stub.acceptAnalysisRetry(retryInput(job, { expectedGeneration: 1 })),
       stub.acceptAnalysisRetry(retryInput(job, { expectedGeneration: 1 })),
     ]);
-    expect(outcomes.map((outcome) => outcome.status)).toEqual(['existing', 'existing']);
-    expect(await sqlRows(`SELECT job_id FROM analysis_jobs WHERE interview_id = ? AND state IN ('pending','claimed','started')`, job.interviewId))
-      .toHaveLength(1);
+    expect(delivered.explicitAcks).toHaveLength(1);
+    for (const outcome of outcomes) {
+      // Active work while the job runs, or its result once it has completed.
+      expect(['existing', 'already-complete']).toContain(outcome.status);
+      expect(outcome).toMatchObject({ body: { generation: 1 } });
+    }
+    const jobs = await sqlRows<{ job_id: string; generation: number; state: string }>(
+      `SELECT job_id, generation, state FROM analysis_jobs WHERE interview_id = ?`,
+      job.interviewId,
+    );
+    expect(jobs).toEqual([{ job_id: job.jobId, generation: 1, state: 'complete' }]);
+    // A redelivery, and anything the race enqueued, never calls again.
+    expect(queue.messages).toEqual([]);
+    expect((await deliver([job.message])).explicitAcks).toHaveLength(1);
+    expect(provider.requests).toHaveLength(1);
+    expect(provider.requests[0]).toMatchObject({ provider: 'openai', body: { model: PROVIDER_MODELS.openai.requested } });
+    expect(await analysisRow(job.interviewId)).toMatchObject({ status: 'complete', current_generation: 1, attempts: 1 });
   });
 
   it('JOB-04 lets exactly one of two racing keys allocate after a terminal failure', async () => {
@@ -300,6 +322,19 @@ describe('acceptAnalysisRetry (JOB-04, API-01)', () => {
     );
     expect(jobs.map((row) => [row.generation, row.state])).toEqual([[1, 'failed'], [2, 'pending']]);
     expect(jobs[1].job_id).not.toBe(job.jobId);
+
+    // The winning generation is dispatched once and paid for once; a duplicate
+    // of its message and a late message for the failed generation never call.
+    const provider = installProviderFixture({ kind: 'success' });
+    await runDurableObjectAlarm(stub);
+    await vi.waitFor(() => expect(queue.messages).toHaveLength(1), { timeout: 3_000, interval: 20 });
+    expect(queue.messages[0]).toMatchObject({ jobId: jobs[1].job_id, generation: 2 });
+    const result = await deliver([queue.messages[0], queue.messages[0], job.message]);
+    expect(result.explicitAcks).toHaveLength(3);
+    expect(provider.requests).toHaveLength(1);
+    expect(await sqlRows(`SELECT generation, state FROM analysis_jobs WHERE interview_id = ? ORDER BY generation`, job.interviewId))
+      .toEqual([{ generation: 1, state: 'failed' }, { generation: 2, state: 'complete' }]);
+    expect(await analysisRow(job.interviewId)).toMatchObject({ status: 'complete', current_generation: 2, attempts: 1 });
   });
 
   it('API-01 refuses a mismatched terminal expectedGeneration and a stale study revision without allocation', async () => {
