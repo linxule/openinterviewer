@@ -6,6 +6,7 @@ import { isPendingStudyStub, StudyWorkspaceItem } from '@/types';
 import {
   deleteStudy,
   getAllStudies,
+  readStudy,
   reconcileStudyOperations,
 } from '@/services/storageService';
 import { Button, Coordinate, Icon, Measure, Notice, Rule } from '@/components/ui';
@@ -104,6 +105,18 @@ export default function StudyList() {
       setDeletingId(null);
       setMenuOpenId(null);
     }
+  };
+
+  // The list carries no configurations (ST-08): editing prefills from the full study.
+  const handleEdit = async (id: string) => {
+    setMenuOpenId(null);
+    const outcome = await readStudy(id);
+    if (outcome.status !== 'ok') {
+      alert(outcome.error);
+      return;
+    }
+    sessionStorage.setItem('prefillStudyConfig', JSON.stringify(outcome.value.config));
+    router.push(`/setup?prefill=edit&studyId=${id}`);
   };
 
   const handleLoadSample = async () => {
@@ -351,7 +364,7 @@ export default function StudyList() {
                       <Coordinate>{pending ? '—' : formatDate(study.createdAt)}</Coordinate>
                     </td>
                     <td className="hidden px-3 py-3 align-top text-[13px] text-ink-700 md:table-cell">
-                      <Coordinate>{pending ? '—' : study.config.coreQuestions.length}</Coordinate>
+                      <Coordinate>{pending ? '—' : study.coreQuestionCount}</Coordinate>
                     </td>
                     <td className="px-3 py-3 align-top text-[13px] text-ink-700">
                       {pending ? (
@@ -404,9 +417,7 @@ export default function StudyList() {
                             type="button"
                             onClick={() => {
                               if (pending) return;
-                              sessionStorage.setItem('prefillStudyConfig', JSON.stringify(study.config));
-                              router.push(`/setup?prefill=edit&studyId=${study.id}`);
-                              setMenuOpenId(null);
+                              void handleEdit(study.id);
                             }}
                             disabled={pending}
                             className="block w-full px-3 py-2 text-left text-[13px] text-ink-700 hover:bg-paper-2 disabled:cursor-not-allowed disabled:opacity-50"

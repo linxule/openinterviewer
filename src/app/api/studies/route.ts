@@ -39,7 +39,7 @@ import {
   readStudyMutationBody,
   validateStudyConfigForCreate,
 } from '@/lib/studyConfigValidation';
-import type { StoredStudy, StudyConfig } from '@/types';
+import { toStudyListItem, type StoredStudy, type StudyConfig } from '@/types';
 import { missingProviderCredential } from '@/lib/providerAvailability';
 import {
   attachCreateIdempotencyOperation,
@@ -105,7 +105,7 @@ export async function GET() {
       });
       if (!mapped.ok) return NextResponse.json(mapped.body, { status: mapped.status });
       return NextResponse.json({
-        studies: [...inspection.pendingStudies, ...mapped.items],
+        studies: [...inspection.pendingStudies, ...mapped.items.map(toStudyListItem)],
         pendingStudies: inspection.pendingStudies,
       });
     }

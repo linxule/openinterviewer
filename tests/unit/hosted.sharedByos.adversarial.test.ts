@@ -534,6 +534,9 @@ describe('hosted shared-BYOS researcher list/export/link adversarial matrix', ()
     const body = await list.json();
     expect(list.status).toBe(200);
     expect(body.studies.map((study: { id: string }) => study.id)).toEqual([STUDY_B]);
+    // Hosted lists carry list items too, never whole configurations (ST-08).
+    expect(Object.keys(body.studies[0].config).sort()).toEqual(['description', 'name']);
+    expect(typeof body.studies[0].coreQuestionCount).toBe('number');
     expect(kvMock.getStudyChecked).toHaveBeenCalledWith(STUDY_B, expect.anything());
     expect(kvMock.getStudyChecked).not.toHaveBeenCalledWith(STUDY_A, expect.anything());
 

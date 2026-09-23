@@ -14,22 +14,21 @@ import {
   isPlainObject,
   isRevision,
   isSafeTime,
+  keysetCursorAfter,
   logCorruptRecord,
   logStorageFailure,
+  MAX_COLLECTION_BYTES,
+  parseKeysetCursor,
   readStudyRow,
   STUDY_ID,
   utf8Bytes,
+  type KeysetCursor,
 } from './studies';
 
 /** The existing serialized aggregate ceiling (kv.ts MAX_STORED_AGGREGATE_BYTES). */
 export const MAX_STORED_AGGREGATE_BYTES = 256_000;
-/**
- * Stored (UTF-8) bytes one RPC response may carry. RPC serializes a string
- * holding any non-Latin-1 character as UTF-16, so mostly ASCII text can double
- * in transit; 12 MiB keeps the worst case under the 32 MiB RPC limit. Larger
- * collections are returned as several keyset pages, never truncated.
- */
-export const MAX_COLLECTION_BYTES = 12 * 1024 * 1024;
+/** Stored bytes one RPC response may carry (defined with the shared row helpers). */
+export { MAX_COLLECTION_BYTES };
 const MAX_PAGE_SIZE = 1_000;
 /** Budget allowance per row for the projected analysis state and clone framing. */
 const PROJECTION_OVERHEAD_BYTES = 1_024;
@@ -70,21 +69,6 @@ const ROW_BYTES = `(octet_length(i.record_json)
 const NEWEST_FIRST = `ORDER BY i.created_at DESC, i.id DESC`;
 const KEYSET = `AND (i.created_at < ? OR (i.created_at = ? AND i.id < ?))`;
 
-type Cursor = { createdAt: number; id: string };
-
-function parseCursor(cursor: string): Cursor | null {
-  const separator = cursor.indexOf(':');
-  if (separator <= 0) return null;
-  const createdAt = Number(cursor.slice(0, separator));
-  const id = cursor.slice(separator + 1);
-  if (!/^\d{1,16}$/.test(cursor.slice(0, separator)) || !isSafeTime(createdAt) || !INTERVIEW_ID.test(id)) return null;
-  return { createdAt, id };
-}
-
-function cursorAfter(row: JoinedRow): string {
-  return `${row.created_at}:${row.id}`;
-}
-
 /**
  * One keyset page over (created_at DESC, id DESC). Sizes are read first so a
  * page never materializes more than its byte budget; a single row larger than
@@ -95,7 +79,7 @@ function readJoinedPage(
   ws: WorkspaceContext,
   where: string,
   bindings: SqlStorageValue[],
-  cursor: Cursor | null,
+  cursor: KeysetCursor | null,
   pageSize: number,
   maxPageBytes: number,
 ): { rows: JoinedRow[]; more: boolean } {
@@ -211,7 +195,7 @@ export async function listInterviews(
       return { status: 'unavailable' };
     }
     const page = input.page;
-    let cursor: Cursor | null = null;
+    let cursor: KeysetCursor | null = null;
     if (page !== undefined) {
       if (
         !isPlainObject(page)
@@ -222,7 +206,7 @@ export async function listInterviews(
       ) {
         return { status: 'unavailable' };
       }
-      cursor = page.cursor === null ? null : parseCursor(page.cursor);
+      cursor = page.cursor === null ? null : parseKeysetCursor(page.cursor);
       if (page.cursor !== null && !cursor) return { status: 'unavailable' };
     }
     const maxPageBytes = page ? Math.min(page.maxPageBytes, MAX_COLLECTION_BYTES) : MAX_COLLECTION_BYTES;
@@ -259,7 +243,7 @@ export async function listInterviews(
       }
       if (skipped) logCorruptRecord('listInterviews');
       if (!page) return { status: 'ok', items };
-      return { status: 'ok', items, nextCursor: more ? cursorAfter(rows[rows.length - 1]) : null, count };
+      return { status: 'ok', items, nextCursor: more ? keysetCursorAfter(rows[rows.length - 1]) : null, count };
     });
   } catch (error) {
     logStorageFailure('listInterviews', error);
@@ -395,7 +379,7 @@ export async function readAggregateInputs(
     ) {
       return { status: 'unavailable' };
     }
-    const cursor = input.cursor === null ? null : parseCursor(input.cursor);
+    const cursor = input.cursor === null ? null : parseKeysetCursor(input.cursor);
     if (input.cursor !== null && !cursor) return { status: 'unavailable' };
     const pageSize = Math.min(input.pageSize, MAX_PAGE_SIZE);
     const maxPageBytes = Math.min(input.maxPageBytes, MAX_COLLECTION_BYTES);
@@ -420,7 +404,7 @@ export async function readAggregateInputs(
           return { status: 'unavailable' };
         }
       }
-      const nextCursor = more ? cursorAfter(rows[rows.length - 1]) : null;
+      const nextCursor = more ? keysetCursorAfter(rows[rows.length - 1]) : null;
       return { status: 'ok', interviews, nextCursor, totalEligible };
     });
   } catch (error) {

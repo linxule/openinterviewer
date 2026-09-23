@@ -4,7 +4,7 @@
 // consumed cursors. Structural corruption refuses without patching the row.
 
 import type * as Port from '../../src/lib/storage/types';
-import type { StoredStudy, StudyConfig } from '../../src/types';
+import { toStudyListItem, type StoredStudy, type StudyConfig, type StudyListItem } from '../../src/types';
 import { logRequestEvent, logRequestFailure } from '../../src/lib/requestLog';
 import { HEX64, MAX_STUDY_REVISION } from '../../src/lib/wire/types';
 import type * as Rpc from './rpcTypes';
@@ -23,6 +23,17 @@ export const STUDY_CREATE_FAMILY = 'study-create';
 export const MAX_STUDY_CREATE_RECEIPTS = 100;
 /** Measured ceiling for one assembled SQLite row; the platform limit is 2 MB. */
 export const MAX_ROW_BYTES = 1_900_000;
+/**
+ * Stored (UTF-8) bytes one RPC response may carry. RPC serializes a string
+ * holding any non-Latin-1 character as UTF-16, so mostly ASCII text can double
+ * in transit; 12 MiB keeps the worst case under the 32 MiB RPC limit. Larger
+ * collections are returned as several keyset pages, never truncated.
+ */
+export const MAX_COLLECTION_BYTES = 12 * 1024 * 1024;
+/** Rows one listStudies page may carry, whatever their size. */
+export const MAX_STUDY_PAGE_ROWS = 1_000;
+/** Page budget allowance per study for its non-config fields and clone framing. */
+export const STUDY_PAGE_OVERHEAD_BYTES = 1_024;
 
 const encoder = new TextEncoder();
 
@@ -166,20 +177,117 @@ export async function getStudy(ws: WorkspaceContext, input: Rpc.StudyIdInput): P
   }
 }
 
+// ---------- Keyset cursors ----------
+
+/** A position after one row of a (created_at DESC, id DESC) listing. */
+export type KeysetCursor = { createdAt: number | string; id: string };
+
+/**
+ * The cursor carries the row's stored key values as JSON, unvalidated, so a
+ * row whose id or created_at is malformed can still end a page: paging moves
+ * past it (the row itself is left out as undecodable) instead of failing on
+ * the next page. The values are only ever bound as SQL parameters.
+ */
+export function keysetCursorAfter(row: { created_at: unknown; id: unknown }): string {
+  return JSON.stringify([row.created_at, row.id]);
+}
+
+export function parseKeysetCursor(cursor: string): KeysetCursor | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(cursor);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed) || parsed.length !== 2) return null;
+  const [createdAt, id] = parsed as unknown[];
+  const validTime = (typeof createdAt === 'number' && Number.isFinite(createdAt)) || typeof createdAt === 'string';
+  return validTime && typeof id === 'string' ? { createdAt, id } : null;
+}
+
+/**
+ * Paged listStudies request (the durable client always sends `page`); its
+ * pages carry list items, not configurations. Without `page` the whole
+ * collection of full studies must fit one response, otherwise it is
+ * too-large, so a caller unaware of paging never receives a partial list or a
+ * reply past the RPC limit.
+ */
+export type ListStudiesRequest = Rpc.MaximumInput & {
+  page?: { cursor: string | null; maxPageBytes: number };
+};
+
+export type ListStudiesPage =
+  | { status: 'ok'; items: StudyListItem[]; nextCursor: string | null; count: number }
+  | { status: 'too-large'; count: number; maximum: number }
+  | { status: 'unavailable' };
+
+/**
+ * Newest-first studies over (created_at DESC, id DESC). Every page re-counts
+ * the collection against the route maximum and is its own transaction keyed by
+ * the immutable (created_at, id), so a study present throughout the listing
+ * appears exactly once; one created or deleted between pages may or may not
+ * appear. Sizes are read first, so a page never loads more stored bytes than
+ * its budget; a single study larger than the budget is a page by itself. A
+ * page's reply is a projection of what it loaded, so it is smaller still.
+ */
 export async function listStudies(
   ws: WorkspaceContext,
-  input: Rpc.MaximumInput,
-): Promise<Port.CollectionLoadResult<Rpc.StoredStudy>> {
+  input: ListStudiesRequest,
+): Promise<Port.CollectionLoadResult<Rpc.StoredStudy> | ListStudiesPage> {
   try {
     const maximum = input?.maximum;
     if (typeof maximum !== 'number' || !Number.isSafeInteger(maximum) || maximum < 0) return { status: 'unavailable' };
-    return ws.storage.transactionSync((): Port.CollectionLoadResult<Rpc.StoredStudy> => {
+    const page = input.page;
+    let cursor: KeysetCursor | null = null;
+    if (page !== undefined) {
+      if (
+        !isPlainObject(page)
+        || typeof page.maxPageBytes !== 'number'
+        || !Number.isSafeInteger(page.maxPageBytes)
+        || page.maxPageBytes < 1
+        || (page.cursor !== null && typeof page.cursor !== 'string')
+      ) {
+        return { status: 'unavailable' };
+      }
+      cursor = page.cursor === null ? null : parseKeysetCursor(page.cursor);
+      if (page.cursor !== null && !cursor) return { status: 'unavailable' };
+    }
+    const maxPageBytes = page ? Math.min(page.maxPageBytes, MAX_COLLECTION_BYTES) : MAX_COLLECTION_BYTES;
+    const keyset = cursor ? `WHERE created_at < ? OR (created_at = ? AND id < ?)` : '';
+    const keysetBindings = cursor ? [cursor.createdAt, cursor.createdAt, cursor.id] : [];
+
+    return ws.storage.transactionSync((): Port.CollectionLoadResult<Rpc.StoredStudy> | ListStudiesPage => {
       if (!gate(ws, 'read').ok) return { status: 'unavailable' };
       const count = ws.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM studies`).one().n;
       if (count > maximum) return { status: 'too-large', count, maximum };
-      const rows = ws.sql
-        .exec<StudyRow>(`SELECT ${STUDY_COLUMNS} FROM studies ORDER BY created_at DESC, id DESC`)
+      const pageSize = page ? MAX_STUDY_PAGE_ROWS : Math.max(1, count);
+      // octet_length reads the stored size without loading the config it measures.
+      const sizes = ws.sql
+        .exec<{ bytes: number }>(
+          `SELECT octet_length(config_json) AS bytes FROM studies ${keyset} ORDER BY created_at DESC, id DESC LIMIT ?`,
+          ...keysetBindings,
+          pageSize + 1,
+        )
         .toArray();
+      let take = 0;
+      let bytes = 0;
+      while (take < sizes.length && take < pageSize) {
+        const next = bytes + sizes[take].bytes + STUDY_PAGE_OVERHEAD_BYTES;
+        if (take > 0 && next > maxPageBytes) break;
+        bytes = next;
+        take += 1;
+      }
+      const more = sizes.length > take;
+      if (!page && more) return { status: 'too-large', count, maximum };
+      const rows = take === 0
+        ? []
+        : ws.sql
+          .exec<StudyRow>(
+            `SELECT ${STUDY_COLUMNS} FROM studies ${keyset} ORDER BY created_at DESC, id DESC LIMIT ?`,
+            ...keysetBindings,
+            take,
+          )
+          .toArray();
       const items: StoredStudy[] = [];
       for (const row of rows) {
         const study = decodeStudyRow(row);
@@ -187,7 +295,15 @@ export async function listStudies(
       }
       // Redis parity: undecodable members are dropped from the collection.
       if (items.length !== rows.length) logCorruptRecord('listStudies');
-      return { status: 'ok', items };
+      if (!page) return { status: 'ok', items };
+      // The cursor follows the last row read, decodable or not, so paging always advances.
+      const last = rows[rows.length - 1];
+      return {
+        status: 'ok',
+        items: items.map(toStudyListItem),
+        nextCursor: more && last ? keysetCursorAfter(last) : null,
+        count,
+      };
     });
   } catch (error) {
     logStorageFailure('listStudies', error);

@@ -10,7 +10,7 @@
 // (or hold reason) is outside the operation's closed union is treated the same
 // way: it is never passed through to a route.
 
-import type { StoredAggregateSynthesis, StoredInterview, StoredStudy } from '@/types';
+import type { StoredAggregateSynthesis, StoredInterview, StoredStudy, StudyListItem } from '@/types';
 import type {
   AcceptAnalysisRetryInput,
   AcceptAnalysisRetryOutcome,
@@ -94,10 +94,25 @@ export const LIST_INTERVIEWS_PAGE_BYTES = 12 * 1024 * 1024;
  * A workerd measurement against a deployed Worker remains a remote gate.
  */
 export const MAX_LIST_INTERVIEWS_BYTES = 16 * 1024 * 1024;
+/**
+ * Stored bytes the object may load per listStudies page. A page replies with
+ * list items projected from what it loaded, so the reply is smaller than the
+ * budget (the object caps any page at 12 MiB and 1,000 rows).
+ */
+export const LIST_STUDIES_PAGE_BYTES = 4 * 1024 * 1024;
+/**
+ * Serialized (UTF-8 JSON) list-item bytes one listStudies result may assemble
+ * in a Worker, across all its pages; more is `too-large` (HTTP 413), never a
+ * truncated list. Sized as MAX_LIST_INTERVIEWS_BYTES is. An item carries the
+ * name (≤ 200 characters), the description (≤ 10,000) and metadata, so 1,000
+ * studies fit unless their descriptions average more than about 16 KB of
+ * UTF-8 (roughly 5,500 characters of CJK text).
+ */
+export const MAX_LIST_STUDIES_BYTES = 16 * 1024 * 1024;
 
-/** One listInterviews page as the object returns it when the request carries `page`. */
-type InterviewListPage =
-  | { status: 'ok'; items: StoredInterview[]; nextCursor: string | null; count: number }
+/** One collection page as the object returns it when the request carries `page`. */
+type CollectionPage<T> =
+  | { status: 'ok'; items: T[]; nextCursor: string | null; count: number }
   | { status: 'too-large'; count: number; maximum: number }
   | { status: 'unavailable' };
 
@@ -138,7 +153,6 @@ function inUnion(table: object): (value: unknown) => boolean {
 
 const READINESS: StatusTable<StoreReadiness> = { ready: true, unavailable: true, held: true };
 const STUDY_LOAD: StatusTable<StudyLoadResult> = { found: true, 'not-found': true, unavailable: true };
-const COLLECTION: StatusTable<CollectionLoadResult<unknown>> = { ok: true, 'too-large': true, unavailable: true };
 const CREATE_STUDY: StatusTable<CreateStudyOutcome> = {
   created: true,
   'key-reuse': true,
@@ -216,7 +230,7 @@ const PERSIST: StatusTable<PersistCompletedInterviewOutcome> = {
   held: true,
 };
 const INTERVIEW_LOAD: StatusTable<InterviewLoadResult> = { found: true, 'not-found': true, unavailable: true };
-const INTERVIEW_LIST_PAGE: StatusTable<InterviewListPage> = { ok: true, 'too-large': true, unavailable: true };
+const COLLECTION_PAGE: StatusTable<CollectionPage<unknown>> = { ok: true, 'too-large': true, unavailable: true };
 const AGGREGATE_LOAD: StatusTable<AggregateLoadResult> = { found: true, 'not-found': true, unavailable: true };
 const SAVE_AGGREGATE: { readonly [S in SaveAggregateOutcome]: true } = {
   saved: true,
@@ -263,8 +277,8 @@ const acceptReadiness = (value: unknown): boolean => {
 
 const acceptSaveAggregate = (value: unknown): boolean => isMember(SAVE_AGGREGATE, value);
 
-function isInterviewListPage(value: unknown): value is InterviewListPage {
-  if (!inUnion(INTERVIEW_LIST_PAGE)(value)) return false;
+function isCollectionPage(value: unknown): value is CollectionPage<unknown> {
+  if (!inUnion(COLLECTION_PAGE)(value)) return false;
   if ((value as { status: string }).status !== 'ok') return true;
   const page = value as { items?: unknown; nextCursor?: unknown; count?: unknown };
   return Array.isArray(page.items)
@@ -366,6 +380,43 @@ export function createDurableWorkspaceStore(config: DurableWorkspaceConfig): Dur
   const unavailable = { status: 'unavailable' } as const;
   const ambiguous = { status: 'ambiguous' } as const;
 
+  // Assembled from keyset pages so only the route maximum and the Worker
+  // byte ceiling limit a collection, never one RPC response's size. Each
+  // page re-counts the scope; the assembled total is checked against the
+  // maximum as well. A page never asks for more stored bytes than the
+  // ceiling has left, so a refusal holds at most one row past it.
+  async function listPaged<T>(
+    method: string,
+    input: { maximum: number },
+    pageBytes: number,
+    ceiling: number,
+  ): Promise<CollectionLoadResult<T>> {
+    const items: T[] = [];
+    let cursor: string | null = null;
+    let bytes = 0;
+    // Every non-final page carries at least one row, which bounds the loop.
+    for (let pages = 0; pages <= input.maximum + 1; pages += 1) {
+      const maxPageBytes = Math.max(1, Math.min(pageBytes, ceiling - bytes));
+      const page: CollectionPage<T> = await call<CollectionPage<T>>(
+        method,
+        { ...input, page: { cursor, maxPageBytes } },
+        unavailable,
+        isCollectionPage,
+      );
+      if (page.status !== 'ok') return page;
+      for (const item of page.items) {
+        bytes += serializedBytes(item);
+        if (bytes > ceiling) return { status: 'too-large', count: page.count, maximum: input.maximum };
+        items.push(item);
+      }
+      if (items.length > input.maximum) return { status: 'too-large', count: items.length, maximum: input.maximum };
+      if (page.nextCursor === null) return { status: 'ok', items };
+      if (page.nextCursor === cursor) return unavailable;
+      cursor = page.nextCursor;
+    }
+    return unavailable;
+  }
+
   async function consentInput(input: ConsentBinding & { now: number }) {
     return {
       participantSessionId: input.participantSessionId,
@@ -384,7 +435,7 @@ export function createDurableWorkspaceStore(config: DurableWorkspaceConfig): Dur
     getStudy: (studyId: string) => call<StudyLoadResult>('getStudy', { studyId }, unavailable, inUnion(STUDY_LOAD)),
 
     listStudies: (maximum: number) =>
-      call<CollectionLoadResult<StoredStudy>>('listStudies', { maximum }, unavailable, inUnion(COLLECTION)),
+      listPaged<StudyListItem>('listStudies', { maximum }, LIST_STUDIES_PAGE_BYTES, MAX_LIST_STUDIES_BYTES),
 
     createStudy: (input: CreateStudyInput) =>
       call<CreateStudyOutcome>('createStudy', input, ambiguous, inUnion(CREATE_STUDY)),
@@ -537,37 +588,8 @@ export function createDurableWorkspaceStore(config: DurableWorkspaceConfig): Dur
     getInterview: (interviewId: string) =>
       call<InterviewLoadResult>('getInterview', { interviewId }, unavailable, inUnion(INTERVIEW_LOAD)),
 
-    // Assembled from keyset pages so only the route maximum and the Worker
-    // byte ceiling limit a collection, never one RPC response's size. Each
-    // page re-counts the scope; the assembled total is checked against the
-    // maximum as well. A page never asks for more stored bytes than the
-    // ceiling has left, so a refusal holds at most one row past it.
-    async listInterviews(input: ListInterviewsInput): Promise<CollectionLoadResult<StoredInterview>> {
-      const items: StoredInterview[] = [];
-      let cursor: string | null = null;
-      let bytes = 0;
-      // Every non-final page carries at least one row, which bounds the loop.
-      for (let pages = 0; pages <= input.maximum + 1; pages += 1) {
-        const maxPageBytes = Math.max(1, Math.min(LIST_INTERVIEWS_PAGE_BYTES, MAX_LIST_INTERVIEWS_BYTES - bytes));
-        const page: InterviewListPage = await call<InterviewListPage>(
-          'listInterviews',
-          { ...input, page: { cursor, maxPageBytes } },
-          unavailable,
-          isInterviewListPage,
-        );
-        if (page.status !== 'ok') return page;
-        for (const item of page.items) {
-          bytes += serializedBytes(item);
-          if (bytes > MAX_LIST_INTERVIEWS_BYTES) return { status: 'too-large', count: page.count, maximum: input.maximum };
-          items.push(item);
-        }
-        if (items.length > input.maximum) return { status: 'too-large', count: items.length, maximum: input.maximum };
-        if (page.nextCursor === null) return { status: 'ok', items };
-        if (page.nextCursor === cursor) return unavailable;
-        cursor = page.nextCursor;
-      }
-      return unavailable;
-    },
+    listInterviews: (input: ListInterviewsInput) =>
+      listPaged<StoredInterview>('listInterviews', input, LIST_INTERVIEWS_PAGE_BYTES, MAX_LIST_INTERVIEWS_BYTES),
 
     getAggregate: (studyId: string) =>
       call<AggregateLoadResult>('getAggregate', { studyId }, unavailable, inUnion(AGGREGATE_LOAD)),

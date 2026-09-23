@@ -56,6 +56,7 @@ import {
 import { recordParticipantConsent, verifyParticipantConsent } from '../participantConsent';
 import { consumeParticipantRateLimits } from '../rateLimit';
 import type { RedisPort } from '../redisPort';
+import { toStudyListItem } from '../../types';
 import { logRequestFailure } from '../requestLog';
 import type {
   AdmissionOutcome,
@@ -176,7 +177,10 @@ export function createRedisWorkspaceStore(client: RedisPort, options: RedisWorks
     },
 
     getStudy: (studyId) => getStudyChecked(studyId, client),
-    listStudies: (maximum) => getAllStudiesChecked(client, maximum),
+    async listStudies(maximum) {
+      const loaded = await getAllStudiesChecked(client, maximum);
+      return loaded.status === 'ok' ? { status: 'ok', items: loaded.items.map(toStudyListItem) } : loaded;
+    },
 
     async createStudy(input) {
       standaloneOnly('createStudy');

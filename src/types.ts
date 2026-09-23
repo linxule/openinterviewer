@@ -417,7 +417,26 @@ export interface PendingStudyStub {
   phase: string;
 }
 
-export type StudyWorkspaceItem = StoredStudy | PendingStudyStub;
+/**
+ * A study as the study list (GET /api/studies) carries it: what the list
+ * shows, never the whole configuration, so a full list stays small on every
+ * target (ST-08). Editing reads the full study from GET /api/studies/[id].
+ */
+export interface StudyListItem extends Omit<StoredStudy, 'config'> {
+  config: Pick<StudyConfig, 'name' | 'description'>;
+  coreQuestionCount: number;
+}
+
+export function toStudyListItem(study: StoredStudy): StudyListItem {
+  const { config, ...metadata } = study;
+  return {
+    ...metadata,
+    config: { name: config.name, description: config.description },
+    coreQuestionCount: Array.isArray(config.coreQuestions) ? config.coreQuestions.length : 0,
+  };
+}
+
+export type StudyWorkspaceItem = StudyListItem | PendingStudyStub;
 
 export function isPendingStudyStub(study: StudyWorkspaceItem): study is PendingStudyStub {
   return 'reconciliationPending' in study && study.reconciliationPending === true;

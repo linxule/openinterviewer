@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeStoredStudy } from '../fixtures/models';
 import { standaloneTestContext } from '../helpers/workspaceStoreFixture';
 import type { RedisPort } from '@/lib/redisPort';
+import { toStudyListItem } from '@/types';
 
 const contextMock = vi.hoisted(() => ({ getRequestContext: vi.fn() }));
 vi.mock('@/lib/researcherContext', () => contextMock);
@@ -52,7 +53,8 @@ describe('GET /api/studies on Node standalone (ST-01)', () => {
     const response = await GET();
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ studies: [JSON.parse(JSON.stringify(study))] });
+    // The list carries list items, never whole configurations (ST-08).
+    await expect(response.json()).resolves.toEqual({ studies: [JSON.parse(JSON.stringify(toStudyListItem(study)))] });
     expect(kvMock.getAllStudiesChecked).toHaveBeenCalledWith(kvClient, 1_000);
 
     kvMock.getAllStudiesChecked.mockResolvedValueOnce({ status: 'unavailable' });

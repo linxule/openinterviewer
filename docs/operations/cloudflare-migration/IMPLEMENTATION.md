@@ -15,7 +15,8 @@ src/lib/storage/            backend-neutral domain boundary
   types.ts                  WorkspaceStorePort and per-operation result unions
   redis.ts                  Redis implementation wrapping kv.ts / participantLinks.ts / … (Node only)
   durableObject.ts          RPC client for the WorkspaceStore Durable Object (Worker only at runtime); assembles
-                            keyset-paged interview lists (≤ 12 MiB per page, ≤ 16 MiB per list, else 413)
+                            keyset-paged interview lists and study list items (pages of ≤ 12 MiB and ≤ 4 MiB of
+                            stored bytes respectively, ≤ 16 MiB per list, else 413)
   resolve.ts                one factory choosing the store from resolved capabilities
   analysisProtocol.ts       job states, message envelope, public projection, constants (portable)
 src/lib/backup/format.ts    operational backup format v1: families, chunk/manifest/trailer records, validator

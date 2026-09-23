@@ -10,6 +10,7 @@ import {
   MAX_LIST_INTERVIEWS_BYTES,
   mintParticipantLinkCode,
 } from '../../src/lib/storage/durableObject';
+import { toStudyListItem } from '../../src/types';
 import { testEnv, workspaceStub } from './helpers';
 import {
   captureStoreEvents,
@@ -82,7 +83,7 @@ describe('durable client against the real object (ST-01, ST-03, ST-06)', () => {
     const input = await createStudyInput();
     expect(await store.createStudy(input)).toEqual({ status: 'created', study: input.candidate, replayed: false });
     expect(await store.getStudy(input.candidate.id)).toEqual({ status: 'found', study: input.candidate });
-    expect(await store.listStudies(10)).toEqual({ status: 'ok', items: [input.candidate] });
+    expect(await store.listStudies(10)).toEqual({ status: 'ok', items: [toStudyListItem(input.candidate)] });
   });
 
   it('ST-03: a link code is returned once as 43 opaque characters and only its sha256 digest is stored', async () => {

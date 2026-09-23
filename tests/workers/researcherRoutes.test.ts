@@ -28,12 +28,13 @@ vi.mock('@/lib/providers', async (importOriginal) => ({
 import { POST as aggregatePOST } from '../../src/app/api/synthesis/aggregate/route';
 import { POST as followupPOST } from '../../src/app/api/studies/[id]/generate-followup/route';
 import { GET as interviewsGET } from '../../src/app/api/interviews/route';
+import { GET as studiesGET } from '../../src/app/api/studies/route';
 import { createSessionToken, SESSION_COOKIE_NAME } from '../../src/lib/auth';
 import { forEachEligibleAggregateInput, loadDurableAggregateInputs } from '../../src/lib/ownedStudies';
 import { createDurableWorkspaceStore, MAX_LIST_INTERVIEWS_BYTES } from '../../src/lib/storage/durableObject';
 import { WORKER_INVOCATION_ACCESSOR, WORKER_RUNTIME_MARKER, type WorkerInvocation } from '../../src/lib/runtime/workerInvocation';
 import type { StoredInterview, StoredStudy } from '../../src/types';
-import { createStudy, DAY, sampleInterview, setMaintenance, sha256Hex, sql, T0, testEnv } from './fixtures';
+import { createStudy, DAY, sampleInterview, setMaintenance, sha256Hex, sql, studyConfig, T0, testEnv } from './fixtures';
 
 const ADMIN_PASSWORD = 'synthetic-admin-password-0123456789';
 const ORIGIN = String(testEnv.APP_BASE_URL);
@@ -280,5 +281,34 @@ describe('interview lists past the Worker byte ceiling (ST-08)', () => {
     const all = await interviewsGET(await researcherRequest(`${ORIGIN}/api/interviews`, 'GET'));
     expect(all.status).toBe(413);
     expect(await all.json()).not.toHaveProperty('interviews');
+  });
+});
+
+describe('study lists past one RPC response (ST-08)', () => {
+  it('ST-08: /api/studies lists 300 maximum-size studies (over 32 MiB stored) as list items, never a 503 or a 413', async () => {
+    await researcherRequest(`${ORIGIN}/api/studies`, 'GET');
+    for (let index = 0; index < 300; index += 1) {
+      const id = `b0000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
+      const config = studyConfig(id, {
+        description: 'd'.repeat(10_000),
+        consentText: 'c'.repeat(20_000),
+        coreQuestions: Array.from({ length: 45 }, () => 'x'.repeat(2_000)),
+      });
+      await sql(
+        `INSERT INTO studies (id, config_json, revision, created_at, updated_at, interview_count, is_locked, sample_fixture)
+         VALUES (?, ?, 1, ?, ?, 0, 0, 0)`,
+        id,
+        JSON.stringify(config),
+        T0 - index,
+        T0 - index,
+      );
+    }
+
+    const response = await studiesGET();
+    expect(response.status).toBe(200);
+    const body = await response.json() as { studies: Array<{ id: string; config: object; coreQuestionCount: number }> };
+    expect(body.studies).toHaveLength(300);
+    expect(body.studies[0]).toMatchObject({ id: 'b0000000-0000-4000-8000-000000000000', coreQuestionCount: 45 });
+    expect(Object.keys(body.studies[0].config).sort()).toEqual(['description', 'name']);
   });
 });

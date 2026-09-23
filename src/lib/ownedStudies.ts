@@ -9,7 +9,7 @@ import {
   type CollectionLoadResult,
 } from './kv';
 import { presentStudyAuthority, type PresentedStudyAuthority } from './researcherContext';
-import type { PendingStudyStub, StoredInterview, StoredStudy, StudyWorkspaceItem } from '@/types';
+import type { PendingStudyStub, StoredInterview, StoredStudy } from '@/types';
 import { logRequestFailure } from './requestLog';
 import {
   RESEARCHER_WORKSPACE_HELD_COPY,
@@ -158,7 +158,7 @@ export async function loadAllowedInterviews(
 export async function loadOwnedStudies(
   researcherId: string,
   kvClient: RedisPort,
-): Promise<OwnedCollectionLoadResult<StudyWorkspaceItem>> {
+): Promise<OwnedCollectionLoadResult<StoredStudy | PendingStudyStub>> {
   const inspection = await inspectOwnedStudyGates(researcherId);
   if (inspection.status !== 'ok') return inspection;
 

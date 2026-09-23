@@ -106,7 +106,9 @@ export class WorkspaceStore extends DurableObject<WorkspaceEnv> {
     return studies.getStudy(this.ws, input);
   }
 
-  async listStudies(input: Rpc.MaximumInput): Promise<Port.CollectionLoadResult<Rpc.StoredStudy>> {
+  async listStudies(
+    input: studies.ListStudiesRequest,
+  ): Promise<Port.CollectionLoadResult<Rpc.StoredStudy> | studies.ListStudiesPage> {
     if (this.requireInitialized()) return { status: 'unavailable' };
     return studies.listStudies(this.ws, input);
   }

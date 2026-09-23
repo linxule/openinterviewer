@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { makeStoredStudy, makeStudyConfig } from '../fixtures/models';
+import { toStudyListItem } from '@/types';
 
 const router = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock('next/navigation', () => ({
@@ -10,6 +11,7 @@ vi.mock('next/navigation', () => ({
 const storageMock = vi.hoisted(() => ({
   deleteStudy: vi.fn(),
   getAllStudies: vi.fn(),
+  readStudy: vi.fn(),
   reconcileStudyOperations: vi.fn(),
 }));
 vi.mock('@/services/storageService', async (importOriginal) => {
@@ -18,6 +20,7 @@ vi.mock('@/services/storageService', async (importOriginal) => {
     ...actual,
     deleteStudy: storageMock.deleteStudy,
     getAllStudies: storageMock.getAllStudies,
+    readStudy: storageMock.readStudy,
     reconcileStudyOperations: storageMock.reconcileStudyOperations,
   };
 });
@@ -95,5 +98,44 @@ describe('StudyList register table', () => {
 
     fireEvent.keyDown(rowAButton, { key: 'ArrowUp' });
     expect(document.activeElement).toBe(rowAButton);
+  });
+
+  it('ST-08: shows list items (no configuration) and edits from the full study it reads', async () => {
+    const study = makeStoredStudy({
+      config: makeStudyConfig({ name: 'Study Alpha', coreQuestions: ['One?', 'Two?', 'Three?'] }),
+    });
+    storageMock.getAllStudies.mockResolvedValue({ studies: [toStudyListItem(study)], outcome: { status: 'ok' } });
+    storageMock.readStudy.mockResolvedValue({ status: 'ok', value: study });
+    sessionStorage.clear();
+
+    render(<StudyList />);
+    const table = await screen.findByRole('table');
+    const row = within(table).getByRole('button', { name: 'Study Alpha' }).closest('tr')!;
+    expect(within(row).getByText('3')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open actions for Study Alpha' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit & Generate Link' }));
+    await waitFor(() => expect(router.push).toHaveBeenCalledWith(`/setup?prefill=edit&studyId=${study.id}`));
+    expect(storageMock.readStudy).toHaveBeenCalledWith(study.id);
+    expect(JSON.parse(sessionStorage.getItem('prefillStudyConfig')!)).toEqual(JSON.parse(JSON.stringify(study.config)));
+  });
+
+  it('ST-08: a study that cannot be read is not opened for editing', async () => {
+    const study = makeStoredStudy({ config: makeStudyConfig({ name: 'Study Alpha' }) });
+    storageMock.getAllStudies.mockResolvedValue({ studies: [toStudyListItem(study)], outcome: { status: 'ok' } });
+    storageMock.readStudy.mockResolvedValue({
+      status: 'unavailable', error: 'Study storage is temporarily unavailable.', retryable: true,
+    });
+    const alert = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    sessionStorage.clear();
+
+    render(<StudyList />);
+    await screen.findByRole('table');
+    fireEvent.click(screen.getByRole('button', { name: 'Open actions for Study Alpha' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit & Generate Link' }));
+    await waitFor(() => expect(alert).toHaveBeenCalledWith('Study storage is temporarily unavailable.'));
+    expect(router.push).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem('prefillStudyConfig')).toBeNull();
+    alert.mockRestore();
   });
 });

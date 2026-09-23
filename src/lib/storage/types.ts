@@ -13,6 +13,7 @@ import type {
   StoredInterview,
   StoredStudy,
   StudyConfig,
+  StudyListItem,
 } from '@/types';
 import type {
   AggregateLoadResult,
@@ -226,7 +227,8 @@ export interface WorkspaceStorePort {
   readiness(): Promise<StoreReadiness>;
 
   getStudy(studyId: string): Promise<StudyLoadResult>;
-  listStudies(maximum: number): Promise<CollectionLoadResult<StoredStudy>>;
+  /** Newest first, as list items (never whole configurations); more than `maximum` is too-large. */
+  listStudies(maximum: number): Promise<CollectionLoadResult<StudyListItem>>;
   createStudy(input: CreateStudyInput): Promise<CreateStudyOutcome>;
   replaceStudyConfig(input: {
     studyId: string;

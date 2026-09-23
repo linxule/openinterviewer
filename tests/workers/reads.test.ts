@@ -286,7 +286,7 @@ describe('interview reads (ST-05, ST-08)', () => {
     }
     const first = await listPage({ scope: 'study', studyId: study.id, maximum: 3, page: { cursor: null, maxPageBytes: 1 } });
     expect(first.status === 'ok' && [first.items.map((item) => item.id), first.nextCursor, first.count])
-      .toEqual([['session-q0'], `${T0}:session-q0`, 3]);
+      .toEqual([['session-q0'], JSON.stringify([T0, 'session-q0']), 3]);
 
     // A row committed between pages that pushes the scope past the maximum refuses the next page.
     await insertInterview({ studyId: study.id, id: 'session-q9', createdAt: T0 - 9 });
@@ -299,6 +299,30 @@ describe('interview reads (ST-05, ST-08)', () => {
       .toEqual({ status: 'unavailable' });
     expect(await listPage({ scope: 'study', studyId: study.id, maximum: 10, page: { cursor: null, maxPageBytes: 0 } }))
       .toEqual({ status: 'unavailable' });
+  });
+
+  it('ST-08: a malformed id or creation time on the last row of a page neither fails nor stalls the listing', async () => {
+    const study = await createStudy();
+    await insertInterview({ studyId: study.id, id: 'session-q0', createdAt: T0 });
+    await insertInterview({ studyId: study.id, id: 'bad id!', createdAt: T0 - 1, analysis: 'none' });
+    await insertInterview({ studyId: study.id, id: 'session-q2', createdAt: T0 - 2 });
+    await insertInterview({ studyId: study.id, id: 'session-q3', createdAt: 1 });
+    await sql(`UPDATE interviews SET created_at = 7.5 WHERE id = ?`, 'session-q2');
+
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    for (let pages = 0; pages < 10; pages += 1) {
+      const page: ListInterviewsPage = await listPage({ scope: 'study', studyId: study.id, maximum: 10, page: { cursor, maxPageBytes: 1 } });
+      if (page.status !== 'ok') throw new Error(page.status);
+      seen.push(...page.items.map((item) => item.id));
+      cursor = page.nextCursor;
+      if (cursor === null) break;
+    }
+    expect(cursor).toBeNull();
+    // The listing matches the unpaged read: paging adds no failure of its own.
+    const unpaged = await workspaceStub().listInterviews({ scope: 'study', studyId: study.id, maximum: 10 });
+    expect(unpaged.status === 'ok' && unpaged.items.map((item) => item.id)).toEqual(seen);
+    expect(seen).toEqual(['session-q0', 'bad id!', 'session-q2', 'session-q3']);
   });
 
   it('OPS-01: reads continue in every maintenance state', async () => {
