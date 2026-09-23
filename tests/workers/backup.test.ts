@@ -291,7 +291,8 @@ describe('operational backup import (ST-10, OPS-02)', () => {
     expect(await importChunk({ ...manifest, exportedAt: manifest.exportedAt + 1 }, studies)).toEqual({ status: 'rejected', errorClass: 'manifest-mismatch' });
     // The request must carry the complete manifest, not a subset of it.
     const { families: _families, watermark: _watermark, exportedAt: _exportedAt, ...subset } = importManifestOf(manifest);
-    expect(await workspaceStub().importBackupChunk({ manifest: subset, chunk: null, finalize: true, now: Date.now() }))
+    // Deliberately malformed at runtime; the RPC type forbids it at compile time.
+    expect(await workspaceStub().importBackupChunk({ manifest: subset as never, chunk: null, finalize: true, now: Date.now() }))
       .toEqual({ status: 'rejected', errorClass: 'manifest-invalid' });
 
     const early = await importChunk(manifest, null, true);

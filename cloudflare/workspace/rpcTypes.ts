@@ -10,6 +10,7 @@ import type {
   StudyConfig,
 } from '../../src/types';
 import type { ParticipantLinkRecord } from '../../src/lib/participantLinks';
+import type { BackupImportManifest } from '../../src/lib/backup/format';
 import type {
   MaintenanceState,
   PersistCompletedInterviewInput,
@@ -185,12 +186,8 @@ export type BackupPageOutcome =
   | { status: 'unavailable' };
 
 export type BackupImportInput = {
-  manifest: {
-    formatVersion: number;
-    schemaVersion: number;
-    sourceWorkspaceId: string;
-    counts: Record<string, number>;
-  };
+  /** importManifestOf(validated backup manifest): binds every chunk to its descriptor. */
+  manifest: BackupImportManifest;
   chunk: { family: string; index: number; sha256: string; rows: unknown[] } | null;
   /** Final call: validate references/counts and keep dispatch suspended. */
   finalize?: boolean;
