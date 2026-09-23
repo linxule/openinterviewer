@@ -10,18 +10,34 @@ src/lib/runtime/            portable (no Workers imports), used by Node and Work
   capabilities.ts           central target/mode/transport/storage/analysisExecution matrix (RT-01)
   workerInvocation.ts       per-invocation Worker env + admission identity accessor (RT-05, RT-07)
   clientAddress.ts          IP normalization and Cloudflare/Node identity adapters (RT-07)
+  readinessGate.ts          not-ready gate for mutating and provider routes on Cloudflare (F10)
 src/lib/storage/            backend-neutral domain boundary
   types.ts                  WorkspaceStorePort and per-operation result unions
   redis.ts                  Redis implementation wrapping kv.ts / participantLinks.ts / … (Node only)
-  durableObject.ts          RPC client for the WorkspaceStore Durable Object (Worker only at runtime)
+  durableObject.ts          RPC client for the WorkspaceStore Durable Object (Worker only at runtime); assembles
+                            keyset-paged interview lists (≤ 12 MiB per page, ≤ 16 MiB per list, else 413)
   resolve.ts                one factory choosing the store from resolved capabilities
   analysisProtocol.ts       job states, message envelope, public projection, constants (portable)
+src/lib/backup/format.ts    operational backup format v1: families, chunk/manifest/trailer records, validator
+                            (portable; the operator CLI loads it too)
+src/lib/export/             researcher ZIP export: entry builders shared by both targets (interviewExport.ts)
+                            and the streaming ZIP writer (zipStream.ts)
+src/app/api/interviews/export/route.ts
+                            Node: JSZip over ≤ 500 interviews. Cloudflare: streamed from an export snapshot in
+                            pages of 50 rows / 4 MiB of stored bytes (the object caps pages at 200 rows / 16 MiB)
+src/lib/ownedStudies.ts     also the Cloudflare aggregate/follow-up input pager: pages of 100 rows / 4 MiB,
+                            ≤ 16 MiB serialized input, ≤ 1,000 interviews
+src/lib/operatorAuth.ts, src/app/api/operator/   operator credential and routes (§6)
+open-next.config.ts         selects the backpressure wrapper below (config validation disabled; see DEVIATIONS)
 cloudflare/                 Worker-only sources (own tsconfig; never imported by src/)
   worker.ts                 custom entrypoint: fetch → OpenNext, queue → analysis consumer, exports WorkspaceStore
-  workspace/                the SQLite Durable Object and its domain transactions
+  opennext/backpressureWrapper.ts   OpenNext server wrapper that honours response backpressure and errors
+                            the body when the route's stream fails
+  workspace/                the SQLite Durable Object and its domain transactions (incl. login.ts, operator.ts)
   analysis/                 Queue consumer and provider execution policy
   test/                     non-deployable test entries/configs
-scripts/cloudflare/         build, deploy, setup (installer), operator and manifest tooling
+scripts/cloudflare/         build, check (release matrix + receipt), deploy, preview, setup (installer/*.mjs),
+                            operator CLI, import-boundary check
 skills/openinterviewer-cloudflare/   agent skill that drives scripts/cloudflare (SETUP-06)
 ```
 
@@ -75,11 +91,15 @@ Logs: `observability.logs.invocation_logs` is disabled in `wrangler.jsonc` becau
 
 `ResearcherContext` gains `store: WorkspaceStorePort`. Standalone routes (Node and Cloudflare) use `context.store`; hosted-only saga paths keep `context.kvClient`. On Cloudflare `kvClient` is a fence whose every method throws `RedisAccessFencedError` without I/O.
 
-Port operations keep the existing result unions and HTTP mappings. Composite operations (create with idempotency, completion with admission and initial job, sample seed/clear) are single port methods. Analysis job methods (`acceptAnalysisRetry`, `readAnalysisStatus`) exist only on the durable capability; `claimAnalysisJob`, `markAnalysisStarted` and `finishAnalysisJob` are DO RPCs used only by the Queue consumer. The Redis store does not implement jobs.
+Port operations keep the existing result unions and HTTP mappings. Composite operations (create with idempotency, completion with admission and initial job, sample seed/clear) are single port methods. Analysis job methods (`acceptAnalysisRetry`, `readAnalysisStatus`), export snapshots (`beginExport`, `readExportPage`, `verifyExportSequence`) and aggregate-input paging (`readAggregateInputs`) exist only on the durable capability (`DurableWorkspaceStorePort`); `claimAnalysisJob`, `markAnalysisStarted` and `finishAnalysisJob` are DO RPCs used only by the Queue consumer. The Redis store does not implement jobs. Sign-in attempts use a separate port (`LoginAttemptBudgetPort`, §6).
 
 ### Durable Object schema (logical)
 
-`workspace_meta` (singleton), `schema_migrations`, `studies`, `interviews`, `analysis`, `analysis_jobs`, `aggregates`, `participant_links`, `consents`, `idempotency_receipts`, `budget_windows`, `budget_members`, `tombstones`, `operator_audit`. All timestamps are integer epoch ms; JSON columns store the exact text written; SQL uses bound parameters only.
+`workspace_meta` (singleton), `schema_migrations`, `studies`, `interviews`, `analysis`, `analysis_jobs`, `aggregates`, `participant_links`, `consents`, `idempotency_receipts`, `budget_windows`, `budget_members`, `deletion_fences`, `operator_audit`, `login_attempts`. All timestamps are integer epoch ms; JSON columns store the exact text written; SQL uses bound parameters only. `operator_audit` and `login_attempts` are per-object operational state: they are not backup families and do not advance the research mutation sequence. Export snapshots and the Queue consumer-contact marker live in the object's synchronous KV storage, outside SQL and backups.
+
+### Migrations (ST-09)
+
+Numbered migrations live in `cloudflare/workspace/schema.ts`; only migration 1 exists and it is unreleased. The runner (`cloudflare/workspace/migrate.ts`) applies each pending migration in its own `transactionSync` together with its ledger row `schema_migrations(version, checksum, applied_at, min_reader_version)`. A build serves a database only when the ledger has no gap, every migration it knows has a matching checksum, and every applied migration it does not know declares `min_reader_version` at or below the build's highest migration. `min_reader_version` defaults to the migration's own version, so older builds refuse; a migration lowers it only for changes older builds can ignore (nullable or defaulted columns, tables they never read) while still serving the newer build's pending jobs. A refused database is `schema-unsupported`: readiness fails, reads and mutations refuse, and the alarm re-arms hourly. The artifact manifest records `schema.current` (highest migration) and `schema.minReadable` (oldest stored schema the build reads). `tests/workers/schema.migrations.test.ts` rehearses N−1 → N → N−1 → N with a synthetic additive migration.
 
 ### Decisions on recorded Redis behavior
 
@@ -117,7 +137,29 @@ Provider outcome classification under the queued policy:
 
 ## 6. Operator surface (OPS)
 
-Operator actions (maintenance transitions, operational backup export/import, recovery-epoch activation) are served by `/api/operator/*` on the Cloudflare target only. Authority: a standalone researcher session issued within the last 15 minutes plus `X-OpenInterviewer-Operator: 1`; no new secret is introduced. Every transition is a compare-and-set on `{state, version}`, audit-logged without content. `scripts/cloudflare/operator.mjs` reads the admin password from stdin, signs in and drives these endpoints. There is no unauthenticated maintenance route.
+Operator actions are served by five routes under `/api/operator/` on the Cloudflare target only (404 on Node). There is no unauthenticated maintenance route. Authority (`src/lib/operatorAuth.ts`, gap F5) is checked in this order, before any storage call:
+
+1. `OPERATOR_TOKEN` is bound in the invocation env, at least 32 characters and not a template value (else 503 `OPERATOR_NOT_CONFIGURED`);
+2. `Authorization: Bearer <token>` matches it in constant time: SHA-256 digests of both values compared with `timingSafeEqual` (else 401 `OPERATOR_UNAUTHORIZED` with `WWW-Authenticate: Bearer`);
+3. a valid standalone researcher session cookie (else 401 `SIGN_IN_REQUIRED`) issued within the last 15 minutes (else 403 `RECENT_SIGN_IN_REQUIRED`).
+
+| Route | Effect | Outcomes |
+| --- | --- | --- |
+| `GET /api/operator/status` | Maintenance state/version, schema version, activated epoch and whether it matches the deployment, record counts, job counts, scheduled alarm | 200; 503 `WORKSPACE_HELD`, `WORKSPACE_UNAVAILABLE` |
+| `POST /api/operator/maintenance` `{expectedState, expectedVersion, nextState, classifyInFlight?}` | Compare-and-set transition | 200 `transitioned` or `already` (replay of the recorded transition); 409 `MAINTENANCE_CONFLICT` (with the current state/version), `ANALYSIS_IN_FLIGHT`, `INVALID_TRANSITION`; 503 `DEPLOYMENT_NOT_READY`, `WORKSPACE_HELD`, `OUTCOME_UNKNOWN` |
+| `GET /api/operator/backup?family=&cursor=&watermark=` | One backup page; the watermark `<maintenanceVersion>:<mutationSeq>` from the first page is required on every later page | 200; 400; 409 `NOT_FROZEN` (not `frozen` or `recovery`), `WATERMARK_CHANGED`; 503 `WORKSPACE_HELD`, `WORKSPACE_UNAVAILABLE` |
+| `POST /api/operator/backup/import` `{manifest, chunk \| null, finalize?}` | One chunk, idempotent by `(family, index)` under one manifest digest, or finalize (counts, references, identities) | 200 `accepted` or `finalized`; 422 `IMPORT_REJECTED` (error class and counts only); 409 `WORKSPACE_NOT_EMPTY`, `NOT_RECOVERY`; 503 `WORKSPACE_HELD`, `OUTCOME_UNKNOWN` |
+| `POST /api/operator/recovery/activate` `{expectedActivatedEpoch}` | Reconciles every restored unfinished generation to recovery-required, then activates the epoch from the Worker's secret binding (never from the request) | 200 `activated` or `already-active`; 409 `EPOCH_CONFLICT`, `NOT_RECOVERY`; 503 `WORKSPACE_HELD`, `OUTCOME_UNKNOWN` |
+
+Every route may also answer 400 `INVALID_REQUEST`, 415 (POST without `application/json`), 413 (maintenance and activation bodies above 1 KiB, import bodies above 24 MiB), 503 `WORKSPACE_NOT_CONFIGURED` (missing binding) and 500 `INTERNAL`. Responses are JSON with `Cache-Control: no-store`; every decision is logged once as an allowlisted `operator.action` event without content, and the object writes an `operator_audit` row for each transition, import and activation. A held 503 carries the public `reason` and, for the authenticated operator only, the exact `holdReason`.
+
+Readiness-gate exemptions (F10, `src/app/api/operator/_lib/http.ts`): the status and backup reads, backup import, recovery activation (both act only inside the `recovery` hold, which the object enforces) and transitions that tighten the hold (open → draining, any state → frozen or recovery) skip `deploymentNotReadyResponse`, so a not-ready installation can be diagnosed, backed up and restored. A transition that resumes work (to `open`, or `frozen` → `draining`) passes the gate first, so a not-ready deployment is never reopened.
+
+The object allows open → draining; draining → open or frozen; frozen → open or draining; recovery → frozen or open; and any state → recovery. Entering `frozen` with claimed or started attempts is refused unless `classifyInFlight` returns claims to `pending` and marks started attempts recovery-required. Leaving `recovery` is refused while an import is in progress. While the activated epoch differs from the deployment's, every target except `recovery` is refused as held. A transition that resumes work re-arms the scheduler in the same storage transaction. `scripts/cloudflare/operator.mjs` (`npm run operator:cloudflare`) drives these routes; see [RUNBOOK.md](RUNBOOK.md).
+
+### Sign-in budget
+
+On Cloudflare, `POST /api/auth` reads at most 1 KiB of body as it streams in (413 above), takes `ADMIN_PASSWORD` from the invocation env and asks the object to admit the attempt before comparing the password (`cloudflare/workspace/login.ts`). Admission is atomic: in one transaction it refuses when either fixed window is full, otherwise counts the attempt in both. The windows are 10 attempts per client key per 15 minutes (the key is an HMAC under `RATE_LIMIT_SALT` of the full normalized IPv4 or IPv6 address, or the shared `unknown` or `subrequest` scope, so no address reaches storage; see DEVIATIONS.md for the open /64 question) and 200 across all clients per hour; each opens at its first counted attempt and later attempts never extend it. A refused attempt counts in neither window. A limit returns 429 with `Retry-After` (the later window end); an unavailable budget returns 503 (fail closed). A correct password refunds its attempt. A refund that is lost leaves the attempt counted, and sign-in still succeeds. Sign-in is not gated on readiness or maintenance; the object refuses it only when the schema is unsupported.
 
 ## 7. Decisions from the independent gap review
 
@@ -127,17 +169,17 @@ An adversarial review of the specification against code and platform facts (23 S
 | --- | --- |
 | Fresh-object bootstrap (F2) | An empty object initializes only when `WORKSPACE_BOOTSTRAP` is `open` or `recovery`. Otherwise every call is held with `workspace-uninitialized`, so identity, jurisdiction or Worker-name drift can never create an empty writable workspace. The installer sets it for the first deployment (or an import target) and clears it afterwards. |
 | Epoch rollback (F4) | `ANALYSIS_RECOVERY_EPOCH` is a secret binding; wrangler refuses rollback across modified secrets without confirmation. |
-| Operator credential (F5) | Operator routes require a constant-time match of a separate installer-generated `OPERATOR_TOKEN` secret **and** a researcher session issued within 15 minutes. Cloudflare adds a DO-backed login attempt budget and a bounded login body. |
+| Operator credential (F5) | Operator routes require a constant-time match of a separate installer-generated `OPERATOR_TOKEN` secret **and** a researcher session issued within 15 minutes (§6). Cloudflare adds a DO-backed sign-in attempt budget and a 1 KiB login body (§6). |
 | Deploy provisioning (F3) | `deploy:cloudflare` uploads the prebuilt `--dry-run` bundle with `no_bundle` + `find_additional_modules` (the same derivation `createTestHarness` uses), passes `--config` (bypassing OpenNext delegation), `--experimental-provision=false --experimental-auto-create=false --strict`. Locally proven by wrangler dry run; real upload is a remote gate. |
 | Dispatch budget vs backlog (F6) | The watchdog charges the dispatch budget only if no consumer contact has been recorded since the job's last send; healthy backlog defers without charging. The 24-hour pre-start cap remains. |
-| Export livelock (F1) | Export captures the ordered interview key set and each row's analysis state at start. Pages overlay the captured analysis state (analysis only moves forward; transcripts are immutable; syntheses are write-once), and invalidate only on deletion of a captured row or replacement of a captured aggregate. Streaming ZIP; an invalidated stream errors, never closes cleanly. |
+| Export livelock (F1) | Export captures the ordered interview key set and each row's analysis state at start. Pages overlay the captured analysis state (analysis only moves forward; transcripts are immutable; syntheses are write-once), and invalidate only on deletion of a captured row or replacement of a captured aggregate. Streaming ZIP; an invalidated stream errors, never closes cleanly: the OpenNext backpressure wrapper errors the response body, and the browser client refuses any download that lacks the ZIP end record. |
 | Batch eligibility (F8) | Cloudflare batches select generation-0 `not-scheduled`, persisted `failed` and recovery-required items (with the disclosure); active generations are shown as a separate queued/running count. The durable projection omits claim fields. |
 | Not-ready gate (F10) | Mutating and provider routes on the Cloudflare target call one readiness gate (configuration, including runtime placeholder-secret detection) before storage or provider use; the DO gate repeats identity/epoch/maintenance checks. |
 | Backup watermark (F11) | `frozen` and `recovery` suspend all alarm work (dispatch, watchdog and cleanup) except re-arming, so `(maintenance_version, mutation_seq)` is a complete watermark while held. |
 | Queue graph (F12) | `providerErrorResponse` moves to a route-only module so the Queue bundle never imports `next/*`; an import-boundary test covers `cloudflare/worker.ts`. |
 | Poison job rows (F13) | Corrupt due job rows are quarantined out of the due scan (the row itself is never patched) with count-only telemetry. |
 | Lease clock (F14) | Claim, start and finish decisions use the object's own clock; caller time is advisory. |
-| Maintenance for paid no-write calls (F26) | Researcher preview and follow-up generation are allowed in `draining`, refused in `frozen`/`recovery`; link exchange is refused in `draining`. |
+| Maintenance for paid no-write calls (F26) | Researcher preview (synthesis, greeting and interview preview) and follow-up generation are allowed in `open` and `draining` and refused in `frozen`/`recovery`; link exchange is refused in `draining`. Aggregate synthesis is a researcher mutation (it ends in the aggregate write): it is refused in `draining`, `frozen` and `recovery` before the provider is paid. |
 | Import mapping (F7) | Any importer maps Node analysis states: none/`pending` with 0 attempts → generation 0 not-scheduled; synthesis/`complete` → generation 0 complete; `failed` → generation-0 synthetic terminal failed job (never enqueued); `running` or `pending` with attempts → generation-0 synthetic recovery-required. Attempts copy verbatim. |
 
 ## 8. Deviations register

@@ -9,6 +9,15 @@ cp .env.example .env.local
 npm run setup:check -- --mode standalone
 npm run dev`;
 
+const cloudflareCommands = `npm ci
+npm run build:cloudflare
+npm run check:cloudflare -- --skip-build
+npm run setup:cloudflare -- plan --install <name> --env production --provider <provider> --jurisdiction eu
+# Review the plan, then apply it with the admin password and provider key on stdin:
+npm run setup:cloudflare -- apply --install <name> --env production --provider <provider> \\
+  --jurisdiction eu --secrets-stdin --yes --operator-token-file <path outside the repository>
+npm run setup:cloudflare -- verify --install <name> --env production`;
+
 export default function SelfHostPage() {
   return (
     <main className="min-h-dvh bg-paper-0">
@@ -26,9 +35,14 @@ export default function SelfHostPage() {
             Your deployment, credentials, and storage
           </h1>
           <p className="max-w-measure font-sans text-[17px] leading-[28px] text-ink-700">
-            Standalone mode keeps researcher credentials in your server environment. It needs Node 24.19+,
-            either Vercel AI Gateway access or one Google Gemini, Anthropic Claude, OpenAI, or OpenRouter key,
-            an Upstash Redis REST URL and token, and four independent secrets.
+            Standalone mode keeps researcher credentials in your server environment. On Node or Vercel it needs
+            Node 24.19+, either Vercel AI Gateway access or one Google Gemini, Anthropic Claude, OpenAI, or
+            OpenRouter key, an Upstash Redis REST URL and token, and four independent secrets.
+          </p>
+          <p className="max-w-measure font-sans text-[17px] leading-[28px] text-ink-700">
+            On Cloudflare it runs as one Worker with a Durable Object for storage and a Queue for background
+            analysis. It needs an admin password, one provider key and no Redis; the installer generates the other
+            secrets and the recovery epoch.
           </p>
         </section>
 
@@ -41,19 +55,30 @@ export default function SelfHostPage() {
           </p>
         </section>
 
+        <section className="space-y-4 border-t border-ink-300 pt-6">
+          <h2 className="font-sans text-[15px] font-semibold text-ink-900">Cloudflare installer</h2>
+          <pre className="overflow-x-auto bg-paper-2 p-4 font-mono text-[13px] leading-[20px] text-ink-900"><code>{cloudflareCommands}</code></pre>
+          <p className="max-w-measure font-sans text-[13px] text-ink-500">
+            The plan is read-only. Apply creates only the named Worker (with its Durable Object), Queue and
+            dead-letter queue, sends secrets through stdin, and records a non-secret receipt. Choose the storage
+            jurisdiction before the first install; changing it later is a migration. Workers Paid is recommended:
+            the Free plan allows 10 ms of CPU time per request.
+          </p>
+        </section>
+
         <section className="divide-y divide-ink-300 border-t border-ink-300">
           <div className="py-6">
             <h2 className="font-sans text-[15px] font-semibold text-ink-900">Security essentials</h2>
             <p className="mt-2 max-w-measure font-sans text-[15px] leading-[24px] text-ink-700">
               Keep all credentials server-only. Never reuse the admin password, session secret, participant
-              secret, or rate-limit salt. Use a write-capable Redis token only on the server.
+              secret, rate-limit salt, or operator token. Use a write-capable Redis token only on the server.
             </p>
           </div>
           <div className="py-6">
             <h2 className="font-sans text-[15px] font-semibold text-ink-900">Full runbook</h2>
             <p className="mt-2 max-w-measure font-sans text-[15px] leading-[24px] text-ink-700">
-              The repository documents local setup, Vercel environment scoping, readiness checks, hosted BYOS,
-              legacy-link retirement, staging, and rollback.
+              The repository documents local setup, Vercel environment scoping, the Cloudflare installer and
+              operator runbook, readiness checks, hosted BYOS, legacy-link retirement, staging, and rollback.
             </p>
             <a
               href="https://github.com/linxule/openinterviewer#3-run-a-self-hosted-standalone-instance"

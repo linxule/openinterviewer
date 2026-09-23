@@ -14,6 +14,7 @@ There are three deliberately different ways to use it:
 | **Keyless public demo** (`/demo`) | None | None | See the participant and analysis experience with scripted sample data |
 | **Hosted researcher account** | Sign in, then add your own AI and Upstash credentials in the UI | Your Upstash database | Run research without administering a Vercel project |
 | **Self-hosted standalone** | Vercel AI Gateway/OIDC or server-side provider keys | Your deployment's Upstash database | Operate the full application and infrastructure yourself |
+| **Self-hosted standalone on Cloudflare** | One server-side provider key | A SQLite Durable Object in your Cloudflare account (no Upstash) | Operate the application on Cloudflare Workers with durable background analysis |
 
 The demo is not a disguised live interview: it is deterministic, does not call an AI provider, and does not save data. Real interviews require configured inference access and storage.
 
@@ -24,6 +25,8 @@ The canonical site is [openinterviewer.vercel.app](https://openinterviewer.verce
 - `/api/config/mode` reports the active mode and whether the configuration shape is valid;
 - `/api/config/readiness` exposes the same safe configuration contract for setup UI; and
 - `/api/health/ready` additionally checks the mode-specific database and returns `503` when the application cannot serve persistent researcher workflows.
+
+Both configuration endpoints also report `analysisExecution`: `synchronous` on Node/Vercel deployments and `queued-v2` on Cloudflare, where analysis runs as a durable background job.
 
 Deployments are created by Vercel's Git integration: pushes to `main` go to production and other branches get previews, except `dependabot/**`, which `vercel.json` excludes so dependency PRs do not build. Vercel retains deployments for one day (with its ten-deployment floor). If a push shows no deployment, check [vercel-status.com](https://www.vercel-status.com/) and allow 30 minutes before assuming the integration failed; do not submit a CLI deployment for a commit that already has one.
 
@@ -201,6 +204,34 @@ npm run setup:check -- --mode standalone --production
 
 `vercel env pull .env.local` overwrites that file. Keep manual local-only overrides in `.env.development.local`, or back them up before pulling. Never commit any `.env*.local` file.
 
+### Deploy standalone on Cloudflare
+
+The Cloudflare target runs the same application as one Worker: the Next.js app (via [OpenNext](https://opennext.js.org/cloudflare)), a SQLite-backed Durable Object that holds the workspace, and a Queue that runs interview analysis in the background. It needs no Upstash database and supports standalone mode with direct provider keys only (no Vercel AI Gateway, no hosted researcher accounts). Design, limits and every deviation from the migration specification are recorded in [`docs/operations/cloudflare-migration/`](docs/operations/cloudflare-migration/IMPLEMENTATION.md).
+
+Requirements: a Cloudflare account with Workers, Durable Objects and Queues; `npx wrangler login`; one provider key. For the local release check: a clean checkout, a local `redis-server` (or Docker) and Playwright browsers.
+
+Worker size does not decide the plan. The bundle is about 26 MiB uncompressed and 5.3 MiB gzip (26,761 KiB and 5,387 KiB in September 2026; `build:cloudflare` prints it as `Total Upload`). Since [4 September 2026](https://developers.cloudflare.com/changelog/post/2026-09-04-increased-worker-size-limit/) the [Worker size limit](https://developers.cloudflare.com/workers/platform/limits/#worker-size) is 64 MiB uncompressed on both Free and Paid, with no compressed limit. Under the earlier compressed limits (3 MB Free, 10 MB Paid) this bundle would have needed Workers Paid. Workers Paid is still recommended, because the Free plan allows [10 ms of CPU time](https://developers.cloudflare.com/workers/platform/limits/#cpu-time) per HTTP request, which server rendering is unlikely to fit (not measured on a live Worker). Provider usage is billed by your provider separately.
+
+Use the checked-in tooling; it never provisions or deploys implicitly:
+
+```bash
+npm ci
+npm run build:cloudflare                  # builds dist/cloudflare/artifact; refuses if .env*/.dev.vars files are present
+npm run check:cloudflare -- --skip-build  # full local release matrix on that artifact; writes the receipt deploy requires
+npm run setup:cloudflare -- plan --install <name> --env production --provider openai --jurisdiction eu
+npm run setup:cloudflare -- apply --install <name> --env production --provider openai --jurisdiction eu --secrets-stdin --yes \
+  --operator-token-file <path outside this repository> < secrets.json
+npm run setup:cloudflare -- verify --install <name> --env production
+```
+
+Without `--origin`, the installer discovers the Worker's `workers.dev` URL from the first deploy and keeps the app not-ready until that origin is set. To use a custom domain, pass `--origin https://…` and attach the domain to the Worker in the Cloudflare dashboard; the installer never changes DNS or routes. `npm run preview:cloudflare` runs the built artifact in local workerd with synthetic provider responses, no credentials and throwaway storage. Operator actions (maintenance modes, operational backup/import, recovery activation) use `npm run operator:cloudflare`, which needs the administrator password and the generated operator token.
+
+`secrets.json` (or a pipe from your secret manager) holds only `{"ADMIN_PASSWORD": "…", "OPENAI_API_KEY": "…"}`; the installer generates the session, participant, rate-limit and operator secrets and the recovery epoch, and sends all secrets to Cloudflare through stdin. It records a non-secret receipt in `cloudflare/installations/`. Updates use `setup:cloudflare -- update`; interrupted installs use `resume`. See [INSTALLER.md](docs/operations/cloudflare-migration/INSTALLER.md) and the operator [RUNBOOK.md](docs/operations/cloudflare-migration/RUNBOOK.md) for maintenance modes, operational backup/import, restore and rollback. A coding agent can drive the same commands with [`skills/openinterviewer-cloudflare`](skills/openinterviewer-cloudflare/SKILL.md).
+
+Choose the Durable Object jurisdiction (`eu` recommended) before the first install; it restricts where the workspace is stored, not where every request or provider call is processed, and changing it later is a migration. Staging is always a separately named Worker with its own storage, Queue, secrets and origin. A one-click Deploy to Cloudflare button is not offered yet: it will be published only after a complete fresh-account installation has been tested.
+
+On Cloudflare, analysis after a participant saves runs as a background job. The researcher sees queued, running, complete, failed or needs-recovery states; "needs recovery" means a paid provider call may have run but its result could not be confirmed, and running it again may make another paid request.
+
 ## Setup diagnostics
 
 The checker is designed for people and coding agents:
@@ -217,6 +248,9 @@ npm run setup:check -- --mode standalone --production --env-file .env.production
 
 # Hosted operator configuration, redacted JSON output
 npm run setup:check -- --mode hosted --production --json
+
+# Cloudflare: an env file kept outside the checkout plus wrangler.jsonc bindings and queue settings
+npm run setup:check -- --target cloudflare --env-file ~/secure/openinterviewer.cloudflare.env
 ```
 
 It validates the Node version, required variable names, URL/key shapes, OAuth pairs, and secret independence. It reads the same local env-file family used for development, but it never prints values, writes secrets, makes network requests, provisions resources, or calls a paid model. A nonzero exit status means setup is incomplete.
@@ -291,6 +325,7 @@ Editing a study advances its revision and invalidates links and participant sess
 - The opaque code is exchanged for a short-lived HttpOnly, `SameSite=Strict` cookie and removed from the address bar.
 - Participant APIs resolve the live, server-owned study revision and recheck link status.
 - AI failures are errors, not fabricated research responses.
+- On Cloudflare, rate limits use only the validated `CF-Connecting-IP`, automatic invocation logs are disabled (they would record participant link codes in URLs), and no Redis client can be constructed inside the Worker.
 - Researchers remain responsible for consent language, retention, deletion, provider terms, and applicable research/privacy governance.
 
 Do not place real credentials in issues, logs, screenshots, chat transcripts, or diagnostic output.
@@ -337,6 +372,19 @@ npm run test:e2e
 npm run test:redis-crash
 npm run test:adversarial
 git diff --check
+```
+
+Cloudflare lanes (no account or credentials needed; everything runs in local workerd with synthetic fixtures):
+
+```bash
+npm run test:cloudflare             # real local Durable Object SQLite, alarms and Queue batches
+npm run test:contract:redis         # the shared WorkspaceStore scenarios on disposable Redis
+npm run test:setup:cloudflare       # installer against a fake wrangler
+npm run build:cloudflare
+npm run test:cloudflare:artifact    # the built Worker artifact in local workerd
+npm run test:e2e:cloudflare         # browser journeys against the built artifact
+npm run preview:cloudflare          # click through the built artifact locally (synthetic provider)
+npm run check:cloudflare            # all of the above plus the existing matrix, on one artifact
 ```
 
 The browser suite covers the keyless demo plus standalone direct and Gateway research workflows: study creation, participant-link exchange, consent, interview, saving, deferred analysis, researcher recovery and review, and export. The workflow tests run the real application APIs with synthetic provider HTTP responses and a fresh disposable Redis instance per test. They require Docker or a local `redis-server`; inherited `REDIS_URL` or Redis attestation configuration is refused. Test-only servers use fixture credentials and Next's test proxy; the deployed application does not enable that proxy. These tests verify application behavior, not live provider availability, model quality, or hosted OAuth onboarding.

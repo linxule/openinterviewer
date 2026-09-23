@@ -9,9 +9,9 @@ Status: exercised only against a simulated account (a fake `wrangler`, a fake de
 - Node 24.19+ and `npm ci` in a clean checkout of the commit you will deploy.
 - `wrangler` authenticated for the target account: `node_modules/.bin/wrangler login` (default config location), or `CLOUDFLARE_API_TOKEN` in the environment. The exact minimal API-token permissions are a remote rehearsal item.
 - Every wrangler the installer starts, including the one inside `deploy.mjs`, gets the same environment: a minimal base plus `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. The installer ignores, and reports that it ignored, `XDG_CONFIG_HOME`, the proxy variables and `NODE_EXTRA_CA_CERTS`, because `deploy.mjs` does not forward them. It refuses a non-public `CLOUDFLARE_COMPLIANCE_REGION`. An environment that needs these settings is unsupported until both allowlists are extended together.
-- A checked release artifact for the current clean commit: `npm run build:cloudflare`, then the local release check that writes a passing `dist/cloudflare/artifact/receipt.json`. `plan` reports readiness; `apply` and `update` refuse without it.
+- A checked release artifact for the current clean commit: `npm run build:cloudflare`, then `npm run check:cloudflare`, the local release check that writes a passing `dist/cloudflare/artifact/receipt.json` (it rebuilds the artifact unless given `-- --skip-build`). `plan` reports readiness; `apply` and `update` refuse without it.
 - An administrator password of at least 16 characters and the API key of the one provider you select. Every credential must be independent.
-- A Workers Paid plan is recommended: the Free plan limits CPU time to 10 ms per request. Durable Object and Queue usage counts against your plan. Provider usage is billed separately by the provider.
+- A Workers Paid plan is recommended: the Free plan limits CPU time to 10 ms per request. Worker size does not force it: the [limit](https://developers.cloudflare.com/workers/platform/limits/#worker-size) is 64 MiB uncompressed on both plans, and `build:cloudflare` prints the bundle's `Total Upload`. Durable Object and Queue usage counts against your plan. Provider usage is billed separately by the provider.
 
 ## Commands
 
@@ -37,9 +37,10 @@ npm run setup:cloudflare -- <command> --install <name> --env <production|staging
 | `--account-id <id>` | Required when the credentials can reach several accounts. Must match the receipt and `CLOUDFLARE_ACCOUNT_ID` if set. |
 | `--import-target` | Initialize the fresh workspace in `recovery` for an operational import (RUNBOOK). |
 | `--secrets-stdin` | Read `{"ADMIN_PASSWORD": "...", "<PROVIDER>_API_KEY": "..."}` from stdin. Without it, a no-echo terminal prompt asks (the password twice). |
-| `--operator-token-file <path>` | Write the generated `OPERATOR_TOKEN` once, mode 0600. Must be outside the repository and the state directory, in a directory other users cannot write to (or one with the sticky bit). The file is created exclusively and never through a symbolic link. |
+| `--operator-token-file <path>` | Write the generated `OPERATOR_TOKEN` once, mode 0600. Must be outside the repository and the state directory, in an existing directory other users cannot write to (or one with the sticky bit). The file is created exclusively and never through a symbolic link. |
 | `--reveal-operator-token` | Print the generated `OPERATOR_TOKEN` once; only to an interactive terminal and not with `--json`. |
-| `--change-provider` | `update` only: switch `AI_PROVIDER`; adds that provider's key if it is not bound. |
+| `--change-provider` | `update` only, with `--provider <name>`: switch `AI_PROVIDER`; asks for that provider's key (stdin JSON with `--secrets-stdin`, or a prompt) only if it is not bound. |
+| `--yes` | Confirms the reviewed plan; required by `apply`, `resume` and `update`. |
 | `--wait-seconds <n>` | Readiness wait budget (default 180). `verify` waits only when given. |
 | `--json` | One JSON document on stdout; progress goes to stderr. |
 | `--state-dir`, `--artifact-dir` | Defaults `cloudflare/installations` (gitignored) and `dist/cloudflare/artifact`. |
@@ -82,7 +83,7 @@ Names: Worker `oi-<install>` (`oi-<install>-staging`), Queue `<worker>-analysis`
 
 ## Interruption and resume
 
-Run `resume` with the same `--install`/`--env` (and credentials again if the secrets phase had not completed). Rules:
+Run `resume` with the same `--install`/`--env`. If the secrets phase had not completed, pass the credentials again and an operator-token destination (`--operator-token-file`, which may be the same path if this installation wrote it, or `--reveal-operator-token`). Rules:
 
 - The workspace ID and names are never regenerated.
 - The epoch exists only in memory until the secrets phase completes. If apply stops before the secrets were bound, resume generates a fresh epoch and records its fingerprint before uploading. Once bound, the epoch and all secrets are never regenerated or rotated by apply, resume or update.
@@ -107,7 +108,7 @@ The installer never re-bootstraps a completed installation on its own: F2 exists
 
 `<state-dir>/<install>-<env>/` (default `cloudflare/installations/`, gitignored) holds no secret values. Back it up: the receipt is the existing-install identity that `update` and `resume` require.
 
-- `receipt.json`: `formatVersion`, `install`, `env`, `accountId`, `names`, `workspaceId`, `jurisdiction`, `provider`, `bootstrap`, `origin`/`originSource`, `workersDevUrl`, `epochFingerprint` (`sha256:` + 16 hex of the epoch), `resources` (per name: `kind`, `attempts` [`at`, and `commit` for the Worker], queue `id`, `createdAt`, `observedAt`), `secrets.attemptedAt`, `operatorToken` (destination, path only, `writtenAt`), `phases`, `deployments` (`purpose`: `initial`, `origin`, `workspace-init`, `bootstrap-clear`, `update`; `commit`, `workerSha256`, `appBaseUrl`, `bootstrap`, `provider`, `at`), `lastVerification` (status, failed check ids, targets), timestamps.
+- `receipt.json`: `formatVersion`, `install`, `env`, `accountId`, `names`, `workspaceId`, `jurisdiction`, `provider`, `bootstrap`, `origin`/`originSource`, `workersDevUrl`, `epochFingerprint` (`sha256:` + 16 hex of the epoch), `resources` (per name: `kind`, `attempts` [`at`, and `commit` for the Worker], queue `id`, `createdAt`, `observedAt`), `secrets` (`attemptedAt`, `epochGeneratedAt`), `operatorToken` (destination, path only, `writtenAt`), `providerHistory` (after `--change-provider`), `phases`, `deployments` (`purpose`: `initial`, `origin`, `workspace-init`, `bootstrap-clear`, `update`; `commit`, `workerSha256`, `appBaseUrl`, `bootstrap`, `provider`, `at`), `lastVerification` (status, failed check ids, targets), timestamps.
 - `wrangler.jsonc`: the current template with installation-owned fields only (`name`, `account_id`, vars values, queue names). It passes `deploy.mjs`'s `configDrift()`. Do not edit it; `update` regenerates it and refuses if it was changed.
 
 After an operator rotates the epoch during a restore (RUNBOOK, OPS-03), `epochFingerprint` no longer describes the bound epoch; the installer never reads or changes the epoch.
@@ -131,7 +132,7 @@ It refuses without deploying:
 - a provider change without `--change-provider`;
 - any drift.
 
-It never creates, deletes or rotates anything. The one exception: `--change-provider` uploads the new provider's key alone when it is not yet bound.
+It never creates, deletes or rotates anything. The one exception: `--change-provider --provider <name>` uploads the new provider's key alone when it is not yet bound.
 
 After the deploy:
 
@@ -165,7 +166,7 @@ It does not verify (remote gates in [04 — verification and cutover](04-verific
 
 ## Manual steps outside the installer
 
-- Workers Paid plan subscription (billing is not automated).
+- A Workers Paid subscription (recommended; billing is not automated).
 - A `workers.dev` subdomain for the account, if none is registered (Workers & Pages → Account details), before origin discovery.
 - Custom-domain origins: attach the domain to the Worker (Worker → Settings → Domains & Routes) after the first deploy. The workspace is initialized and its bootstrap cleared through the Worker's `workers.dev` URL. The final `verify` phase then waits for the origin to answer; run `resume` once the domain is routed. The installer never changes DNS or routes.
 - For a custom domain on your zone, turn Pseudo IPv4 off (zone Network settings) as `RT-07` requires.

@@ -1,9 +1,11 @@
-// Researcher ZIP export content (ST-08, RT-09). The entry builders are copied
-// from src/app/api/interviews/export/route.ts so the Cloudflare streaming
-// export produces the same entries, byte for byte, as the Node JSZip export:
-// per interview NNN_<date>_<id8>.json and .md, then aggregates/<studyId>.json
-// (with JSZip's implicit aggregates/ folder entry), then summary.csv with
-// formula-safe cells. Keep both copies in step; the parity test compares them.
+// Researcher ZIP export content (ST-08, RT-09). The one copy of the entry
+// builders: src/app/api/interviews/export/route.ts imports them for the Node
+// JSZip archive and for the Cloudflare streaming archive, so both targets
+// produce the same entries with the same decompressed bytes: per interview
+// NNN_<date>_<id8>.json and .md, then aggregates/<studyId>.json (with JSZip's
+// implicit aggregates/ folder entry), then summary.csv with formula-safe
+// cells. The parity tests (zipStream.test.ts, api.export.durable.test.ts)
+// compare the two archives entry by entry.
 
 import type { StoredAggregateSynthesis, StoredInterview } from '@/types';
 import { csvCell } from '@/lib/csv';
