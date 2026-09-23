@@ -4,8 +4,8 @@ For Codex's independent review and deployment strategy (VERIFY-05). This packet 
 
 ## 1. Status
 
-- Branch `feat/cloudflare-standalone`, base `35f90c7` (main, specification package), head `d8bb26e` (last code commit; this packet is committed on top of it). Worktree: `/Users/xulelin/code/openinterviewer-cloudflare`. Not pushed.
-- Local release candidate: complete through M6 on this branch. The full local release matrix (`npm run check:cloudflare`, 18 lanes) passed on `d8bb26e`, a clean checkout; its receipt binds that commit and artifact. The packet itself is added in the following docs-only commit, which changes nothing else; rerunning the check on the branch head re-binds the receipt.
+- Branch `feat/cloudflare-standalone`, base `35f90c7` (main, specification package), head `2e72fe3` (last code commit, after the Codex review round in section 12; this packet revision is committed on top of it). Worktree: `/Users/xulelin/code/openinterviewer-cloudflare`. Not pushed.
+- Local release candidate: complete through M6 on this branch. The full local release matrix (`npm run check:cloudflare`, 18 lanes) passed on `2e72fe3`, a clean checkout (and earlier on `d8bb26e`; Codex reran it independently on `7235c80`); its receipt binds that commit and artifact. The packet itself is added in the following docs-only commit, which changes nothing else; rerunning the check on the branch head re-binds the receipt.
 - Requirement map (appendix A): of 55 requirement IDs, met locally 40, implemented with acceptance at a remote gate 11, recorded deviations 4, partial 0.
 - Remote-only gates (section 9) and operational decisions (section 10) remain, as VERIFY-05 allows. Production migration and the deploy button remain incomplete by design.
 
@@ -24,12 +24,12 @@ Individual lanes: `npm run check` (lint, typecheck, unit), `npm run test:setup`,
 
 | Lane | Command | Result | Duration |
 | --- | --- | --- | --- |
-| sync-artifacts+lint+typecheck+unit | `npm run check` | 2724 passed (2724) | 17.5 s |
+| sync-artifacts+lint+typecheck+unit | `npm run check` | 2735 passed (2735) | 22.2 s |
 | setup-checker | `npm run test:setup` | 44 passed, 0 failed | 0.9 s |
-| installer | `npm run test:setup:cloudflare` | 181 passed, 0 failed | 20.7 s |
+| installer | `npm run test:setup:cloudflare` | 202 passed, 0 failed | 31.0 s |
 | audit-production | `npm audit --omit=dev --audit-level=high` | 0 vulnerabilities (production dependencies, high and above) | 0.7 s |
 | diff-check | `git diff --check` | exit 0 | 0.0 s |
-| workers-runtime | `npm run test:cloudflare` | 371 passed (371) | 8.9 s |
+| workers-runtime | `npm run test:cloudflare` | 390 passed (390) | 9.8 s |
 | worker-import-boundary | `node scripts/cloudflare/check-import-boundary.mjs` | Worker-only graph reaches no Next, Redis or hosted modules | 0.2 s |
 | redis-contract | `npm run test:contract:redis` | 26 passed, 2 skipped (28) | 1.5 s |
 | redis-crash | `npm run test:redis-crash` | 34 passed (34) | 0.9 s |
@@ -38,16 +38,16 @@ Individual lanes: `npm run check` (lint, typecheck, unit), `npm run test:setup`,
 | build:node-standalone | `npm run build` | build succeeded | 5.2 s |
 | build:node-gateway | `npm run build` | build succeeded | 4.3 s |
 | build:node-hosted | `npm run build` | build succeeded | 4.3 s |
-| node-browser | `npm run test:e2e` | 5 passed (8.9s) | 9.3 s |
-| cloudflare-artifact | `npm run test:cloudflare:artifact` | 35 passed (35) | 17.6 s |
-| cloudflare-restart | `npm run test:cloudflare:restart` | 4 passed (4) | 188.2 s |
-| cloudflare-browser | `npm run test:e2e:cloudflare` | 9 passed (48.6s) | 49.0 s |
+| node-browser | `npm run test:e2e` | 5 passed (9.8s) | 10.3 s |
+| cloudflare-artifact | `npm run test:cloudflare:artifact` | 35 passed (35) | 19.5 s |
+| cloudflare-restart | `npm run test:cloudflare:restart` | 4 passed (4) | 188.6 s |
+| cloudflare-browser | `npm run test:e2e:cloudflare` | 9 passed (51.2s) | 51.7 s |
 
-Receipt: `status: passed`, commit `d8bb26ec12b7e880b42192caa52767685fe0b178`, worker bundle SHA-256 `ce6f0b6c579632764d153778a45b5f131639ba3f93e8f99d0c651d767a38eb5c`, checked at 2026-09-23T20:00:54.818Z. Artifact upload 27413.90 KiB, gzip 5440.21 KiB. Credential-like variables removed from the lanes (names only): CLAUDE_CODE_MESSAGING_TOKEN, MINERU_API_KEY.
+Receipt: `status: passed`, commit `2e72fe36fa6d257157525dee797c1ce35ae56c08`, worker bundle SHA-256 `8685051e6ac42d4cb5f6f9b763b10d6096ffcec349c1565339b32dcd5ad1b284`, checked on 2026-09-24. Artifact upload 27534.37 KiB, gzip 5464.85 KiB. The other lanes are unchanged from `d8bb26e`, except for small timing differences. The previous run, on `d8bb26e`, had unit 2724, installer 181, workers 371 and upload 27413.90 KiB. Credential-like variables removed from the lanes (names only): CLAUDE_CODE_MESSAGING_TOKEN, MINERU_API_KEY.
 
 ## 4. Branch and scoped diff
 
-47 commits, `35f90c7..d8bb26e`:
+47 commits, `35f90c7..d8bb26e`, then the packet (`7235c80`) and four Codex-round fixes (section 12):
 
 - `d24c502` build: pin Cloudflare toolchain and add M0 runtime feasibility probe
 - `8ee2629` build: typecheck Worker sources separately and ignore Cloudflare outputs
@@ -97,7 +97,7 @@ Receipt: `status: passed`, commit `d8bb26ec12b7e880b42192caa52767685fe0b178`, wo
 - `c937470` fix(ui): a start refused by a workspace hold is a certain refusal
 - `d8bb26e` test(cloudflare): batch/detail/automatic races, keyboard use and the keyless demo in the browser
 
-Scoped diff `35f90c7..d8bb26e`: 313 files changed, 81357 insertions(+), 2778 deletions(-). Excluding the generated `cloudflare/worker-configuration.d.ts` (15,767 lines) and `package-lock.json`, about 59,240 lines, of which 32,658 are tests. By area: `src/` +9,577; `cloudflare/` +22,941; `scripts/` +7,614; `tests/` +32,658; `docs/` +1,683; `.github/` +127.
+Scoped diff `35f90c7..d8bb26e`: 313 files changed, 81357 insertions(+), 2778 deletions(-); through `2e72fe3`: 317 files changed, 82950 insertions(+), 2787 deletions(-) (the Codex round: 32 files, +1511/−191, of which +986 tests). Excluding the generated `cloudflare/worker-configuration.d.ts` (15,767 lines) and `package-lock.json`, about 59,240 lines, of which 32,658 are tests. By area: `src/` +9,577; `cloudflare/` +22,941; `scripts/` +7,614; `tests/` +32,658; `docs/` +1,683; `.github/` +127.
 
 | Area | Main paths |
 | --- | --- |
@@ -126,13 +126,14 @@ Scoped diff `35f90c7..d8bb26e`: 313 files changed, 81357 insertions(+), 2778 del
 - **Operator API** (Cloudflare only): `GET /api/operator/status`, `POST /api/operator/maintenance`, `GET /api/operator/backup`, `POST /api/operator/backup/import`, `POST /api/operator/recovery/activate`, `POST /api/operator/recovery/restore`. Each needs `Authorization: Bearer <OPERATOR_TOKEN>` and a researcher session issued within 15 minutes.
 - **Configuration** (`wrangler.jsonc`): vars `DEPLOYMENT_TARGET`, `DEPLOYMENT_MODE`, `AI_TRANSPORT`, `AI_PROVIDER`, `APP_BASE_URL`, `WORKSPACE_ID`, `WORKSPACE_JURISDICTION`, `WORKSPACE_BOOTSTRAP` (installer-only); secrets `ADMIN_PASSWORD`, `SESSION_SECRET`, `PARTICIPANT_TOKEN_SECRET`, `RATE_LIMIT_SALT`, `OPERATOR_TOKEN`, `ANALYSIS_RECOVERY_EPOCH` and the one selected provider key; bindings `WORKSPACE_STORE` (SQLite DO, migration tag `v1`), `ANALYSIS_QUEUE` producer and consumer (batch 1, concurrency 1, 3 retries, 30 s delay, dead-letter queue). Invocation logs are off and query strings redacted.
 - **Schema**: SQLite migration 1 (studies, interviews, analysis, analysis_jobs, participant_links, consents, idempotency_receipts, deletion_fences, budget windows and members, aggregates, workspace_meta, operator_audit, login_attempts) and the `schema_migrations` ledger with `min_reader_version`. IMPLEMENTATION.md §4.
+- **Study list** (all targets, Codex round): `GET /api/studies` returns list items (metadata, `config.name`, `config.description`, `coreQuestionCount`), not whole configurations; Edit reads `GET /api/studies/[id]`. The port's `listStudies` returns `StudyListItem`; the Durable Object pages it by keyset (4 MiB of stored configuration per page requested, 12 MiB and 1,000 rows capped) and the Worker assembles at most 16 MiB, else 413.
 - **Node-visible changes** are listed in DEVIATIONS.md (Node rows): loopback `APP_BASE_URL` rejection in Node production, `busy` stops a researcher batch, some error bodies, the study-scoped 413 copy, a failed refresh no longer empties the register.
 
 ## 7. Installer, update and restore behavior
 
-- `plan` is read-only. `apply` records each phase only after observing its effect: queues, installation config, initial deploy, one bulk secret upload (four generated secrets plus the epoch; the admin password and one provider key from stdin or a no-echo prompt), origin (discovered from the Worker's `workers.dev` URL or given), workspace initialization through the Worker's own URL under `WORKSPACE_BOOTSTRAP`, bootstrap clear, verify. `resume` adopts a queue or Worker only with ownership evidence. `update` refuses drift, identity or jurisdiction changes and unready artifacts; exit 3 means deployed but held. `config` rewrites the installation config from the receipt without any remote call.
+- `plan` is read-only. `apply` records each phase only after observing its effect: queues, installation config, initial deploy, one bulk secret upload (four generated secrets plus the epoch; the admin password and one provider key from stdin or a no-echo prompt), origin (discovered from the Worker's `workers.dev` URL or given), workspace initialization through the Worker's own URL under `WORKSPACE_BOOTSTRAP`, bootstrap clear, verify. `resume` adopts a queue or Worker only with ownership evidence. `update` refuses drift, identity or jurisdiction changes and unready artifacts; exit 3 means deployed but held. `config` rewrites the installation config from the receipt without any remote call. A provider change (`update --change-provider`) is recorded as `pendingProviderChange` before its first remote write and finalized after its deploy; rerunning the same update finishes an interrupted one, and other commands refuse meanwhile.
 - Deploy uploads only the prebuilt artifact whose manifest matches the clean checkout and whose receipt shows a passing release check; bootstrap values need `--bootstrap`. CI promotion (`workflow_dispatch`, `cloudflare-production` environment) checks the stored config, runs the full release check, deploys and verifies readiness; it does not update the installer receipt.
-- Restore paths: operational backup and import into a fresh workspace in `recovery`, then epoch activation (all local-tested); PITR through the guarded restore entry point after deploying a new epoch first (refusals local-tested, the restore itself remote). RUNBOOK.md and TRANSITION.md hold the procedures.
+- Restore paths: operational backup and import into a fresh workspace in `recovery`, then epoch activation (all local-tested); PITR through the guarded restore entry point after deploying a new epoch first (refusals local-tested, the restore itself remote). RUNBOOK.md and TRANSITION.md hold the procedures. Operator state changes (maintenance, activate, restore, import) whose reply is lost, cut off, timed out or unrecognizable exit 1 with `detail.outcome: "unknown"` and a status read taken afterwards; they are never resent, except idempotent import requests.
 
 ## 8. Evidence highlights
 
@@ -200,6 +201,25 @@ Known residual gaps (not defects found in review):
 - The inventory summary does not count a misfiled index entry whose interview belongs to another existing study (the per-family counter does; TRANSITION.md says to record both).
 - `docs/operations/cloudflare-migration/03-analysis-jobs.md:100` has a table row with one extra column (a specification original, left unedited).
 - The artifact was built under Node 26.9.0 locally; CI pins 24.19.0.
+
+## 12. Codex review round (2026-09-24)
+
+Codex reran `check:cloudflare` on `7235c80`: all 18 lanes passed. It then reported four reproducible P2 issues. Each was fixed with regression tests that fail on the previous code. Two verifiers checked each fix independently: one tried to reproduce the original failure, the other looked for regressions against the specifications. Their findings were fixed or documented before commit.
+
+| Finding | Commit | Fix | Regression evidence |
+| --- | --- | --- | --- |
+| Large study lists fail: one RPC returned every study, and 300 valid large studies (37,365,331 bytes) exceeded workerd's 32 MiB RPC limit (503) | `655b426` | The list returns list items, not configurations, on every target. The object pages over (created_at DESC, id DESC) within a stored-byte budget: sizes are read first, a study larger than the budget is a page of its own, and the cursor advances past undecodable rows. The Worker assembles at most 16 MiB, else 413. A request without paging that would not fit is `too-large` at the object. Edit reads the full study first | `tests/workers/studyList.test.ts` (new) and `tests/workers/researcherRoutes.test.ts` (300 maximum-size studies answer 200 with every item): with the pre-fix source restored, 16 of these tests fail, and workerd reports "Serialized RPC arguments or return values are limited to 32MiB, but the size of this value was: 37365331 bytes"; unit tests for list items and Edit |
+| Polling can hang: the 180 s budget was checked only between reads | `15713de` | Each read gets a timer of max(time left in the session, 30 s). An automatic read aborted at the deadline ends the budget as exhausted. A manual check that times out halts with a retryable error. A read made moot by a stored outcome is dropped without an error. Reads stay serial | `tests/unit/analysisExecution.polling.test.ts` (+8; 6 fail on the old code): a read that never resolves is aborted at the deadline, and a manual check then starts a new read |
+| An interrupted provider change could not be resumed: config written before the deploy, receipt updated after | `5d37582` | `pendingProviderChange` is recorded after the read-only checks and key validation, before any upload or deploy. Drift accepts either side of a pending change only. The same update finishes it, with one history entry. `update`, `resume`, `apply` and `config` refuse other requests while a change is pending | `tests/setup-cloudflare/update-verify.test.mjs`: a failed deploy before the upload, a lost reply after it, and a lost key-upload reply are each rerun to completion; conflicting providers and unrelated drift are still refused |
+| Operator commands mishandled lost connections: a committed transition was reported as a socket error | `2e72fe3` | Every state-changing request (maintenance, activate, restore, import chunk and finalize) treats a reset, cut-off, timed-out or unrecognizable reply as `outcome: "unknown"`. The request is never resent, except idempotent import requests. Status is read once and reported, or the report says status could not be read either. Maintenance and activation count a 200 as success only when it carries the documented result | `tests/setup-cloudflare/operator.test.mjs`: a fake server commits the change, then resets, truncates, returns HTML or hangs, for each state-changing command; a failed status read; a read-only command reports a plain error |
+
+Decisions and residuals from this round, for review:
+
+- **Study list shape (recorded in DEVIATIONS ST-08).** Full configurations cannot fit a 128 MB isolate at the 1,000-study maximum (up to about 125 MiB), however they are paged. The list therefore carries list items on Node, hosted and Cloudflare alike. Anything that scripted full configurations from `GET /api/studies` must read `GET /api/studies/[id]` instead, which is worth a release note. A browser tab still running the previous release's bundle fails to render the new list shape until it is reloaded (there is no deployment skew protection). It fails closed: it never prefills Edit from a partial configuration.
+- **Keyset cursors.** Interview, aggregate and study cursors share one format (JSON `[created_at, id]`, bound only as SQL parameters, never sent to a browser). A malformed text or number key on a page boundary is skipped like any undecodable row. A NULL or BLOB key, possible only through storage corruption, still makes that listing unavailable.
+- **Polling.** Inside a live session, a stalled read keeps "Checking…" until the deadline; the worst case for the batch is 210 s. A refresh during an outstanding read is still ignored.
+- **Installer.** There is no abandon command for a pending provider change. The way back is to finish it, then change back (both keys stay bound). `verify` during a pending change can report an `AI_PROVIDER` mismatch.
+- **Remote gates added.** Peak memory for a 16 MiB study list (ST-08/RT-09 row). A lost reply against real Cloudflare for operator commands and installer updates, covered by the staging rehearsal (VERIFY-04).
 
 ## Appendix A. Requirement-to-evidence map
 
