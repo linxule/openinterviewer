@@ -281,6 +281,17 @@ export interface InterviewAnalysisState {
   claimedAt?: number;
   failureKind?: InterviewAnalysisFailureKind;  // only when `status === 'failed'`
   studyRevision?: number;    // the revision the successful analysis ran under
+  /**
+   * Durable (Cloudflare) analysis only. The generation this state describes;
+   * 0 for a legacy record that never had a job. Absent on Node records.
+   */
+  generation?: number;
+  /**
+   * Durable (Cloudflare) analysis only. True when a paid provider call may have
+   * run but its outcome could not be confirmed; `status` is then `failed` with
+   * `failureKind: 'timeout'`, and another run may make another paid request.
+   */
+  recoveryRequired?: boolean;
 }
 
 // ============================================

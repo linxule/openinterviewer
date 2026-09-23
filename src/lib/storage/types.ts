@@ -31,7 +31,12 @@ import type {
   VerifyParticipantConsentResult,
 } from '@/lib/participantConsent';
 import type { ParticipantRateLimitCounter, PersistRatePlanRow } from '@/lib/rateLimit';
-import type { FrozenAnalysisInput } from './analysisProtocol';
+import type {
+  AcceptAnalysisRetryInput,
+  AcceptAnalysisRetryOutcome,
+  FrozenAnalysisInput,
+  ReadAnalysisStatusOutcome,
+} from './analysisProtocol';
 
 export type {
   AggregateLoadResult,
@@ -258,3 +263,47 @@ export interface WorkspaceStorePort {
 }
 
 export type { ParticipantConsentRecord };
+
+// ---------- Durable-only capability (Cloudflare target) ----------
+
+export type ExportBegin =
+  | { status: 'ok'; sequence: number; count: number; studyIds: string[] }
+  | { status: 'empty' }
+  | { status: 'too-large'; count: number; maximum: number }
+  | { status: 'unavailable' };
+
+export type ExportPage =
+  | { status: 'ok'; interviews: StoredInterview[]; aggregates: StoredAggregateSynthesis[]; nextCursor: string | null }
+  | { status: 'changed' }
+  | { status: 'unavailable' };
+
+export type AggregateInputsPage =
+  | { status: 'ok'; interviews: StoredInterview[]; nextCursor: string | null; totalEligible: number }
+  | { status: 'unavailable' };
+
+/**
+ * Operations only the durable workspace provides. Routes narrow with
+ * `isDurableWorkspaceStore(store)`; the Redis store never implements them.
+ */
+export interface DurableWorkspaceStorePort extends WorkspaceStorePort {
+  readonly backend: 'durable-object';
+  acceptAnalysisRetry(input: Omit<AcceptAnalysisRetryInput, 'requestKeyDigest' | 'requestFingerprint'> & {
+    rawIdempotencyKey: string;
+    apiVersion: 2;
+  }): Promise<AcceptAnalysisRetryOutcome>;
+  readAnalysisStatus(input: { studyId: string; interviewId: string }): Promise<ReadAnalysisStatusOutcome>;
+  beginExport(input: { maximum: number }): Promise<ExportBegin>;
+  readExportPage(input: { sequence: number; cursor: string | null; pageSize: number; maxPageBytes: number }): Promise<ExportPage>;
+  verifyExportSequence(input: { sequence: number }): Promise<'unchanged' | 'changed' | 'unavailable'>;
+  readAggregateInputs(input: {
+    studyId: string;
+    studyRevision: number;
+    cursor: string | null;
+    pageSize: number;
+    maxPageBytes: number;
+  }): Promise<AggregateInputsPage>;
+}
+
+export function isDurableWorkspaceStore(store: WorkspaceStorePort): store is DurableWorkspaceStorePort {
+  return store.backend === 'durable-object';
+}
