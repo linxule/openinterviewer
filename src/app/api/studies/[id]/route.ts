@@ -9,11 +9,7 @@ import { randomBytes } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import {
   deleteStudy,
-  getStudy,
-  getStudyChecked,
   isKVAvailable,
-  replaceStudyConfigAtomic,
-  setStudyLinksEnabled,
   studyOperationMarkerId,
 } from '@/lib/kv';
 import {
@@ -21,7 +17,12 @@ import {
   getHostedResearcherIdentity,
   getRequestContext,
 } from '@/lib/researcherContext';
-import { mapStudyLoad } from '@/lib/ownedStudies';
+import {
+  mapReadinessHold,
+  mapStudyLoad,
+  mapWorkspaceHold,
+  RESEARCHER_MUTATION_STATES,
+} from '@/lib/ownedStudies';
 import { configurationRequiredResponse } from '@/lib/researcherAccess';
 import {
   beginDeleteStudyOperationV2,
@@ -38,6 +39,10 @@ import {
 import { missingProviderCredential } from '@/lib/providerAvailability';
 import { RETRY_AFTER_PENDING } from '@/lib/createIdempotency';
 import { createRequestId, logRequestFailure } from '@/lib/requestLog';
+import { deploymentNotReadyResponse } from '@/lib/runtime/readinessGate';
+import { isDurableWorkspaceStore, type WorkspaceStorePort } from '@/lib/storage/types';
+
+const ROUTE = '/api/studies/[id]';
 
 // GET /api/studies/[id] - Get single study
 export async function GET(
@@ -60,7 +65,7 @@ export async function GET(
       );
     }
 
-    const loaded = await getStudyChecked(id, gated.context.kvClient);
+    const loaded = await gated.context.store.getStudy(id);
     const mapped = mapStudyLoad(loaded);
     if (!mapped.ok) return NextResponse.json(mapped.body, { status: mapped.status });
     return NextResponse.json({ study: mapped.study });
@@ -85,7 +90,12 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const notReady = deploymentNotReadyResponse(ROUTE);
+    if (notReady) return notReady;
+
     const { id } = await params;
+    // Parsing precedes authorization because the hosted authority purpose
+    // (link status vs config edit) is derived from the body.
     const parsedBody = await readStudyMutationBody(request, 'update');
     if (!parsedBody.ok) {
       return NextResponse.json({ error: parsedBody.error }, { status: parsedBody.status });
@@ -111,33 +121,35 @@ export async function PUT(
       );
     }
     const context = gated.context;
+    const store = context.store;
 
-    const kvAvailable = await isKVAvailable(context.kvClient);
-    if (!kvAvailable) {
-      return NextResponse.json(
-        { error: 'Storage not configured' },
-        { status: 503 }
-      );
+    const unready = await storeNotWritable(store);
+    if (unready) return unready;
+
+    const loaded = await store.getStudy(id);
+    if (loaded.status === 'unavailable') {
+      // The former unchecked read threw here; keep its 500 response.
+      return updateFailure(request, new Error('Study storage is temporarily unavailable'));
     }
-
-    const study = await getStudy(id, context.kvClient);
-    if (!study) {
+    if (loaded.status !== 'found') {
       return NextResponse.json(
         { error: 'Study not found' },
         { status: 404 }
       );
     }
+    const study = loaded.study;
 
     // Revocation/restoration is deliberately independent from editable study
     // content and remains available after the first interview.
     if (isLinkOnlyUpdate) {
-      const update = await setStudyLinksEnabled(id, linksEnabled, context.kvClient);
+      const update = await store.setStudyLinksEnabled({ studyId: id, enabled: linksEnabled, now: Date.now() });
       if (update.status === 'not-found') {
         return NextResponse.json({ error: 'Study not found' }, { status: 404 });
       }
       if (update.status === 'persist-guard') {
         return liveStudyMutationResponse();
       }
+      if (update.status === 'held') return heldResponse(update.reason);
       if (update.status !== 'updated') {
         return NextResponse.json({ error: 'Failed to update participant links' }, { status: 503 });
       }
@@ -183,12 +195,13 @@ export async function PUT(
       }, { status: 409 });
     }
 
-    const update = await replaceStudyConfigAtomic(
-      id,
-      study.revision,
-      updatedConfig,
-      context.kvClient
-    );
+    const update = await store.replaceStudyConfig({
+      studyId: id,
+      expectedRevision: study.revision,
+      config: updatedConfig,
+      now: Date.now(),
+    });
+    if (update.status === 'held') return heldResponse(update.reason);
     if (update.status === 'conflict') {
       return NextResponse.json(
         { error: 'The study changed while you were editing it. Reload and try again.' },
@@ -210,18 +223,48 @@ export async function PUT(
       message: 'Study updated successfully'
     });
   } catch (error) {
-    logRequestFailure({
-      event: 'route.failure',
-      route: '/api/studies/[id]',
-      method: 'PUT',
-      status: 500,
-      requestId: createRequestId(request.headers.get('x-request-id')),
-    }, error);
+    return updateFailure(request, error);
+  }
+}
+
+function updateFailure(request: Request, error: unknown) {
+  logRequestFailure({
+    event: 'route.failure',
+    route: ROUTE,
+    method: 'PUT',
+    status: 500,
+    requestId: createRequestId(request.headers.get('x-request-id')),
+  }, error);
+  return NextResponse.json(
+    { error: 'Failed to update study' },
+    { status: 500 }
+  );
+}
+
+function heldResponse(reason: Parameters<typeof mapWorkspaceHold>[0]) {
+  const held = mapWorkspaceHold(reason, ROUTE);
+  return NextResponse.json(held.body, { status: held.status });
+}
+
+/**
+ * Standalone PUT/DELETE storage precheck: on Node this is the former Redis
+ * ping with its 503 body; a durable workspace that cannot answer is a
+ * configured store that is temporarily unreachable (retryable), and it
+ * additionally refuses research mutations outside the open maintenance state
+ * before any validation work.
+ */
+async function storeNotWritable(store: WorkspaceStorePort) {
+  const readiness = await store.readiness();
+  if (readiness.status === 'unavailable') {
     return NextResponse.json(
-      { error: 'Failed to update study' },
-      { status: 500 }
+      isDurableWorkspaceStore(store)
+        ? { error: 'Study storage is temporarily unavailable.', retryable: true }
+        : { error: 'Storage not configured' },
+      { status: 503 }
     );
   }
+  const held = mapReadinessHold(readiness, RESEARCHER_MUTATION_STATES, ROUTE);
+  return held ? NextResponse.json(held.body, { status: held.status }) : null;
 }
 
 // DELETE /api/studies/[id] - Delete study
@@ -230,6 +273,9 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const notReady = deploymentNotReadyResponse(ROUTE);
+    if (notReady) return notReady;
+
     const { id } = await params;
 
     // No preliminary GET. Hosted begin owns owner/journal/bind before BYOS
@@ -276,13 +322,9 @@ export async function DELETE(
       }
       kvClient = access.context.kvClient;
     } else {
-      const access = await getRequestContext();
-      const setupResponse = configurationRequiredResponse(access);
-      if (setupResponse) return setupResponse;
-      if (!access.authorized || !access.context) {
-        return NextResponse.json({ error: access.error || 'Unauthorized' }, { status: 401 });
-      }
-      kvClient = access.context.kvClient;
+      // Standalone (Node Redis and the Cloudflare workspace) deletes through
+      // the workspace store.
+      return await deleteStandaloneStudy(id);
     }
 
     const kvAvailable = await isKVAvailable(kvClient);
@@ -386,6 +428,57 @@ export async function DELETE(
       { status: 500 }
     );
   }
+}
+
+/**
+ * Standalone delete (Node Redis and the Cloudflare workspace alike). On Node
+ * the Redis store runs the same marker-scoped atomic delete this route used
+ * to call directly, after the same ping.
+ */
+async function deleteStandaloneStudy(id: string) {
+  const access = await getRequestContext();
+  const setupResponse = configurationRequiredResponse(access);
+  if (setupResponse) return setupResponse;
+  if (!access.authorized || !access.context) {
+    return NextResponse.json({ error: access.error || 'Unauthorized' }, { status: 401 });
+  }
+  const store = access.context.store;
+
+  const unready = await storeNotWritable(store);
+  if (unready) return unready;
+  // The former route's operation-marker check (after the ping, before any
+  // write); both stores accept exactly the ids this marker accepts.
+  if (!studyOperationMarkerId(`delete:${id}`, 0)) {
+    return NextResponse.json({ error: 'Invalid study operation.' }, { status: 503 });
+  }
+
+  const result = await store.deleteStudy({ studyId: id, now: Date.now() });
+  if (result.status === 'held') return heldResponse(result.reason);
+  if (result.status === 'ambiguous') {
+    return NextResponse.json({ retryable: true, reason: 'ambiguous' }, { status: 503 });
+  }
+  if (result.status === 'still-pending') {
+    return NextResponse.json({ code: 'STUDY_PERSIST_PENDING' }, { status: 409 });
+  }
+  if (!result.success) {
+    if (result.status === 'not-found') {
+      return NextResponse.json({ error: result.error || 'Study not found' }, { status: 404 });
+    }
+    if (result.status === 'conflict' || result.status === 'cancelled') {
+      return NextResponse.json(
+        { error: result.error || 'Failed to delete study' },
+        { status: 409 }
+      );
+    }
+    return NextResponse.json(
+      { error: result.error || 'Failed to delete study', retryable: true, reason: 'unavailable' },
+      { status: 503 }
+    );
+  }
+  return NextResponse.json({
+    success: true,
+    message: 'Study deleted successfully'
+  });
 }
 
 function mapBeginDeleteHttp(

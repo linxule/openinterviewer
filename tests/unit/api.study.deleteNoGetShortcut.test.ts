@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeStudyConfig, makeStoredStudy } from '../fixtures/models';
+import { standaloneTestContext } from '../helpers/workspaceStoreFixture';
+import type { RedisPort } from '@/lib/redisPort';
+import { hashCreateIdempotencyKey } from '@/lib/createIdempotency';
 
 const STUDY_ID = '11111111-1111-4111-8111-111111111111';
 
@@ -13,9 +16,13 @@ const kvMock = vi.hoisted(() => ({
   isKVAvailable: vi.fn(),
   replaceStudyConfigAtomic: vi.fn(),
   setStudyLinksEnabled: vi.fn(),
-  studyOperationMarkerId: vi.fn((id: string, createdAt: number) => `${id}:${createdAt}`),
+  studyOperationMarkerId: vi.fn((id: string, createdAt: number): string | null => `${id}:${createdAt}`),
+  standaloneCreateMarkerId: vi.fn((studyId: string, createdAt: number) => `create:${studyId}:${createdAt}`),
 }));
 vi.mock('@/lib/kv', () => kvMock);
+// The Redis workspace store imports participant links, whose module init reads
+// platformDb exports this file mocks away; no link operation runs here.
+vi.mock('@/lib/participantLinks', () => ({}));
 
 const platformMock = vi.hoisted(() => ({
   beginCreateStudyOperationV2: vi.fn(),
@@ -35,6 +42,10 @@ const idempMock = vi.hoisted(() => ({
   casCreateIdempotencyState: vi.fn(),
   attachCreateIdempotencyOperation: vi.fn(),
   resolveCreateIdempotencyClient: vi.fn(() => ({})),
+  // The standalone create runs inside the Redis workspace store, which keys
+  // the same begin/created transition by the scoped key digest.
+  beginCreateIdempotencyForHash: vi.fn(),
+  casCreateIdempotencyStateForHash: vi.fn(),
 }));
 vi.mock('@/lib/createIdempotency', async () => {
   const actual = await vi.importActual<typeof import('@/lib/createIdempotency')>('@/lib/createIdempotency');
@@ -44,6 +55,8 @@ vi.mock('@/lib/createIdempotency', async () => {
     casCreateIdempotencyState: idempMock.casCreateIdempotencyState,
     attachCreateIdempotencyOperation: idempMock.attachCreateIdempotencyOperation,
     resolveCreateIdempotencyClient: idempMock.resolveCreateIdempotencyClient,
+    beginCreateIdempotencyForHash: idempMock.beginCreateIdempotencyForHash,
+    casCreateIdempotencyStateForHash: idempMock.casCreateIdempotencyStateForHash,
   };
 });
 
@@ -67,19 +80,13 @@ beforeEach(() => {
   modeMock.isHostedMode.mockReturnValue(false);
   contextMock.getRequestContext.mockResolvedValue({
     authorized: true,
-    context: {
-      kvClient: { name: 'standalone-kv' },
-      geminiApiKey: 'gemini-key',
-      anthropicApiKey: null,
-      openaiApiKey: null,
-      openrouterApiKey: null,
-    },
+    context: standaloneTestContext({ name: 'standalone-kv' } as unknown as RedisPort, { geminiApiKey: 'gemini-key' }),
     researcherId: null,
   });
   kvMock.isKVAvailable.mockResolvedValue(true);
   kvMock.deleteStudy.mockResolvedValue({ status: 'deleted', success: true });
   kvMock.createStudyAtomic.mockResolvedValue('created');
-  idempMock.casCreateIdempotencyState.mockResolvedValue({ status: 'ok' });
+  idempMock.casCreateIdempotencyStateForHash.mockResolvedValue({ status: 'ok' });
 });
 
 describe('DELETE /api/studies/[id] standalone — no getStudy shortcut', () => {
@@ -153,6 +160,31 @@ describe('DELETE /api/studies/[id] standalone — no getStudy shortcut', () => {
     expect(await response.json()).toMatchObject({ retryable: true, reason: 'unavailable' });
   });
 
+  it('ST-01: keeps the former invalid-operation 503 for an id the delete marker refuses, after the ping', async () => {
+    const actualKv = await vi.importActual<typeof import('@/lib/kv')>('@/lib/kv');
+    kvMock.studyOperationMarkerId.mockImplementation(actualKv.studyOperationMarkerId);
+
+    const response = await DELETE(
+      new Request('http://localhost/api/studies/bad', { method: 'DELETE' }),
+      { params: Promise.resolve({ id: 'not a study id' }) },
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: 'Invalid study operation.' });
+    expect(kvMock.isKVAvailable).toHaveBeenCalledTimes(1);
+    expect(kvMock.deleteStudy).not.toHaveBeenCalled();
+  });
+
+  it('ST-01: an unreachable Redis keeps the former storage-not-configured delete body', async () => {
+    kvMock.isKVAvailable.mockResolvedValue(false);
+
+    const response = await DELETE(deleteRequest, routeContext);
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: 'Storage not configured' });
+    expect(kvMock.deleteStudy).not.toHaveBeenCalled();
+  });
+
   it('fails closed on response-loss / ambiguous delete', async () => {
     kvMock.deleteStudy.mockResolvedValue({
       status: 'ambiguous',
@@ -169,7 +201,7 @@ describe('DELETE /api/studies/[id] standalone — no getStudy shortcut', () => {
 describe('POST /api/studies standalone receipt replay', () => {
   it('re-enters create on pending mapping so S4 returns the same 200 study', async () => {
     const minted = storedStudy();
-    idempMock.beginCreateIdempotency
+    idempMock.beginCreateIdempotencyForHash
       .mockResolvedValueOnce({
         status: 'started',
         record: {
@@ -222,11 +254,17 @@ describe('POST /api/studies standalone receipt replay', () => {
     expect(kvMock.createStudyAtomic).toHaveBeenCalledTimes(2);
     expect(kvMock.createStudyAtomic.mock.calls[0][0].id).toBe(STUDY_ID);
     expect(kvMock.createStudyAtomic.mock.calls[1][0].id).toBe(STUDY_ID);
+    // Both attempts carry the same standalone-scoped key digest (never the raw key).
+    const digest = hashCreateIdempotencyKey('standalone', '22222222-2222-4222-8222-222222222222');
+    for (const [options] of idempMock.beginCreateIdempotencyForHash.mock.calls) {
+      expect(options).toMatchObject({ mode: 'standalone', researcherId: 'standalone', idempotencyHash: digest });
+    }
+    expect(idempMock.beginCreateIdempotency).not.toHaveBeenCalled();
   });
 
   it('returns 503 ambiguous when standalone create response is lost', async () => {
     const minted = storedStudy();
-    idempMock.beginCreateIdempotency.mockResolvedValue({
+    idempMock.beginCreateIdempotencyForHash.mockResolvedValue({
       status: 'started',
       record: {
         version: 2,

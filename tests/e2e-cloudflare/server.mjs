@@ -17,6 +17,7 @@ import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createTestHarness } from 'wrangler';
+import { AGGREGATE, GREETING, SYNTHESIS } from './fixtureData.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PORT = Number(process.argv[2] || 3200);
@@ -27,23 +28,6 @@ if (!existsSync(ARTIFACT_WORKER_DIR)) {
   console.error('Build the Cloudflare artifact first: npm run build:cloudflare');
   process.exit(2);
 }
-
-const GREETING = 'Hello, and thank you for joining this conversation about your work.';
-const SYNTHESIS = {
-  statedPreferences: ['Prefers clear feedback loops'],
-  revealedPreferences: ['Returns to collaboration repeatedly'],
-  themes: [{ theme: 'Collaboration', frequency: 2, evidenceRefs: [{ quote: 'I work closely with my team', turnIndex: 2 }] }],
-  contradictions: [],
-  keyInsights: ['Collaboration shapes daily decisions'],
-  bottomLine: 'The participant values collaborative, feedback-rich work.',
-};
-const AGGREGATE = {
-  commonThemes: [{ theme: 'Collaboration', frequency: 2, quoteRefs: [{ quote: 'I work closely with my team', turnIndex: 2, interviewIndex: 1 }] }],
-  divergentViews: [],
-  keyFindings: ['Collaboration is central'],
-  researchImplications: ['Study team rituals'],
-  bottomLine: 'Participants value collaboration.',
-};
 
 const fixture = {
   calls: [],

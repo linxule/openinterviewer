@@ -2,6 +2,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeStudyConfig } from '../fixtures/models';
+import { standaloneTestContext } from '../helpers/workspaceStoreFixture';
+import type { RedisPort } from '@/lib/redisPort';
 
 const contextMock = vi.hoisted(() => ({
   getParticipantRequestContext: vi.fn(),
@@ -64,7 +66,18 @@ const kvMock = vi.hoisted(() => ({ getStudyChecked: vi.fn() }));
 vi.mock('@/lib/kv', () => kvMock);
 const accessMock = vi.hoisted(() => ({ configurationRequiredResponse: vi.fn() }));
 vi.mock('@/lib/researcherAccess', () => accessMock);
-vi.mock('@/lib/mode', () => ({ isHostedMode: vi.fn(() => false) }));
+const modeMock = vi.hoisted(() => ({ isHostedMode: vi.fn(() => false) }));
+vi.mock('@/lib/mode', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/mode')>(),
+  ...modeMock,
+}));
+// Standalone exchange resolves its workspace store through the real resolver;
+// only the deployment Redis client is a fixture.
+const standaloneRedis = vi.hoisted(() => ({ marker: 'standalone-redis' }));
+vi.mock('@/lib/kvClient', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/kvClient')>(),
+  getKVClient: vi.fn(() => standaloneRedis),
+}));
 vi.mock('@/lib/platformDb', () => ({
   consumePlatformRateLimit: vi.fn(),
 }));
@@ -96,13 +109,7 @@ beforeEach(() => {
   accessMock.configurationRequiredResponse.mockReturnValue(null);
   contextMock.getRequestContext.mockResolvedValue({
     authorized: true,
-    context: {
-      kvClient: {},
-      geminiApiKey: 'gemini-key',
-      anthropicApiKey: null,
-      openaiApiKey: null,
-      openrouterApiKey: null,
-    },
+    context: standaloneTestContext({} as RedisPort, { geminiApiKey: 'gemini-key' }),
     researcherId: null,
   });
   contextMock.getAuthorizedResearcherStudyContext.mockImplementation(
@@ -144,7 +151,29 @@ describe('GET /api/generate-link participant-session exchange', () => {
     expect(cookieA).not.toBe(cookieB);
   });
 
+  it('RT-06: standalone exchange resolves the code through the workspace store and is never cached', async () => {
+    const response = await GET(new Request('http://localhost/api/generate-link?token=code-a'));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    // The Redis workspace store passes the deployment client explicitly.
+    expect(participantLinksMock.getParticipantLinkByCode).toHaveBeenCalledWith('code-a', standaloneRedis);
+  });
+
+  it('RT-06: a standalone storage failure is a retryable 503 without a cookie', async () => {
+    participantLinksMock.getParticipantLinkByCode.mockResolvedValue({ status: 'unavailable' });
+
+    const response = await GET(new Request('http://localhost/api/generate-link?token=code-a'));
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    await expect(response.json()).resolves.toMatchObject({ valid: false, retryable: true });
+    expect(response.headers.get('set-cookie')).toBeNull();
+    expect(contextMock.getParticipantRequestContext).not.toHaveBeenCalled();
+  });
+
   it('maps live exchange to an opaque 404 and sets no participant cookie', async () => {
+    modeMock.isHostedMode.mockReturnValue(true);
     participantLinksMock.getParticipantLinkByCode.mockResolvedValue({
       status: 'live',
       phase: 'pending',
@@ -160,6 +189,7 @@ describe('GET /api/generate-link participant-session exchange', () => {
   });
 
   it('maps pair-mismatch exchange to 503 and sets no participant cookie', async () => {
+    modeMock.isHostedMode.mockReturnValue(true);
     participantLinksMock.getParticipantLinkByCode.mockResolvedValue({ status: 'mismatch' });
 
     const response = await GET(new Request('http://localhost/api/generate-link?token=code-a'));
@@ -170,6 +200,44 @@ describe('GET /api/generate-link participant-session exchange', () => {
     expect(body.retryable).toBe(true);
     expect(response.headers.get('set-cookie')).toBeNull();
     expect(contextMock.getParticipantRequestContext).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/generate-link request bounds (RT-06)', () => {
+  it('RT-06: a malformed body is a 400 before authentication, not a 500', async () => {
+    const response = await POST(new Request('http://localhost/api/generate-link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{"studyConfig":',
+    }));
+
+    expect(response.status).toBe(400);
+    expect(contextMock.getAuthorizedResearcherStudyContext).not.toHaveBeenCalled();
+  });
+
+  it('RT-06: the legacy full-config body a researcher client still sends is accepted', async () => {
+    kvMock.getStudyChecked.mockResolvedValue({ status: 'found', study: { id: 'study-a', revision: 1, config: studyConfig } });
+    participantLinksMock.createParticipantLinkRecord.mockResolvedValue({ status: 'created', code: 'c'.repeat(43), link });
+
+    const response = await POST(new Request('http://localhost/api/generate-link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ studyConfig: { ...studyConfig, consentText: 'x'.repeat(20_000) } }),
+    }));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      token: 'c'.repeat(43),
+      url: `http://localhost/p/${'c'.repeat(43)}`,
+    });
+    // Standalone Node: the Redis workspace store passes today's arguments.
+    expect(participantLinksMock.createParticipantLinkRecord).toHaveBeenCalledWith({
+      studyId: 'study-a',
+      studyRevision: 1,
+      researcherId: null,
+      expiresAt: expect.any(Number),
+      standaloneClient: expect.any(Object),
+    });
   });
 });
 

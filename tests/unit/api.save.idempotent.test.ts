@@ -1,6 +1,14 @@
 import { createHash } from 'crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeStoredInterview } from '../fixtures/models';
+import { standaloneTestContext } from '../helpers/workspaceStoreFixture';
+import type { RedisPort } from '@/lib/redisPort';
+import {
+  WORKER_INVOCATION_ACCESSOR,
+  WORKER_RUNTIME_MARKER,
+  type AdmissionIdentity,
+  type WorkerInvocation,
+} from '@/lib/runtime/workerInvocation';
 
 // Fixture models standing in for whatever the study's researcher configured
 // for each provider; the conducting model must record exactly this value.
@@ -60,9 +68,15 @@ const canonicalMock = vi.hoisted(() => ({
   loadCanonicalStudy: vi.fn(),
 }));
 
-vi.mock('@/lib/canonicalStudy', () => canonicalMock);
+vi.mock('@/lib/canonicalStudy', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/canonicalStudy')>(),
+  ...canonicalMock,
+}));
 
-const rateLimitMock = vi.hoisted(() => ({ getSavePersistRatePlan: vi.fn() }));
+const rateLimitMock = vi.hoisted(() => ({
+  savePersistRatePlanOrResponse: vi.fn(),
+  participantAdmissionRefusal: vi.fn(() => null),
+}));
 vi.mock('@/lib/rateLimit', () => rateLimitMock);
 
 const consentMock = vi.hoisted(() => ({ verifyParticipantConsent: vi.fn() }));
@@ -98,7 +112,7 @@ beforeEach(() => {
   vi.stubEnv('AI_PROVIDER', '');
   contextMock.getParticipantRequestContext.mockResolvedValue({
     valid: true,
-    context: { kvClient: {} },
+    context: standaloneTestContext({} as RedisPort),
     studyId: 'study-a',
     isAdmin: false,
     linkId: 'a'.repeat(64),
@@ -124,9 +138,10 @@ beforeEach(() => {
       acceptedAt: 1_700_000_000_000,
     },
   });
-  rateLimitMock.getSavePersistRatePlan.mockReturnValue([
-    { key: 'interview-rate:session:0', maximum: 2, windowSeconds: 86_400, windowStart: 0 },
-  ]);
+  rateLimitMock.savePersistRatePlanOrResponse.mockReturnValue({
+    status: 'planned',
+    rows: [{ key: 'interview-rate:session:0', maximum: 2, windowSeconds: 86_400, windowStart: 0 }],
+  });
   kvMock.persistCompletedInterview
     .mockResolvedValueOnce({ status: 'created' })
     .mockResolvedValue({ status: 'duplicate' });
@@ -324,6 +339,74 @@ describe('POST /api/interviews/save idempotency', () => {
     expect(response.headers.get('retry-after')).toBe('3600');
   });
 
+  describe('RT-07: refused save plans through the real plan builder', () => {
+    const runtime = globalThis as unknown as Record<symbol, unknown>;
+    function enterWorker(identity: AdmissionIdentity, env: Record<string, string> = {}) {
+      const invocation: WorkerInvocation = { env, identity, source: 'fetch' };
+      runtime[WORKER_RUNTIME_MARKER] = true;
+      runtime[WORKER_INVOCATION_ACCESSOR] = () => invocation;
+    }
+
+    beforeEach(async () => {
+      const actual = await vi.importActual<typeof import('@/lib/rateLimit')>('@/lib/rateLimit');
+      rateLimitMock.savePersistRatePlanOrResponse.mockImplementation(actual.savePersistRatePlanOrResponse);
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+      delete runtime[WORKER_RUNTIME_MARKER];
+      delete runtime[WORKER_INVOCATION_ACCESSOR];
+    });
+
+    it.each([
+      ['an unsupported deployment target', () => vi.stubEnv('DEPLOYMENT_TARGET', 'workers'), 503, {
+        error: 'Unable to verify request limits. Please try again later.',
+        retryable: true,
+      }],
+      ['a Worker with no rate-limit salt', () => {
+        vi.stubEnv('RATE_LIMIT_SALT', '');
+        enterWorker({ kind: 'address', address: '203.0.113.7' });
+      }, 503, {
+        error: 'Unable to verify request limits. Please try again later.',
+        retryable: true,
+      }],
+      ['a Workers subrequest that reached the plan builder', () => {
+        enterWorker({ kind: 'subrequest' }, { RATE_LIMIT_SALT: 'synthetic-rate-limit-salt-0123456789abcdef' });
+      }, 403, {
+        error: 'Participant requests must come directly from a browser.',
+        retryable: false,
+      }],
+    ] as const)('RT-07: %s refuses the save plan (never 500) and nothing persists', async (_case, arrange, status, body) => {
+      arrange();
+      const interview = makeStoredInterview({ id: 'interview-x', studyId: 'study-a' });
+
+      const response = await POST(makeRequest(interview));
+
+      expect(response.status).toBe(status);
+      await expect(response.json()).resolves.toEqual(body);
+      expect(kvMock.persistCompletedInterview).not.toHaveBeenCalled();
+      expect(afterMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it('OPS-01: a session context that cannot be verified is a retryable 503 and nothing persists', async () => {
+    contextMock.getParticipantRequestContext.mockResolvedValue({
+      valid: false,
+      context: null,
+      error: 'Unable to verify participant link.',
+      statusCode: 503,
+      retryable: true,
+    });
+    const interview = makeStoredInterview({ id: 'interview-x', studyId: 'study-a' });
+
+    const response = await POST(makeRequest(interview));
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ error: 'Unable to verify participant link.', retryable: true });
+    expect(kvMock.persistCompletedInterview).not.toHaveBeenCalled();
+    expect(afterMock).not.toHaveBeenCalled();
+  });
+
   it('asks participant context for new-persist so live create cannot start a save', async () => {
     const interview = makeStoredInterview({ id: 'interview-x', studyId: 'study-a' });
     await POST(makeRequest(interview));
@@ -336,7 +419,7 @@ describe('POST /api/interviews/save idempotency', () => {
   it('does not persist a preview save even with a selected study id', async () => {
     contextMock.getParticipantRequestContext.mockResolvedValue({
       valid: true,
-      context: { kvClient: { get: vi.fn() } },
+      context: standaloneTestContext({ get: vi.fn() } as unknown as RedisPort),
       isAdmin: true,
       studyId: 'study-a',
     });
@@ -354,7 +437,7 @@ describe('POST /api/interviews/save idempotency', () => {
     const get = vi.fn().mockResolvedValue('oi:pguard:{}');
     contextMock.getParticipantRequestContext.mockResolvedValue({
       valid: true,
-      context: { kvClient: { get } },
+      context: standaloneTestContext({ get } as unknown as RedisPort),
       studyId: 'study-a',
       isAdmin: false,
       linkId: 'a'.repeat(64),
@@ -410,7 +493,7 @@ describe('POST /api/interviews/save idempotency', () => {
     const get = vi.fn().mockResolvedValue('oi:pguard:{}');
     contextMock.getParticipantRequestContext.mockResolvedValue({
       valid: true,
-      context: { kvClient: { get } },
+      context: standaloneTestContext({ get } as unknown as RedisPort),
       studyId: 'study-a',
       isAdmin: false,
       linkId: 'a'.repeat(64),
@@ -456,7 +539,7 @@ describe('POST /api/interviews/save idempotency', () => {
     const get = vi.fn().mockResolvedValue(null);
     contextMock.getParticipantRequestContext.mockResolvedValue({
       valid: true,
-      context: { kvClient: { get } },
+      context: standaloneTestContext({ get } as unknown as RedisPort),
       studyId: 'study-a',
       isAdmin: false,
       linkId: 'a'.repeat(64),

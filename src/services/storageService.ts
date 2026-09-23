@@ -201,13 +201,84 @@ export async function exportAllInterviews(): Promise<Blob | null> {
   return null;
 }
 
+const ZIP_END_OF_CENTRAL_DIRECTORY_SIGNATURE = 0x06054b50;
+const ZIP_CENTRAL_HEADER_SIGNATURE = 0x02014b50;
+const ZIP_END_OF_CENTRAL_DIRECTORY_BYTES = 22;
+const ZIP_CENTRAL_HEADER_BYTES = 46;
+
+/**
+ * True only for a finished ZIP archive as both export writers produce it
+ * (JSZip on Node, the streaming writer on Cloudflare): a comment-less
+ * end-of-central-directory record in the last 22 bytes whose central
+ * directory ends exactly there and holds exactly the recorded entries, each
+ * pointing before the directory. Both writers emit these records last, only
+ * after every entry, so a truncated download never passes.
+ */
+export async function isCompleteZipArchive(archive: Blob): Promise<boolean> {
+  const size = archive.size;
+  if (size < ZIP_END_OF_CENTRAL_DIRECTORY_BYTES) return false;
+  const end = new DataView(await archive.slice(size - ZIP_END_OF_CENTRAL_DIRECTORY_BYTES).arrayBuffer());
+  if (end.byteLength !== ZIP_END_OF_CENTRAL_DIRECTORY_BYTES) return false;
+  if (end.getUint32(0, true) !== ZIP_END_OF_CENTRAL_DIRECTORY_SIGNATURE) return false;
+  const entries = end.getUint16(10, true);
+  const directorySize = end.getUint32(12, true);
+  const directoryOffset = end.getUint32(16, true);
+  if (
+    end.getUint16(4, true) !== 0
+    || end.getUint16(6, true) !== 0
+    || end.getUint16(8, true) !== entries
+    || end.getUint16(20, true) !== 0
+    || directoryOffset + directorySize !== size - ZIP_END_OF_CENTRAL_DIRECTORY_BYTES
+  ) {
+    return false;
+  }
+  const directory = new DataView(await archive.slice(directoryOffset, directoryOffset + directorySize).arrayBuffer());
+  if (directory.byteLength !== directorySize) return false;
+  let position = 0;
+  let count = 0;
+  while (position < directorySize) {
+    if (position + ZIP_CENTRAL_HEADER_BYTES > directorySize) return false;
+    if (directory.getUint32(position, true) !== ZIP_CENTRAL_HEADER_SIGNATURE) return false;
+    if (directory.getUint32(position + 42, true) >= directoryOffset) return false;
+    position += ZIP_CENTRAL_HEADER_BYTES
+      + directory.getUint16(position + 28, true)
+      + directory.getUint16(position + 30, true)
+      + directory.getUint16(position + 32, true);
+    count += 1;
+  }
+  return position === directorySize && count === entries;
+}
+
 export async function exportAllInterviewsChecked(): Promise<ResearcherStorageOutcome<Blob>> {
   try {
     const response = await fetch('/api/interviews/export');
     if (response.ok) {
-      return { status: 'ok', value: await response.blob() };
+      // A streamed export that fails after the headers is not reliably an
+      // errored body: the Cloudflare runtime (through OpenNext) can end it as
+      // a clean 200 with the bytes written so far. The archive is therefore
+      // checked for its closing records, written only after every entry and
+      // the final snapshot check, and a truncated one is never offered.
+      const archive = await response.blob();
+      if (!(await isCompleteZipArchive(archive))) {
+        logRequestEvent({
+          event: 'route.failure',
+          route: '/api/interviews/export',
+          method: 'GET',
+          errorType: 'IncompleteExportArchive',
+        });
+        return { status: 'unavailable', error: 'The export did not complete. Try the export again.', retryable: true };
+      }
+      return { status: 'ok', value: archive };
     }
     const data = await response.json().catch(() => ({})) as { code?: string; error?: string };
+    // The interviews changed before the streamed export started (ST-08): retry.
+    if (response.status === 409 && data.code === 'EXPORT_CHANGED') {
+      return {
+        status: 'unavailable',
+        error: data.error || 'The interviews changed while the export was being prepared. Try the export again.',
+        retryable: true,
+      };
+    }
     return classifyResearcherStorageFailure(response, data);
   } catch (error) {
     if (error instanceof StudyOperationPendingError || error instanceof ResearcherStorageUnavailableError) {

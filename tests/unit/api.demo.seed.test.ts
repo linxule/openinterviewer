@@ -6,17 +6,21 @@ const contextMock = vi.hoisted(() => ({ getRequestContext: vi.fn() }));
 vi.mock('@/lib/researcherContext', () => contextMock);
 
 const kvMock = vi.hoisted(() => ({
-  getAllStudies: vi.fn(),
+  clearSampleWorkspaceRecords: vi.fn(),
+  getStudyChecked: vi.fn(),
   isKVAvailable: vi.fn(),
   saveInterview: vi.fn(),
   saveStudy: vi.fn(),
+  studyKeysExist: vi.fn(),
 }));
 vi.mock('@/lib/kv', () => kvMock);
 
-import { POST } from '@/app/api/demo/seed/route';
+import { DELETE, POST } from '@/app/api/demo/seed/route';
 import { DEMO_INTERVIEWS, DEMO_STORED_STUDY, DEMO_STUDIES } from '@/lib/demoData';
+import { standaloneTestContext } from '../helpers/workspaceStoreFixture';
+import type { RedisPort } from '@/lib/redisPort';
 
-const kvClient = {};
+const kvClient = {} as RedisPort;
 
 function authorizeWithKeys(options: {
   geminiApiKey: string | null;
@@ -26,14 +30,11 @@ function authorizeWithKeys(options: {
 }) {
   contextMock.getRequestContext.mockResolvedValue({
     authorized: true,
-    context: {
+    context: standaloneTestContext(kvClient, {
       ...options,
       openaiApiKey: options.openaiApiKey ?? null,
       openrouterApiKey: options.openrouterApiKey ?? null,
-      kvClient,
-      onboardingComplete: true,
-      researcherId: 'researcher-a',
-    },
+    }),
   });
 }
 
@@ -41,7 +42,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   authorizeWithKeys({ geminiApiKey: 'gemini-key', anthropicApiKey: null });
   kvMock.isKVAvailable.mockResolvedValue(true);
-  kvMock.getAllStudies.mockResolvedValue([]);
+  kvMock.studyKeysExist.mockResolvedValue('absent');
+  kvMock.getStudyChecked.mockResolvedValue({ status: 'not-found' });
   kvMock.saveStudy.mockResolvedValue(true);
   kvMock.saveInterview.mockResolvedValue(true);
 });
@@ -120,6 +122,7 @@ describe('authenticated sample-workspace seed', () => {
     await expect(response.json()).resolves.toEqual({
       error: 'AI provider not configured. Configure the active AI transport before loading sample workspace data.',
     });
+    expect(kvMock.getStudyChecked).toHaveBeenCalledWith(DEMO_STUDIES[0].id, kvClient);
     expect(kvMock.saveStudy).not.toHaveBeenCalled();
     expect(kvMock.saveInterview).not.toHaveBeenCalled();
   });
@@ -137,5 +140,101 @@ describe('authenticated sample-workspace seed', () => {
       aiProvider: 'openai',
       aiModel: 'gpt-5.6-terra',
     });
+  });
+});
+
+describe('authenticated sample-workspace seed collisions and clear on Redis (ST-07)', () => {
+  it('ST-07: refuses a present fixture study with 409 and writes nothing', async () => {
+    kvMock.studyKeysExist.mockResolvedValue('present');
+
+    const response = await POST();
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Sample workspace data is already loaded. Clear it before reloading.',
+    });
+    expect(kvMock.studyKeysExist).toHaveBeenCalledWith(DEMO_STUDIES.map(study => study.id), kvClient);
+    expect(kvMock.saveStudy).not.toHaveBeenCalled();
+    expect(kvMock.saveInterview).not.toHaveBeenCalled();
+  });
+
+  it('ST-07: an already-loaded sample stays 409 ahead of a missing provider, as before', async () => {
+    authorizeWithKeys({ geminiApiKey: null, anthropicApiKey: null });
+    kvMock.getStudyChecked.mockResolvedValue({ status: 'found', study: DEMO_STORED_STUDY });
+
+    const response = await POST();
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Sample workspace data is already loaded. Clear it before reloading.',
+    });
+    expect(kvMock.getStudyChecked).toHaveBeenCalledWith(DEMO_STUDIES[0].id, kvClient);
+    expect(kvMock.saveStudy).not.toHaveBeenCalled();
+  });
+
+  it('ST-07: the seeding path adds no fixture read before the store collision check', async () => {
+    const response = await POST();
+
+    expect(response.status).toBe(200);
+    expect(kvMock.getStudyChecked).not.toHaveBeenCalled();
+    expect(kvMock.studyKeysExist).toHaveBeenCalledTimes(1);
+  });
+
+  it('ST-07: reports unconfigured storage before provider configuration', async () => {
+    kvMock.isKVAvailable.mockResolvedValue(false);
+    authorizeWithKeys({ geminiApiKey: null, anthropicApiKey: null });
+
+    const response = await POST();
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Storage not configured. Connect Upstash Redis before loading sample workspace data.',
+    });
+    expect(kvMock.saveStudy).not.toHaveBeenCalled();
+  });
+
+  it('ST-07: clears exactly the fixture study and interview ids through the store and reports counts', async () => {
+    kvMock.clearSampleWorkspaceRecords.mockResolvedValue({
+      status: 'cleared',
+      studiesDeleted: DEMO_STUDIES.length,
+      interviewsDeleted: DEMO_INTERVIEWS.length,
+    });
+
+    const response = await DELETE();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      success: true,
+      message: 'Sample workspace data cleared',
+      data: { studiesDeleted: DEMO_STUDIES.length, interviewsDeleted: DEMO_INTERVIEWS.length },
+    });
+    expect(kvMock.clearSampleWorkspaceRecords).toHaveBeenCalledWith({
+      studyIds: DEMO_STUDIES.map(study => study.id),
+      interviewIds: DEMO_INTERVIEWS.map(interview => interview.id),
+    }, kvClient);
+  });
+
+  it('ST-07: fails closed without clearing when storage is unavailable, and 503s a possibly partial clear', async () => {
+    kvMock.isKVAvailable.mockResolvedValue(false);
+    const unavailable = await DELETE();
+    expect(unavailable.status).toBe(503);
+    await expect(unavailable.json()).resolves.toEqual({ error: 'Storage not configured.' });
+    expect(kvMock.clearSampleWorkspaceRecords).not.toHaveBeenCalled();
+
+    kvMock.isKVAvailable.mockResolvedValue(true);
+    kvMock.clearSampleWorkspaceRecords.mockResolvedValue({ status: 'ambiguous' });
+    const ambiguous = await DELETE();
+    expect(ambiguous.status).toBe(503);
+    await expect(ambiguous.json()).resolves.toMatchObject({ retryable: true, reason: 'ambiguous' });
+  });
+
+  it('ST-07: requires an authenticated researcher before any storage call', async () => {
+    contextMock.getRequestContext.mockResolvedValue({ authorized: false, context: null, error: 'Unauthorized' });
+
+    const response = await DELETE();
+
+    expect(response.status).toBe(401);
+    expect(kvMock.isKVAvailable).not.toHaveBeenCalled();
+    expect(kvMock.clearSampleWorkspaceRecords).not.toHaveBeenCalled();
   });
 });

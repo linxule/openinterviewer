@@ -48,6 +48,7 @@ import {
 import { BEGIN_STUDY_OPERATION_SCRIPT } from '@/lib/platformDb.operations';
 import { makeStoredInterview, makeStoredStudy, makeStudyConfig } from '../fixtures/models';
 import { loadCanonicalStudy } from '@/lib/canonicalStudy';
+import { createRedisWorkspaceStore } from '@/lib/storage/redis';
 import { validateStudyConfig } from '@/lib/studyConfigValidation';
 import {
   startDisposableRedis,
@@ -789,7 +790,7 @@ describe('study JSON preservation on owned Redis', () => {
       expect(validateStudyConfig(afterFirst.config).ok).toBe(true);
       expect(afterFirst).toMatchObject({ interviewCount: 1, isLocked: true, revision: 1 });
       if (prefixed) {
-        expect((await loadCanonicalStudy({ kvClient: redis, tokenStudyId: studyId })).ok).toBe(true);
+        expect((await loadCanonicalStudy({ store: createRedisWorkspaceStore(redis, { researcherId: null }), tokenStudyId: studyId })).ok).toBe(true);
       }
       expect(await persistCompletedInterview(first, FP, options, redis)).toEqual({ status: 'duplicate' });
       expect(await readStored(studyId, prefixed)).toEqual(afterFirst);
@@ -858,7 +859,7 @@ describe('study JSON preservation on owned Redis', () => {
     const stored = await readStored(studyId, true);
     expect(stored.config.topicAreas).toEqual({});
     expect(validateStudyConfig(stored.config).ok).toBe(false);
-    expect((await loadCanonicalStudy({ kvClient: redis, tokenStudyId: studyId })).ok).toBe(false);
+    expect((await loadCanonicalStudy({ store: createRedisWorkspaceStore(redis, { researcherId: null }), tokenStudyId: studyId })).ok).toBe(false);
   });
 });
 

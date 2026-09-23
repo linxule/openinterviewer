@@ -69,7 +69,8 @@ export async function GET(
       return NextResponse.json({ error: error || 'Unauthorized' }, { status: 401 });
     }
 
-    const loaded = await getInterviewChecked(id, context.kvClient);
+    // Standalone: the workspace store (Redis on Node, the Durable Object on Cloudflare).
+    const loaded = await context.store.getInterview(id);
     const mapped = mapInterviewLoad(loaded);
     if (!mapped.ok) return NextResponse.json(mapped.body, { status: mapped.status });
     if (studyId && mapped.interview.studyId !== studyId) {

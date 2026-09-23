@@ -3,6 +3,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import JSZip from 'jszip';
 import { makeStoredInterview } from '../fixtures/models';
+import { standaloneTestContext } from '../helpers/workspaceStoreFixture';
+import type { RedisPort } from '@/lib/redisPort';
 
 /**
  * CSV formula-injection neutralization contract.
@@ -68,9 +70,11 @@ async function readSummaryRow(interview: ReturnType<typeof makeStoredInterview>)
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The real Redis workspace store over the mocked kv functions: the same
+  // calls the Node standalone export makes.
   contextMock.getRequestContext.mockResolvedValue({
     authorized: true,
-    context: { kvClient: {} },
+    context: standaloneTestContext({} as RedisPort),
   });
   // vitest.config.mts sets mockReset: true, which wipes a hoisted
   // mockResolvedValue before every test — so the default lives here instead.

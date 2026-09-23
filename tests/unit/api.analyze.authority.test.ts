@@ -2,6 +2,8 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeStoredInterview } from '../fixtures/models';
+import { hostedTestContext } from '../helpers/workspaceStoreFixture';
+import type { RedisPort } from '@/lib/redisPort';
 
 /**
  * The tenancy test for POST /api/interviews/[id]/analyze — the analyze
@@ -29,7 +31,7 @@ vi.mock('@/lib/platformAiRateLimit', () => rateLimitMock);
 const analysisMock = vi.hoisted(() => ({ runInterviewAnalysis: vi.fn() }));
 vi.mock('@/lib/interviewAnalysis', () => analysisMock);
 
-import { POST } from '@/app/api/interviews/[id]/analyze/route';
+import { GET, OPTIONS, POST } from '@/app/api/interviews/[id]/analyze/route';
 
 const makeRequest = (id: string, studyId?: string) => {
   const url = new URL(`http://localhost/api/interviews/${id}/analyze`);
@@ -49,7 +51,7 @@ describe('POST /api/interviews/[id]/analyze — tenancy', () => {
   it('404s and makes no provider call when the interview belongs to a different study than the one authorized', async () => {
     contextMock.getAuthorizedResearcherStudyContext.mockResolvedValue({
       authorized: true,
-      context: { kvClient: {}, researcherId: 'researcher-b' },
+      context: hostedTestContext({} as RedisPort, 'researcher-b'),
       researcherId: 'researcher-b',
     });
     kvMock.getInterviewChecked.mockResolvedValue({
@@ -109,7 +111,7 @@ describe('POST /api/interviews/[id]/analyze — tenancy', () => {
   ])('returns the factual analysis outcome %j as HTTP %i for an authorized request', async (outcome, status, body) => {
     contextMock.getAuthorizedResearcherStudyContext.mockResolvedValue({
       authorized: true,
-      context: { kvClient: {}, researcherId: 'researcher-a' },
+      context: hostedTestContext({} as RedisPort, 'researcher-a'),
       researcherId: 'researcher-a',
     });
     kvMock.getInterviewChecked.mockResolvedValue({
@@ -128,5 +130,85 @@ describe('POST /api/interviews/[id]/analyze — tenancy', () => {
     expect(response.status).toBe(status);
     await expect(response.json()).resolves.toEqual(body);
     expect(analysisMock.runInterviewAnalysis).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Node target keeps the synchronous analyze contract (API-01 compatibility)', () => {
+  function authorizedNodeContext() {
+    const context = hostedTestContext({} as RedisPort, 'researcher-a');
+    contextMock.getAuthorizedResearcherStudyContext.mockResolvedValue({
+      authorized: true,
+      context,
+      researcherId: 'researcher-a',
+    });
+    kvMock.getInterviewChecked.mockResolvedValue({
+      status: 'found',
+      interview: makeStoredInterview({ id: 'interview-in-a', studyId: 'study-a' }),
+    });
+    canonicalMock.loadCanonicalStudy.mockResolvedValue({
+      ok: true,
+      study: { id: 'study-a', revision: 1, config: { aiProvider: 'gemini', aiModel: 'gemini-3.7-flash' } },
+    });
+    return context;
+  }
+
+  it('API-01 ignores the additive v2 header, key and body and still runs one synchronous analysis', async () => {
+    const context = authorizedNodeContext();
+    analysisMock.runInterviewAnalysis.mockResolvedValue({ status: 'complete' });
+
+    const url = 'http://localhost/api/interviews/interview-in-a/analyze?studyId=study-a';
+    const response = await POST(new Request(url, {
+      method: 'POST',
+      headers: {
+        'X-OpenInterviewer-Analysis-Version': '2',
+        'Idempotency-Key': '6f1d8a8e-2d7c-4c1e-9d55-3a2f5b6c7d8e',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ expectedGeneration: 0 }),
+    }), { params: Promise.resolve({ id: 'interview-in-a' }) });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: 'complete' });
+    expect(analysisMock.runInterviewAnalysis).toHaveBeenCalledTimes(1);
+    expect(analysisMock.runInterviewAnalysis.mock.calls[0][0].kvClient).toBe(context.kvClient);
+    // The canonical study is read through the request's own workspace store.
+    expect(canonicalMock.loadCanonicalStudy).toHaveBeenCalledWith({
+      store: context.store,
+      tokenStudyId: 'study-a',
+      isAdmin: true,
+    });
+  });
+
+  it('API-01 an unversioned Node request is never refused as an outdated client', async () => {
+    authorizedNodeContext();
+    analysisMock.runInterviewAnalysis.mockResolvedValue({ status: 'busy' });
+
+    const { request, params } = makeRequest('interview-in-a', 'study-a');
+    const response = await POST(request, { params });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: 'busy' });
+  });
+
+  it('API-02 the status GET does not exist on the Node target and touches no authority or storage', async () => {
+    const { params } = makeRequest('interview-in-a', 'study-a');
+    const response = await GET(
+      new Request('http://localhost/api/interviews/interview-in-a/analyze?studyId=study-a'),
+      { params },
+    );
+
+    // Byte-for-byte Next's automatic 405 for an unimplemented method.
+    expect(response.status).toBe(405);
+    expect([...response.headers.keys()]).toEqual([]);
+    expect(await response.text()).toBe('');
+    expect(contextMock.getAuthorizedResearcherStudyContext).not.toHaveBeenCalled();
+    expect(kvMock.getInterviewChecked).not.toHaveBeenCalled();
+  });
+
+  it('API-02 OPTIONS on the Node target advertises only what Node serves, as before GET was exported', async () => {
+    const response = OPTIONS();
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get('allow')).toBe('OPTIONS, POST');
   });
 });

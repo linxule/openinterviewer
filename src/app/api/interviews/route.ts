@@ -1,10 +1,11 @@
 // GET /api/interviews - List interviews for owned studies (or filter by studyId)
-// Protected: Requires authenticated session
+// Protected: Requires authenticated session. Standalone reads go through the
+// workspace store (RT-09); hosted keeps its owned-study/BYOS path unchanged.
 
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
-import { getAllInterviewsChecked, getStudyInterviewsChecked } from '@/lib/kv';
+import { getStudyInterviewsChecked } from '@/lib/kv';
 import {
   getAuthorizedResearcherStudyContext,
   getHostedResearcherIdentity,
@@ -38,7 +39,11 @@ export async function GET(request: Request) {
           { status: gated.statusCode ?? 401 },
         );
       }
-      const loaded = await getStudyInterviewsChecked(studyId, gated.context.kvClient, 1_000);
+      // Hosted reads the researcher's BYOS client exactly as before; standalone
+      // (Redis on Node, the workspace Durable Object on Cloudflare) uses the store.
+      const loaded = isHostedMode()
+        ? await getStudyInterviewsChecked(studyId, gated.context.kvClient, 1_000)
+        : await gated.context.store.listInterviews({ scope: 'study', studyId, maximum: 1_000 });
       const mapped = mapCollectionLoad(loaded, {
         unavailable: 'Interview storage is temporarily unavailable.',
         tooLarge: 'This interview list is too large to load at once. Narrow it by study.',
@@ -98,7 +103,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: error || 'Unauthorized' }, { status: 401 });
     }
 
-    const loaded = await getAllInterviewsChecked(context.kvClient, 1_000);
+    const loaded = await context.store.listInterviews({ scope: 'all', maximum: 1_000 });
     const mapped = mapCollectionLoad(loaded, {
       unavailable: 'Interview storage is temporarily unavailable.',
       tooLarge: 'This interview list is too large to load at once. Narrow it by study.',

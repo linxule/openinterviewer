@@ -10,20 +10,37 @@ import {
 } from '@/lib/providers';
 import { getAuthorizedResearcherStudyContext, providerKeysFromContext } from '@/lib/researcherContext';
 import { configurationRequiredResponse } from '@/lib/researcherAccess';
-import { getStudyAggregateChecked, getStudyChecked, getStudyInterviewsChecked } from '@/lib/kv';
-import { mapCollectionLoad, mapStudyLoad } from '@/lib/ownedStudies';
+import {
+  forEachEligibleAggregateInput,
+  MAX_AGGREGATE_INTERVIEWS,
+  mapCollectionLoad,
+  mapReadinessHold,
+  mapStudyLoad,
+  PAID_CALL_STATES,
+} from '@/lib/ownedStudies';
 import { AggregateSynthesisResult, StudyConfig } from '@/types';
 import { validateResolvedAggregateSynthesis } from '@/lib/providerValidation';
 import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
 import { providerErrorResponse } from '@/lib/providerErrorResponse';
 import { aggregateProvenance } from '@/lib/synthesisProvenance';
 import { createRequestId, logRequestFailure } from '@/lib/requestLog';
+import { deploymentNotReadyResponse } from '@/lib/runtime/readinessGate';
+import { isDurableWorkspaceStore } from '@/lib/storage/types';
+
+const ROUTE = '/api/studies/[id]/generate-followup';
+const INTERVIEW_MESSAGES = {
+  unavailable: 'Interview storage is temporarily unavailable.',
+  tooLarge: 'This study has too many interviews for interactive follow-up generation.',
+};
 
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const notReady = deploymentNotReadyResponse(ROUTE);
+    if (notReady) return notReady;
+
     const { id: studyId } = await params;
 
     const gated = await getAuthorizedResearcherStudyContext(studyId, 'read');
@@ -41,12 +58,24 @@ export async function POST(
       );
     }
 
-    const loadedStudy = await getStudyChecked(studyId, gated.context.kvClient);
+    const store = gated.context.store;
+    // A paid call without a write: a durable workspace allows it while
+    // draining and refuses it while frozen or in recovery (gap F26).
+    if (isDurableWorkspaceStore(store)) {
+      const readiness = await store.readiness();
+      if (readiness.status === 'unavailable') {
+        return NextResponse.json({ error: 'Study storage is temporarily unavailable.', retryable: true }, { status: 503 });
+      }
+      const held = mapReadinessHold(readiness, PAID_CALL_STATES, ROUTE);
+      if (held) return NextResponse.json(held.body, { status: held.status });
+    }
+
+    const loadedStudy = await store.getStudy(studyId);
     const studyMapped = mapStudyLoad(loadedStudy);
     if (!studyMapped.ok) return NextResponse.json(studyMapped.body, { status: studyMapped.status });
     const parentStudy = studyMapped.study;
 
-    const loadedAggregate = await getStudyAggregateChecked(parentStudy.id, gated.context.kvClient);
+    const loadedAggregate = await store.getAggregate(parentStudy.id);
     if (loadedAggregate.status === 'unavailable') {
       return NextResponse.json(
         { error: 'Analysis storage is temporarily unavailable.', retryable: true },
@@ -84,20 +113,37 @@ export async function POST(
     }
     const interviewIds = stored.interviewIds;
 
-    const loadedInterviews = await getStudyInterviewsChecked(parentStudy.id, gated.context.kvClient, 1_000);
-    const interviewsMapped = mapCollectionLoad(loadedInterviews, {
-      unavailable: 'Interview storage is temporarily unavailable.',
-      tooLarge: 'This study has too many interviews for interactive follow-up generation.',
-    });
-    if (!interviewsMapped.ok) {
-      return NextResponse.json(interviewsMapped.body, { status: interviewsMapped.status });
+    const eligibleIds = new Set<string>();
+    if (isDurableWorkspaceStore(store)) {
+      // Only eligibility is needed: page current-revision analyzed interviews,
+      // keep ids and stop once every aggregate source has been seen.
+      const wanted = new Set(interviewIds);
+      const pass = await forEachEligibleAggregateInput(store, parentStudy, page => {
+        for (const interview of page) {
+          if (wanted.has(interview.id)) eligibleIds.add(interview.id);
+        }
+        return eligibleIds.size < wanted.size;
+      });
+      if (pass === 'unavailable') {
+        return NextResponse.json({ error: INTERVIEW_MESSAGES.unavailable, retryable: true }, { status: 503 });
+      }
+      if (pass === 'too-large') {
+        return NextResponse.json({ error: INTERVIEW_MESSAGES.tooLarge }, { status: 413 });
+      }
+    } else {
+      const loadedInterviews = await store.listInterviews({
+        scope: 'study',
+        studyId: parentStudy.id,
+        maximum: MAX_AGGREGATE_INTERVIEWS,
+      });
+      const interviewsMapped = mapCollectionLoad(loadedInterviews, INTERVIEW_MESSAGES);
+      if (!interviewsMapped.ok) {
+        return NextResponse.json(interviewsMapped.body, { status: interviewsMapped.status });
+      }
+      for (const interview of interviewsMapped.items) {
+        if (interview.studyRevision === parentStudy.revision && interview.synthesis) eligibleIds.add(interview.id);
+      }
     }
-    const loadedInterviewItems = interviewsMapped.items;
-    const eligibleIds = new Set(
-      loadedInterviewItems
-        .filter(interview => interview.studyRevision === parentStudy.revision && interview.synthesis)
-        .map(interview => interview.id)
-    );
     if (new Set(interviewIds).size !== interviewIds.length || interviewIds.some(id => !eligibleIds.has(id))) {
       return NextResponse.json({ error: 'Synthesis interview provenance is invalid.' }, { status: 409 });
     }
@@ -178,7 +224,7 @@ export async function POST(
   } catch (error) {
     logRequestFailure({
       event: 'route.failure',
-      route: '/api/studies/[id]/generate-followup',
+      route: ROUTE,
       method: 'POST',
       status: 500,
       requestId: createRequestId(request.headers.get('x-request-id')),

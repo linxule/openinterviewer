@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeStudyConfig } from '../fixtures/models';
+import { standaloneTestContext } from '../helpers/workspaceStoreFixture';
+import type { RedisPort } from '@/lib/redisPort';
 
 const contextMock = vi.hoisted(() => ({
   getRequestContext: vi.fn(),
@@ -12,8 +14,12 @@ const kvMock = vi.hoisted(() => ({
   getAllStudies: vi.fn(),
   isKVAvailable: vi.fn(),
   studyOperationMarkerId: vi.fn((id: string, createdAt: number) => `${id}:${createdAt}`),
+  standaloneCreateMarkerId: vi.fn((studyId: string, createdAt: number) => `create:${studyId}:${createdAt}`),
 }));
 vi.mock('@/lib/kv', () => kvMock);
+// The Redis workspace store imports participant links, whose module init reads
+// platformDb exports this file mocks away; no link operation runs here.
+vi.mock('@/lib/participantLinks', () => ({}));
 
 const STORAGE_ID = 'a'.repeat(64);
 const OP_NONCE = 'ab'.repeat(16);
@@ -39,6 +45,10 @@ const idempMock = vi.hoisted(() => ({
   casCreateIdempotencyState: vi.fn(),
   attachCreateIdempotencyOperation: vi.fn(),
   resolveCreateIdempotencyClient: vi.fn(() => ({})),
+  // The standalone create runs inside the Redis workspace store, which keys
+  // the same begin/created transition by the scoped key digest.
+  beginCreateIdempotencyForHash: vi.fn(),
+  casCreateIdempotencyStateForHash: vi.fn(),
 }));
 vi.mock('@/lib/createIdempotency', async () => {
   const actual = await vi.importActual<typeof import('@/lib/createIdempotency')>('@/lib/createIdempotency');
@@ -48,6 +58,8 @@ vi.mock('@/lib/createIdempotency', async () => {
     casCreateIdempotencyState: idempMock.casCreateIdempotencyState,
     attachCreateIdempotencyOperation: idempMock.attachCreateIdempotencyOperation,
     resolveCreateIdempotencyClient: idempMock.resolveCreateIdempotencyClient,
+    beginCreateIdempotencyForHash: idempMock.beginCreateIdempotencyForHash,
+    casCreateIdempotencyStateForHash: idempMock.casCreateIdempotencyStateForHash,
   };
 });
 
@@ -86,13 +98,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   contextMock.getRequestContext.mockResolvedValue({
     authorized: true,
-    context: {
-      kvClient: {},
-      geminiApiKey: 'gemini-key',
-      anthropicApiKey: null,
-      openaiApiKey: null,
-      openrouterApiKey: null,
-    },
+    context: standaloneTestContext({} as RedisPort, { geminiApiKey: 'gemini-key' }),
     researcherId: 'researcher-a',
   });
   contextMock.getHostedResearcherIdentity.mockResolvedValue({
@@ -171,6 +177,8 @@ beforeEach(() => {
   });
   idempMock.casCreateIdempotencyState.mockResolvedValue({ status: 'ok' });
   idempMock.attachCreateIdempotencyOperation.mockResolvedValue({ status: 'ok' });
+  idempMock.beginCreateIdempotencyForHash.mockImplementation(idempMock.beginCreateIdempotency.getMockImplementation()!);
+  idempMock.casCreateIdempotencyStateForHash.mockResolvedValue({ status: 'ok' });
 });
 
 describe('hosted study creation ownership saga', () => {

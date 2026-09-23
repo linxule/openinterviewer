@@ -17,7 +17,8 @@ import {
   resolveParticipantOrPreviewContext,
   selectedStudyIdFromParticipantBody,
 } from '@/lib/researcherContext';
-import { loadCanonicalStudy } from '@/lib/canonicalStudy';
+import { loadCanonicalStudy, researcherPreviewHoldResponse } from '@/lib/canonicalStudy';
+import { deploymentNotReadyResponse } from '@/lib/runtime/readinessGate';
 import { providerErrorResponse } from '@/lib/providerErrorResponse';
 import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
 import { validateBehavior, validateProfile, validateTranscript } from '@/lib/interviewSubmission';
@@ -31,7 +32,12 @@ import {
 import { createRequestId, logRequestEvent, logRequestFailure } from '@/lib/requestLog';
 import { resolveEvidenceRef } from '@/lib/evidence';
 
+const ROUTE = '/api/synthesis';
+
 export async function POST(request: Request) {
+  // Provider-calling route: a not-ready Cloudflare deployment refuses first.
+  const notReady = deploymentNotReadyResponse(ROUTE);
+  if (notReady) return notReady;
   try {
     const parsedBody = await readBoundedJsonObject(request, 600_000);
     if (!parsedBody.ok) {
@@ -93,7 +99,7 @@ export async function POST(request: Request) {
     // Canonical study authority: the token's studyId wins; the body may carry
     // only a study id for authenticated admin previews.
     const canonical = await loadCanonicalStudy({
-      kvClient: context.kvClient,
+      store: context.store,
       tokenStudyId: studyId,
       legacyBodyStudyId: (body as { studyConfig?: StudyConfig }).studyConfig?.id,
       isAdmin,
@@ -101,6 +107,12 @@ export async function POST(request: Request) {
     if (!canonical.ok) {
       return canonical.response;
     }
+
+    // Maintenance (gap review F26): the paid, non-persistent preview is
+    // allowed while the durable workspace drains and refused while it is
+    // frozen, in recovery or otherwise held. Always allowed on Redis.
+    const previewHeld = await researcherPreviewHoldResponse(context.store, ROUTE);
+    if (previewHeld) return previewHeld;
 
     const platformLimited = await hostedAiRateLimitResponse(
       request,

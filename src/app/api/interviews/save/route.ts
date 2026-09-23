@@ -10,6 +10,12 @@
 // A successful, newly-created save schedules the deferred analysis via
 // `after()`; the researcher-triggered `POST /api/interviews/[id]/analyze` is
 // the recovery path for everything that run cannot finish.
+//
+// Cloudflare target (durable workspace store): the same transaction that
+// persists the transcript re-checks link, revision and consent and commits
+// the initial analysis job with its frozen inputs (ST-02/03, JOB-01/02). The
+// Queue consumer runs that job; this route never calls `after()` or a
+// provider there.
 
 export const maxDuration = 120;
 
@@ -18,22 +24,31 @@ import { after, NextResponse } from 'next/server';
 import {
   INTERVIEW_PERSISTING_PREFIX,
   parsePersistingGuard,
-  persistCompletedInterview,
 } from '@/lib/kv';
 import {
   providerKeysFromContext,
   resolveParticipantOrPreviewContext,
   selectedStudyIdFromParticipantBody,
 } from '@/lib/researcherContext';
-import { loadCanonicalStudy } from '@/lib/canonicalStudy';
+import {
+  frozenAnalysisInput,
+  loadCanonicalStudy,
+  PARTICIPANT_SAVE_HELD_COPY,
+  participantContextRefusal,
+  workspaceHeldResponse,
+} from '@/lib/canonicalStudy';
 import { StoredInterview } from '@/types';
 import { validateInterviewSubmission } from '@/lib/interviewSubmission';
-import { getSavePersistRatePlan } from '@/lib/rateLimit';
+import { participantAdmissionRefusal, savePersistRatePlanOrResponse } from '@/lib/rateLimit';
 import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
 import { runInterviewAnalysis } from '@/lib/interviewAnalysis';
-import { verifyParticipantConsent, type ParticipantConsentRecord } from '@/lib/participantConsent';
+import type { ParticipantConsentRecord } from '@/lib/participantConsent';
 import { readBoundedJsonObject } from '@/lib/requestBody';
-import { createRequestId, logRequestFailure } from '@/lib/requestLog';
+import { createRequestId, logRequestEvent, logRequestFailure } from '@/lib/requestLog';
+import { deploymentNotReadyResponse } from '@/lib/runtime/readinessGate';
+import { isDurableWorkspaceStore, type PersistCompletedInterviewInput } from '@/lib/storage/types';
+
+const ROUTE = '/api/interviews/save';
 
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -52,6 +67,12 @@ function submissionFingerprint(value: unknown): string {
 }
 
 export async function POST(request: Request) {
+  // Cloudflare only (both null on Node): a not-ready deployment and a Workers
+  // subrequest are refused before any storage or persistence.
+  const notReady = deploymentNotReadyResponse(ROUTE);
+  if (notReady) return notReady;
+  const subrequest = participantAdmissionRefusal('save');
+  if (subrequest) return subrequest;
   try {
     const parsedBody = await readBoundedJsonObject(request, 512_000);
     if (!parsedBody.ok) {
@@ -63,26 +84,26 @@ export async function POST(request: Request) {
     const body = parsedBody.value;
     const selectedStudyId = selectedStudyIdFromParticipantBody(body);
 
+    const resolved = await resolveParticipantOrPreviewContext(request, {
+      purpose: 'new-persist',
+      selectedStudyId,
+    });
     const {
       valid,
       context,
       studyId,
       isAdmin,
-      error,
-      statusCode,
       linkId,
       participantSessionId,
       studyRevision,
       persistRepairOnly,
-    } = await resolveParticipantOrPreviewContext(request, {
-      purpose: 'new-persist',
-      selectedStudyId,
-    });
+    } = resolved;
     if (!valid || !context) {
-      return NextResponse.json(
-        { error: error || 'Valid participant token or admin session required' },
-        { status: statusCode ?? 401 }
-      );
+      return participantContextRefusal(resolved, {
+        route: ROUTE,
+        error: 'Valid participant token or admin session required',
+        held: PARTICIPANT_SAVE_HELD_COPY,
+      });
     }
     let clientData;
     try {
@@ -113,24 +134,22 @@ export async function POST(request: Request) {
     }
 
     const canonical = await loadCanonicalStudy({
-      kvClient: context.kvClient,
+      store: context.store,
       tokenStudyId: studyId,
       legacyBodyStudyId: clientData.studyId,
       isAdmin,
     });
     if (!canonical.ok) return canonical.response;
 
+    const consentBinding = {
+      participantSessionId: participantSessionId!,
+      studyId: canonical.study.id,
+      studyRevision: canonical.study.revision ?? 1,
+      consentText: canonical.study.config.consentText || '',
+    };
     let consentRecord: ParticipantConsentRecord | null = null;
     if (!isAdmin) {
-      const consent = await verifyParticipantConsent(
-        {
-          participantSessionId: participantSessionId!,
-          studyId: canonical.study.id,
-          studyRevision: canonical.study.revision ?? 1,
-          consentText: canonical.study.config.consentText || '',
-        },
-        context.kvClient
-      );
+      const consent = await context.store.verifyConsent({ ...consentBinding, now: Date.now() });
       if (consent.status === 'unavailable') {
         return NextResponse.json(
           { error: 'Unable to verify participant consent. Interview not saved. Please try again.', retryable: true },
@@ -160,13 +179,25 @@ export async function POST(request: Request) {
       });
     }
 
-    const rateLimits = getSavePersistRatePlan(
+    // 401 incomplete authority; on Cloudflare a missing salt is 503 and a
+    // subrequest 403 (never the generic 500).
+    const ratePlan = savePersistRatePlanOrResponse(
       request,
       canonical.study.id,
       { sessionId: participantSessionId, linkId, researcherId: context.researcherId }
     );
-    if (!rateLimits) {
-      return NextResponse.json({ error: 'Participant request authority is incomplete.' }, { status: 401 });
+    if (ratePlan.status === 'refused') return ratePlan.response;
+    const rateLimits = ratePlan.rows;
+
+    // The durable backend commits the initial analysis job with the save, so
+    // its frozen inputs (with the explicit model) are resolved before
+    // persistence. Redis keeps its synchronous `after()` analysis.
+    const durable = isDurableWorkspaceStore(context.store);
+    let initialAnalysis: PersistCompletedInterviewInput['initialAnalysis'];
+    if (durable) {
+      const frozen = frozenAnalysisInput(canonical.study);
+      if (!frozen.ok) return frozen.response;
+      initialAnalysis = frozen.input;
     }
 
     // Build the interview with server-controlled identity and timestamps.
@@ -265,25 +296,39 @@ export async function POST(request: Request) {
       }
     }
 
-    const persistence = await persistCompletedInterview(
+    const persistence = await context.store.persistCompletedInterview({
       interview,
       fingerprint,
-      {
-        allowDisabledLinks: false,
-        expectedStudyRevision: canonical.study.revision ?? 1,
-        rateLimits,
-        identity: {
-          participantSessionId: participantSessionId ?? null,
-          linkId: linkId ?? null,
-        },
+      expectedStudyRevision: canonical.study.revision ?? 1,
+      allowDisabledLinks: false,
+      ratePlan: rateLimits,
+      identity: {
+        participantSessionId: participantSessionId ?? null,
+        linkId: linkId ?? null,
       },
-      context.kvClient
-    );
+      ...(durable ? { consent: consentBinding, initialAnalysis } : {}),
+      now,
+    });
 
+    if (persistence.status === 'held') {
+      // The participant keeps the transcript and can retry once the operator
+      // reopens the workspace.
+      return workspaceHeldResponse({ route: ROUTE, reason: persistence.reason, ...PARTICIPANT_SAVE_HELD_COPY });
+    }
     if (persistence.status === 'unavailable' || persistence.status === 'ambiguous' || persistence.status === 'persist-guard') {
       return NextResponse.json(
         { error: 'Storage is temporarily unavailable. Interview not saved. Please try again.', retryable: true },
         { status: 503 }
+      );
+    }
+    // Durable write-boundary re-checks (the Redis store never returns these).
+    if (persistence.status === 'link-inactive') {
+      return NextResponse.json({ error: 'Participant link is no longer active.' }, { status: 403 });
+    }
+    if (persistence.status === 'consent-required') {
+      return NextResponse.json(
+        { error: 'Verified participant consent is required before saving.', code: 'CONSENT_REQUIRED' },
+        { status: 428 }
       );
     }
     if (persistence.status === 'conflict') {
@@ -313,12 +358,23 @@ export async function POST(request: Request) {
         { status: 429, headers: { 'Retry-After': '3600' } }
       );
     }
+    // Only a known commit is success. An outcome this build does not
+    // recognize (a malformed or version-skewed RPC reply on Cloudflare) must
+    // never let the browser drop the transcript (ST-02).
+    if (persistence.status !== 'created' && persistence.status !== 'duplicate') {
+      logRequestEvent({ event: 'workspace.store', route: ROUTE, method: 'POST', status: 503, reason: 'unknown-outcome' });
+      return NextResponse.json(
+        { error: 'Storage is temporarily unavailable. Interview not saved. Please try again.', retryable: true },
+        { status: 503 }
+      );
+    }
 
     // Deferred work is scheduled ONLY on `created` — never on `duplicate`,
     // and never on any refusal — so a retrying participant cannot schedule a
     // second run. The claim CAS inside runInterviewAnalysis is still the
     // real concurrency gate; this is just the common case's first attempt.
-    if (persistence.status === 'created') {
+    // The durable backend already committed the initial job (JOB-01).
+    if (persistence.status === 'created' && !durable) {
       const kvClient = context.kvClient;
       const study = canonical.study;
       const providerKeys = providerKeysFromContext(context);

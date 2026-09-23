@@ -251,7 +251,7 @@ describe('create idempotency keyed by digest (ST-01)', () => {
 });
 
 describe('createStudy (ST-01)', () => {
-  it('ST-01: issues exactly the Redis calls and create arguments of the standalone POST /api/studies route', async () => {
+  it('ST-01: the standalone POST /api/studies route, now through the store, issues exactly the pre-store route\'s Redis calls and create arguments', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(FROZEN_NOW);
     kvMock.isKVAvailable.mockImplementation(actualKv.isKVAvailable);
@@ -262,6 +262,7 @@ describe('createStudy (ST-01)', () => {
       authorized: true,
       context: {
         kvClient: asPort(routeRedis),
+        store: createRedisWorkspaceStore(asPort(routeRedis), { researcherId: null }),
         geminiApiKey: 'gemini-key',
         anthropicApiKey: null,
         openaiApiKey: null,
@@ -282,24 +283,44 @@ describe('createStudy (ST-01)', () => {
     const routeFingerprint = routeBegin[3][4];
     expect(routeBegin[3][0]).toBe(digest());
 
-    const storeRedis = new RecordingRedis();
-    const store = createRedisWorkspaceStore(asPort(storeRedis), { researcherId: null });
-    const outcome = await store.createStudy({
-      idempotencyKeyDigest: digest(),
+    expect(routeBody.study).toEqual(JSON.parse(JSON.stringify(minted.study)));
+
+    // The pre-store route's own composition (git HEAD before the move to
+    // context.store): raw-key begin on the context client, ping, atomic create
+    // (mocked here, so it records nothing), raw-key created transition. The
+    // route now reaches Redis only through the store, so this independent
+    // sequence is what keeps the comparison able to fail.
+    const headRedis = new RecordingRedis();
+    const headBegin = await actualIdemp.beginCreateIdempotency({
+      client: asPort(headRedis),
+      mode: 'standalone',
+      researcherId: 'standalone',
+      idempotencyKey: IDEMPOTENCY_KEY,
       fingerprint: routeFingerprint,
-      candidate: minted.study,
+      mintStudy: () => minted.study,
+    });
+    expect(headBegin.status).toBe('started');
+    expect(await actualKv.isKVAvailable(asPort(headRedis))).toBe(true);
+    await actualIdemp.casCreateIdempotencyState({
+      client: asPort(headRedis),
+      mode: 'standalone',
+      researcherId: 'standalone',
+      idempotencyKey: IDEMPOTENCY_KEY,
+      fingerprint: routeFingerprint,
+      nextState: 'created',
+      operationId: null,
     });
 
-    expect(outcome).toEqual({ status: 'created', study: routeBody.study, replayed: false });
-    expect(storeRedis.calls).toEqual(routeRedis.calls);
-    expect(storeRedis.calls.map(call => call[0])).toEqual(['get', 'eval', 'ping', 'eval']);
+    expect(routeRedis.calls).toEqual(headRedis.calls);
+    expect(routeRedis.calls.map(call => call[0])).toEqual(['get', 'eval', 'ping', 'eval']);
 
-    const [routeCreate, storeCreate] = kvMock.createStudyAtomic.mock.calls;
-    expect(routeCreate[1]).toBe(routeRedis);
-    expect(storeCreate[1]).toBe(storeRedis);
-    expect([storeCreate[0], storeCreate[2], storeCreate[3]]).toEqual([routeCreate[0], routeCreate[2], routeCreate[3]]);
-    expect(storeCreate[2]).toBe(`create:${minted.study.id}:${FROZEN_NOW}`);
-    expect(storeCreate[3]).toEqual({ idempotencyHash: digest(), researcherId: 'standalone' });
+    expect(kvMock.createStudyAtomic).toHaveBeenCalledTimes(1);
+    expect(kvMock.createStudyAtomic).toHaveBeenCalledWith(
+      minted.study,
+      routeRedis,
+      `create:${minted.study.id}:${FROZEN_NOW}`,
+      { idempotencyHash: digest(), researcherId: 'standalone' },
+    );
   });
 
   it('ST-01: a created mapping replays its original study without writing', async () => {

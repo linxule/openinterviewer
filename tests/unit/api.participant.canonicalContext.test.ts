@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { makeStoredStudy, makeStudyConfig } from '../fixtures/models';
+import { standaloneTestContext } from '../helpers/workspaceStoreFixture';
+import type { RedisPort } from '@/lib/redisPort';
 
 /**
  * Participant API canonical-context contract.
@@ -48,14 +50,24 @@ const providersMock = vi.hoisted(() => ({
 
 vi.mock('@/lib/providers', () => providersMock);
 
-const kvMock = vi.hoisted(() => ({
-  getStudy: vi.fn(),
-}));
+// The Redis workspace store reads through getStudyChecked; derive it from the
+// getStudy fixture so both see the same record.
+const kvMock = vi.hoisted(() => {
+  const getStudy = vi.fn();
+  return {
+    getStudy,
+    getStudyChecked: vi.fn(async (id: string) => {
+      const study = await getStudy(id);
+      return study ? { status: 'found', study } : { status: 'not-found' };
+    }),
+  };
+});
 
 vi.mock('@/lib/kv', () => kvMock);
 
 const rateLimitMock = vi.hoisted(() => ({
-  participantRateLimitResponse: vi.fn(),
+  participantStoreAdmissionResponse: vi.fn(),
+  participantAdmissionRefusal: vi.fn(() => null),
 }));
 
 vi.mock('@/lib/rateLimit', () => rateLimitMock);
@@ -97,15 +109,10 @@ const makeRequest = (body: unknown) =>
     body: JSON.stringify(body),
   });
 
-const sessionContext = {
-  kvClient: {} as never,
+const sessionContext = standaloneTestContext({} as RedisPort, {
   geminiApiKey: 'canonical-gemini-key',
-  anthropicApiKey: null,
-  openaiApiKey: null,
-  openrouterApiKey: null,
   researcherId: 'researcher-a',
-  onboardingComplete: true,
-};
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -117,7 +124,7 @@ beforeEach(() => {
     participantSessionId: 'participant-session-a',
   });
   kvMock.getStudy.mockResolvedValue(makeStoredStudy({ id: 'study-a', config: canonicalConfig }));
-  rateLimitMock.participantRateLimitResponse.mockResolvedValue(null);
+  rateLimitMock.participantStoreAdmissionResponse.mockResolvedValue(null);
   platformRateLimitMock.hostedAiRateLimitResponse.mockResolvedValue(null);
   consentMock.verifyParticipantConsent.mockResolvedValue({
     status: 'accepted',
@@ -200,6 +207,42 @@ describe('POST /api/interview canonical provider context', () => {
       'interview',
       { researcherId: 'researcher-a', participantSessionId: 'participant-session-a' }
     );
+    // ST-06: participant admission runs through the request's workspace store.
+    expect(rateLimitMock.participantStoreAdmissionResponse).toHaveBeenCalledWith(
+      expect.any(Request),
+      'study-a',
+      'interview',
+      expect.objectContaining({ admitParticipantRequest: expect.any(Function) }),
+      { sessionId: 'participant-session-a', linkId: undefined, researcherId: 'researcher-a' },
+    );
+    const admit = vi.spyOn(sessionContext.store, 'admitParticipantRequest').mockResolvedValue({ status: 'admitted' });
+    const [, , , admissionStore] = rateLimitMock.participantStoreAdmissionResponse.mock.calls[0];
+    const admission = { operation: 'interview' as const, counters: [], now: 1 };
+    await expect(admissionStore.admitParticipantRequest(admission)).resolves.toEqual({ status: 'admitted' });
+    expect(admit).toHaveBeenCalledWith(admission);
+  });
+
+  it('ST-06: a limited admission stops before any provider is constructed', async () => {
+    rateLimitMock.participantStoreAdmissionResponse.mockResolvedValue(
+      new Response(JSON.stringify({ error: 'Too many AI requests. Please wait before trying again.' }), {
+        status: 429,
+        headers: { 'Content-Type': 'application/json', 'Retry-After': '60' },
+      })
+    );
+
+    const res = await interviewPOST(
+      makeRequest({
+        history: [{ id: 'm1', role: 'user', content: 'hi', timestamp: 1 }],
+        studyConfig: bodyConfig,
+        participantProfile: null,
+        questionProgress: { questionsAsked: [], total: 0, currentPhase: 'background', isComplete: false },
+        currentContext: '',
+      })
+    );
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get('retry-after')).toBe('60');
+    expect(providersMock.getInterviewProvider).not.toHaveBeenCalled();
   });
 
   it('fails closed before provider use when canonical consent is missing', async () => {

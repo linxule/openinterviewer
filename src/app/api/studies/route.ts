@@ -8,7 +8,6 @@ import { randomBytes } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import {
   createStudyAtomic,
-  getAllStudiesChecked,
   isKVAvailable,
   studyOperationMarkerId,
 } from '@/lib/kv';
@@ -22,6 +21,8 @@ import {
   inspectOwnedStudyGates,
   loadAllowedStudies,
   mapCollectionLoad,
+  mapReadReadinessHold,
+  mapWorkspaceHold,
 } from '@/lib/ownedStudies';
 import { configurationRequiredResponse, schemaHoldResponse } from '@/lib/researcherAccess';
 import {
@@ -38,7 +39,7 @@ import {
   readStudyMutationBody,
   validateStudyConfigForCreate,
 } from '@/lib/studyConfigValidation';
-import { StoredStudy } from '@/types';
+import type { StoredStudy, StudyConfig } from '@/types';
 import { missingProviderCredential } from '@/lib/providerAvailability';
 import {
   attachCreateIdempotencyOperation,
@@ -48,12 +49,19 @@ import {
   hashCreateIdempotencyKey,
   mintCreateStudy,
   parseIdempotencyKey,
-  resolveCreateIdempotencyClient,
   RETRY_AFTER_PENDING,
+  STANDALONE_SCOPE,
   type CreateIdempotencyRecord,
 } from '@/lib/createIdempotency';
 import { getPlatformClient } from '@/lib/kvClient';
 import { createRequestId, logRequestFailure } from '@/lib/requestLog';
+import { deploymentNotReadyResponse } from '@/lib/runtime/readinessGate';
+import { isDurableWorkspaceStore, type WorkspaceStorePort } from '@/lib/storage/types';
+
+const COLLECTION_MESSAGES = {
+  unavailable: 'Study storage is temporarily unavailable.',
+  tooLarge: 'This study list is too large to load at once.',
+};
 
 // GET /api/studies - List all saved studies
 export async function GET() {
@@ -110,19 +118,29 @@ export async function GET() {
       return NextResponse.json({ error: error || 'Unauthorized' }, { status: 401 });
     }
 
-    const kvAvailable = await isKVAvailable(context.kvClient);
-    if (!kvAvailable) {
+    const store = context.store;
+    const readiness = await store.readiness();
+    if (readiness.status === 'unavailable') {
+      // Only a Node deployment keeps the unconfigured-Redis empty list; a
+      // durable workspace that cannot answer is never an empty success.
+      if (isDurableWorkspaceStore(store)) {
+        return NextResponse.json(
+          { error: COLLECTION_MESSAGES.unavailable, retryable: true },
+          { status: 503 },
+        );
+      }
       return NextResponse.json({
         studies: [],
         warning: 'Storage not configured. Connect Upstash Redis to enable persistence.'
       });
     }
+    // Reads continue in every maintenance state and under a recovery-epoch
+    // hold (an operator inspects a restored workspace before activation).
+    const held = mapReadReadinessHold(readiness, '/api/studies');
+    if (held) return NextResponse.json(held.body, { status: held.status });
 
-    const loaded = await getAllStudiesChecked(context.kvClient, 1_000);
-    const mapped = mapCollectionLoad(loaded, {
-      unavailable: 'Study storage is temporarily unavailable.',
-      tooLarge: 'This study list is too large to load at once.',
-    });
+    const loaded = await store.listStudies(1_000);
+    const mapped = mapCollectionLoad(loaded, COLLECTION_MESSAGES);
     if (!mapped.ok) return NextResponse.json(mapped.body, { status: mapped.status });
     return NextResponse.json({ studies: mapped.items });
   } catch (error) {
@@ -142,6 +160,9 @@ export async function GET() {
 // POST /api/studies - Create new study
 export async function POST(request: Request) {
   try {
+    const notReady = deploymentNotReadyResponse('/api/studies');
+    if (notReady) return notReady;
+
     // Hosted: identity and account-record gates run before any BYOS cipher is
     // decrypted; the platform write path (rate limit, idempotency, begin) is
     // decided first, and only the create itself resolves BYOS credentials.
@@ -254,28 +275,29 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Idempotency-Key header must be a UUID.' }, { status: 400 });
     }
 
-    const researcherScope = hosted ? (researcherId as string) : 'standalone';
+    if (!hosted) return await createStandaloneStudy(context!.store, serverConfig, idempotencyKey);
+
+    // Hosted from here on: the cross-database create saga.
+    const researcherScope = researcherId as string;
     const fingerprint = createFingerprint(serverConfig);
     const idempotencyHash = hashCreateIdempotencyKey(researcherScope, idempotencyKey);
     let idempClient;
     try {
       // Hosted idempotency lives on platform Redis; BYOS is not decrypted yet.
-      idempClient = hosted
-        ? getPlatformClient()
-        : resolveCreateIdempotencyClient('standalone', context!.kvClient);
+      idempClient = getPlatformClient();
     } catch {
       return NextResponse.json({ retryable: true, reason: 'unavailable' }, { status: 503 });
     }
 
     const idemp = await beginCreateIdempotency({
       client: idempClient,
-      mode: hosted ? 'hosted' : 'standalone',
+      mode: 'hosted',
       researcherId: researcherScope,
       idempotencyKey,
       fingerprint,
       mintStudy: () => mintCreateStudy(serverConfig),
     });
-    const idempResponse = mapIdempotencyHttp(idemp, hosted);
+    const idempResponse = mapIdempotencyHttp(idemp);
     if (idempResponse) return idempResponse;
 
     const mapping = idemp.status === 'started' || idemp.status === 'replay'
@@ -442,7 +464,6 @@ export async function POST(request: Request) {
 
 function mapIdempotencyHttp(
   idemp: Awaited<ReturnType<typeof beginCreateIdempotency>>,
-  hosted: boolean,
 ) {
   if (idemp.status === 'reuse') {
     return NextResponse.json({ code: 'IDEMPOTENCY_KEY_REUSE' }, { status: 409 });
@@ -475,12 +496,50 @@ function mapIdempotencyHttp(
         message: 'Study saved successfully',
       });
     }
-    // Standalone pending replay re-enters createStudyAtomic so S4 receipt
-    // replay can return the same terminal 200. Hosted pending stays 202.
-    if (hosted) return pendingCreateResponse(idemp.record, idemp.record.operationId);
-    return null;
+    // Hosted pending stays 202 (standalone pending replay re-enters the
+    // atomic create inside the workspace store instead).
+    return pendingCreateResponse(idemp.record, idemp.record.operationId);
   }
   return null;
+}
+
+/**
+ * Standalone create (Node Redis and the Cloudflare workspace alike): the study
+ * is minted here, outside any retried store transaction, and the store owns
+ * the idempotency receipt, the atomic create and the created transition. On
+ * Node the Redis store composes exactly the Redis calls this route used to
+ * make; a replayed key returns the originally minted study.
+ */
+async function createStandaloneStudy(
+  store: WorkspaceStorePort,
+  config: StudyConfig,
+  idempotencyKey: string,
+) {
+  const created = await store.createStudy({
+    idempotencyKeyDigest: hashCreateIdempotencyKey(STANDALONE_SCOPE, idempotencyKey),
+    fingerprint: createFingerprint(config),
+    candidate: mintCreateStudy(config),
+  });
+  switch (created.status) {
+    case 'created':
+      return NextResponse.json({ study: created.study, message: 'Study saved successfully' });
+    case 'key-reuse':
+      return NextResponse.json({ code: 'IDEMPOTENCY_KEY_REUSE' }, { status: 409 });
+    case 'key-consumed':
+      return NextResponse.json({ code: 'IDEMPOTENCY_KEY_CONSUMED' }, { status: 409 });
+    case 'conflict':
+      return NextResponse.json({ error: 'Study already exists' }, { status: 409 });
+    case 'quota':
+      return NextResponse.json({ retryable: true, reason: 'idempotency-quota' }, { status: 503 });
+    case 'ambiguous':
+      return NextResponse.json({ retryable: true, reason: 'ambiguous' }, { status: 503 });
+    case 'held': {
+      const held = mapWorkspaceHold(created.reason, '/api/studies');
+      return NextResponse.json(held.body, { status: held.status });
+    }
+    default:
+      return NextResponse.json({ retryable: true, reason: 'unavailable' }, { status: 503 });
+  }
 }
 
 function mapBeginCreateHttp(

@@ -104,7 +104,10 @@ vi.mock('@/lib/providers', () => providersMock);
 
 vi.mock('@/lib/rateLimit', () => ({
   participantRateLimitResponse: vi.fn(async () => null),
+  participantStoreAdmissionResponse: vi.fn(async () => null),
+  participantAdmissionRefusal: vi.fn(() => null),
   getSavePersistRatePlan: vi.fn(() => []),
+  savePersistRatePlanOrResponse: vi.fn(() => ({ status: 'planned', rows: [] })),
 }));
 vi.mock('@/lib/platformAiRateLimit', () => ({
   hostedAiRateLimitResponse: vi.fn(async () => null),

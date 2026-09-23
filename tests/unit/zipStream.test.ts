@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import JSZip from 'jszip';
 import type { StoredAggregateSynthesis, StoredInterview } from '@/types';
 import { makeStoredInterview } from '../fixtures/models';
+import { standaloneTestContext } from '../helpers/workspaceStoreFixture';
+import type { RedisPort } from '@/lib/redisPort';
 import { createZipStream, crc32, ZIP32_LIMITS, ZipLimitError } from '@/lib/export/zipStream';
 import {
   createInterviewExportStream,
@@ -217,7 +219,7 @@ describe('createZipStream (RT-09, ST-08)', () => {
 
 describe('createInterviewExportStream parity with the Node JSZip export (ST-08, RT-09)', () => {
   beforeEach(() => {
-    contextMock.getRequestContext.mockResolvedValue({ authorized: true, context: { kvClient: {} } });
+    contextMock.getRequestContext.mockResolvedValue({ authorized: true, context: standaloneTestContext({} as RedisPort) });
   });
 
   function fixtures(): { interviews: StoredInterview[]; aggregates: Map<string, StoredAggregateSynthesis> } {

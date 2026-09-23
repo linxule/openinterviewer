@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { STUDY_MUTATION_MAX_BYTES } from '@/lib/studyConfigValidation';
 import { makeStoredStudy, makeStudyConfig } from '../fixtures/models';
+import { standaloneTestContext } from '../helpers/workspaceStoreFixture';
+import type { RedisPort } from '@/lib/redisPort';
 
 const contextMock = vi.hoisted(() => ({
   getRequestContext: vi.fn(),
@@ -13,11 +15,15 @@ const kvMock = vi.hoisted(() => ({
   deleteStudy: vi.fn(),
   getAllStudies: vi.fn(),
   getStudy: vi.fn(),
+  getStudyChecked: vi.fn(),
   isKVAvailable: vi.fn(),
   replaceStudyConfigAtomic: vi.fn(),
   setStudyLinksEnabled: vi.fn(),
 }));
 vi.mock('@/lib/kv', () => kvMock);
+// The Redis workspace store imports participant links, whose module init reads
+// platformDb exports this file mocks away; no link operation runs here.
+vi.mock('@/lib/participantLinks', () => ({}));
 
 vi.mock('@/lib/platformDb', () => ({
   consumePlatformRateLimit: vi.fn(),
@@ -37,28 +43,22 @@ beforeEach(() => {
   vi.clearAllMocks();
   contextMock.getRequestContext.mockResolvedValue({
     authorized: true,
-    context: {
-      kvClient: {},
-      geminiApiKey: 'gemini-key',
-      anthropicApiKey: null,
-      openaiApiKey: null,
-      openrouterApiKey: null,
-    },
+    context: standaloneTestContext({} as RedisPort, { geminiApiKey: 'gemini-key' }),
     researcherId: 'researcher-a',
   });
   contextMock.getAuthorizedResearcherStudyContext.mockImplementation(async (id: string) => ({
     authorized: true,
-    context: {
-      kvClient: {},
-      geminiApiKey: 'gemini-key',
-      anthropicApiKey: null,
-      openaiApiKey: null,
-      openrouterApiKey: null,
-    },
+    context: standaloneTestContext({} as RedisPort, { geminiApiKey: 'gemini-key' }),
     researcherId: 'researcher-a',
   }));
   kvMock.isKVAvailable.mockResolvedValue(true);
   kvMock.createStudyAtomic.mockResolvedValue('created');
+  // The workspace store reads through the checked form; derive it from the
+  // existing getStudy fixtures.
+  kvMock.getStudyChecked.mockImplementation(async (id: string) => {
+    const study = await kvMock.getStudy(id);
+    return study ? { status: 'found', study } : { status: 'not-found' };
+  });
 });
 
 describe('study route configuration validation', () => {

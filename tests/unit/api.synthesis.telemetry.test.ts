@@ -2,6 +2,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { makeStoredStudy, makeStudyConfig } from '../fixtures/models';
+import { standaloneTestContext } from '../helpers/workspaceStoreFixture';
+import type { RedisPort } from '@/lib/redisPort';
 
 /**
  * Slice I2d: /api/synthesis emits a counts-only `synthesis.evidence` log event
@@ -47,7 +49,18 @@ const providersMock = vi.hoisted(() => ({
 
 vi.mock('@/lib/providers', () => providersMock);
 
-const kvMock = vi.hoisted(() => ({ getStudy: vi.fn() }));
+// The Redis workspace store reads through getStudyChecked; derive it from the
+// getStudy fixture so both see the same record.
+const kvMock = vi.hoisted(() => {
+  const getStudy = vi.fn();
+  return {
+    getStudy,
+    getStudyChecked: vi.fn(async (id: string) => {
+      const study = await getStudy(id);
+      return study ? { status: 'found', study } : { status: 'not-found' };
+    }),
+  };
+});
 vi.mock('@/lib/kv', () => kvMock);
 
 const platformRateLimitMock = vi.hoisted(() => ({ hostedAiRateLimitResponse: vi.fn() }));
@@ -112,15 +125,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   contextMock.getParticipantRequestContext.mockResolvedValue({
     valid: true,
-    context: {
-      kvClient: {} as never,
+    context: standaloneTestContext({} as RedisPort, {
       geminiApiKey: 'test-gemini-key',
-      anthropicApiKey: null,
-      openaiApiKey: null,
-      openrouterApiKey: null,
       researcherId: 'researcher-t',
-      onboardingComplete: true,
-    },
+    }),
     studyId: 'study-t',
     isAdmin: true,
     participantSessionId: undefined,
@@ -210,15 +218,7 @@ describe('POST /api/synthesis — participant tokens are refused', () => {
   it('returns 403 for a participant token, with no provider call', async () => {
     contextMock.getParticipantRequestContext.mockResolvedValue({
       valid: true,
-      context: {
-        kvClient: {} as never,
-        geminiApiKey: 'test-gemini-key',
-        anthropicApiKey: null,
-        openaiApiKey: null,
-        openrouterApiKey: null,
-        researcherId: null,
-        onboardingComplete: true,
-      },
+      context: standaloneTestContext({} as RedisPort, { geminiApiKey: 'test-gemini-key' }),
       studyId: 'study-t',
       isAdmin: false,
       participantSessionId: 'participant-session-t',

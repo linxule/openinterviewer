@@ -2,6 +2,8 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeStoredStudy } from '../fixtures/models';
+import { standaloneTestContext } from '../helpers/workspaceStoreFixture';
+import type { RedisPort } from '@/lib/redisPort';
 
 const contextMock = vi.hoisted(() => ({
   getParticipantRequestContext: vi.fn(),
@@ -19,7 +21,10 @@ const consentMock = vi.hoisted(() => ({ recordParticipantConsent: vi.fn() }));
 vi.mock('@/lib/participantConsent', () => consentMock);
 
 const canonicalMock = vi.hoisted(() => ({ loadCanonicalStudy: vi.fn() }));
-vi.mock('@/lib/canonicalStudy', () => canonicalMock);
+vi.mock('@/lib/canonicalStudy', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/canonicalStudy')>(),
+  ...canonicalMock,
+}));
 
 import { POST } from '@/app/api/consent/route';
 
@@ -40,7 +45,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   contextMock.getParticipantRequestContext.mockResolvedValue({
     valid: true,
-    context: { kvClient: {} },
+    context: standaloneTestContext({} as RedisPort),
     studyId: 'study-a',
     study,
     studyRevision: 3,
@@ -94,10 +99,36 @@ describe('POST /api/consent', () => {
     expect(await response.json()).toMatchObject({ retryable: true });
   });
 
+  it.each([
+    [{ statusCode: 401, error: 'Participant session expired.' }, 401, { error: 'Participant session expired.' }],
+    [
+      { statusCode: 403, error: 'Participant link is no longer active.', retryable: false },
+      403,
+      { error: 'Participant link is no longer active.' },
+    ],
+    [
+      { statusCode: 503, error: 'Unable to verify participant link.', retryable: true },
+      503,
+      { error: 'Unable to verify participant link.', retryable: true },
+    ],
+  ])('OPS-01: an unresolved session context %o keeps its status and message; only a 503 carries retryable', async (
+    denial,
+    status,
+    body,
+  ) => {
+    contextMock.getParticipantRequestContext.mockResolvedValue({ valid: false, context: null, ...denial });
+
+    const response = await POST(request());
+
+    expect(response.status).toBe(status);
+    expect(await response.json()).toEqual(body);
+    expect(consentMock.recordParticipantConsent).not.toHaveBeenCalled();
+  });
+
   it('authorizes researcher preview without persisting a consent record', async () => {
     contextMock.getParticipantRequestContext.mockResolvedValue({
       valid: true,
-      context: { kvClient: {} },
+      context: standaloneTestContext({} as RedisPort),
       isAdmin: true,
     });
     canonicalMock.loadCanonicalStudy.mockResolvedValue({ ok: true, study });

@@ -1,6 +1,8 @@
 // @vitest-environment node
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { hostedTestContext, standaloneTestContext } from '../helpers/workspaceStoreFixture';
+import type { RedisPort } from '@/lib/redisPort';
 
 const contextMock = vi.hoisted(() => ({
   getRequestContext: vi.fn(),
@@ -58,14 +60,14 @@ vi.mock('@/lib/participantLinks', () => linksMock);
 import { DELETE, GET } from '@/app/api/studies/[id]/participant-links/route';
 
 const routeContext = { params: Promise.resolve({ id: 'study-a' }) };
-const kvClient = { marker: 'researcher-storage' };
+const kvClient = { marker: 'researcher-storage' } as unknown as RedisPort;
 
 beforeEach(() => {
   vi.clearAllMocks();
   accessMock.configurationRequiredResponse.mockReturnValue(null);
   contextMock.getRequestContext.mockResolvedValue({
     authorized: true,
-    context: { kvClient },
+    context: hostedTestContext(kvClient, 'researcher-a'),
     researcherId: 'researcher-a',
   });
   contextMock.getAuthorizedResearcherStudyContext.mockImplementation(
@@ -121,7 +123,7 @@ describe('researcher participant-link management API', () => {
 
   it('requires canonical study existence in standalone mode', async () => {
     modeMock.isHostedMode.mockReturnValue(false);
-    contextMock.getRequestContext.mockResolvedValue({ authorized: true, context: { kvClient } });
+    contextMock.getRequestContext.mockResolvedValue({ authorized: true, context: standaloneTestContext(kvClient) });
     kvMock.getStudyChecked.mockResolvedValue({ status: 'not-found' });
 
     const response = await GET(
@@ -131,6 +133,41 @@ describe('researcher participant-link management API', () => {
 
     expect(response.status).toBe(404);
     expect(linksMock.listParticipantLinksForStudy).not.toHaveBeenCalled();
+  });
+
+  it('RT-09: standalone list and revoke go through the workspace store with the deployment client', async () => {
+    modeMock.isHostedMode.mockReturnValue(false);
+    contextMock.getRequestContext.mockResolvedValue({ authorized: true, context: standaloneTestContext(kvClient) });
+    linksMock.listParticipantLinksForStudy.mockResolvedValue({ status: 'ok', links: [], truncated: false });
+    linksMock.revokeParticipantLink.mockResolvedValue({ status: 'already-revoked' });
+
+    const listed = await GET(new Request('http://localhost/api/studies/study-a/participant-links'), routeContext);
+    const revoked = await DELETE(new Request('http://localhost/api/studies/study-a/participant-links', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ linkId: 'e'.repeat(64) }),
+    }), routeContext);
+
+    expect(listed.status).toBe(200);
+    expect(listed.headers.get('cache-control')).toBe('no-store');
+    expect(linksMock.listParticipantLinksForStudy).toHaveBeenCalledWith({
+      studyId: 'study-a', researcherId: null, standaloneClient: kvClient, maximum: 1_000,
+    });
+    expect(revoked.status).toBe(200);
+    await expect(revoked.json()).resolves.toEqual({ link: { id: 'e'.repeat(64), revoked: true } });
+    expect(linksMock.revokeParticipantLink).toHaveBeenCalledWith({
+      linkId: 'e'.repeat(64), studyId: 'study-a', researcherId: null, standaloneClient: kvClient,
+    });
+  });
+
+  it('RT-09: a thrown storage error is a retryable 503, never a 500', async () => {
+    linksMock.listParticipantLinksForStudy.mockRejectedValue(new Error('transport'));
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const response = await GET(new Request('http://localhost/api/studies/study-a/participant-links'), routeContext);
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({ retryable: true });
   });
 
   it('revokes one link through the atomic owner-checked storage operation', async () => {
