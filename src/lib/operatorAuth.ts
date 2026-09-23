@@ -35,7 +35,8 @@ export type OperatorOperation =
   | 'maintenance'
   | 'backup.export'
   | 'backup.import'
-  | 'recovery.activate';
+  | 'recovery.activate'
+  | 'recovery.restore';
 
 export type OperatorRequestLabel = {
   route: string;

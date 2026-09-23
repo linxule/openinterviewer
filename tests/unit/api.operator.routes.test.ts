@@ -24,6 +24,7 @@ import { POST as maintenancePOST } from '@/app/api/operator/maintenance/route';
 import { GET as backupGET } from '@/app/api/operator/backup/route';
 import { POST as importPOST } from '@/app/api/operator/backup/import/route';
 import { POST as activatePOST } from '@/app/api/operator/recovery/activate/route';
+import { POST as restorePOST } from '@/app/api/operator/recovery/restore/route';
 import { createSessionToken, SESSION_COOKIE_NAME } from '@/lib/auth';
 import {
   WORKER_INVOCATION_ACCESSOR,
@@ -185,6 +186,7 @@ describe('F5 every operator route requires operator authority before any RPC', (
     ['backup', () => backupGET(get('/api/operator/backup?family=studies', {}))],
     ['backup/import', () => importPOST(post('/api/operator/backup/import', {}, { 'content-type': 'application/json' }))],
     ['recovery/activate', () => activatePOST(post('/api/operator/recovery/activate', {}, { 'content-type': 'application/json' }))],
+    ['recovery/restore', () => restorePOST(post('/api/operator/recovery/restore', {}, { 'content-type': 'application/json' }))],
   ];
 
   it.each(calls)('%s without the bearer token is 401 and makes no RPC', async (_name, call) => {
@@ -512,5 +514,86 @@ describe('JOB-10 / OPS-03 POST /api/operator/recovery/activate', () => {
     delete process.env.OPENAI_API_KEY;
     handlers.activateRecoveryEpoch = () => ({ status: 'activated', reconciledJobs: 0 });
     expect((await activatePOST(post('/api/operator/recovery/activate', { expectedActivatedEpoch: OLD_EPOCH }))).status).toBe(200);
+  });
+});
+
+describe('OPS-03 POST /api/operator/recovery/restore', () => {
+  const BOOKMARK = '0000007b-0000b26e-00001538-0c3e87bb37b3db5cc52eedb93cd3b96b';
+  const UNDO = '0000007c-0000b26f-00001539-1c3e87bb37b3db5cc52eedb93cd3b96c';
+  const DAY_MS = 24 * 3_600_000;
+  const byBookmark = { expectedState: 'frozen', expectedVersion: 5, bookmark: BOOKMARK };
+
+  it('forwards a bookmark with the compare-and-set inputs and returns the undo bookmark', async () => {
+    handlers.restoreToBookmark = () => ({ status: 'scheduled', bookmark: BOOKMARK, undoBookmark: UNDO });
+    const { status, body } = await read(await restorePOST(post('/api/operator/recovery/restore', byBookmark)));
+    expect(status).toBe(200);
+    expect(body).toEqual({ status: 'scheduled', bookmark: BOOKMARK, undoBookmark: UNDO });
+    expect(rpcCalls).toEqual([{ method: 'restoreToBookmark', input: { ...byBookmark, at: null, now: expect.any(Number) } }]);
+    expect(operatorEvents()).toEqual([expect.objectContaining({ route: '/api/operator/recovery/restore', operation: 'recovery.restore', status: 200 })]);
+  });
+
+  it('forwards a time in epoch milliseconds for the object to resolve', async () => {
+    handlers.restoreToBookmark = () => ({ status: 'scheduled', bookmark: BOOKMARK, undoBookmark: UNDO });
+    const at = Date.now() - 2 * DAY_MS;
+    const { status } = await read(await restorePOST(post('/api/operator/recovery/restore', { expectedState: 'recovery', expectedVersion: 9, at })));
+    expect(status).toBe(200);
+    expect(rpcCalls[0].input).toEqual({ expectedState: 'recovery', expectedVersion: 9, bookmark: null, at, now: expect.any(Number) });
+  });
+
+  it.each([
+    [{ status: 'conflict', state: 'recovery', version: 6 }, 409, { code: 'MAINTENANCE_CONFLICT', state: 'recovery', version: 6 }],
+    [{ status: 'not-held', state: 'open', version: 5 }, 409, { code: 'NOT_HELD', state: 'open', version: 5 }],
+    [{ status: 'epoch-not-rotated' }, 409, { code: 'EPOCH_NOT_ROTATED' }],
+    [{ status: 'bookmark-refused' }, 422, { code: 'BOOKMARK_REFUSED', retryable: false }],
+    [{ status: 'invalid-request' }, 400, { code: 'INVALID_REQUEST' }],
+    [{ status: 'held', reason: 'workspace-identity-mismatch' }, 503, { code: 'WORKSPACE_HELD', holdReason: 'workspace-identity-mismatch' }],
+    [{ status: 'unavailable' }, 503, { code: 'OUTCOME_UNKNOWN', retryable: true }],
+    [{ status: 'scheduled', bookmark: BOOKMARK, undoBookmark: `${CONTENT_MARKER} <script>` }, 503, { code: 'OUTCOME_UNKNOWN' }],
+    [{ status: 'conflict', state: 'paused', version: 6 }, 503, { code: 'OUTCOME_UNKNOWN' }],
+  ])('maps %j to %i', async (reply, expectedStatus, expected) => {
+    handlers.restoreToBookmark = () => reply;
+    const { status, body } = await read(await restorePOST(post('/api/operator/recovery/restore', byBookmark)));
+    expect(status).toBe(expectedStatus);
+    expect(body).toMatchObject(expected);
+    expect(JSON.stringify(body)).not.toContain(CONTENT_MARKER);
+  });
+
+  it('maps a thrown RPC (the object may have restarted before replying) to an unknown outcome', async () => {
+    handlers.restoreToBookmark = () => {
+      throw new Error('Durable Object reset');
+    };
+    const { status, body } = await read(await restorePOST(post('/api/operator/recovery/restore', byBookmark)));
+    expect(status).toBe(503);
+    expect(body).toMatchObject({ code: 'OUTCOME_UNKNOWN', retryable: true });
+  });
+
+  it.each([
+    ['both a bookmark and a time', { ...byBookmark, at: Date.now() - DAY_MS }],
+    ['neither a bookmark nor a time', { expectedState: 'frozen', expectedVersion: 5 }],
+    ['a malformed bookmark', { ...byBookmark, bookmark: 'bookmark with spaces' }],
+    ['an oversized bookmark', { ...byBookmark, bookmark: 'a'.repeat(257) }],
+    ['a time in the future', { expectedState: 'frozen', expectedVersion: 5, at: Date.now() + 60_000 }],
+    ['a time beyond the 30-day window', { expectedState: 'frozen', expectedVersion: 5, at: Date.now() - 31 * DAY_MS }],
+    ['a time that is not epoch milliseconds', { expectedState: 'frozen', expectedVersion: 5, at: '2026-09-21T10:00:00Z' }],
+    ['an unknown state', { ...byBookmark, expectedState: 'paused' }],
+    ['a missing version', { expectedState: 'frozen', bookmark: BOOKMARK }],
+    ['a chosen epoch', { ...byBookmark, epoch: EPOCH }],
+  ])('refuses %s with 400 and no RPC', async (_label, body) => {
+    const { status, body: reply } = await read(await restorePOST(post('/api/operator/recovery/restore', body)));
+    expect(status).toBe(400);
+    expect(reply.code).toBe('INVALID_REQUEST');
+    expect(rpcCalls).toEqual([]);
+  });
+
+  it('requires a JSON content type and a bounded body', async () => {
+    expect((await restorePOST(post('/api/operator/recovery/restore', byBookmark, operatorHeaders({ 'content-type': 'text/plain' })))).status).toBe(415);
+    expect((await restorePOST(post('/api/operator/recovery/restore', { ...byBookmark, pad: 'x'.repeat(2048) }))).status).toBe(413);
+    expect(rpcCalls).toEqual([]);
+  });
+
+  it('F10 a restore is available while the deployment is not ready (it never resumes work)', async () => {
+    delete process.env.OPENAI_API_KEY;
+    handlers.restoreToBookmark = () => ({ status: 'scheduled', bookmark: BOOKMARK, undoBookmark: UNDO });
+    expect((await restorePOST(post('/api/operator/recovery/restore', byBookmark))).status).toBe(200);
   });
 });

@@ -9,7 +9,7 @@ import type * as Port from '../../src/lib/storage/types';
 import type * as Protocol from '../../src/lib/storage/analysisProtocol';
 import { isValidRecoveryEpoch, isValidWorkspaceId } from '../../src/lib/storage/analysisProtocol';
 import { applyMigrations } from './migrate';
-import { readMeta, type WorkspaceContext, type WorkspaceEnv } from './context';
+import { HELD_ALARM_RETRY_MS, readMeta, type WorkspaceContext, type WorkspaceEnv } from './context';
 import * as studies from './studies';
 import * as participants from './participants';
 import * as completion from './completion';
@@ -21,9 +21,6 @@ import * as exporter from './exports';
 import * as operator from './operator';
 import * as login from './login';
 import type * as Rpc from './rpcTypes';
-
-/** Wake-up interval an alarm keeps while the object is held (see alarm()). */
-const HELD_ALARM_RETRY_MS = 60 * 60 * 1000;
 
 type InitState =
   | { status: 'ready' }
@@ -306,6 +303,28 @@ export class WorkspaceStore extends DurableObject<WorkspaceEnv> {
     const held = this.requireInitialized();
     if (held) return { status: 'held', reason: held };
     return operator.activateRecoveryEpoch(this.ws, input);
+  }
+
+  async restoreToBookmark(input: Rpc.RestoreBookmarkInput): Promise<Rpc.RestoreBookmarkOutcome> {
+    const held = this.requireInitialized();
+    if (held) return { status: 'held', reason: held };
+    const outcome = await operator.restoreToBookmark(this.ws, input, this.ctx.storage);
+    if (outcome.status === 'scheduled') this.restartAfterReply();
+    return outcome;
+  }
+
+  /**
+   * A scheduled point-in-time restore applies when the next session opens.
+   * This call's reply goes out first; the object then takes no other event
+   * and resets, so nothing is served from the storage the restore replaces.
+   */
+  private restartAfterReply(): void {
+    this.ctx
+      .blockConcurrencyWhile(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        this.ctx.abort('point-in-time restore scheduled');
+      })
+      .catch(() => undefined);
   }
 
   // ---------- Researcher sign-in budget (gap F5) ----------

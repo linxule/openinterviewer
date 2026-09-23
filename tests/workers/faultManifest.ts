@@ -50,6 +50,7 @@ const RESTART_COMMITTED = 'tests/cloudflare-restart/committed.restart.test.ts';
 const RESTART_LEASE = 'tests/cloudflare-restart/lease.restart.test.ts';
 const RESTART_TRANSACTION = 'tests/cloudflare-restart/transaction.restart.test.ts';
 const OPERATOR_CLI = 'tests/setup-cloudflare/operator.test.mjs';
+const OPERATOR_ROUTES = 'tests/unit/api.operator.routes.test.ts';
 
 const WS = 'cloudflare/workspace';
 const STORE = `${WS}/WorkspaceStore.ts`;
@@ -180,7 +181,7 @@ export const CLOUDFLARE_FAULT_CUTS: ReadonlyArray<CloudflareFaultCut> = [
   },
   {
     id: 'CF-ALARM-FAILURE',
-    code: [`${WS}/scheduler.ts#runAlarm`, `${STORE}#alarm`],
+    code: [`${WS}/scheduler.ts#runAlarm`, `${WS}/scheduler.ts#runScheduler`, `${STORE}#alarm`],
     cut: 'Storage fails during the alarm, a settlement throws, or the object is held (uninitialized, schema, identity).',
     durableEvidence: 'A retry alarm 30 s ahead persisted before the handler returns (hourly while held); a failing row is quarantined in memory and never patched.',
     expectedReply: 'None; the handler returns normally so platform alarm retries are not the recovery path.',
@@ -189,6 +190,7 @@ export const CLOUDFLARE_FAULT_CUTS: ReadonlyArray<CloudflareFaultCut> = [
       { file: SCHEDULER, title: 'JOB-07 persists a retry alarm before returning when storage fails during the alarm' },
       { file: SCHEDULER, title: 'JOB-06/F13 quarantines a row whose settlement fails, without patching it or starving the rest of the batch' },
       { file: SCHEMA, title: 'an unsupported future schema refuses readiness, reads, mutations and dispatch, and keeps a wake-up' },
+      { file: SCHEDULER, title: 'ST-09/JOB-05 keeps an hourly wake-up under a workspace identity mismatch, with no send and no write' },
     ],
   },
   {
@@ -360,7 +362,7 @@ export const CLOUDFLARE_FAULT_CUTS: ReadonlyArray<CloudflareFaultCut> = [
     ],
   },
 
-  // ---------- Operational backup, import, activation, maintenance (OPS-01/02/03, JOB-10, ST-09/10) ----------
+  // ---------- Operational backup, import, activation, restore, maintenance (OPS-01/02/03, JOB-10, ST-09/10) ----------
   {
     id: 'CF-BACKUP-PAGE',
     code: [`${WS}/operator.ts#exportBackupPage`, `${STORE}#exportBackupPage`],
@@ -413,6 +415,23 @@ export const CLOUDFLARE_FAULT_CUTS: ReadonlyArray<CloudflareFaultCut> = [
       { file: OPERATOR, title: 'JOB-10: activation never re-adopts an epoch this object already superseded, and always advances the watermark' },
       { file: BACKUP, title: 'JOB-10/ST-10: imported nonterminal jobs stay held until activation reconciles them to recovery-required' },
       { file: OPERATOR_CLI, title: 'JOB-10 recovery activate maps a held workspace to refused (exit 2) and an unknown outcome to exit 1' },
+    ],
+  },
+  {
+    id: 'CF-RESTORE-SCHEDULE',
+    code: [`${WS}/operator.ts#restoreToBookmark`, `${WS}/operator.ts#restoreRefusal`, `${STORE}#restoreToBookmark`, `${STORE}#restartAfterReply`],
+    cut: 'A point-in-time restore was scheduled (OPS-03 step 4) and the object reset after replying, so the reply can be lost; or the platform refused the time or bookmark. The platform applying the restore is remote only: local workerd refuses both point-in-time calls.',
+    durableEvidence: 'Nothing is written before the reset (no SQL row, audit row, alarm or mutation-sequence change: the restore would rewind them), only a `restore.schedule` log event without content. After the reset the object opens on the bookmark and `status` reports the restored state and version with `configuredMatches: false`. A refusal changes nothing and never resets the object.',
+    expectedReply: '`scheduled` with `bookmark` and `undoBookmark` (200); `bookmark-refused` (422) and every precondition refusal come before any point-in-time storage call; a thrown RPC is 503 `OUTCOME_UNKNOWN` and the CLI exits 1 with the current status.',
+    nextAction: 'The operator reads `status`: a state or version other than the one sent means the restore ran; unchanged means the same command is repeated. A replay that meets another version conflicts, and the epoch stays unactivated until the explicit epoch check and activation.',
+    coverage: [
+      { file: OPERATOR, title: 'OPS-03: refuses before any point-in-time storage call unless held at the expected version with the epoch already rotated' },
+      { file: OPERATOR, title: 'OPS-03: a time resolves to a bookmark, the restore is scheduled for the next session, the reply goes out, then the object restarts' },
+      { file: OPERATOR, title: 'OPS-03: a bookmark is scheduled as given, from recovery as well as frozen; a platform refusal schedules nothing and never restarts' },
+      { file: OPERATOR, title: 'OPS-03: through the RPC stub the scheduled reply reaches the caller, then the object really resets and reopens' },
+      { file: OPERATOR, title: 'OPS-03: the local runtime has no point-in-time recovery: through the RPC stub its storage refuses and nothing is scheduled' },
+      { file: OPERATOR_ROUTES, title: 'maps a thrown RPC (the object may have restarted before replying) to an unknown outcome' },
+      { file: OPERATOR_CLI, title: 'OPS-03 recovery restore reports a definite refusal as exit 2 and an unknown outcome as exit 1 with the current status' },
     ],
   },
   {

@@ -13,7 +13,8 @@ export type OperatorRpcMethod =
   | 'transitionMaintenance'
   | 'exportBackupPage'
   | 'importBackupChunk'
-  | 'activateRecoveryEpoch';
+  | 'activateRecoveryEpoch'
+  | 'restoreToBookmark';
 
 export type OperatorReply = { status: string } & Record<string, unknown>;
 

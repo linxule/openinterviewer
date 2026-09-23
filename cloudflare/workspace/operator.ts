@@ -11,11 +11,15 @@
 //   importBackupChunk      recovery, and an empty workspace when it begins;
 //                          bound to one backup file's complete manifest.
 //   activateRecoveryEpoch  recovery; compare-and-set on the activated epoch.
+//   restoreToBookmark      frozen or recovery at the expected version, and a
+//                          configured epoch already rotated away from the
+//                          activated one (point-in-time restore, OPS-03).
 // Every change appends operator_audit rows with identifiers and counts only,
-// never research content.
+// never research content. A scheduled restore writes nothing: the restore
+// itself would rewind that row, so it is logged as an operator event instead.
 
 import type * as Port from '../../src/lib/storage/types';
-import type { MaintenanceState } from '../../src/lib/storage/types';
+import { isRestoreBookmark, RESTORE_WINDOW_MS, type MaintenanceState } from '../../src/lib/storage/types';
 import { isValidRecoveryEpoch, isValidWorkspaceId } from '../../src/lib/storage/analysisProtocol';
 import {
   BACKUP_FAMILIES,
@@ -86,7 +90,7 @@ function audit(sql: SqlStorage, at: number, action: string, detail: Record<strin
   sql.exec(`INSERT INTO operator_audit (at, action, detail_json) VALUES (?, ?, ?)`, at, action, JSON.stringify(detail));
 }
 
-function logOperator(operation: string, reason?: 'corrupt-record' | 'maintenance-hold' | 'epoch-mismatch' | 'too-large'): void {
+function logOperator(operation: string, reason?: 'corrupt-record' | 'maintenance-hold' | 'epoch-mismatch' | 'too-large' | 'unavailable'): void {
   logRequestEvent({ event: 'operator.action', operation, ...(reason ? { reason } : {}) });
 }
 
@@ -780,6 +784,94 @@ export async function activateRecoveryEpoch(ws: WorkspaceContext, input: Rpc.Act
       logOperator('epoch.activate');
       return { status: 'activated', reconciledJobs };
     });
+  } catch {
+    return { status: 'unavailable' };
+  }
+}
+
+// ---------- Point-in-time restore (OPS-03) ----------
+
+/** The storage methods a point-in-time restore uses: the object's own storage in production. */
+export type PointInTimeStorage = Pick<DurableObjectStorage, 'getBookmarkForTime' | 'onNextSessionRestoreBookmark'>;
+
+function restoreRefusal(ws: WorkspaceContext, input: Rpc.RestoreBookmarkInput): Rpc.RestoreBookmarkOutcome | null {
+  const meta = readMeta(ws.sql);
+  if (!meta) return { status: 'unavailable' };
+  if (meta.maintenanceState !== input.expectedState || meta.maintenanceVersion !== input.expectedVersion) {
+    return { status: 'conflict', state: meta.maintenanceState, version: meta.maintenanceVersion };
+  }
+  if (meta.maintenanceState !== 'frozen' && meta.maintenanceState !== 'recovery') {
+    return { status: 'not-held', state: meta.maintenanceState, version: meta.maintenanceVersion };
+  }
+  // The restored database carries an older activated epoch. Only a
+  // deployment already bound to a new, never-activated epoch keeps its
+  // writes, alarms and consumer callbacks inert until controlled activation.
+  const configured = ws.env.ANALYSIS_RECOVERY_EPOCH;
+  if (!isValidRecoveryEpoch(configured) || configured === meta.activatedEpoch || epochSuperseded(ws.sql, configured)) {
+    logOperator('restore.schedule', 'epoch-mismatch');
+    return { status: 'epoch-not-rotated' };
+  }
+  return null;
+}
+
+/**
+ * Schedules a point-in-time restore of this object's storage for its next
+ * session (OPS-03 step 4); the caller restarts the object after replying.
+ * Every refusal happens before any point-in-time storage call: the request
+ * names exactly one bookmark or one time inside the platform's 30-day window
+ * (never ahead of the object's clock), the workspace is `frozen` or
+ * `recovery` at exactly the expected state and version (a replay after the
+ * restore meets the restored version and conflicts), and the configured epoch
+ * was rotated first (restoreRefusal).
+ */
+export async function restoreToBookmark(
+  ws: WorkspaceContext,
+  input: Rpc.RestoreBookmarkInput,
+  pitr: PointInTimeStorage,
+): Promise<Rpc.RestoreBookmarkOutcome> {
+  try {
+    if (!isMaintenanceState(input?.expectedState) || !isSafeCount(input.expectedVersion) || !isSafeCount(input.now)) {
+      return { status: 'invalid-request' };
+    }
+    const byBookmark = input.bookmark !== null && input.bookmark !== undefined;
+    const byTime = input.at !== null && input.at !== undefined;
+    if (byBookmark === byTime) return { status: 'invalid-request' };
+    if (byBookmark && !isRestoreBookmark(input.bookmark)) return { status: 'invalid-request' };
+    if (byTime) {
+      const objectNow = Date.now();
+      if (!isSafeCount(input.at) || input.at > objectNow || input.at < objectNow - RESTORE_WINDOW_MS) {
+        return { status: 'invalid-request' };
+      }
+    }
+    const checked = gate(ws, 'read');
+    if (!checked.ok) return { status: 'held', reason: checked.reason };
+    const refused = restoreRefusal(ws, input);
+    if (refused) return refused;
+
+    let bookmark: string;
+    try {
+      bookmark = byTime ? await pitr.getBookmarkForTime(input.at as number) : (input.bookmark as string);
+    } catch {
+      logOperator('restore.schedule', 'unavailable');
+      return { status: 'bookmark-refused' };
+    }
+    if (!isRestoreBookmark(bookmark)) {
+      logOperator('restore.schedule', 'unavailable');
+      return { status: 'bookmark-refused' };
+    }
+    // The lookup yielded to the runtime: the preconditions must still hold.
+    const changed = restoreRefusal(ws, input);
+    if (changed) return changed;
+
+    let undoBookmark: string;
+    try {
+      undoBookmark = await pitr.onNextSessionRestoreBookmark(bookmark);
+    } catch {
+      logOperator('restore.schedule', 'unavailable');
+      return { status: 'bookmark-refused' };
+    }
+    logOperator('restore.schedule');
+    return { status: 'scheduled', bookmark, undoBookmark: String(undoBookmark) };
   } catch {
     return { status: 'unavailable' };
   }

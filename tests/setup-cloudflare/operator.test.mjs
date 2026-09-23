@@ -1,16 +1,17 @@
 // scripts/cloudflare/operator.mjs against a fake local installation (OPS-01,
-// OPS-02, OPS-03 local parts, JOB-10). The fake server implements the
+// OPS-02, OPS-03, JOB-10). The fake server implements the
 // /api/auth and /api/operator/* HTTP contracts with an in-memory workspace
 // made of synthetic rows; no credentials, no network beyond 127.0.0.1.
 
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { ROOT } from '../../scripts/cloudflare/lib.mjs';
+import { parseRestoreTime, RESTORE_BOOKMARK, RESTORE_WINDOW_MS } from '../../scripts/cloudflare/operator.mjs';
 
 const CLI = path.join(ROOT, 'scripts', 'cloudflare', 'operator.mjs');
 const PASSWORD = 'synthetic-admin-password-4471';
@@ -19,8 +20,12 @@ const CREDENTIALS = JSON.stringify({ ADMIN_PASSWORD: PASSWORD, OPERATOR_TOKEN: T
 const CONTENT_MARKER = 'synthetic-participant-speech-9c1f';
 const WORKSPACE_ID = `ws_${'1'.repeat(32)}`;
 const SOURCE_EPOCH = `ep_${'a'.repeat(32)}`;
+const BOOKMARK = '0000007b-0000b26e-00001538-0c3e87bb37b3db5cc52eedb93cd3b96b';
+const UNDO_BOOKMARK = '0000007c-0000b26f-00001539-1c3e87bb37b3db5cc52eedb93cd3b96c';
 
 const format = await loadFormat();
+/** The Worker's sign-in body bound, which the fake server enforces as POST /api/auth does. */
+const { MAX_CLOUDFLARE_LOGIN_BODY_BYTES: MAX_LOGIN_BODY_BYTES } = await import(new URL('../../src/lib/loginBody.ts', import.meta.url).href);
 
 async function loadFormat() {
   process.removeAllListeners('warning');
@@ -105,6 +110,9 @@ async function fakeInstallation(t, overrides = {}) {
     signIns: 0,
     requests: [],
     maintenanceBodies: [],
+    restoreBodies: [],
+    epochRotated: true,
+    adminPassword: PASSWORD,
     importCalls: [],
     imported: new Map(),
     finalized: null,
@@ -126,13 +134,15 @@ async function fakeInstallation(t, overrides = {}) {
     });
 
     if (url.pathname === '/api/auth' && request.method === 'POST') {
+      // Like the Worker: a body over 1 KiB is refused before any comparison.
+      if (Buffer.byteLength(body) > MAX_LOGIN_BODY_BYTES) return send(response, 413, { error: 'Request body is too large' });
       let password = null;
       try {
         password = JSON.parse(body).password;
       } catch {
         // falls through to 401
       }
-      if (password !== PASSWORD) return send(response, 401, { error: 'Invalid password' });
+      if (password !== state.adminPassword) return send(response, 401, { error: 'Invalid password' });
       state.signIns += 1;
       const session = `session-${state.signIns}`;
       state.sessions.add(session);
@@ -235,6 +245,20 @@ async function fakeInstallation(t, overrides = {}) {
       const duplicate = state.imported.has(key);
       state.imported.set(key, chunk.sha256);
       return send(response, 200, { status: 'accepted', family: chunk.family, index: chunk.index, duplicate });
+    }
+
+    if (url.pathname === '/api/operator/recovery/restore' && request.method === 'POST') {
+      const input = JSON.parse(body);
+      state.restoreBodies.push(input);
+      if (state.faults.restoreReply) return send(response, state.faults.restoreReply.status, state.faults.restoreReply.body);
+      if (input.expectedState !== state.maintenance.state || input.expectedVersion !== state.maintenance.version) {
+        return send(response, 409, { error: 'conflict', code: 'MAINTENANCE_CONFLICT', ...state.maintenance });
+      }
+      if (state.maintenance.state !== 'frozen' && state.maintenance.state !== 'recovery') {
+        return send(response, 409, { error: 'not held', code: 'NOT_HELD', ...state.maintenance });
+      }
+      if (!state.epochRotated) return send(response, 409, { error: 'rotate first', code: 'EPOCH_NOT_ROTATED' });
+      return send(response, 200, { status: 'scheduled', bookmark: input.bookmark ?? BOOKMARK, undoBookmark: UNDO_BOOKMARK });
     }
 
     if (url.pathname === '/api/operator/recovery/activate' && request.method === 'POST') {
@@ -344,6 +368,20 @@ test('a refused password stops before any operator call', async (t) => {
   assert.equal(result.code, 2);
   assert.match(result.stderr, /ADMIN_PASSWORD was not accepted/);
   assert.deepEqual(state.requests.map((request) => request.path), ['/api/auth']);
+});
+
+test('the CLI runs through a symlinked path (Node runs the real path of a linked script)', async (t) => {
+  const link = path.join(tempDir(t, 'oi-operator-link-'), 'operator.mjs');
+  symlinkSync(CLI, link);
+  const help = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [link, '--help'], { env: { PATH: process.env.PATH }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.on('error', reject);
+    child.on('close', (code) => resolve({ code, stdout }));
+  });
+  assert.equal(help.code, 0);
+  assert.match(help.stdout, /^Usage: node scripts\/cloudflare\/operator\.mjs/);
 });
 
 test('--origin must be https, or http only to a loopback host', async () => {
@@ -625,4 +663,126 @@ test('JOB-10 recovery activate maps a held workspace to refused (exit 2) and an 
   assert.equal(unknown.code, 1);
   assert.match(unknown.stderr, /activation outcome unknown/);
   assert.equal(unknown.json.detail.status.maintenance.state, 'recovery');
+});
+
+// ---------- Point-in-time restore ----------
+
+test('OPS-03 recovery restore by bookmark or by time sends one target with the compare-and-set inputs', async (t) => {
+  const { state, origin } = await fakeInstallation(t);
+  const byBookmark = await runCli([
+    'recovery', 'restore', '--expected-state', 'frozen', '--expected-version', '4', '--bookmark', BOOKMARK, '--origin', origin,
+  ]);
+  assert.equal(byBookmark.code, 0, byBookmark.stderr);
+  assert.equal(byBookmark.json.command, 'recovery restore');
+  assert.equal(byBookmark.json.status, 'scheduled');
+  assert.equal(byBookmark.json.bookmark, BOOKMARK);
+  assert.equal(byBookmark.json.undoBookmark, UNDO_BOOKMARK);
+  assert.match(byBookmark.json.next, /undoBookmark/);
+  assert.deepEqual(state.restoreBodies[0], { expectedState: 'frozen', expectedVersion: 4, bookmark: BOOKMARK });
+
+  const at = new Date(Date.now() - 2 * 3_600_000);
+  at.setUTCMilliseconds(250);
+  const byTime = await runCli([
+    'recovery', 'restore', '--expected-state', 'frozen', '--expected-version', '4', '--at', at.toISOString(), '--origin', origin,
+  ]);
+  assert.equal(byTime.code, 0, byTime.stderr);
+  assert.deepEqual(state.restoreBodies[1], { expectedState: 'frozen', expectedVersion: 4, at: at.getTime() });
+  for (const result of [byBookmark, byTime]) assertNoSecretsOrContent(result);
+});
+
+test('OPS-03 --at is a strict ISO 8601 time with a zone inside the 30-day window', () => {
+  const now = Date.UTC(2026, 8, 23, 12, 0, 0);
+  assert.equal(parseRestoreTime('2026-09-21T10:00Z', now), Date.UTC(2026, 8, 21, 10, 0, 0));
+  assert.equal(parseRestoreTime('2026-09-21T12:30:00.5+02:00', now), Date.UTC(2026, 8, 21, 10, 30, 0, 500));
+  assert.equal(parseRestoreTime('2026-09-21T05:30:00-04:30', now), Date.UTC(2026, 8, 21, 10, 0, 0));
+  assert.equal(parseRestoreTime('2026-08-24T12:00:00Z', now), now - RESTORE_WINDOW_MS);
+  for (const raw of [
+    '2026-09-21T10:00:00',          // no zone: local time is ambiguous
+    '2026-09-21 10:00:00Z',         // not ISO 8601
+    '2026-02-30T00:00:00Z',         // Date.parse would roll this into March
+    '2026-09-21T24:00:00Z',
+    '2026-09-21T10:00:00+24:00',
+    '2026-09-23T12:00:01Z',         // the future
+    '2026-08-24T11:59:59Z',         // one second beyond the window
+    '1789984800000',
+  ]) {
+    assert.throws(() => parseRestoreTime(raw, now), (error) => error.exitCode === 2, raw);
+  }
+});
+
+test('OPS-03 the CLI bookmark rule and window match the Worker (src/lib/storage/types.ts)', async () => {
+  const types = await import(new URL('../../src/lib/storage/types.ts', import.meta.url).href);
+  assert.equal(RESTORE_WINDOW_MS, types.RESTORE_WINDOW_MS);
+  for (const sample of [BOOKMARK, 'a', 'A.b_c-1', '-leading-dash', '', 'with space', 'x'.repeat(256), 'x'.repeat(257), 'ümlaut', 'semi;colon']) {
+    assert.equal(RESTORE_BOOKMARK.test(sample), types.isRestoreBookmark(sample), sample);
+  }
+});
+
+test('OPS-03 recovery restore refuses a malformed request locally, before credentials or any request', async (t) => {
+  const { state, origin } = await fakeInstallation(t);
+  const base = ['recovery', 'restore', '--origin', origin];
+  const recent = new Date(Date.now() - 3_600_000).toISOString();
+  const cases = [
+    [['--expected-state', 'frozen', '--expected-version', '4'], /exactly one of --at/],
+    [['--expected-state', 'frozen', '--expected-version', '4', '--bookmark', BOOKMARK, '--at', recent], /exactly one of --at/],
+    [['--expected-state', 'frozen', '--expected-version', '4', '--bookmark', 'not a bookmark'], /--bookmark must be/],
+    [['--expected-state', 'frozen', '--expected-version', '4', '--at', recent.replace('Z', '')], /ISO 8601 time with a zone/],
+    [['--expected-state', 'frozen', '--expected-version', '4', '--at', new Date(Date.now() + 60_000).toISOString()], /in the future/],
+    [['--expected-state', 'frozen', '--expected-version', '4', '--at', new Date(Date.now() - 31 * 86_400_000).toISOString()], /more than 30 days/],
+    [['--expected-state', 'open', '--expected-version', '4', '--bookmark', BOOKMARK], /frozen or recovery/],
+    [['--expected-state', 'frozen', '--bookmark', BOOKMARK], /--expected-version is required/],
+    [['--expected-state', 'frozen', '--expected-version', '4', '--bookmark', BOOKMARK, '--expected-epoch', SOURCE_EPOCH], /does not take --expected-epoch/],
+  ];
+  for (const [args, message] of cases) {
+    const result = await runCli([...base, ...args], { stdin: '' });
+    assert.equal(result.code, 2, args.join(' '));
+    assert.match(result.stderr, message, args.join(' '));
+  }
+  assert.equal(state.requests.length, 0);
+});
+
+test('OPS-03 recovery restore reports a definite refusal as exit 2 and an unknown outcome as exit 1 with the current status', async (t) => {
+  const notRotated = await fakeInstallation(t, { epochRotated: false });
+  const refused = await runCli(['recovery', 'restore', '--expected-state', 'frozen', '--expected-version', '4', '--bookmark', BOOKMARK, '--origin', notRotated.origin]);
+  assert.equal(refused.code, 2);
+  assert.match(refused.stderr, /restore refused \(HTTP 409 EPOCH_NOT_ROTATED\)/);
+
+  const open = await fakeInstallation(t, { maintenance: { state: 'recovery', version: 7 } });
+  const stale = await runCli(['recovery', 'restore', '--expected-state', 'frozen', '--expected-version', '4', '--bookmark', BOOKMARK, '--origin', open.origin]);
+  assert.equal(stale.code, 2);
+  assert.equal(stale.json.detail.code, 'MAINTENANCE_CONFLICT');
+  assert.equal(stale.json.detail.state, 'recovery');
+  assert.equal(stale.json.detail.version, 7);
+
+  const platform = await fakeInstallation(t, { faults: { restoreReply: { status: 422, body: { code: 'BOOKMARK_REFUSED', retryable: false } } } });
+  const bookmarkRefused = await runCli(['recovery', 'restore', '--expected-state', 'frozen', '--expected-version', '4', '--bookmark', BOOKMARK, '--origin', platform.origin]);
+  assert.equal(bookmarkRefused.code, 2);
+  assert.match(bookmarkRefused.stderr, /BOOKMARK_REFUSED/);
+
+  const lost = await fakeInstallation(t, { faults: { restoreReply: { status: 503, body: { code: 'OUTCOME_UNKNOWN', retryable: true } } } });
+  const unknown = await runCli(['recovery', 'restore', '--expected-state', 'frozen', '--expected-version', '4', '--bookmark', BOOKMARK, '--origin', lost.origin]);
+  assert.equal(unknown.code, 1);
+  assert.match(unknown.stderr, /restore outcome unknown/);
+  assert.equal(unknown.json.detail.status.maintenance.state, 'frozen');
+});
+
+// ---------- Sign-in body bound ----------
+
+test('F5 an ADMIN_PASSWORD whose sign-in body exceeds the Worker\'s 1 KiB bound is refused before signing in', async (t) => {
+  const { state, origin } = await fakeInstallation(t);
+  for (const password of ['A'.repeat(1010), '\u20ac'.repeat(342), '"'.repeat(505)]) {
+    assert.ok(Buffer.byteLength(JSON.stringify({ password })) > MAX_LOGIN_BODY_BYTES);
+    const result = await runCli(['status', '--origin', origin], { stdin: JSON.stringify({ ADMIN_PASSWORD: password, OPERATOR_TOKEN: TOKEN }) });
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /ADMIN_PASSWORD is too long for Cloudflare sign-in/);
+    assert.ok(!result.stderr.includes(password) && !result.stdout.includes(password), 'password printed');
+  }
+  assert.equal(state.requests.length, 0);
+
+  // The largest password that fits still signs in.
+  const largest = 'A'.repeat(MAX_LOGIN_BODY_BYTES - Buffer.byteLength('{"password":""}'));
+  const fits = await fakeInstallation(t, { adminPassword: largest });
+  const accepted = await runCli(['status', '--origin', fits.origin], { stdin: JSON.stringify({ ADMIN_PASSWORD: largest, OPERATOR_TOKEN: TOKEN }) });
+  assert.equal(accepted.code, 0, accepted.stderr);
+  assert.equal(fits.state.signIns, 1);
 });

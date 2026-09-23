@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// operator:cloudflare (OPS-01, OPS-02, OPS-03 local parts, JOB-10): operator
+// operator:cloudflare (OPS-01, OPS-02, OPS-03, JOB-10): operator
 // commands against a deployed Cloudflare installation's /api/operator API.
 //
 //   node scripts/cloudflare/operator.mjs <command> --origin <https://installation> [options]
@@ -21,9 +21,8 @@
 
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, statSync, writeSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { ROOT } from './lib.mjs';
+import { ROOT, isMain } from './lib.mjs';
 
 const USAGE = `Usage: node scripts/cloudflare/operator.mjs <command> --origin <https://installation> [options]
 
@@ -35,6 +34,10 @@ Commands
                                              (the directory must be new or empty and outside the repository)
   backup import --in <dir>                   import a complete backup into an empty workspace in recovery
                                              (validated before sending; re-run to resume)
+  recovery restore --expected-state <frozen|recovery> --expected-version <n> (--at <time> | --bookmark <b>)
+                                             point-in-time restore of the workspace object; the new
+                                             ANALYSIS_RECOVERY_EPOCH must already be bound (RUNBOOK OPS-03).
+                                             --at is ISO 8601 with a zone (2026-09-21T14:30:00Z) within 30 days
   recovery activate --expected-epoch <ep_…>  activate the deployment's epoch after restore/import
 
 Credentials
@@ -56,6 +59,16 @@ const SESSION_REFRESH_MS = 12 * 60 * 1000;
 const MAX_IMPORT_BODY_BYTES = 24 * 1024 * 1024;
 const IMPORT_ATTEMPTS = 3;
 const SESSION_COOKIE = 'research-auth';
+/**
+ * The Cloudflare sign-in body bound: MAX_CLOUDFLARE_LOGIN_BODY_BYTES in
+ * src/lib/loginBody.ts, which POST /api/auth enforces (tests/unit/adminPasswordLimit.test.ts
+ * keeps the two equal).
+ */
+export const MAX_LOGIN_BODY_BYTES = 1024;
+/** Same rule and window as isRestoreBookmark and RESTORE_WINDOW_MS in src/lib/storage/types.ts. */
+export const RESTORE_BOOKMARK = /^[0-9A-Za-z][0-9A-Za-z._-]{0,255}$/;
+export const RESTORE_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+const ISO_TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?(Z|[+-]\d{2}:\d{2})$/;
 
 export class OperatorError extends Error {
   constructor(message, { exitCode = EXIT_FAILED, detail } = {}) {
@@ -82,6 +95,8 @@ const OPTIONS = {
   out: { type: 'string' },
   in: { type: 'string' },
   'expected-epoch': { type: 'string' },
+  at: { type: 'string' },
+  bookmark: { type: 'string' },
   help: { type: 'boolean' },
 };
 
@@ -91,7 +106,41 @@ const COMMAND_OPTIONS = {
   'backup export': ['out'],
   'backup import': ['in'],
   'recovery activate': ['expected-epoch'],
+  'recovery restore': ['expected-state', 'expected-version', 'at', 'bookmark'],
 };
+
+function expectedVersionOf(values) {
+  const version = values['expected-version'];
+  if (typeof version !== 'string' || !/^\d{1,15}$/.test(version)) {
+    throw refuse('--expected-version is required: the maintenance version status reports');
+  }
+  return Number(version);
+}
+
+/**
+ * A strict ISO 8601 time with an explicit zone, as epoch milliseconds. Refuses
+ * impossible calendar dates (Date.parse would roll 2026-02-30 into March) and
+ * times the platform cannot restore: ahead of now or more than 30 days back.
+ */
+export function parseRestoreTime(raw, now = Date.now()) {
+  const match = ISO_TIME.exec(raw ?? '');
+  if (!match) throw refuse('--at must be an ISO 8601 time with a zone, such as 2026-09-21T14:30:00Z');
+  const [, year, month, day, hour, minute, second = '0', millis = '0', zone] = match;
+  const fields = [year, month, day, hour, minute, second].map(Number);
+  const wall = new Date(Date.UTC(fields[0], fields[1] - 1, fields[2], fields[3], fields[4], fields[5], Number(millis.padEnd(3, '0'))));
+  const actual = [wall.getUTCFullYear(), wall.getUTCMonth() + 1, wall.getUTCDate(), wall.getUTCHours(), wall.getUTCMinutes(), wall.getUTCSeconds()];
+  if (actual.some((value, index) => value !== fields[index])) throw refuse(`--at is not a real calendar time: ${raw}`);
+  let offsetMinutes = 0;
+  if (zone !== 'Z') {
+    const [zoneHours, zoneMinutes] = zone.slice(1).split(':').map(Number);
+    if (zoneHours > 23 || zoneMinutes > 59) throw refuse(`--at has an invalid zone offset: ${raw}`);
+    offsetMinutes = (zone[0] === '-' ? -1 : 1) * (zoneHours * 60 + zoneMinutes);
+  }
+  const at = wall.getTime() - offsetMinutes * 60_000;
+  if (at > now) throw refuse('--at is in the future: a restore target must be a past time');
+  if (at < now - RESTORE_WINDOW_MS) throw refuse('--at is more than 30 days ago: point-in-time recovery reaches back 30 days');
+  return at;
+}
 
 export function parseCommand(argv) {
   let parsed;
@@ -109,7 +158,7 @@ export function parseCommand(argv) {
   else if (first === 'maintenance' && positionals.length === 2) {
     command = 'maintenance';
     nextState = second;
-  } else if ((first === 'backup' && (second === 'export' || second === 'import')) || (first === 'recovery' && second === 'activate')) {
+  } else if ((first === 'backup' && (second === 'export' || second === 'import')) || (first === 'recovery' && (second === 'activate' || second === 'restore'))) {
     if (rest.length > 0) throw refuse(`unexpected arguments after ${first} ${second}\n\n${USAGE}`);
     command = `${first} ${second}`;
   } else {
@@ -126,16 +175,12 @@ export function parseCommand(argv) {
     if (!STATES.includes(values['expected-state'])) {
       throw refuse('--expected-state is required: the state status reports (open, draining, frozen or recovery)');
     }
-    const version = values['expected-version'];
-    if (typeof version !== 'string' || !/^\d{1,15}$/.test(version)) {
-      throw refuse('--expected-version is required: the maintenance version status reports');
-    }
     return {
       command,
       origin,
       nextState,
       expectedState: values['expected-state'],
-      expectedVersion: Number(version),
+      expectedVersion: expectedVersionOf(values),
       classifyInFlight: values['classify-in-flight'] === true,
     };
   }
@@ -152,6 +197,27 @@ export function parseCommand(argv) {
       throw refuse('--expected-epoch is required: the activated epoch status reports (ep_ followed by 32 hex digits)');
     }
     return { command, origin, expectedEpoch: values['expected-epoch'] };
+  }
+  if (command === 'recovery restore') {
+    const expectedState = values['expected-state'];
+    if (expectedState !== 'frozen' && expectedState !== 'recovery') {
+      throw refuse('--expected-state is required: frozen or recovery, as status reports (a restore needs a held workspace)');
+    }
+    const expectedVersion = expectedVersionOf(values);
+    if ((values.at === undefined) === (values.bookmark === undefined)) {
+      throw refuse('recovery restore needs exactly one of --at <ISO 8601 time> and --bookmark <bookmark>');
+    }
+    if (values.bookmark !== undefined && !RESTORE_BOOKMARK.test(values.bookmark)) {
+      throw refuse('--bookmark must be a point-in-time recovery bookmark (letters, digits, dots, dashes, underscores; at most 256)');
+    }
+    return {
+      command,
+      origin,
+      expectedState,
+      expectedVersion,
+      bookmark: values.bookmark ?? null,
+      at: values.at === undefined ? null : parseRestoreTime(values.at),
+    };
   }
   return { command, origin };
 }
@@ -182,6 +248,15 @@ function validateCredential(name, value) {
   if (typeof value !== 'string' || value.length === 0) throw refuse(`${name} is blank`);
   if (value.length > 4096) throw refuse(`${name} is longer than 4096 characters`);
   if (/[\u0000-\u001f\u007f]/.test(value)) throw refuse(`${name} contains control characters`);
+  // The Worker refuses a larger sign-in body with 413 before comparing the
+  // password, so such a password could never sign in: refuse it here instead.
+  if (name === 'ADMIN_PASSWORD' && Buffer.byteLength(JSON.stringify({ password: value })) > MAX_LOGIN_BODY_BYTES) {
+    throw refuse(
+      `ADMIN_PASSWORD is too long for Cloudflare sign-in: the sign-in request would exceed the ${MAX_LOGIN_BODY_BYTES} bytes `
+        + `the Worker accepts (at most ${MAX_LOGIN_BODY_BYTES - Buffer.byteLength('{"password":""}')} ASCII characters; `
+        + 'fewer with multi-byte or escaped characters). Rotate it to a shorter value.',
+    );
+  }
   return value;
 }
 
@@ -797,6 +872,35 @@ async function activate(client, options) {
   throw refuse(`activation refused (${refusalSummary(result)})`, detail);
 }
 
+async function restore(client, options) {
+  const result = await client.call('POST', '/api/operator/recovery/restore', {
+    body: JSON.stringify({
+      expectedState: options.expectedState,
+      expectedVersion: options.expectedVersion,
+      ...(options.bookmark !== null ? { bookmark: options.bookmark } : { at: options.at }),
+    }),
+  });
+  if (result.status === 200 && result.body.status === 'scheduled') {
+    return {
+      command: 'recovery restore',
+      status: 'scheduled',
+      bookmark: result.body.bookmark,
+      undoBookmark: result.body.undoBookmark,
+      next: 'The workspace object restarts on the restored storage. Read status: it reports the restored maintenance state '
+        + 'and version with epoch.configuredMatches false. Then move it to recovery and activate the epoch. '
+        + 'Keep undoBookmark: restoring it, from frozen or recovery, reverses this restore.',
+    };
+  }
+  const detail = safeDetail(result.status, result.body);
+  if (!isDefiniteRefusal(result) && (result.body.code === 'OUTCOME_UNKNOWN' || result.status >= 500)) {
+    // The object may have restarted on the restored storage before replying.
+    throw new OperatorError(`restore outcome unknown (${refusalSummary(result)}); current status is reported below`, {
+      detail: { ...detail, status: await currentStatus(client) },
+    });
+  }
+  throw refuse(`restore refused (${refusalSummary(result)})`, detail);
+}
+
 export async function runOperator(argv) {
   const options = parseCommand(argv);
   if (options.command === 'help') {
@@ -825,6 +929,8 @@ export async function runOperator(argv) {
       return importBackup(client, backup);
     case 'recovery activate':
       return activate(client, options);
+    case 'recovery restore':
+      return restore(client, options);
     default:
       throw refuse('unknown command');
   }
@@ -848,6 +954,8 @@ async function main() {
   }
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+// import.meta.main, not an argv[1] path comparison: Node runs the real path
+// of a symlinked script, so that comparison never matched through a link.
+if (isMain(import.meta)) {
   await main();
 }

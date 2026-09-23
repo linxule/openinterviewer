@@ -223,6 +223,30 @@ export type ActivateEpochOutcome =
   | { status: 'held'; reason: WorkspaceHoldReason }
   | { status: 'unavailable' };
 
+export type RestoreBookmarkInput = {
+  /** The held state (`frozen` or `recovery`) and version status reported (compare-and-set). */
+  expectedState: MaintenanceState;
+  expectedVersion: number;
+  /** Exactly one of `bookmark` and `at` (epoch ms, resolved to a bookmark by the object). */
+  bookmark: string | null;
+  at: number | null;
+  now: number;
+};
+
+export type RestoreBookmarkOutcome =
+  /** The next session opens on `bookmark`; restoring `undoBookmark` reverses it. */
+  | { status: 'scheduled'; bookmark: string; undoBookmark: string }
+  | { status: 'conflict'; state: MaintenanceState; version: number }
+  /** The workspace is not `frozen` or `recovery`. */
+  | { status: 'not-held'; state: MaintenanceState; version: number }
+  /** The configured epoch is invalid, still the activated one, or one this object already replaced. */
+  | { status: 'epoch-not-rotated' }
+  /** The platform refused the time or bookmark; nothing was scheduled. */
+  | { status: 'bookmark-refused' }
+  | { status: 'invalid-request' }
+  | { status: 'held'; reason: WorkspaceHoldReason }
+  | { status: 'unavailable' };
+
 // ---------- Researcher sign-in budget (gap F5) ----------
 
 export type LoginAttemptInput = {

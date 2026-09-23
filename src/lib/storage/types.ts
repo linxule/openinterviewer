@@ -319,6 +319,20 @@ export function isDurableWorkspaceStore(store: WorkspaceStorePort): store is Dur
   return store.backend === 'durable-object';
 }
 
+// ---------- Point-in-time restore (Cloudflare target only, OPS-03) ----------
+
+/** How far back Durable Object point-in-time recovery reaches. */
+export const RESTORE_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+const RESTORE_BOOKMARK = /^[0-9A-Za-z][0-9A-Za-z._-]{0,255}$/;
+
+/**
+ * A point-in-time recovery bookmark as the platform prints it (an opaque,
+ * mostly alphanumeric string with dashes), bounded before it reaches storage.
+ */
+export function isRestoreBookmark(value: unknown): value is string {
+  return typeof value === 'string' && RESTORE_BOOKMARK.test(value);
+}
+
 // ---------- Researcher sign-in budget (Cloudflare target only, gap F5) ----------
 
 /** Per-client attempts counted in one window opened by the first counted attempt. */

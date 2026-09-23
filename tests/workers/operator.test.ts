@@ -1,8 +1,10 @@
-// Maintenance modes, operator status, in-flight classification and
-// recovery-epoch activation in the real WorkspaceStore (OPS-01, OPS-03, JOB-10).
+// Maintenance modes, operator status, in-flight classification,
+// recovery-epoch activation and the point-in-time restore entry point in the
+// real WorkspaceStore (OPS-01, OPS-03, JOB-10).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { gate, type OperationClass, type WorkspaceContext, type WorkspaceEnv } from '../../cloudflare/workspace/context';
+import type { RestoreBookmarkInput, RestoreBookmarkOutcome } from '../../cloudflare/workspace/rpcTypes';
 import type { MaintenanceState } from '../../src/lib/storage/types';
 import { testEnv, workspaceStub } from './helpers';
 
@@ -320,9 +322,11 @@ describe('maintenance transitions (OPS-01)', () => {
     expect(await workspaceStub().transitionMaintenance({ expectedState: 'frozen', expectedVersion: 9, nextState: 'open', now: callerNow }))
       .toEqual({ status: 'transitioned', state: 'open', version: 10 });
     const armed = await runInDurableObject(workspaceStub(), (_instance, state) => state.storage.getAlarm());
-    // Armed at the object's now (or already fired); never the caller's week-ahead time.
-    expect(armed === null || armed <= Date.now()).toBe(true);
-    if (armed !== null) await runDurableObjectAlarm(workspaceStub());
+    // Armed at the object's now, never the caller's week-ahead time. Under load
+    // the real alarm may already have fired, dispatched and re-armed a later
+    // watchdog; that is minutes ahead, not a week.
+    expect(armed === null || armed < callerNow - 24 * 3_600_000).toBe(true);
+    if (queueSends.length === 0 && armed !== null && armed <= Date.now()) await runDurableObjectAlarm(workspaceStub());
     await vi.waitFor(() => expect(queueSends).toHaveLength(1));
     expect(fetchSpy).not.toHaveBeenCalled();
   });
@@ -464,5 +468,177 @@ describe('recovery-epoch activation (JOB-10, OPS-03)', () => {
     });
     expect(outcome).toEqual({ status: 'held', reason: 'recovery-epoch-mismatch' });
     expect((await meta()).activated_epoch).toBe(OLD_EPOCH);
+  });
+});
+
+describe('point-in-time restore entry point (OPS-03)', () => {
+  // workerd has no point-in-time recovery (its storage refuses both calls, see
+  // the last test), so these tests call the real RPC method on the live
+  // instance with the two storage methods and ctx.abort stubbed. Real: the
+  // gating, SQLite state, reply and restart ordering. Not exercised locally:
+  // the platform resolving a time, restoring storage and reopening the object.
+  const BOOKMARK = '0000007b-0000b26e-00001538-0c3e87bb37b3db5cc52eedb93cd3b96b';
+  const UNDO = '0000007c-0000b26f-00001539-1c3e87bb37b3db5cc52eedb93cd3b96c';
+  const DAY_MS = 24 * 3_600_000;
+
+  /** OPS-03 steps 1-3 done: frozen, and the deployment binds a new epoch the object has not activated. */
+  async function rotatedAndFrozen(state: MaintenanceState = 'frozen', version = 5): Promise<void> {
+    await withSql((sql) => {
+      sql.exec(`UPDATE workspace_meta SET maintenance_state = ?, maintenance_version = ?, activated_epoch = ?`, state, version, OLD_EPOCH);
+    });
+  }
+
+  function request(overrides: Partial<RestoreBookmarkInput> = {}): RestoreBookmarkInput {
+    return { expectedState: 'frozen', expectedVersion: 5, bookmark: BOOKMARK, at: null, now: Date.now(), ...overrides };
+  }
+
+  type Stubbed = { outcome: RestoreBookmarkOutcome; events: string[]; abortReasons: unknown[] };
+
+  async function restoreWithStubbedStorage(input: RestoreBookmarkInput, env: Partial<WorkspaceEnv> = {}): Promise<Stubbed> {
+    return runInDurableObject(workspaceStub(), async (instance, state) => {
+      const events: string[] = [];
+      const lookup = vi.spyOn(state.storage, 'getBookmarkForTime').mockImplementation(async (time) => {
+        events.push(`lookup:${Number(time)}`);
+        return BOOKMARK;
+      });
+      const schedule = vi.spyOn(state.storage, 'onNextSessionRestoreBookmark').mockImplementation(async (bookmark) => {
+        events.push(`schedule:${bookmark}`);
+        return UNDO;
+      });
+      const abort = vi.spyOn(state, 'abort').mockImplementation(() => {
+        events.push('abort');
+      });
+      const instanceEnv = (instance as unknown as { env: WorkspaceEnv }).env;
+      const saved = Object.fromEntries(Object.keys(env).map((name) => [name, instanceEnv[name]]));
+      Object.assign(instanceEnv, env);
+      try {
+        const outcome = await (instance as unknown as { restoreToBookmark(input: RestoreBookmarkInput): Promise<RestoreBookmarkOutcome> })
+          .restoreToBookmark(input);
+        events.push(`reply:${outcome.status}`);
+        if (outcome.status === 'scheduled') await vi.waitFor(() => expect(abort).toHaveBeenCalled());
+        else await new Promise((resolve) => setTimeout(resolve, 20));
+        return { outcome, events, abortReasons: abort.mock.calls.map((call) => call[0]) };
+      } finally {
+        Object.assign(instanceEnv, saved);
+        lookup.mockRestore();
+        schedule.mockRestore();
+        abort.mockRestore();
+      }
+    });
+  }
+
+  it('OPS-03: refuses before any point-in-time storage call unless held at the expected version with the epoch already rotated', async () => {
+    const configured = testEnv.ANALYSIS_RECOVERY_EPOCH;
+    const cases: Array<[string, () => Promise<void>, RestoreBookmarkInput, Partial<WorkspaceEnv>, RestoreBookmarkOutcome]> = [
+      ['an open workspace', () => withSql((sql) => {
+        sql.exec(`UPDATE workspace_meta SET activated_epoch = ?, maintenance_version = 5`, OLD_EPOCH);
+      }),
+        request({ expectedState: 'open' }), {}, { status: 'not-held', state: 'open', version: 5 }],
+      ['a draining workspace', () => rotatedAndFrozen('draining'),
+        request({ expectedState: 'draining' }), {}, { status: 'not-held', state: 'draining', version: 5 }],
+      ['a stale version', () => rotatedAndFrozen('frozen', 6), request(), {}, { status: 'conflict', state: 'frozen', version: 6 }],
+      ['a stale state', () => rotatedAndFrozen('recovery', 5), request(), {}, { status: 'conflict', state: 'recovery', version: 5 }],
+      ['an epoch that was never rotated', () => withSql((sql) => {
+        sql.exec(`UPDATE workspace_meta SET maintenance_state = 'frozen', maintenance_version = 5`);
+      }),
+        request(), {}, { status: 'epoch-not-rotated' }],
+      ['an unset configured epoch', () => rotatedAndFrozen(), request(), { ANALYSIS_RECOVERY_EPOCH: 'not-an-epoch' }, { status: 'epoch-not-rotated' }],
+      ['a configured epoch this object already replaced', async () => {
+        await rotatedAndFrozen();
+        await withSql((sql) => sql.exec(
+          `INSERT INTO operator_audit (at, action, detail_json) VALUES (?, 'epoch.activate', ?)`,
+          NOW, JSON.stringify({ from: configured, to: OLD_EPOCH, reconciledJobs: 0 }),
+        ));
+      }, request(), {}, { status: 'epoch-not-rotated' }],
+      ['another workspace identity', () => rotatedAndFrozen(), request(), { WORKSPACE_ID: `ws_${'9'.repeat(32)}` },
+        { status: 'held', reason: 'workspace-identity-mismatch' }],
+      ['both a bookmark and a time', () => rotatedAndFrozen(), request({ at: Date.now() - 60_000 }), {}, { status: 'invalid-request' }],
+      ['neither a bookmark nor a time', () => rotatedAndFrozen(), request({ bookmark: null }), {}, { status: 'invalid-request' }],
+      ['a malformed bookmark', () => rotatedAndFrozen(), request({ bookmark: 'not a bookmark; drop' }), {}, { status: 'invalid-request' }],
+      ['a time ahead of the object clock', () => rotatedAndFrozen(), request({ bookmark: null, at: Date.now() + 60_000 }), {}, { status: 'invalid-request' }],
+      ['a time beyond the 30-day window', () => rotatedAndFrozen(), request({ bookmark: null, at: Date.now() - 31 * DAY_MS }), {}, { status: 'invalid-request' }],
+      ['an unknown expected state', () => rotatedAndFrozen(), request({ expectedState: 'paused' as MaintenanceState }), {}, { status: 'invalid-request' }],
+      ['a negative expected version', () => rotatedAndFrozen(), request({ expectedVersion: -1 }), {}, { status: 'invalid-request' }],
+    ];
+    for (const [label, arrange, input, env, expected] of cases) {
+      await reset();
+      await arrange();
+      const before = await meta();
+      const audit = await auditRows();
+      const result = await restoreWithStubbedStorage(input, env);
+      expect(result.outcome, label).toEqual(expected);
+      expect(result.events, label).toEqual([`reply:${expected.status}`]);
+      expect(await meta(), label).toEqual(before);
+      expect(await auditRows(), label).toEqual(audit);
+    }
+  });
+
+  it('OPS-03: a time resolves to a bookmark, the restore is scheduled for the next session, the reply goes out, then the object restarts', async () => {
+    await rotatedAndFrozen();
+    const logged: string[] = [];
+    vi.spyOn(console, 'error').mockImplementation((line: unknown) => {
+      logged.push(String(line));
+    });
+    const before = await meta();
+    const at = Date.now() - 2 * DAY_MS;
+    const result = await restoreWithStubbedStorage(request({ bookmark: null, at }));
+    expect(result.outcome).toEqual({ status: 'scheduled', bookmark: BOOKMARK, undoBookmark: UNDO });
+    expect(result.events).toEqual([`lookup:${at}`, `schedule:${BOOKMARK}`, 'reply:scheduled', 'abort']);
+    expect(result.abortReasons).toEqual(['point-in-time restore scheduled']);
+    // Nothing is written: the restore would rewind it.
+    expect(await meta()).toEqual(before);
+    expect(await auditRows()).toEqual([]);
+    const events = logged.map((line) => JSON.parse(line) as Record<string, unknown>).filter((event) => event.event === 'operator.action');
+    expect(events).toEqual([expect.objectContaining({ operation: 'restore.schedule' })]);
+    expect(events[0]).not.toHaveProperty('reason');
+    expect(logged.join('\n')).not.toContain(BOOKMARK.slice(0, 17));
+  });
+
+  it('OPS-03: a bookmark is scheduled as given, from recovery as well as frozen; a platform refusal schedules nothing and never restarts', async () => {
+    await rotatedAndFrozen('recovery', 8);
+    const direct = await restoreWithStubbedStorage(request({ expectedState: 'recovery', expectedVersion: 8 }));
+    expect(direct.outcome).toEqual({ status: 'scheduled', bookmark: BOOKMARK, undoBookmark: UNDO });
+    expect(direct.events).toEqual([`schedule:${BOOKMARK}`, 'reply:scheduled', 'abort']);
+
+    const refused = await runInDurableObject(workspaceStub(), async (instance, state) => {
+      vi.spyOn(state.storage, 'getBookmarkForTime').mockRejectedValue(new Error('outside the retention window'));
+      const schedule = vi.spyOn(state.storage, 'onNextSessionRestoreBookmark');
+      const abort = vi.spyOn(state, 'abort').mockImplementation(() => undefined);
+      const outcome = await (instance as unknown as { restoreToBookmark(input: RestoreBookmarkInput): Promise<RestoreBookmarkOutcome> })
+        .restoreToBookmark(request({ expectedState: 'recovery', expectedVersion: 8, bookmark: null, at: Date.now() - DAY_MS }));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return { outcome, scheduled: schedule.mock.calls.length, aborted: abort.mock.calls.length };
+    });
+    expect(refused).toEqual({ outcome: { status: 'bookmark-refused' }, scheduled: 0, aborted: 0 });
+  });
+
+  it('OPS-03: through the RPC stub the scheduled reply reaches the caller, then the object really resets and reopens', async () => {
+    // Only onNextSessionRestoreBookmark is stubbed; ctx.abort is workerd's own.
+    // Locally the reopened object finds its storage unchanged (no restore is
+    // applied); on Cloudflare it opens on the bookmark.
+    await rotatedAndFrozen();
+    await runInDurableObject(workspaceStub(), async (instance, state) => {
+      (instance as unknown as { restoreProbe?: string }).restoreProbe = 'before-restart';
+      vi.spyOn(state.storage, 'onNextSessionRestoreBookmark').mockResolvedValue(UNDO);
+    });
+    expect(await workspaceStub().restoreToBookmark(request())).toEqual({ status: 'scheduled', bookmark: BOOKMARK, undoBookmark: UNDO });
+    await vi.waitFor(async () => {
+      const probe = await runInDurableObject(workspaceStub(), (instance) => (instance as unknown as { restoreProbe?: string }).restoreProbe ?? 'fresh');
+      expect(probe).toBe('fresh');
+    });
+    expect(await workspaceStub().operatorStatus()).toMatchObject({
+      status: 'ok',
+      maintenance: { state: 'frozen', version: 5 },
+      epoch: { activated: OLD_EPOCH, configuredMatches: false },
+    });
+  });
+
+  it('OPS-03: the local runtime has no point-in-time recovery: through the RPC stub its storage refuses and nothing is scheduled', async () => {
+    await rotatedAndFrozen();
+    const stub = workspaceStub();
+    expect(await stub.restoreToBookmark(request({ bookmark: null, at: Date.now() - 60_000 }))).toEqual({ status: 'bookmark-refused' });
+    expect(await stub.restoreToBookmark(request())).toEqual({ status: 'bookmark-refused' });
+    expect(await meta()).toMatchObject({ maintenance_state: 'frozen', maintenance_version: 5, activated_epoch: OLD_EPOCH });
+    expect(await stub.operatorStatus()).toMatchObject({ status: 'ok', epoch: { activated: OLD_EPOCH, configuredMatches: false } });
   });
 });

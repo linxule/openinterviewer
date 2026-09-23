@@ -6,6 +6,8 @@
 //  - GET status, GET backup (reads that diagnose or rescue a held workspace);
 //  - POST backup/import and POST recovery/activate (they act only inside the
 //    `recovery` hold, which the object enforces);
+//  - POST recovery/restore (only inside the `frozen` or `recovery` hold, with
+//    the epoch already rotated, so the restored storage stays inert);
 //  - POST maintenance whose transition tightens the hold (open → draining,
 //    any state → frozen or recovery).
 // A maintenance transition that enables more work — to `open`, or to
