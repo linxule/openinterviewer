@@ -23,6 +23,21 @@ export {
   formatProfileFields
 } from './prompts';
 
+/**
+ * How one provider call may execute. `default` keeps every existing path
+ * (participant greeting/interview, synchronous Node analysis, aggregate,
+ * follow-up) exactly as before, including each SDK's own retries.
+ * `queued-synthesis` is the durable Cloudflare analysis policy (JOB-09): one
+ * outbound HTTP request with SDK retries disabled per call, no fallback or
+ * repair request, and an explicit deadline no longer than the synthesis
+ * deadline.
+ */
+export type ProviderExecutionPolicy =
+  | { kind: 'default' }
+  | { kind: 'queued-synthesis'; deadlineMs: number };
+
+export const DEFAULT_EXECUTION_POLICY: ProviderExecutionPolicy = { kind: 'default' };
+
 // Provider interface for interview AI
 export interface AIProvider {
   generateInterviewResponse(
@@ -39,7 +54,8 @@ export interface AIProvider {
     history: InterviewMessage[],
     studyConfig: StudyConfig,
     behaviorData: BehaviorData,
-    participantProfile: ParticipantProfile | null
+    participantProfile: ParticipantProfile | null,
+    policy?: ProviderExecutionPolicy
   ): Promise<ProviderResult<SynthesisResult>>;
 
   synthesizeAggregate(

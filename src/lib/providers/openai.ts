@@ -3,6 +3,8 @@ import {
   AIProvider,
   buildInterviewSystemPrompt,
   cleanJSON,
+  DEFAULT_EXECUTION_POLICY,
+  type ProviderExecutionPolicy,
   type ProviderResult,
 } from '../ai';
 import {
@@ -48,8 +50,10 @@ import {
   formatInterviewHistory,
   GREETING_DEADLINE_MS,
   INTERVIEW_DEADLINE_MS,
+  isQueuedSynthesis,
   providerResult,
   SYNTHESIS_DEADLINE_MS,
+  synthesisDeadlineMs,
   type AggregateSynthesisPayload,
 } from './shared';
 import { isKnownProviderModel } from '../providerRegistry';
@@ -90,6 +94,7 @@ export class OpenAIProvider implements AIProvider {
     maxOutputTokens: number;
     deadlineMs: number;
     operation: string;
+    policy?: ProviderExecutionPolicy;
   }) {
     try {
       return await withProviderDeadline(options.deadlineMs, (signal) =>
@@ -117,6 +122,8 @@ export class OpenAIProvider implements AIProvider {
         }, {
           signal,
           timeout: options.deadlineMs,
+          // OpenAI SDK 7.15.0 per-call RequestOptions.maxRetries (client.js makeRequest).
+          ...(isQueuedSynthesis(options.policy) ? { maxRetries: 0 } : {}),
         })
       );
     } catch (error) {
@@ -170,6 +177,7 @@ export class OpenAIProvider implements AIProvider {
     studyConfig: StudyConfig,
     behaviorData: BehaviorData,
     participantProfile: ParticipantProfile | null,
+    policy: ProviderExecutionPolicy = DEFAULT_EXECUTION_POLICY,
   ): Promise<ProviderResult<SynthesisResult>> {
     const requestedModel = resolveSynthesisModel(studyConfig);
     const response = await this.createResponse({
@@ -179,8 +187,9 @@ export class OpenAIProvider implements AIProvider {
       schemaName: 'interview_synthesis',
       enableReasoning: studyConfig.enableReasoning ?? true,
       maxOutputTokens: 8192,
-      deadlineMs: SYNTHESIS_DEADLINE_MS,
+      deadlineMs: synthesisDeadlineMs(policy),
       operation: 'synthesis',
+      policy,
     });
     const value = this.parseStructured(response.output_text, 'synthesis', validateSynthesisResult);
     return providerResult(value, execution('openai', requestedModel, response.model));

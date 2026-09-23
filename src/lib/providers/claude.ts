@@ -3,6 +3,8 @@ import {
   AIProvider,
   buildInterviewSystemPrompt,
   cleanJSON,
+  DEFAULT_EXECUTION_POLICY,
+  type ProviderExecutionPolicy,
   type ProviderResult,
 } from '../ai';
 import {
@@ -47,8 +49,10 @@ import {
   execution,
   GREETING_DEADLINE_MS,
   INTERVIEW_DEADLINE_MS,
+  isQueuedSynthesis,
   providerResult,
   SYNTHESIS_DEADLINE_MS,
+  synthesisDeadlineMs,
   type AggregateSynthesisPayload,
 } from './shared';
 import { isKnownProviderModel } from '../providerRegistry';
@@ -95,6 +99,7 @@ export class ClaudeProvider implements AIProvider {
     maxTokens: number;
     deadlineMs: number;
     operation: string;
+    policy?: ProviderExecutionPolicy;
   }) {
     const thinking = getClaudeThinkingConfig(options.model, options.enableReasoning);
     try {
@@ -114,6 +119,8 @@ export class ClaudeProvider implements AIProvider {
         }, {
           signal,
           timeout: options.deadlineMs,
+          // Anthropic SDK 0.125.0 per-call RequestOptions.maxRetries (client.js makeRequest).
+          ...(isQueuedSynthesis(options.policy) ? { maxRetries: 0 } : {}),
         })
       );
     } catch (error) {
@@ -175,6 +182,7 @@ export class ClaudeProvider implements AIProvider {
     studyConfig: StudyConfig,
     behaviorData: BehaviorData,
     participantProfile: ParticipantProfile | null,
+    policy: ProviderExecutionPolicy = DEFAULT_EXECUTION_POLICY,
   ): Promise<ProviderResult<SynthesisResult>> {
     const requestedModel = resolveSynthesisModel(studyConfig);
     const response = await this.createStructured({
@@ -186,8 +194,9 @@ export class ClaudeProvider implements AIProvider {
       schema: synthesisResponseSchema,
       enableReasoning: studyConfig.enableReasoning ?? true,
       maxTokens: 8192,
-      deadlineMs: SYNTHESIS_DEADLINE_MS,
+      deadlineMs: synthesisDeadlineMs(policy),
       operation: 'synthesis',
+      policy,
     });
     const value = this.parseStructured(response, 'synthesis', validateSynthesisResult);
     return providerResult(value, execution('claude', requestedModel, response.model));

@@ -1,4 +1,4 @@
-import type { ProviderExecution, ProviderResult } from '../ai';
+import type { ProviderExecution, ProviderExecutionPolicy, ProviderResult } from '../ai';
 import type { AIProviderType, AggregateSynthesisProviderPayload, AggregateSynthesisResult, StudyConfig } from '@/types';
 import type { FollowupStudy } from '../providerValidation';
 import { ProviderFailure } from '../providerErrors';
@@ -8,6 +8,21 @@ export const INTERVIEW_DEADLINE_MS = 60_000;
 export const SYNTHESIS_DEADLINE_MS = 120_000;
 
 export type AggregateSynthesisPayload = AggregateSynthesisProviderPayload;
+
+export function isQueuedSynthesis(
+  policy: ProviderExecutionPolicy | undefined,
+): policy is Extract<ProviderExecutionPolicy, { kind: 'queued-synthesis' }> {
+  return policy?.kind === 'queued-synthesis';
+}
+
+/** The synthesis deadline for a policy; a queued deadline never exceeds the default. */
+export function synthesisDeadlineMs(policy: ProviderExecutionPolicy | undefined): number {
+  if (!isQueuedSynthesis(policy)) return SYNTHESIS_DEADLINE_MS;
+  if (!Number.isSafeInteger(policy.deadlineMs) || policy.deadlineMs <= 0) {
+    throw new Error('Queued synthesis requires a positive integer deadline');
+  }
+  return Math.min(policy.deadlineMs, SYNTHESIS_DEADLINE_MS);
+}
 
 export function providerResult<T>(
   value: T,

@@ -3,6 +3,8 @@ import {
   AIProvider,
   buildInterviewSystemPrompt,
   cleanJSON,
+  DEFAULT_EXECUTION_POLICY,
+  type ProviderExecutionPolicy,
   type ProviderResult,
 } from '../ai';
 import {
@@ -48,8 +50,10 @@ import {
   formatInterviewHistory,
   GREETING_DEADLINE_MS,
   INTERVIEW_DEADLINE_MS,
+  isQueuedSynthesis,
   providerResult,
   SYNTHESIS_DEADLINE_MS,
+  synthesisDeadlineMs,
   type AggregateSynthesisPayload,
 } from './shared';
 import { isKnownProviderModel } from '../providerRegistry';
@@ -118,6 +122,7 @@ export class GeminiProvider implements AIProvider {
     enableReasoning?: boolean;
     deadlineMs: number;
     operation: string;
+    policy?: ProviderExecutionPolicy;
   }) {
     const thinkingLevel = getGeminiInteractionThinkingLevel(options.enableReasoning);
 
@@ -145,6 +150,9 @@ export class GeminiProvider implements AIProvider {
         }, {
           timeout: options.deadlineMs,
           fetchOptions: { signal },
+          // @google/genai 2.22.0 Interactions per-call maxRetries: the bridge maps
+          // it to retries.maxRetries, and 0 permits a single attempt.
+          ...(isQueuedSynthesis(options.policy) ? { maxRetries: 0 } : {}),
         })
       );
     } catch (error) {
@@ -196,6 +204,7 @@ export class GeminiProvider implements AIProvider {
     studyConfig: StudyConfig,
     behaviorData: BehaviorData,
     participantProfile: ParticipantProfile | null,
+    policy: ProviderExecutionPolicy = DEFAULT_EXECUTION_POLICY,
   ): Promise<ProviderResult<SynthesisResult>> {
     const requestedModel = resolveSynthesisModel(studyConfig);
     const response = await this.createInteraction({
@@ -203,8 +212,9 @@ export class GeminiProvider implements AIProvider {
       input: buildSynthesisPrompt(history, studyConfig, behaviorData, participantProfile),
       schema: synthesisResponseSchema,
       enableReasoning: studyConfig.enableReasoning ?? true,
-      deadlineMs: SYNTHESIS_DEADLINE_MS,
+      deadlineMs: synthesisDeadlineMs(policy),
       operation: 'synthesis',
+      policy,
     });
     const value = this.parseStructured(response.output_text, 'synthesis', validateSynthesisResult);
     return providerResult(value, execution('gemini', requestedModel, response.model));
