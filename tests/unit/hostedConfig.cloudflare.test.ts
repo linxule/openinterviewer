@@ -148,6 +148,20 @@ describe('RT-08 Cloudflare configuration validation', () => {
   });
 
   it.each([
+    ['1,009 ASCII characters (a 1,024-byte body)', 'a'.repeat(1_009), []],
+    ['1,010 ASCII characters (a 1,025-byte body)', 'a'.repeat(1_010), ['admin_password_too_long']],
+    ['342 three-byte characters', '€'.repeat(342), ['admin_password_too_long']],
+    ['505 characters JSON must escape', '"'.repeat(505), ['admin_password_too_long']],
+  ])('F5 refuses an ADMIN_PASSWORD whose sign-in body cannot fit the 1 KiB bound: %s', (_label, password, errors) => {
+    expect(validateCloudflareConfig(cloudflareEnv({ ADMIN_PASSWORD: password }), BINDINGS)).toEqual(errors);
+  });
+
+  it('F5 reports an unusable password on the public readiness view like any other configuration error', () => {
+    const config = getPublicConfig(cloudflareEnv({ ADMIN_PASSWORD: 'a'.repeat(1_010) }), BINDINGS);
+    expect(config).toMatchObject({ ready: false, errors: ['admin_password_too_long'] });
+  });
+
+  it.each([
     ['SESSION_SECRET', 'PARTICIPANT_TOKEN_SECRET'],
     ['SESSION_SECRET', 'RATE_LIMIT_SALT'],
     ['PARTICIPANT_TOKEN_SECRET', 'RATE_LIMIT_SALT'],
@@ -317,6 +331,10 @@ describe('RT-01 Node target keeps its existing validation', () => {
       OPERATOR_TOKEN: SESSION,
     })).toMatchObject({ ready: true, errors: [] });
     expect(getPublicConfig({ ...nodeEnv, KV_REST_API_URL: undefined }).errors).toEqual(['missing_standalone_redis_url']);
+  });
+
+  it('F5 leaves the Node target without the Cloudflare sign-in body bound', () => {
+    expect(getPublicConfig({ ...nodeEnv, ADMIN_PASSWORD: 'a'.repeat(2_000) })).toMatchObject({ ready: true, errors: [] });
   });
 
   it('RT-01 keeps the existing Node invalid-transport result and withholds the protocol', () => {

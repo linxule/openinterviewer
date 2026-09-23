@@ -15,6 +15,7 @@ import { resolveCapabilities, type AnalysisExecution } from './runtime/capabilit
 import { isProductionStrict } from './runtime/target';
 import { workerBinding } from './runtime/workerInvocation';
 import { isValidRecoveryEpoch, isValidWorkspaceId } from './storage/analysisProtocol';
+import { loginBodyBytes, MAX_CLOUDFLARE_LOGIN_BODY_BYTES } from './loginBody';
 import type { StoreReadiness } from './storage/types';
 
 export const MIN_HOSTED_SECRET_LENGTH = 32;
@@ -44,6 +45,7 @@ export type HostedConfigError =
   | 'incomplete_github_oauth'
   | 'missing_admin_password'
   | 'weak_admin_password'
+  | 'admin_password_too_long'
   | 'missing_standalone_redis_url'
   | 'invalid_standalone_redis_url'
   | 'missing_standalone_redis_token'
@@ -429,6 +431,11 @@ export function validateCloudflareConfig(
   const adminPassword = isPlaceholder(rawAdminPassword) ? '' : rawAdminPassword;
   if (!rawAdminPassword) errors.push('missing_admin_password');
   else if (adminPassword && adminPassword.length < 16) errors.push('weak_admin_password');
+  // Sign-in compares the binding exactly as stored and reads at most a 1 KiB
+  // body, so a longer password could never be sent (gap F5).
+  else if (adminPassword && loginBodyBytes(env.ADMIN_PASSWORD ?? '') > MAX_CLOUDFLARE_LOGIN_BODY_BYTES) {
+    errors.push('admin_password_too_long');
+  }
 
   const pushChecked = (
     name: 'SESSION_SECRET' | 'PARTICIPANT_TOKEN_SECRET' | 'RATE_LIMIT_SALT',

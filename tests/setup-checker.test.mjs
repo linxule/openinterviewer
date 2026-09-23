@@ -456,6 +456,31 @@ test('SETUP-02 Cloudflare rejects placeholder and reused credentials', () => {
   assert.deepEqual(errorCodes(weak), ['env.ADMIN_PASSWORD.short']);
 });
 
+test('SETUP-02 Cloudflare refuses an ADMIN_PASSWORD whose sign-in body exceeds 1 KiB, like readiness', () => {
+  for (const [shape, longest, onePast] of [
+    ['ASCII', 'a'.repeat(1_009), 'a'.repeat(1_010)],
+    ['three-byte', '€'.repeat(336), '€'.repeat(337)],
+    ['JSON-escaped', '"'.repeat(504), '"'.repeat(505)],
+  ]) {
+    const accepted = cloudflareReport({ env: { ...validCloudflareEnv(), ADMIN_PASSWORD: longest } });
+    assert.equal(accepted.ok, true, `${shape}: ${JSON.stringify(errorCodes(accepted))}`);
+    const refused = cloudflareReport({ env: { ...validCloudflareEnv(), ADMIN_PASSWORD: onePast } });
+    assert.deepEqual(errorCodes(refused), ['env.ADMIN_PASSWORD.too_long'], shape);
+    assert.equal(codes(refused).includes('env.ADMIN_PASSWORD.present'), false, shape);
+    const { message } = refused.checks.find((item) => item.code === 'env.ADMIN_PASSWORD.too_long');
+    assert.match(message, /1024 bytes \(at most 1009 ASCII characters/);
+    assert.equal(message.includes(onePast), false, 'the message never contains the value');
+  }
+  // The bound is Cloudflare sign-in's; the Node target keeps no maximum.
+  const node = validateSetup({
+    mode: 'standalone',
+    production: true,
+    env: { ...validStandaloneEnv(), ADMIN_PASSWORD: 'a'.repeat(1_010) },
+    nodeVersion: '24.19.0',
+  });
+  assert.equal(node.ok, true, JSON.stringify(node.checks));
+});
+
 test('SETUP-02 OPERATOR_TOKEN is optional but, when set, must be a strong independent credential', () => {
   const env = validCloudflareEnv();
   delete env.OPERATOR_TOKEN;
@@ -723,6 +748,25 @@ test('RT-02 the repository Wrangler template satisfies the binding contract', ()
   const report = cloudflareReport({ config });
   const wranglerErrors = errorCodes(report).filter((code) => code.startsWith('wrangler.'));
   assert.deepEqual(wranglerErrors, []);
+});
+
+test('SETUP-01 the CLI runs through a symlinked path and fails an incomplete setup there too', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'oi-setup-link-'));
+  try {
+    const link = path.join(directory, 'check-setup.mjs');
+    fs.symlinkSync(CHECKER, link);
+    const result = spawnSync(process.execPath, [link, '--mode', 'standalone', '--production', '--json'], {
+      cwd: directory,
+      encoding: 'utf8',
+      env: { PATH: process.env.PATH },
+    });
+    // Node runs a linked script from its real path; an argv[1] comparison
+    // skipped the check there and exited 0 with no report.
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.equal(JSON.parse(result.stdout).ok, false);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('SETUP-01 the CLI reads .dev.vars and the default wrangler.jsonc and never prints values', () => {

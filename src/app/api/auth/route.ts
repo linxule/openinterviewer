@@ -31,8 +31,7 @@ import { currentWorkerInvocation } from '@/lib/runtime/workerInvocation';
 import { createDurableLoginBudget } from '@/lib/storage/durableObject';
 import { durableWorkspaceSettings } from '@/lib/storage/resolve';
 import type { LoginAttemptBudgetPort } from '@/lib/storage/types';
-
-const MAX_CLOUDFLARE_LOGIN_BODY_BYTES = 1024;
+import { MAX_CLOUDFLARE_LOGIN_BODY_BYTES } from '@/lib/loginBody';
 
 function noStoreJson(body: Record<string, unknown>, status: number, headers: Record<string, string> = {}) {
   return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store', ...headers } });

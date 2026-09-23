@@ -2,9 +2,9 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-import { parseJsonc } from './cloudflare/lib.mjs';
+import { MAX_LOGIN_BODY_BYTES, loginBodyBytes } from './cloudflare/installer/model.mjs';
+import { parseJsonc, isMain } from './cloudflare/lib.mjs';
 
 // One JSONC parser for the checker and the Cloudflare installer, so both read
 // wrangler.jsonc identically.
@@ -114,6 +114,19 @@ function addRequiredEnv(checks, env, name, options = {}) {
       'error',
       `env.${name}.short`,
       `${name} must be at least ${options.minLength} characters.`,
+    ));
+    return false;
+  }
+
+  // Cloudflare sign-in reads at most a 1 KiB body and compares the password
+  // exactly as stored, so a longer one could never sign in (the readiness
+  // check reports it as admin_password_too_long).
+  if (options.maxLoginBodyBytes && loginBodyBytes(value) > options.maxLoginBodyBytes) {
+    checks.push(check(
+      'error',
+      `env.${name}.too_long`,
+      `${name} is too long: its sign-in request body would exceed ${options.maxLoginBodyBytes} bytes `
+        + `(at most ${options.maxLoginBodyBytes - loginBodyBytes('')} ASCII characters; fewer with multi-byte or JSON-escaped characters).`,
     ));
     return false;
   }
@@ -268,7 +281,11 @@ function validateHostedKeyring(checks, env) {
 }
 
 // ANALYSIS_RECOVERY_EPOCH is not sensitive; it is a secret binding so that
-// `wrangler rollback` cannot silently reinstate an older epoch.
+// `wrangler rollback` to a version from before a rotation lists it as a
+// changed secret and asks for confirmation, where a var would roll back with
+// no prompt at all. That prompt is a warning, not a guard: it defaults to yes
+// and wrangler answers it yes by itself without a TTY or in CI (DEVIATIONS F4),
+// so it does not stop an older epoch being reinstated.
 const CLOUDFLARE_SECRET_NAMES = [
   'ADMIN_PASSWORD',
   'SESSION_SECRET',
@@ -474,7 +491,7 @@ function validateCloudflareSetup(checks, env, selectedMode, wrangler) {
   addRequiredEnv(checks, env, 'SESSION_SECRET', { minLength: 32 });
   addRequiredEnv(checks, env, 'PARTICIPANT_TOKEN_SECRET', { minLength: 32 });
   addRequiredEnv(checks, env, 'RATE_LIMIT_SALT', { minLength: 32 });
-  addRequiredEnv(checks, env, 'ADMIN_PASSWORD', { minLength: 16 });
+  addRequiredEnv(checks, env, 'ADMIN_PASSWORD', { minLength: 16, maxLoginBodyBytes: MAX_LOGIN_BODY_BYTES });
   addRequiredEnv(checks, env, 'APP_BASE_URL');
   validateUrl(checks, env, 'APP_BASE_URL', { production: true });
   if (isPresent(env, 'NEXT_PUBLIC_BASE_URL')) {
@@ -559,6 +576,10 @@ function validateCloudflareSetup(checks, env, selectedMode, wrangler) {
   validateWranglerConfig(checks, wrangler);
 }
 
+/**
+ * @param {{ mode?: string, production?: boolean, env?: Record<string, string | undefined>, nodeVersion?: string,
+ *   target?: string, wrangler?: { config?: unknown, error?: string } | null }} [options]
+ */
 export function validateSetup({
   mode,
   production = false,
@@ -931,8 +952,9 @@ cloudflare target, binding presence in configuration does not prove that the
 deployed Queue consumer is running; installation verification tests that.`);
 }
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
-if (isMain) {
+// import.meta.main, not an argv[1] path comparison: Node runs the real path
+// of a symlinked script, so that comparison skipped the check and exited 0.
+if (isMain(import.meta)) {
   try {
     const args = parseArgs(process.argv.slice(2));
     if (args.help) {
