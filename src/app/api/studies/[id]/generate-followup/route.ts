@@ -15,7 +15,7 @@ import { mapCollectionLoad, mapStudyLoad } from '@/lib/ownedStudies';
 import { AggregateSynthesisResult, StudyConfig } from '@/types';
 import { validateResolvedAggregateSynthesis } from '@/lib/providerValidation';
 import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
-import { providerErrorResponse } from '@/lib/providerErrors';
+import { providerErrorResponse } from '@/lib/providerErrorResponse';
 import { aggregateProvenance } from '@/lib/synthesisProvenance';
 import { createRequestId, logRequestFailure } from '@/lib/requestLog';
 

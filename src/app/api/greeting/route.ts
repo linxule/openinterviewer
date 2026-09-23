@@ -12,7 +12,7 @@ import {
   selectedStudyIdFromParticipantBody,
 } from '@/lib/researcherContext';
 import { loadCanonicalStudy } from '@/lib/canonicalStudy';
-import { providerErrorResponse } from '@/lib/providerErrors';
+import { providerErrorResponse } from '@/lib/providerErrorResponse';
 import { participantRateLimitResponse } from '@/lib/rateLimit';
 import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
 import { verifyParticipantConsent } from '@/lib/participantConsent';

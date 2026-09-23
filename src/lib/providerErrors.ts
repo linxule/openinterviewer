@@ -1,10 +1,11 @@
 // Typed AI provider failures and deadline enforcement
 // Provider calls never masquerade as success: routes map these failures to
 // explicit non-200 responses (502 unavailable, 504 timeout) without exposing
-// provider error bodies, credentials, or request data in responses.
+// provider error bodies, credentials, or request data in responses. The HTTP
+// mapping lives in providerErrorResponse.ts so this module stays free of
+// Next imports (the Cloudflare Queue consumer bundles it).
 
-import { NextResponse } from 'next/server';
-import { logRequestFailure, wasErrorLogged } from './requestLog';
+import { logRequestFailure } from './requestLog';
 
 // Failure classification (see providerErrorResponse for the wire mapping):
 // - 'config': provider rejected the request itself (auth, invalid model, bad
@@ -159,50 +160,4 @@ export async function withProviderDeadline<T>(
   } finally {
     clearTimeout(timer!);
   }
-}
-
-// Map a provider failure to a safe, honest JSON error response.
-// Messages are generic on purpose: they never echo provider details.
-export function providerErrorResponse(err: unknown): NextResponse {
-  if (err instanceof ProviderTimeoutError) {
-    return NextResponse.json(
-      { error: 'The AI provider took too long to respond. Please try again.', retryable: true },
-      { status: 504 }
-    );
-  }
-  if (err instanceof ProviderFailure) {
-    switch (err.kind) {
-      case 'config':
-        return NextResponse.json(
-          {
-            error: 'The AI provider rejected the request. Please check the provider configuration and try again.',
-            retryable: false,
-          },
-          { status: 502 }
-        );
-      case 'rate-limited':
-        return NextResponse.json(
-          { error: 'The AI provider is receiving too many requests right now. Please try again shortly.', retryable: true },
-          { status: 503 }
-        );
-      case 'invalid-response':
-        return NextResponse.json(
-          { error: 'The AI provider returned an invalid response. Please try again.', retryable: true },
-          { status: 502 }
-        );
-      case 'unavailable':
-        return NextResponse.json(
-          { error: 'The AI provider is temporarily unavailable. Please try again.', retryable: true },
-          { status: 502 }
-        );
-    }
-  }
-  if (!wasErrorLogged(err)) {
-    logRequestFailure({
-      event: 'route.failure',
-      route: 'provider',
-      errorType: err instanceof Error ? err.name : 'UnknownError',
-    }, err);
-  }
-  return NextResponse.json({ error: 'Failed to generate response' }, { status: 500 });
 }

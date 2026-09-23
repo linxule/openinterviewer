@@ -12,7 +12,7 @@ import { getAuthorizedResearcherStudyContext, providerKeysFromContext } from '@/
 import { configurationRequiredResponse } from '@/lib/researcherAccess';
 import { getStudyChecked, getStudyInterviewsChecked, saveStudyAggregate } from '@/lib/kv';
 import { mapCollectionLoad, mapStudyLoad } from '@/lib/ownedStudies';
-import { providerErrorResponse } from '@/lib/providerErrors';
+import { providerErrorResponse } from '@/lib/providerErrorResponse';
 import { aggregateProvenance } from '@/lib/synthesisProvenance';
 import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
 import { AggregateSynthesisResult, AggregateTheme, StoredAggregateSynthesis, SynthesisResult } from '@/types';

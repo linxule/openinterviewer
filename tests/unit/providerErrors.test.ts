@@ -6,9 +6,9 @@ import {
   ProviderTimeoutError,
   classifyProviderError,
   providerCallError,
-  providerErrorResponse,
   withProviderDeadline,
 } from '@/lib/providerErrors';
+import { providerErrorResponse } from '@/lib/providerErrorResponse';
 
 afterEach(() => {
   vi.useRealTimers();

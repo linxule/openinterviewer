@@ -18,7 +18,7 @@ import {
   selectedStudyIdFromParticipantBody,
 } from '@/lib/researcherContext';
 import { loadCanonicalStudy } from '@/lib/canonicalStudy';
-import { providerErrorResponse } from '@/lib/providerErrors';
+import { providerErrorResponse } from '@/lib/providerErrorResponse';
 import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
 import { validateBehavior, validateProfile, validateTranscript } from '@/lib/interviewSubmission';
 import { readBoundedJsonObject } from '@/lib/requestBody';
