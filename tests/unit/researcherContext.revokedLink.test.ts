@@ -28,9 +28,18 @@ const kvClientMock = vi.hoisted(() => ({
 
 vi.mock('@/lib/kvClient', () => kvClientMock);
 
-const kvMock = vi.hoisted(() => ({
-  getStudy: vi.fn(),
-}));
+// The standalone participant path reads through the Redis WorkspaceStore,
+// which uses the checked read; derive it from the same study fixture.
+const kvMock = vi.hoisted(() => {
+  const getStudy = vi.fn();
+  return {
+    getStudy,
+    getStudyChecked: vi.fn(async (id: string) => {
+      const study = await getStudy(id);
+      return study ? { status: 'found', study } : { status: 'not-found' };
+    }),
+  };
+});
 
 vi.mock('@/lib/kv', () => kvMock);
 

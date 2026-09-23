@@ -5,7 +5,13 @@
 import type { RedisPort } from './redisPort';
 import { cookies } from 'next/headers';
 import { isStandaloneMode, isHostedMode } from './mode';
-import { getKVClient, getResearcherClient } from './kvClient';
+import { createFencedRedisPort, getKVClient, getResearcherClient } from './kvClient';
+import { isCloudflareTarget } from './runtime/capabilities';
+import { currentWorkerInvocation } from './runtime/workerInvocation';
+import { createDurableWorkspaceStore } from './storage/durableObject';
+import { createRedisWorkspaceStore } from './storage/redis';
+import { durableWorkspaceSettings, WorkspaceStoreUnavailableError } from './storage/resolve';
+import type { WorkspaceStorePort } from './storage/types';
 import {
   getResearcherByIdChecked,
   getStudyAuthorityChecked,
@@ -26,8 +32,15 @@ export interface ResearcherContext {
   // Identity (null in standalone mode)
   researcherId: string | null;
 
-  // Storage client (researcher's own Redis in hosted, env-var Redis in standalone)
+  // Redis client for hosted saga/control-plane paths (researcher's own Redis in
+  // hosted, env-var Redis in Node standalone). On the Cloudflare target this is
+  // a fence that rejects every command without I/O: no Redis exists there.
   kvClient: RedisPort;
+
+  // The backend-neutral workspace store every standalone storage operation
+  // uses (Redis on the Node target, the WorkspaceStore Durable Object on the
+  // Cloudflare target).
+  store: WorkspaceStorePort;
 
   // AI API keys
   geminiApiKey: string | null;
@@ -91,6 +104,7 @@ async function resolveById(researcherId: string): Promise<ResearcherContext> {
   return {
     researcherId,
     kvClient,
+    store: createRedisWorkspaceStore(kvClient, { researcherId }),
     geminiApiKey: researcher.encryptedGeminiApiKey
       ? decrypt(researcher.encryptedGeminiApiKey, { researcherId, purpose: 'gemini-api-key' })
       : null,
@@ -109,14 +123,50 @@ async function resolveById(researcherId: string): Promise<ResearcherContext> {
 
 // Standalone context: uses env vars, no researcher identity
 function getStandaloneContext(): ResearcherContext {
+  if (isCloudflareTarget()) return getCloudflareStandaloneContext();
+  const kvClient = getKVClient();
   return {
     researcherId: null,
-    kvClient: getKVClient(),
+    kvClient,
+    store: createRedisWorkspaceStore(kvClient, { researcherId: null }),
     geminiApiKey: process.env.GEMINI_API_KEY || null,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY || null,
     openaiApiKey: process.env.OPENAI_API_KEY || null,
     openrouterApiKey: process.env.OPENROUTER_API_KEY || null,
     onboardingComplete: true,
+  };
+}
+
+// Cloudflare standalone (RT-05): the workspace Durable Object and provider keys
+// come from the current Worker invocation's env, never from a Redis client or
+// a value copied from an earlier request. Throws WorkspaceStoreUnavailableError
+// when bindings or workspace configuration are missing (no fallback).
+function getCloudflareStandaloneContext(): ResearcherContext {
+  const env = currentWorkerInvocation()?.env ?? {};
+  const secret = (name: string): string | null => {
+    const value = env[name];
+    return typeof value === 'string' && value.length > 0 ? value : null;
+  };
+  return {
+    researcherId: null,
+    kvClient: createFencedRedisPort(),
+    store: createDurableWorkspaceStore(durableWorkspaceSettings()),
+    geminiApiKey: secret('GEMINI_API_KEY'),
+    anthropicApiKey: secret('ANTHROPIC_API_KEY'),
+    openaiApiKey: secret('OPENAI_API_KEY'),
+    openrouterApiKey: secret('OPENROUTER_API_KEY'),
+    onboardingComplete: true,
+  };
+}
+
+function storageNotConfigured(): RequestContextResult {
+  return {
+    authorized: true,
+    context: null,
+    error: 'Workspace storage is not configured for this deployment.',
+    statusCode: 503,
+    retryable: false,
+    reason: 'not-configured',
   };
 }
 
@@ -420,6 +470,10 @@ export async function getRequestContext(): Promise<RequestContextResult> {
       researcherId: session.researcherId,
     };
   } catch (err) {
+    if (err instanceof WorkspaceStoreUnavailableError) {
+      logRequestFailure({ event: 'workspace.store', route: 'researcher-context', reason: 'binding-missing' }, err);
+      return storageNotConfigured();
+    }
     if (err instanceof ResearcherSetupRequiredError) {
       return {
         authorized: true,
@@ -603,11 +657,20 @@ export async function getParticipantRequestContext(
     return { valid: false, context: null, error: 'Participant session is missing link authority.', statusCode: 401 };
   }
 
-  // Standalone mode: use env vars
+  // Standalone mode: the deployment's workspace store
   if (isStandaloneMode()) {
-    const standaloneContext = getStandaloneContext();
-    const link = await getParticipantLinkById(auth.linkId, standaloneContext.kvClient);
-    if (link.status === 'unavailable') {
+    let standaloneContext: ResearcherContext;
+    try {
+      standaloneContext = getStandaloneContext();
+    } catch (err) {
+      if (err instanceof WorkspaceStoreUnavailableError) {
+        logRequestFailure({ event: 'workspace.store', route: 'participant-context', reason: 'binding-missing' }, err);
+        return { valid: false, context: null, error: 'Unable to verify participant link.', statusCode: 503, retryable: true };
+      }
+      throw err;
+    }
+    const link = await standaloneContext.store.getParticipantLinkById({ linkId: auth.linkId, now: Date.now() });
+    if (link.status === 'unavailable' || link.status === 'held') {
       return { valid: false, context: null, error: 'Unable to verify participant link.', statusCode: 503, retryable: true };
     }
     if (
@@ -620,7 +683,17 @@ export async function getParticipantRequestContext(
 
     // Check if links are enabled for this study (fail closed on any doubt)
     try {
-      const study = await getStudy(auth.studyId, standaloneContext.kvClient);
+      const loaded = await standaloneContext.store.getStudy(auth.studyId);
+      if (loaded.status === 'unavailable') {
+        return {
+          valid: false,
+          context: null,
+          error: 'Unable to verify study status. Please try again later.',
+          statusCode: 503,
+          retryable: true,
+        };
+      }
+      const study = loaded.status === 'found' ? loaded.study : null;
       if (!study) {
         return {
           valid: false,

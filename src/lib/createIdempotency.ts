@@ -270,21 +270,51 @@ export function mintCreateStudy(config: StudyConfig, now = Date.now(), studyId =
   };
 }
 
-export async function beginCreateIdempotency(options: {
+type BeginCreateIdempotencyOptions = {
   client: RedisPort;
   mode: 'hosted' | 'standalone';
   researcherId: string;
-  idempotencyKey: string;
   fingerprint: string;
   mintStudy: () => StoredStudy;
   now?: number;
   maxMappings?: number;
-}): Promise<BeginCreateIdempotencyResult> {
+};
+
+export async function beginCreateIdempotency(
+  options: BeginCreateIdempotencyOptions & { idempotencyKey: string },
+): Promise<BeginCreateIdempotencyResult> {
   const researcherId = options.researcherId;
   if (!isResearcherId(researcherId) || !isUuid(options.idempotencyKey) || !isHex64(options.fingerprint)) {
     return { status: 'unavailable' };
   }
+  return beginCreateIdempotencyWithHash(
+    options,
+    hashCreateIdempotencyKey(researcherId, options.idempotencyKey),
+  );
+}
 
+/**
+ * The same begin for a caller that holds only the scoped key digest
+ * (`hashCreateIdempotencyKey(scope, rawKey)`), never the raw key.
+ */
+export async function beginCreateIdempotencyForHash(
+  options: BeginCreateIdempotencyOptions & { idempotencyHash: string },
+): Promise<BeginCreateIdempotencyResult> {
+  if (
+    !isResearcherId(options.researcherId)
+    || !isHex64(options.idempotencyHash)
+    || !isHex64(options.fingerprint)
+  ) {
+    return { status: 'unavailable' };
+  }
+  return beginCreateIdempotencyWithHash(options, options.idempotencyHash);
+}
+
+async function beginCreateIdempotencyWithHash(
+  options: BeginCreateIdempotencyOptions,
+  hash: string,
+): Promise<BeginCreateIdempotencyResult> {
+  const researcherId = options.researcherId;
   if (options.mode === 'hosted') {
     try {
       const lineage = await ensurePlatformSchemaLineage(options.client);
@@ -294,7 +324,6 @@ export async function beginCreateIdempotency(options: {
     }
   }
 
-  const hash = hashCreateIdempotencyKey(researcherId, options.idempotencyKey);
   const keys = createIdempotencyKeys(options.mode, researcherId, hash);
 
   try {
@@ -341,17 +370,37 @@ export async function beginCreateIdempotency(options: {
   }
 }
 
-export async function casCreateIdempotencyState(options: {
+type CasCreateIdempotencyOptions = {
   client: RedisPort;
   mode: 'hosted' | 'standalone';
   researcherId: string;
-  idempotencyKey: string;
   fingerprint: string;
   nextState: IdempotencyState;
   operationId?: string | null;
   now?: number;
-}): Promise<CasCreateIdempotencyResult> {
-  const hash = hashCreateIdempotencyKey(options.researcherId, options.idempotencyKey);
+};
+
+export async function casCreateIdempotencyState(
+  options: CasCreateIdempotencyOptions & { idempotencyKey: string },
+): Promise<CasCreateIdempotencyResult> {
+  return casCreateIdempotencyStateWithHash(
+    options,
+    hashCreateIdempotencyKey(options.researcherId, options.idempotencyKey),
+  );
+}
+
+/** The same transition keyed by the scoped digest instead of the raw key. */
+export async function casCreateIdempotencyStateForHash(
+  options: CasCreateIdempotencyOptions & { idempotencyHash: string },
+): Promise<CasCreateIdempotencyResult> {
+  if (!isHex64(options.idempotencyHash)) return { status: 'unavailable' };
+  return casCreateIdempotencyStateWithHash(options, options.idempotencyHash);
+}
+
+async function casCreateIdempotencyStateWithHash(
+  options: CasCreateIdempotencyOptions,
+  hash: string,
+): Promise<CasCreateIdempotencyResult> {
   const keys = createIdempotencyKeys(options.mode, options.researcherId, hash);
   try {
     const wire = await options.client.eval(
