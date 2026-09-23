@@ -26,7 +26,10 @@ type OpenNextHandler = { fetch(request: Request, env: unknown, ctx: ExecutionCon
 const invocations = new AsyncLocalStorage<WorkerInvocation>();
 const runtimeGlobals = globalThis as unknown as Record<symbol, unknown>;
 runtimeGlobals[WORKER_RUNTIME_MARKER] = true;
-runtimeGlobals[WORKER_INVOCATION_ACCESSOR] = () => invocations.getStore() ?? null;
+function currentInvocation(): WorkerInvocation | null {
+  return invocations.getStore() ?? null;
+}
+runtimeGlobals[WORKER_INVOCATION_ACCESSOR] = currentInvocation;
 
 const INTERNAL_HEADER_PREFIX = 'x-openinterviewer-internal-';
 
