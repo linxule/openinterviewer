@@ -3,7 +3,20 @@
 // after its statements succeed inside the same transactionSync; unknown newer
 // versions refuse service. Never edit a released migration: add a new one.
 
-export type Migration = { version: number; name: string; statements: string[] };
+export type Migration = {
+  version: number;
+  name: string;
+  statements: string[];
+  /**
+   * Oldest build, identified by its highest known migration, that may still
+   * serve a database with this migration applied. Defaults to the migration's
+   * own version, so older builds refuse it. Declare a lower value only for a
+   * change older builds can ignore: new nullable or defaulted columns, or new
+   * tables they never read. An N−1 build must keep serving N's pending jobs.
+   * Not part of the checksum, which covers the statements only.
+   */
+  minReaderVersion?: number;
+};
 
 export const MIGRATIONS: ReadonlyArray<Migration> = [
   {

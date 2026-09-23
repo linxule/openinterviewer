@@ -195,5 +195,12 @@ export function jobStateIsActive(state: AnalysisJobState): boolean {
   return state === 'pending' || state === 'claimed' || state === 'started';
 }
 
+/**
+ * Wake-up interval the alarm keeps while the object is held by a condition a
+ * compatible redeploy clears (an unreadable schema, a missing or mismatched
+ * workspace identity), so dispatch resumes without waiting for a request.
+ */
+export const HELD_ALARM_RETRY_MS = 60 * 60 * 1000;
+
 export const RECEIPT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const DELETION_FENCE_TTL_MS = 30 * 24 * 60 * 60 * 1000;

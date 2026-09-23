@@ -25,6 +25,7 @@ import {
   armAlarmNoLaterThan,
   bumpMutationSeq,
   gate,
+  HELD_ALARM_RETRY_MS,
   RECEIPT_TTL_MS,
   type WorkspaceContext,
   type WorkspaceMeta,
@@ -136,12 +137,18 @@ export async function runAlarm(ws: WorkspaceContext, alarmInfo: AlarmInvocationI
 }
 
 async function runScheduler(ws: WorkspaceContext): Promise<void> {
-  // Restored or held workspaces stay inert: no dispatch, no cleanup and no
-  // re-arm. Leaving maintenance re-arms the alarm; a hold cleared otherwise is
-  // healed by the next job-capable RPC that finds due work without an alarm.
+  // Held workspaces stay inert: no dispatch and no cleanup. An identity
+  // mismatch (the deployment's WORKSPACE_ID no longer names this object) keeps
+  // an hourly wake-up, so correcting the binding resumes dispatch by itself
+  // (ST-09). A restored workspace (epoch mismatch) and maintenance consume the
+  // alarm: activation or leaving maintenance re-arms it, and any other cleared
+  // hold is healed by the next job-capable RPC that finds due work without one.
   const gated = gate(ws, 'job-settlement');
   if (!gated.ok) {
     logJobEvent({ operation: 'alarm', reason: holdReason(gated.reason) });
+    if (gated.reason === 'workspace-identity-mismatch') {
+      await ws.storage.setAlarm(Date.now() + HELD_ALARM_RETRY_MS);
+    }
     return;
   }
   const quarantine = quarantineOf(ws.storage);

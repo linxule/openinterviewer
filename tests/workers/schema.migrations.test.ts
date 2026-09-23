@@ -5,8 +5,8 @@
 // synthetic migration applied with the production runner.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
-import { CURRENT_SCHEMA_VERSION, MIGRATIONS, migrationChecksum } from '../../cloudflare/workspace/schema';
-import { applyMigrations, type MigrationSpec } from '../../cloudflare/workspace/migrate';
+import { CURRENT_SCHEMA_VERSION, MIGRATIONS, migrationChecksum, type Migration } from '../../cloudflare/workspace/schema';
+import { applyMigrations } from '../../cloudflare/workspace/migrate';
 import { createStudyInput, candidateStudy } from './fixtures';
 import { testEnv, workspaceStub } from './helpers';
 import {
@@ -23,8 +23,12 @@ import {
 
 const N = CURRENT_SCHEMA_VERSION + 1;
 
-/** An additive N that declares this build (N−1) a compatible reader. */
-const ADDITIVE_N: MigrationSpec = {
+/**
+ * An additive N that declares this build (N−1) a compatible reader. Typed as
+ * an entry of the production list, so `npm run typecheck` proves a real
+ * migration can declare `minReaderVersion` as the RUNBOOK says.
+ */
+const ADDITIVE_N: (typeof MIGRATIONS)[number] = {
   version: N,
   name: 'synthetic additive migration',
   minReaderVersion: CURRENT_SCHEMA_VERSION,
@@ -35,7 +39,7 @@ const ADDITIVE_N: MigrationSpec = {
 };
 
 /** An N that older builds must not serve (default reader compatibility). */
-const INCOMPATIBLE_N: MigrationSpec = {
+const INCOMPATIBLE_N: Migration = {
   version: N,
   name: 'synthetic incompatible migration',
   statements: ['CREATE TABLE st09_incompatible (id TEXT PRIMARY KEY)'],
@@ -81,7 +85,7 @@ describe('migration runner (ST-09)', () => {
   });
 
   it('an interrupted migration leaves no partial schema or ledger row and is retried on the next start', async () => {
-    const broken: MigrationSpec = {
+    const broken: Migration = {
       version: N,
       name: 'interrupted migration',
       statements: [
@@ -95,7 +99,7 @@ describe('migration runner (ST-09)', () => {
       expect(tableExists(state, 'st09_partial')).toBe(false);
       expect(ledger(state).map((row) => row.version)).toEqual([CURRENT_SCHEMA_VERSION]);
 
-      const fixed: MigrationSpec = { ...broken, statements: broken.statements.slice(0, 2) };
+      const fixed: Migration = { ...broken, statements: broken.statements.slice(0, 2) };
       expect(applyMigrations(state.storage, [...MIGRATIONS, fixed])).toEqual({ status: 'ready', storedVersion: N, applied: [N] });
       expect(state.storage.sql.exec('SELECT id FROM st09_partial').toArray()).toEqual([{ id: 'first' }]);
       expect(applyMigrations(state.storage, [...MIGRATIONS, fixed])).toEqual({ status: 'ready', storedVersion: N, applied: [] });

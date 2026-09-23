@@ -12,17 +12,6 @@
 
 import { MIGRATIONS, migrationChecksum, type Migration } from './schema';
 
-export type MigrationSpec = Migration & {
-  /**
-   * Oldest build, identified by its highest known migration, that may still
-   * serve a database with this migration applied. Defaults to the migration's
-   * own version, so older builds refuse it. Declare a lower value only for a
-   * change older builds can ignore: new nullable or defaulted columns, or new
-   * tables they never read. An N−1 build must keep serving N's pending jobs.
-   */
-  minReaderVersion?: number;
-};
-
 export type SchemaRefusal = 'newer-incompatible' | 'checksum-mismatch' | 'ledger-gap';
 
 export type SchemaOutcome =
@@ -38,14 +27,14 @@ const LEDGER_DDL = `CREATE TABLE IF NOT EXISTS schema_migrations (
   min_reader_version INTEGER NOT NULL CHECK (min_reader_version >= 1)
 )`;
 
-function minReaderOf(migration: MigrationSpec): number {
+function minReaderOf(migration: Migration): number {
   return migration.minReaderVersion ?? migration.version;
 }
 
 /** Validate the stored ledger against this build, then apply its pending migrations in order. */
 export function applyMigrations(
   storage: DurableObjectStorage,
-  migrations: ReadonlyArray<MigrationSpec> = MIGRATIONS,
+  migrations: ReadonlyArray<Migration> = MIGRATIONS,
   now: number = Date.now(),
 ): SchemaOutcome {
   const sql = storage.sql;

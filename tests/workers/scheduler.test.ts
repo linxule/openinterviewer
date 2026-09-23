@@ -47,6 +47,7 @@ import {
 } from './jobFixtures';
 
 const OTHER_EPOCH = 'ep_ffffffffffffffffffffffffffffffff';
+const OTHER_WORKSPACE_ID = 'ws_ffffffffffffffffffffffffffffffff';
 const REQUIRED_REMAINING = QUEUED_SYNTHESIS_DEADLINE_MS + ANALYSIS_ATTACH_MARGIN_MS;
 
 let queue: QueueCapture;
@@ -337,6 +338,38 @@ describe('restore, maintenance and deletion fences (JOB-10, OPS-01)', () => {
     expect(queue.messages).toHaveLength(0);
     expect(await jobRow(job.jobId)).toMatchObject({ state: 'pending', dispatch_state: 'unsent', dispatch_attempts: 0 });
     expect(await currentAlarm()).toBeNull();
+  });
+
+  it('ST-09/JOB-05 keeps an hourly wake-up under a workspace identity mismatch, with no send and no write', async () => {
+    const job = await seedJob();
+    await makeDue(job.jobId);
+    const stub = workspaceStub();
+    const rowBefore = await jobRow(job.jobId);
+    const metaBefore = await sqlRows(`SELECT * FROM workspace_meta`);
+    // The object's stored alarm fires under a deployment whose WORKSPACE_ID no
+    // longer names it (a changed or invalid binding).
+    let originalEnv: unknown;
+    await runInDurableObject(stub, (instance) => {
+      const target = instance as unknown as { env: Record<string, unknown> };
+      originalEnv = target.env;
+      target.env = { ...target.env, WORKSPACE_ID: OTHER_WORKSPACE_ID };
+    });
+    const firedAt = Date.now();
+    try {
+      await fireAlarm();
+    } finally {
+      await runInDurableObject(stub, (instance) => {
+        (instance as unknown as { env: unknown }).env = originalEnv;
+      });
+    }
+    const alarm = await currentAlarm();
+    expect(alarm).not.toBeNull();
+    expect(alarm as number).toBeGreaterThanOrEqual(firedAt + HOUR_MS);
+    expect(alarm as number).toBeLessThan(firedAt + HOUR_MS + 60_000);
+    expect(queue.messages).toHaveLength(0);
+    expect(testEnv.ANALYSIS_QUEUE.send).not.toHaveBeenCalled();
+    expect(await jobRow(job.jobId)).toEqual(rowBefore);
+    expect(await sqlRows(`SELECT * FROM workspace_meta`)).toEqual(metaBefore);
   });
 
   it('JOB-05 restores a wake-up lost under an epoch mismatch once the configuration is corrected', async () => {
