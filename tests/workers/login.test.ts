@@ -8,6 +8,7 @@
 // identities.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { reset } from 'cloudflare:test';
+import { createHmac } from 'node:crypto';
 import { BACKUP_FAMILY_NAMES } from '../../src/lib/backup/format';
 import { createDurableLoginBudget, loginClientKey } from '../../src/lib/storage/durableObject';
 import {
@@ -273,6 +274,48 @@ describe('F5 durable client against the real object', () => {
     const keys = (await sql<{ scope_key: string }>(`SELECT scope_key FROM login_attempts ORDER BY scope_key`)).map((row) => row.scope_key);
     expect(keys).toEqual(['global', await loginClientKey(SALT, a), await loginClientKey(SALT, null)].sort());
     expect(JSON.stringify(keys)).not.toContain('203.0.113.7');
+  });
+
+  it('F5 RT-07 an IPv6 client is its full normalized address: equivalent spellings share one budget, other addresses in the /64 do not', async () => {
+    const client = budget();
+    const sameAddress = [
+      '2001:db8:0:1::1',
+      '2001:0db8:0000:0001:0000:0000:0000:0001',
+      '2001:DB8:0:1:0:0:0:1',
+    ];
+    for (let attempt = 0; attempt < LOGIN_CLIENT_MAX_FAILURES; attempt += 1) {
+      const address = sameAddress[attempt % sameAddress.length];
+      expect(await client.admitLoginAttempt({ identity: { kind: 'address', address }, now: T0 })).toEqual({ status: 'admitted' });
+    }
+    for (const address of sameAddress) {
+      expect(await client.admitLoginAttempt({ identity: { kind: 'address', address }, now: T0 })).toMatchObject({ status: 'limited', scope: 'client' });
+    }
+    // RT-07 introduces no subnet policy: another interface in the same /64 has its own budget.
+    for (const address of ['2001:db8:0:1::2', '2001:db8:0:1:1234:5678:9abc:def0']) {
+      expect(await client.admitLoginAttempt({ identity: { kind: 'address', address }, now: T0 })).toEqual({ status: 'admitted' });
+    }
+
+    const keys = await Promise.all(sameAddress.map((address) => loginClientKey(SALT, { kind: 'address', address })));
+    expect(new Set(keys).size).toBe(1);
+    expect(await loginClientKey(SALT, { kind: 'address', address: '2001:db8:0:1::2' })).not.toBe(keys[0]);
+    expect(await attempts(keys[0])).toBe(LOGIN_CLIENT_MAX_FAILURES);
+  });
+
+  it('F5 IPv4 keeps one budget per address; mapped IPv6 is the same IPv4 client; unknown and subrequest stay separate shared scopes', async () => {
+    const v4 = await loginClientKey(SALT, { kind: 'address', address: '203.0.113.7' });
+    // The subject for a normalized IPv4 address is unchanged by the /64 policy.
+    expect(v4).toBe(createHmac('sha256', SALT).update('login:v1\u0000address:203.0.113.7').digest('hex'));
+    expect(await loginClientKey(SALT, { kind: 'address', address: '203.0.113.8' })).not.toBe(v4);
+    expect(await loginClientKey(SALT, { kind: 'address', address: '::ffff:203.0.113.7' })).toBe(v4);
+    // A /64 subject never collides with an IPv4 subject or the shared scopes.
+    const v6 = await loginClientKey(SALT, { kind: 'address', address: '::1' });
+    const unknown = await loginClientKey(SALT, null);
+    const subrequest = await loginClientKey(SALT, { kind: 'subrequest' });
+    expect(new Set([v4, v6, unknown, subrequest]).size).toBe(4);
+    expect(await loginClientKey(SALT, { kind: 'unknown', reason: 'invalid' })).toBe(unknown);
+    expect(await loginClientKey(SALT, { kind: 'unknown', reason: 'missing' })).toBe(unknown);
+    // An address that does not normalize is never its own budget.
+    expect(await loginClientKey(SALT, { kind: 'address', address: '2001:db8::1%eth0' })).toBe(unknown);
   });
 
   it('F5 an object held for its identity still answers sign-in budget calls', async () => {

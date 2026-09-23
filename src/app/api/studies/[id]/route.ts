@@ -20,9 +20,9 @@ import {
 import {
   mapReadinessHold,
   mapStudyLoad,
-  mapWorkspaceHold,
   RESEARCHER_MUTATION_STATES,
 } from '@/lib/ownedStudies';
+import { RESEARCHER_WORKSPACE_HELD_COPY, workspaceHeldResponse } from '@/lib/canonicalStudy';
 import { configurationRequiredResponse } from '@/lib/researcherAccess';
 import {
   beginDeleteStudyOperationV2,
@@ -40,7 +40,7 @@ import { missingProviderCredential } from '@/lib/providerAvailability';
 import { RETRY_AFTER_PENDING } from '@/lib/createIdempotency';
 import { createRequestId, logRequestFailure } from '@/lib/requestLog';
 import { deploymentNotReadyResponse } from '@/lib/runtime/readinessGate';
-import { isDurableWorkspaceStore, type WorkspaceStorePort } from '@/lib/storage/types';
+import { isDurableWorkspaceStore, type WorkspaceHoldReason, type WorkspaceStorePort } from '@/lib/storage/types';
 
 const ROUTE = '/api/studies/[id]';
 
@@ -241,9 +241,8 @@ function updateFailure(request: Request, error: unknown) {
   );
 }
 
-function heldResponse(reason: Parameters<typeof mapWorkspaceHold>[0]) {
-  const held = mapWorkspaceHold(reason, ROUTE);
-  return NextResponse.json(held.body, { status: held.status });
+function heldResponse(reason: WorkspaceHoldReason) {
+  return workspaceHeldResponse({ route: ROUTE, reason, ...RESEARCHER_WORKSPACE_HELD_COPY });
 }
 
 /**
@@ -263,8 +262,7 @@ async function storeNotWritable(store: WorkspaceStorePort) {
       { status: 503 }
     );
   }
-  const held = mapReadinessHold(readiness, RESEARCHER_MUTATION_STATES, ROUTE);
-  return held ? NextResponse.json(held.body, { status: held.status }) : null;
+  return mapReadinessHold(readiness, RESEARCHER_MUTATION_STATES, ROUTE);
 }
 
 // DELETE /api/studies/[id] - Delete study

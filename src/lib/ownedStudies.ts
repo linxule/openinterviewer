@@ -1,3 +1,4 @@
+import type { NextResponse } from 'next/server';
 import type { RedisPort } from './redisPort';
 import { getPlatformClient } from './kvClient';
 import { getStudyAuthorityChecked, type StudyAuthorityCheckedResult } from './platformDb';
@@ -9,7 +10,12 @@ import {
 } from './kv';
 import { presentStudyAuthority, type PresentedStudyAuthority } from './researcherContext';
 import type { PendingStudyStub, StoredInterview, StoredStudy, StudyWorkspaceItem } from '@/types';
-import { logRequestEvent, logRequestFailure, type RequestLogReason } from './requestLog';
+import { logRequestFailure } from './requestLog';
+import {
+  RESEARCHER_WORKSPACE_HELD_COPY,
+  workspaceHeldResponse,
+  type WorkspaceHeldCopy,
+} from './canonicalStudy';
 import type {
   DurableWorkspaceStorePort,
   MaintenanceState,
@@ -272,56 +278,23 @@ export const PAID_CALL_STATES: ReadonlyArray<MaintenanceState> = ['open', 'drain
  */
 export const READABLE_HOLD_REASONS: ReadonlyArray<WorkspaceHoldReason> = ['recovery-epoch-mismatch'];
 
-const HOLD_LOG_REASON: Record<WorkspaceHoldReason, RequestLogReason> = {
-  maintenance: 'maintenance-hold',
-  'schema-unsupported': 'schema-unsupported',
-  'workspace-identity-mismatch': 'workspace-identity-mismatch',
-  'workspace-uninitialized': 'not-configured',
-  'recovery-epoch-mismatch': 'epoch-mismatch',
-};
-
-/**
- * HTTP mapping for a durable workspace hold. The public body carries one of
- * two reasons: `maintenance` (an operator state that ends on its own schedule;
- * retryable) or `workspace-unavailable` (schema, identity, bootstrap or
- * recovery-epoch hold; only an operator can clear it, so not retryable). The
- * specific hold reason goes to the allowlisted log only.
- */
-export function mapWorkspaceHold(
-  reason: WorkspaceHoldReason,
-  route: string,
-): { ok: false; status: 503; body: Record<string, unknown> } {
-  logRequestEvent({ event: 'workspace.store', route, status: 503, reason: HOLD_LOG_REASON[reason] ?? 'unavailable' });
-  if (reason === 'maintenance') {
-    return {
-      ok: false,
-      status: 503,
-      body: { error: 'This workspace is paused for maintenance. Try again later.', retryable: true, reason: 'maintenance' },
-    };
-  }
-  return {
-    ok: false,
-    status: 503,
-    body: {
-      error: 'Workspace storage is unavailable until its operator completes setup or recovery.',
-      retryable: false,
-      reason: 'workspace-unavailable',
-    },
-  };
-}
-
 /**
  * A readiness result that is not `unavailable` (callers keep their own
- * unavailable bodies) mapped to a hold refusal, or null when the request class
- * may proceed in the current maintenance state.
+ * unavailable bodies) mapped to the held-workspace response
+ * (canonicalStudy.workspaceHeldResponse, with the researcher copy unless the
+ * route passes its own), or null when the request class may proceed in the
+ * current maintenance state.
  */
 export function mapReadinessHold(
   readiness: Exclude<StoreReadiness, { status: 'unavailable' }>,
   allowed: ReadonlyArray<MaintenanceState>,
   route: string,
-): { ok: false; status: 503; body: Record<string, unknown> } | null {
-  if (readiness.status === 'held') return mapWorkspaceHold(readiness.reason, route);
-  return allowed.includes(readiness.maintenance) ? null : mapWorkspaceHold('maintenance', route);
+  copy: WorkspaceHeldCopy = RESEARCHER_WORKSPACE_HELD_COPY,
+): NextResponse | null {
+  if (readiness.status === 'held') return workspaceHeldResponse({ route, reason: readiness.reason, ...copy });
+  return allowed.includes(readiness.maintenance)
+    ? null
+    : workspaceHeldResponse({ route, reason: 'maintenance', ...copy });
 }
 
 /**
@@ -332,9 +305,10 @@ export function mapReadinessHold(
 export function mapReadReadinessHold(
   readiness: Exclude<StoreReadiness, { status: 'unavailable' }>,
   route: string,
-): { ok: false; status: 503; body: Record<string, unknown> } | null {
+  copy: WorkspaceHeldCopy = RESEARCHER_WORKSPACE_HELD_COPY,
+): NextResponse | null {
   if (readiness.status === 'held' && READABLE_HOLD_REASONS.includes(readiness.reason)) return null;
-  return mapReadinessHold(readiness, RESEARCHER_READ_STATES, route);
+  return mapReadinessHold(readiness, RESEARCHER_READ_STATES, route, copy);
 }
 
 // ---------- Bounded aggregate/follow-up inputs (Cloudflare target, RT-09) ----------
@@ -370,11 +344,17 @@ export type EligibleInputsPass = 'done' | 'stopped' | 'too-large' | 'unavailable
  * object keeps it equal to its interview rows) is checked before any page is
  * read, and more than MAX_AGGREGATE_INTERVIEWS eligible records met while
  * paging (interviews saved meanwhile) is `too-large` too.
+ *
+ * `purpose` names the paid route the inputs feed; the object fences each page
+ * like that route (aggregate: open only; follow-up: open or draining, gap
+ * F26), so a maintenance transition after the route's readiness check still
+ * refuses before the provider is paid. It defaults to the stricter aggregate.
  */
 export async function forEachEligibleAggregateInput(
   store: DurableWorkspaceStorePort,
   study: StoredStudy,
   visit: (interviews: StoredInterview[]) => boolean,
+  purpose: 'aggregate' | 'follow-up' = 'aggregate',
 ): Promise<EligibleInputsPass> {
   if (study.interviewCount > MAX_AGGREGATE_INTERVIEWS) return 'too-large';
   let cursor: string | null = null;
@@ -387,6 +367,7 @@ export async function forEachEligibleAggregateInput(
       cursor,
       pageSize: AGGREGATE_INPUT_PAGE_SIZE,
       maxPageBytes: AGGREGATE_INPUT_PAGE_BYTES,
+      purpose,
     });
     if (page.status !== 'ok' || !Array.isArray(page.interviews)) return 'unavailable';
     if (page.totalEligible > MAX_AGGREGATE_INTERVIEWS) return 'too-large';

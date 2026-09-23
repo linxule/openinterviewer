@@ -173,6 +173,27 @@ describe('held durable workspace responses (OPS-01)', () => {
     });
   });
 
+  it('OPS-01: an unrecognized hold reason is a non-retryable workspace-unavailable hold, logged as unavailable', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const response = workspaceHeldResponse({
+      route: '/api/studies',
+      reason: 'some-future-hold' as never,
+      error: 'Paused.',
+      unavailableError: 'Unavailable.',
+    });
+    expect(response.status).toBe(503);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    const body = await response.json();
+    expect(body).toEqual({ error: 'Unavailable.', retryable: false, reason: 'workspace-unavailable' });
+    expect(JSON.stringify(body)).not.toContain('some-future-hold');
+    expect(JSON.parse(String(errorSpy.mock.calls[0][0]))).toMatchObject({
+      event: 'workspace.store',
+      route: '/api/studies',
+      status: 503,
+      reason: 'unavailable',
+    });
+  });
+
   it('OPS-01: a caller that must keep unsaved data can mark any hold retryable', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const response = workspaceHeldResponse({

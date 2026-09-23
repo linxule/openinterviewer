@@ -376,10 +376,12 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
 
     setGeneratingLink(true);
     try {
+      // The server mints links for the saved study it loads itself; only the
+      // id identifies it (the route ignores every other field).
       const response = await fetch('/api/generate-link', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ studyConfig: study.config })
+        body: JSON.stringify({ studyConfig: { id: study.config.id } })
       });
 
       const data = await response.json().catch(() => ({})) as { error?: string; code?: string; url?: string };

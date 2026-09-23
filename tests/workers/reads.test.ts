@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { reset, runInDurableObject } from 'cloudflare:test';
 import {
   MAX_COLLECTION_BYTES,
-  type AggregateInputsRequest,
   type ListInterviewsPage,
   type ListInterviewsRequest,
 } from '../../cloudflare/workspace/reads';
+import type * as Rpc from '../../cloudflare/workspace/rpcTypes';
 import type { StoredInterview } from '../../src/types';
 import { workspaceStub } from './helpers';
 import {
@@ -33,7 +33,7 @@ function listPage(request: ListInterviewsRequest): Promise<ListInterviewsPage> {
   return workspaceStub().listInterviews(request) as Promise<ListInterviewsPage>;
 }
 
-function aggregateInputs(request: AggregateInputsRequest) {
+function aggregateInputs(request: Rpc.AggregateInputsInput) {
   return workspaceStub().readAggregateInputs(request);
 }
 
@@ -418,30 +418,48 @@ describe('aggregate inputs (ST-08)', () => {
     expect(bySize.status === 'ok' && [bySize.interviews.length, bySize.nextCursor !== null]).toEqual([3, true]);
   });
 
-  it('OPS-01: inputs for paid follow-up are fenced like job work: refused when frozen, in recovery or under an epoch mismatch', async () => {
+  it('F26/OPS-01: follow-up inputs are served while open or draining; aggregate inputs (and a request without a purpose) only while open', async () => {
     const study = await createStudy();
     await insertInterview({ studyId: study.id, id: 'session-fenced' });
     const request = { studyId: study.id, studyRevision: 1, cursor: null, pageSize: 10, maxPageBytes: 1_000_000 };
 
+    for (const purpose of ['aggregate', 'follow-up', undefined] as const) {
+      const open = await aggregateInputs({ ...request, purpose });
+      expect(open.status === 'ok' && open.totalEligible).toBe(1);
+    }
+
     await setMaintenance('draining');
-    const draining = await aggregateInputs(request);
-    expect(draining.status === 'ok' && draining.totalEligible).toBe(1);
-    expect((await aggregateInputs({ ...request, purpose: 'follow-up' })).status).toBe('ok');
+    // Follow-up generation is a paid call without a write (F26).
+    const followUp = await aggregateInputs({ ...request, purpose: 'follow-up' });
+    expect(followUp.status === 'ok' && followUp.interviews.map((item) => item.id)).toEqual(['session-fenced']);
     // Aggregate synthesis ends in a researcher mutation, which draining refuses: refuse before the provider is paid.
     expect(await aggregateInputs({ ...request, purpose: 'aggregate' })).toEqual({ status: 'unavailable' });
+    // No purpose gets the stricter fence.
+    expect(await aggregateInputs(request)).toEqual({ status: 'unavailable' });
 
     for (const state of ['frozen', 'recovery'] as const) {
       await setMaintenance(state);
-      expect(await aggregateInputs(request)).toEqual({ status: 'unavailable' });
-      expect(await aggregateInputs({ ...request, purpose: 'aggregate' })).toEqual({ status: 'unavailable' });
+      for (const purpose of ['aggregate', 'follow-up', undefined] as const) {
+        expect(await aggregateInputs({ ...request, purpose })).toEqual({ status: 'unavailable' });
+      }
     }
 
     await setMaintenance('open');
     expect((await aggregateInputs({ ...request, purpose: 'aggregate' })).status).toBe('ok');
     await sql(`UPDATE workspace_meta SET activated_epoch = ?`, 'ep_ffffffffffffffffffffffffffffffff');
-    expect(await aggregateInputs(request)).toEqual({ status: 'unavailable' });
+    for (const purpose of ['aggregate', 'follow-up', undefined] as const) {
+      expect(await aggregateInputs({ ...request, purpose })).toEqual({ status: 'unavailable' });
+    }
     // Plain reads stay available for inspection under the mismatch.
     expect((await workspaceStub().getInterview({ interviewId: 'session-fenced' })).status).toBe('found');
+  });
+
+  it('F26: an unknown purpose is refused rather than given either fence', async () => {
+    const study = await createStudy();
+    await insertInterview({ studyId: study.id, id: 'session-purpose' });
+    const request = { studyId: study.id, studyRevision: 1, cursor: null, pageSize: 10, maxPageBytes: 1_000_000 };
+    expect(await aggregateInputs({ ...request, purpose: 'preview' } as unknown as Rpc.AggregateInputsInput))
+      .toEqual({ status: 'unavailable' });
   });
 
   it('ST-05/ST-08: a corrupt eligible row fails the page rather than silently shrinking the aggregate set', async () => {

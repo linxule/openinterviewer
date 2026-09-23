@@ -751,11 +751,12 @@ describe('immutable save with its initial durable job (JOB-01, JOB-02, ST-02, ST
     });
     expect(afterMock).not.toHaveBeenCalled();
     expect(providerFactory).not.toHaveBeenCalled();
+    // The durable client closes the reply set: an out-of-union status becomes
+    // ambiguous there and is logged by operation, never by reply content.
     const logged = vi.mocked(console.error).mock.calls.map(([line]) => String(line));
     expect(logged.map(line => JSON.parse(line))).toContainEqual(expect.objectContaining({
       event: 'workspace.store',
-      route: '/api/interviews/save',
-      status: 503,
+      operation: 'persistCompletedInterview',
       reason: 'unknown-outcome',
     }));
     expect(logged.join('\n')).not.toContain(outcome.status);
@@ -784,7 +785,8 @@ describe('steady-state workspace holds on participant routes (OPS-01)', () => {
   // What the object answers while it stays held: every participant-session
   // operation is refused, the session's own link check included, while reads
   // (study, consent verification) stay open. The request stops at the link
-  // check, so no route-level held branch below it is reached.
+  // check, and the resolver reports the hold so each route answers with its
+  // held-workspace copy and public reason, not a generic storage failure.
   function holdWorkspace(reason: 'maintenance' | 'recovery-epoch-mismatch') {
     const held = () => ({ status: 'held', reason });
     handlers.readiness = () => (reason === 'maintenance'
@@ -805,20 +807,72 @@ describe('steady-state workspace holds on participant routes (OPS-01)', () => {
     };
   }
 
-  it.each(['maintenance', 'recovery-epoch-mismatch'] as const)(
-    'OPS-01: a %s hold refuses consent, greeting, interview and save with a 503 before any work, the transcript kept for retry',
-    async (reason) => {
+  it.each([
+    ['maintenance', 'a frozen workspace', {
+      consent: {
+        error: 'Consent cannot be recorded right now. Please try again later.',
+        retryable: true,
+        reason: 'maintenance',
+      },
+      greeting: {
+        error: 'This interview is paused for maintenance. Please try again later.',
+        retryable: true,
+        reason: 'maintenance',
+      },
+      interview: {
+        error: 'This interview is paused for maintenance. Please try again later.',
+        retryable: true,
+        reason: 'maintenance',
+      },
+      save: {
+        error: 'Storage is temporarily unavailable. Interview not saved. Please try again.',
+        retryable: true,
+        reason: 'maintenance',
+      },
+    }],
+    ['recovery-epoch-mismatch', 'an epoch hold', {
+      consent: {
+        error: 'Consent cannot be recorded because this study is unavailable. Please contact the researcher.',
+        retryable: false,
+        reason: 'workspace-unavailable',
+      },
+      greeting: {
+        error: 'This interview is unavailable right now. Please contact the researcher.',
+        retryable: false,
+        reason: 'workspace-unavailable',
+      },
+      interview: {
+        error: 'This interview is unavailable right now. Please contact the researcher.',
+        retryable: false,
+        reason: 'workspace-unavailable',
+      },
+      // The participant keeps the transcript and retries the save.
+      save: {
+        error: 'Storage is temporarily unavailable. Interview not saved. Please try again.',
+        retryable: true,
+        reason: 'workspace-unavailable',
+      },
+    }],
+  ] as const)(
+    'OPS-01: a %s hold (%s) refuses consent, greeting, interview and save with the held response before any work',
+    async (reason, _label, expected) => {
       holdWorkspace(reason);
 
       const responses = await participantResponses();
 
       for (const [route, response] of Object.entries(responses)) {
         expect(response.status, route).toBe(503);
-        const body = await response.json() as Record<string, unknown>;
-        // The participant keeps the transcript and retries the save.
-        if (route === 'save' || reason === 'maintenance') expect(body.retryable, route).toBe(true);
-        if (body.reason !== undefined) expect(['maintenance', 'workspace-unavailable']).toContain(body.reason);
-        expect(JSON.stringify(body)).not.toContain(reason === 'maintenance' ? 'frozen' : reason);
+        expect(response.headers.get('cache-control'), route).toBe('no-store');
+        await expect(response.json(), route).resolves.toEqual(expected[route as keyof typeof expected]);
+      }
+      const logged = vi.mocked(console.error).mock.calls.map(([line]) => JSON.parse(String(line)));
+      for (const route of ['/api/consent', '/api/greeting', '/api/interview', '/api/interviews/save']) {
+        expect(logged).toContainEqual(expect.objectContaining({
+          event: 'workspace.store',
+          route,
+          status: 503,
+          reason: reason === 'maintenance' ? 'maintenance-hold' : 'epoch-mismatch',
+        }));
       }
       expect(new Set(rpcMethods())).toEqual(new Set(['getParticipantLink']));
       expect(providerFactory).not.toHaveBeenCalled();

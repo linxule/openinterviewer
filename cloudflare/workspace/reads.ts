@@ -367,16 +367,17 @@ const ELIGIBLE = `i.study_id = ?
   )`;
 
 /**
- * Which paid route the inputs feed (requested for rpcTypes.ts). Follow-up
- * generation is a paid call without a write, allowed while draining (F26);
- * aggregate synthesis ends in a researcher mutation, so it is refused outside
- * open before the provider is paid.
+ * Inputs for one paid aggregate or follow-up call. They exist only to feed a
+ * provider, so they are fenced like the route they feed rather than like a
+ * read: follow-up generation is a paid call without a write, served while open
+ * or draining (F26); aggregate synthesis ends in a researcher mutation, so it
+ * is served only while open and refused before the provider is paid. A request
+ * without a purpose gets the stricter aggregate fence. Both refuse a
+ * recovery-epoch mismatch.
  */
-export type AggregateInputsRequest = Rpc.AggregateInputsInput & { purpose?: 'aggregate' | 'follow-up' };
-
 export async function readAggregateInputs(
   ws: WorkspaceContext,
-  input: AggregateInputsRequest,
+  input: Rpc.AggregateInputsInput,
 ): Promise<Rpc.AggregateInputsOutcome> {
   try {
     if (
@@ -399,9 +400,7 @@ export async function readAggregateInputs(
     const pageSize = Math.min(input.pageSize, MAX_PAGE_SIZE);
     const maxPageBytes = Math.min(input.maxPageBytes, MAX_COLLECTION_BYTES);
     const base = [input.studyId, input.studyRevision];
-    // These inputs exist only to feed a paid provider call, so they are fenced
-    // like job work (open/draining, matching recovery epoch), not like a read.
-    const operation = input.purpose === 'aggregate' ? 'researcher-mutation' : 'job-settlement';
+    const operation = input.purpose === 'follow-up' ? 'job-settlement' : 'researcher-mutation';
 
     return ws.storage.transactionSync((): Rpc.AggregateInputsOutcome => {
       if (!gate(ws, operation).ok) return { status: 'unavailable' };

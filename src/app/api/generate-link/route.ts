@@ -32,7 +32,7 @@ import { resolveAITransport } from '@/lib/aiTransport';
 import { createRequestId, logRequestFailure } from '@/lib/requestLog';
 import { readBoundedJsonObject } from '@/lib/requestBody';
 import { getKVClient } from '@/lib/kvClient';
-import { researcherHeldCopy, workspaceHeldResponse } from '@/lib/canonicalStudy';
+import { PARTICIPANT_EXCHANGE_HELD_COPY, researcherHeldCopy, workspaceHeldResponse } from '@/lib/canonicalStudy';
 import { deploymentNotReadyResponse } from '@/lib/runtime/readinessGate';
 import { isProductionStrict } from '@/lib/runtime/target';
 import { resolveWorkspaceStore } from '@/lib/storage/resolve';
@@ -307,8 +307,7 @@ export async function GET(request: Request) {
       return workspaceHeldResponse({
         route: ROUTE,
         reason: loaded.reason,
-        error: 'New interviews cannot start right now. Please try again later.',
-        unavailableError: 'Unable to verify participant link.',
+        ...PARTICIPANT_EXCHANGE_HELD_COPY,
         body: { valid: false },
       });
     }
@@ -335,6 +334,15 @@ export async function GET(request: Request) {
       },
     });
     const live = await getParticipantRequestContext(liveRequest);
+    // A hold that began after the exchange refuses like the exchange's own.
+    if (live.holdReason !== undefined) {
+      return workspaceHeldResponse({
+        route: ROUTE,
+        reason: live.holdReason,
+        ...PARTICIPANT_EXCHANGE_HELD_COPY,
+        body: { valid: false },
+      });
+    }
     if (!live.valid) {
       return NextResponse.json(
         { valid: false, error: live.error || 'Participant link is no longer active', retryable: live.retryable },

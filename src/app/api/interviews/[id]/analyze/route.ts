@@ -319,9 +319,8 @@ function heldResponse(reason: string): NextResponse {
   return workspaceHeldResponse({
     route: ROUTE,
     reason: reason as WorkspaceHoldReason,
-    error: reason === 'maintenance'
-      ? 'Analysis is paused while this workspace is under maintenance. Try again later.'
-      : START_UNAVAILABLE,
+    error: 'Analysis is paused while this workspace is under maintenance. Try again later.',
+    unavailableError: START_UNAVAILABLE,
     retryable: true,
   });
 }

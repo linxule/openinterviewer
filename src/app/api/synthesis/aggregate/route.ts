@@ -91,7 +91,7 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: 'Study storage is temporarily unavailable.', retryable: true }, { status: 503 });
       }
       const held = mapReadinessHold(readiness, RESEARCHER_MUTATION_STATES, ROUTE);
-      if (held) return NextResponse.json(held.body, { status: held.status });
+      if (held) return held;
     }
 
     const loadedStudy = await store.getStudy(studyId);

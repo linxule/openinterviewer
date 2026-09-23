@@ -144,12 +144,22 @@ export type WorkspaceHeldCopy = {
   error: string;
   /** Shown for `workspace-unavailable` holds, which need operator action. */
   unavailableError?: string;
+  /**
+   * Overrides the policy below for a route that documents why (save keeps
+   * the transcript in the browser; analysis retries repeat the same key).
+   */
   retryable?: boolean;
 };
 
 /**
- * 503 for a held workspace. `retryable` defaults to true only for
- * maintenance; callers whose client must keep unsaved data (save) pass true.
+ * The one HTTP translation of a durable workspace hold, used by every
+ * researcher and participant route: a no-store 503 carrying only the public
+ * reason. Policy: `maintenance` is retryable (the operator state ends on its
+ * own schedule); every other hold, including an unrecognized reason, is
+ * `workspace-unavailable` and not retryable (only an operator can clear it),
+ * unless the route passes a documented `retryable` override. Route-specific
+ * copy and extra body fields arrive as parameters; the internal hold reason
+ * goes to the allowlisted log only.
  */
 export function workspaceHeldResponse(input: WorkspaceHeldCopy & {
   route: string;
@@ -157,24 +167,41 @@ export function workspaceHeldResponse(input: WorkspaceHeldCopy & {
   body?: Record<string, unknown>;
 }): NextResponse {
   const known = Object.prototype.hasOwnProperty.call(HOLD_LOG_REASON, input.reason);
-  const reason: WorkspaceHoldReason = known ? input.reason : 'workspace-identity-mismatch';
-  const publicReason = workspaceHoldPublicReason(reason);
-  logRequestEvent({ event: 'workspace.store', route: input.route, status: 503, reason: HOLD_LOG_REASON[reason] });
+  const publicReason = known ? workspaceHoldPublicReason(input.reason) : 'workspace-unavailable';
+  logRequestEvent({
+    event: 'workspace.store',
+    route: input.route,
+    status: 503,
+    reason: known ? HOLD_LOG_REASON[input.reason] : 'unavailable',
+  });
   return NextResponse.json(
     {
       ...input.body,
       error: publicReason === 'maintenance' ? input.error : input.unavailableError ?? input.error,
-      retryable: input.retryable ?? reason === 'maintenance',
+      retryable: input.retryable ?? publicReason === 'maintenance',
       reason: publicReason,
     },
     { status: 503, headers: { 'Cache-Control': 'no-store' } },
   );
 }
 
+/** Researcher copy for routes without an action-specific message. */
+export const RESEARCHER_WORKSPACE_HELD_COPY: WorkspaceHeldCopy = {
+  error: 'This workspace is paused for maintenance. Try again later.',
+  unavailableError: 'Workspace storage is unavailable until its operator completes setup or recovery.',
+};
+
 // Participant-facing copy never mentions the workspace or its operator.
 export const PARTICIPANT_INTERVIEW_HELD_COPY: WorkspaceHeldCopy = {
   error: 'This interview is paused for maintenance. Please try again later.',
   unavailableError: 'This interview is unavailable right now. Please contact the researcher.',
+};
+
+// Link exchange: a draining, frozen or recovering workspace starts no new
+// collection (OPS-01); other holds need operator action.
+export const PARTICIPANT_EXCHANGE_HELD_COPY: WorkspaceHeldCopy = {
+  error: 'New interviews cannot start right now. Please try again later.',
+  unavailableError: 'Unable to verify participant link.',
 };
 
 export const PARTICIPANT_CONSENT_HELD_COPY: WorkspaceHeldCopy = {

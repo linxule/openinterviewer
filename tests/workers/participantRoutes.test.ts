@@ -146,6 +146,21 @@ async function exchange(code: string): Promise<{ response: Response; session: Se
   return { response, session: { cookie: setCookie.split(';')[0], handle: body.data.sessionHandle } };
 }
 
+async function heldParticipantResponses(session: Session, studyId: string) {
+  const responses = {
+    consent: await consentPOST(participantRequest('/api/consent', session, { studyId })),
+    greeting: await greetingPOST(participantRequest('/api/greeting', session, {})),
+    interview: await interviewPOST(participantRequest('/api/interview', session, interviewBody)),
+    save: await savePOST(participantRequest('/api/interviews/save', session, saveBody(studyId))),
+  };
+  const out: Record<string, { status: number; body: unknown }> = {};
+  for (const [route, response] of Object.entries(responses)) {
+    expect(response.headers.get('cache-control'), route).toBe('no-store');
+    out[route] = { status: response.status, body: await response.json() };
+  }
+  return out;
+}
+
 describe('participant routes against the real WorkspaceStore (RT-06, ST-02/03, JOB-01/02, OPS-01)', () => {
   it('JOB-01/02, ST-02/03: link, exchange, consent, greeting, interview and save commit one interview with its initial job; a replay is a duplicate', async () => {
     expect(DEFAULT_MODEL_BY_PROVIDER.openai).not.toBe(STUDY_MODEL);
@@ -228,15 +243,84 @@ describe('participant routes against the real WorkspaceStore (RT-06, ST-02/03, J
     expect((await greetingPOST(participantRequest('/api/greeting', session!, {}))).status).toBe(200);
 
     await setMaintenance('frozen');
-    for (const response of [
-      await greetingPOST(participantRequest('/api/greeting', session!, {})),
-      await savePOST(participantRequest('/api/interviews/save', session!, saveBody(study.id))),
-    ]) {
-      expect(response.status).toBe(503);
-      await expect(response.json()).resolves.toMatchObject({ retryable: true });
-    }
+    // The object refuses the session's own link check; each route answers
+    // with its held-workspace copy and the public reason.
+    const frozen = await heldParticipantResponses(session!, study.id);
+    expect(frozen).toEqual({
+      consent: {
+        status: 503,
+        body: { error: 'Consent cannot be recorded right now. Please try again later.', retryable: true, reason: 'maintenance' },
+      },
+      greeting: {
+        status: 503,
+        body: { error: 'This interview is paused for maintenance. Please try again later.', retryable: true, reason: 'maintenance' },
+      },
+      interview: {
+        status: 503,
+        body: { error: 'This interview is paused for maintenance. Please try again later.', retryable: true, reason: 'maintenance' },
+      },
+      save: {
+        status: 503,
+        body: {
+          error: 'Storage is temporarily unavailable. Interview not saved. Please try again.',
+          retryable: true,
+          reason: 'maintenance',
+        },
+      },
+    });
     expect(providerFactory).toHaveBeenCalledTimes(1);
     expect(await sql('SELECT COUNT(*) AS n FROM interviews')).toEqual([{ n: 0 }]);
+  });
+
+  it('OPS-01: an epoch hold refuses consent, greeting, interview and save as workspace-unavailable; only the save stays retryable', async () => {
+    const study = await createStudy({ aiProvider: 'openai', aiModel: STUDY_MODEL });
+    const { token: code } = await (await mintLink(study.id)).json() as { token: string };
+    const { session } = await exchange(code);
+    expect(session).not.toBeNull();
+
+    // A restored object whose activated epoch no longer matches the deployment.
+    await sql('UPDATE workspace_meta SET activated_epoch = ?', 'ep_ffffffffffffffffffffffffffffffff');
+    const held = await heldParticipantResponses(session!, study.id);
+
+    expect(held).toEqual({
+      consent: {
+        status: 503,
+        body: {
+          error: 'Consent cannot be recorded because this study is unavailable. Please contact the researcher.',
+          retryable: false,
+          reason: 'workspace-unavailable',
+        },
+      },
+      greeting: {
+        status: 503,
+        body: {
+          error: 'This interview is unavailable right now. Please contact the researcher.',
+          retryable: false,
+          reason: 'workspace-unavailable',
+        },
+      },
+      interview: {
+        status: 503,
+        body: {
+          error: 'This interview is unavailable right now. Please contact the researcher.',
+          retryable: false,
+          reason: 'workspace-unavailable',
+        },
+      },
+      // The browser keeps the transcript and retries the save.
+      save: {
+        status: 503,
+        body: {
+          error: 'Storage is temporarily unavailable. Interview not saved. Please try again.',
+          retryable: true,
+          reason: 'workspace-unavailable',
+        },
+      },
+    });
+    expect(JSON.stringify(held)).not.toContain('epoch');
+    expect(providerFactory).not.toHaveBeenCalled();
+    expect(await sql('SELECT COUNT(*) AS n FROM interviews')).toEqual([{ n: 0 }]);
+    expect(await sql('SELECT COUNT(*) AS n FROM consents')).toEqual([{ n: 0 }]);
   });
 
   it('RT-09, ST-03: a revoked link refuses the session, including a replay of its committed save', async () => {

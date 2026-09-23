@@ -11,7 +11,7 @@ import { currentWorkerInvocation } from './runtime/workerInvocation';
 import { createDurableWorkspaceStore } from './storage/durableObject';
 import { createRedisWorkspaceStore } from './storage/redis';
 import { durableWorkspaceSettings, WorkspaceStoreUnavailableError } from './storage/resolve';
-import type { WorkspaceStorePort } from './storage/types';
+import type { WorkspaceHoldReason, WorkspaceStorePort } from './storage/types';
 import {
   getResearcherByIdChecked,
   getStudyAuthorityChecked,
@@ -509,6 +509,10 @@ export interface ParticipantContextResult {
   // Suggested HTTP status for the denial when !valid (503 = retryable, 403 = denied, 401 = auth)
   statusCode?: number;
   retryable?: boolean;
+  // Set when a durable workspace hold (Cloudflare target) refused the
+  // session's link check. Routes map it through the held-workspace response;
+  // it never reaches a response body.
+  holdReason?: WorkspaceHoldReason;
   study?: StoredStudy;
   linkId?: string;
   participantSessionId?: string;
@@ -670,7 +674,19 @@ export async function getParticipantRequestContext(
       throw err;
     }
     const link = await standaloneContext.store.getParticipantLinkById({ linkId: auth.linkId, now: Date.now() });
-    if (link.status === 'unavailable' || link.status === 'held') {
+    if (link.status === 'held') {
+      // A held workspace is not a storage blip: only maintenance clears on
+      // its own, and the route answers with the held-workspace response.
+      return {
+        valid: false,
+        context: null,
+        error: 'Unable to verify participant link.',
+        statusCode: 503,
+        retryable: link.reason === 'maintenance',
+        holdReason: link.reason,
+      };
+    }
+    if (link.status === 'unavailable') {
       return { valid: false, context: null, error: 'Unable to verify participant link.', statusCode: 503, retryable: true };
     }
     if (

@@ -67,7 +67,7 @@ export async function POST(
         return NextResponse.json({ error: 'Study storage is temporarily unavailable.', retryable: true }, { status: 503 });
       }
       const held = mapReadinessHold(readiness, PAID_CALL_STATES, ROUTE);
-      if (held) return NextResponse.json(held.body, { status: held.status });
+      if (held) return held;
     }
 
     const loadedStudy = await store.getStudy(studyId);
@@ -123,7 +123,7 @@ export async function POST(
           if (wanted.has(interview.id)) eligibleIds.add(interview.id);
         }
         return eligibleIds.size < wanted.size;
-      });
+      }, 'follow-up');
       if (pass === 'unavailable') {
         return NextResponse.json({ error: INTERVIEW_MESSAGES.unavailable, retryable: true }, { status: 503 });
       }

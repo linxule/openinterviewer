@@ -17,7 +17,8 @@ import {
 } from '@/lib/aiTransport';
 import { isHostedMode } from '@/lib/mode';
 import { logRequestFailure } from '@/lib/requestLog';
-import { mapReadinessHold, mapWorkspaceHold, RESEARCHER_MUTATION_STATES } from '@/lib/ownedStudies';
+import { RESEARCHER_WORKSPACE_HELD_COPY, workspaceHeldResponse } from '@/lib/canonicalStudy';
+import { mapReadinessHold, RESEARCHER_MUTATION_STATES } from '@/lib/ownedStudies';
 import { deploymentNotReadyResponse } from '@/lib/runtime/readinessGate';
 import { isCloudflareTarget } from '@/lib/runtime/capabilities';
 import { currentWorkerInvocation } from '@/lib/runtime/workerInvocation';
@@ -27,8 +28,7 @@ import type { AIProviderType } from '@/types';
 const ROUTE = '/api/demo/seed';
 
 function heldResponse(reason: WorkspaceHoldReason) {
-  const held = mapWorkspaceHold(reason, ROUTE);
-  return NextResponse.json(held.body, { status: held.status });
+  return workspaceHeldResponse({ route: ROUTE, reason, ...RESEARCHER_WORKSPACE_HELD_COPY });
 }
 
 function seedStorageUnavailable(store: WorkspaceStorePort) {
@@ -125,7 +125,7 @@ export async function POST() {
     const readiness = await store.readiness();
     if (readiness.status === 'unavailable') return seedStorageUnavailable(store);
     const held = mapReadinessHold(readiness, RESEARCHER_MUTATION_STATES, ROUTE);
-    if (held) return NextResponse.json(held.body, { status: held.status });
+    if (held) return held;
 
     const aiProvider = sampleProvider(context);
     if (!aiProvider) {

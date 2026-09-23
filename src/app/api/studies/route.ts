@@ -22,8 +22,8 @@ import {
   loadAllowedStudies,
   mapCollectionLoad,
   mapReadReadinessHold,
-  mapWorkspaceHold,
 } from '@/lib/ownedStudies';
+import { RESEARCHER_WORKSPACE_HELD_COPY, workspaceHeldResponse } from '@/lib/canonicalStudy';
 import { configurationRequiredResponse, schemaHoldResponse } from '@/lib/researcherAccess';
 import {
   beginCreateStudyOperationV2,
@@ -137,7 +137,7 @@ export async function GET() {
     // Reads continue in every maintenance state and under a recovery-epoch
     // hold (an operator inspects a restored workspace before activation).
     const held = mapReadReadinessHold(readiness, '/api/studies');
-    if (held) return NextResponse.json(held.body, { status: held.status });
+    if (held) return held;
 
     const loaded = await store.listStudies(1_000);
     const mapped = mapCollectionLoad(loaded, COLLECTION_MESSAGES);
@@ -533,10 +533,8 @@ async function createStandaloneStudy(
       return NextResponse.json({ retryable: true, reason: 'idempotency-quota' }, { status: 503 });
     case 'ambiguous':
       return NextResponse.json({ retryable: true, reason: 'ambiguous' }, { status: 503 });
-    case 'held': {
-      const held = mapWorkspaceHold(created.reason, '/api/studies');
-      return NextResponse.json(held.body, { status: held.status });
-    }
+    case 'held':
+      return workspaceHeldResponse({ route: '/api/studies', reason: created.reason, ...RESEARCHER_WORKSPACE_HELD_COPY });
     default:
       return NextResponse.json({ retryable: true, reason: 'unavailable' }, { status: 503 });
   }

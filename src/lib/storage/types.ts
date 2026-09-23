@@ -284,6 +284,14 @@ export type AggregateInputsPage =
   | { status: 'unavailable' };
 
 /**
+ * The paid route aggregate inputs feed (gap F26). Aggregate synthesis ends in
+ * a researcher mutation, so the object serves its inputs only while open;
+ * follow-up generation writes nothing and is also served while draining.
+ * Absent means `aggregate`, the stricter fence.
+ */
+export type AggregateInputsPurpose = 'aggregate' | 'follow-up';
+
+/**
  * Operations only the durable workspace provides. Routes narrow with
  * `isDurableWorkspaceStore(store)`; the Redis store never implements them.
  */
@@ -303,6 +311,7 @@ export interface DurableWorkspaceStorePort extends WorkspaceStorePort {
     cursor: string | null;
     pageSize: number;
     maxPageBytes: number;
+    purpose?: AggregateInputsPurpose;
   }): Promise<AggregateInputsPage>;
 }
 

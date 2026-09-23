@@ -12,6 +12,7 @@ import type {
 import type { ParticipantLinkRecord } from '../../src/lib/participantLinks';
 import type { BackupImportManifest } from '../../src/lib/backup/format';
 import type {
+  AggregateInputsPurpose,
   LoginBudgetAdmitOutcome,
   LoginBudgetRefundOutcome,
   MaintenanceState,
@@ -88,6 +89,8 @@ export type SaveAggregateInput = { aggregate: StoredAggregateSynthesis; now: num
 /**
  * Bounded aggregate/follow-up inputs: analyzed interviews of one study at one
  * revision, selecting only the fields prompt assembly needs. Paged by keyset.
+ * `purpose` selects the maintenance fence of the paid route they feed
+ * (absent: `aggregate`).
  */
 export type AggregateInputsInput = {
   studyId: string;
@@ -95,6 +98,7 @@ export type AggregateInputsInput = {
   cursor: string | null;
   pageSize: number;
   maxPageBytes: number;
+  purpose?: AggregateInputsPurpose;
 };
 
 export type AggregateInputsOutcome =

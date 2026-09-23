@@ -93,6 +93,45 @@ describe('StudyDetail participant-link management', () => {
     expect(deleteCall?.[1]?.body).toBe(JSON.stringify({ linkId }));
   });
 
+  it('Generate New Link posts only the saved study id, never the study configuration', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/generate-link') && init?.method === 'POST') {
+        return new Response(JSON.stringify({ url: 'https://example.com/p/synthetic-token' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/studies/study-a/participant-links')) {
+        return new Response(JSON.stringify({ links: [], truncated: false }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/studies/study-a/aggregate')) {
+        return new Response(JSON.stringify({ aggregate: null }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderStudyDetail('study-a');
+    await screen.findByRole('heading', { name: 'Managed Links Study' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Study settings' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Generate New Link' }));
+
+    expect(await screen.findByDisplayValue('https://example.com/p/synthetic-token')).toBeInTheDocument();
+    const posts = fetchMock.mock.calls.filter(([input, init]) => String(input).endsWith('/api/generate-link')
+      && init?.method === 'POST');
+    expect(posts).toHaveLength(1);
+    // The route reads only the id; a whole config would also press against the
+    // request body cap for a realistic study.
+    expect(posts[0][1]?.body).toBe(JSON.stringify({ studyConfig: { id: 'study-a' } }));
+  });
+
   it('keeps the study workspace compact on mobile and names interview controls', async () => {
     storageMock.getStudyInterviews.mockResolvedValue([
       makeStoredInterview({ id: 'interview-a', studyId: 'study-a' }),
