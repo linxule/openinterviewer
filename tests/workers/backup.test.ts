@@ -179,8 +179,11 @@ describe('operational backup export (OPS-02)', () => {
       }
       return { tables, columns };
     });
-    // operator_audit belongs to each object; schema_migrations travels as schemaVersion.
-    expect(schema.tables.filter((table) => table !== 'operator_audit' && table !== 'schema_migrations').sort())
+    // operator_audit belongs to each object; schema_migrations travels as
+    // schemaVersion; login_attempts holds only short-lived sign-in windows
+    // (15 minutes per client, one hour global) that a restore deliberately resets.
+    const perObject = new Set(['operator_audit', 'schema_migrations', 'login_attempts']);
+    expect(schema.tables.filter((table) => !perObject.has(table)).sort())
       .toEqual([...BACKUP_FAMILY_NAMES].sort());
     for (const family of BACKUP_FAMILIES) {
       const live = schema.columns[family.name];

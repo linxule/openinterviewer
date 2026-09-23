@@ -12,6 +12,8 @@ import type {
 import type { ParticipantLinkRecord } from '../../src/lib/participantLinks';
 import type { BackupImportManifest } from '../../src/lib/backup/format';
 import type {
+  LoginBudgetAdmitOutcome,
+  LoginBudgetRefundOutcome,
   MaintenanceState,
   PersistCompletedInterviewInput,
   WorkspaceHoldReason,
@@ -216,3 +218,19 @@ export type ActivateEpochOutcome =
   | { status: 'not-recovery' }
   | { status: 'held'; reason: WorkspaceHoldReason }
   | { status: 'unavailable' };
+
+// ---------- Researcher sign-in budget (gap F5) ----------
+
+export type LoginAttemptInput = {
+  /** HMAC-SHA-256 hex digest of the admission identity, computed by the durable client. */
+  clientKey: string;
+  now: number;
+};
+
+export type LoginAdmitOutcome =
+  | LoginBudgetAdmitOutcome
+  | { status: 'held'; reason: WorkspaceHoldReason };
+
+export type LoginRefundOutcome =
+  | LoginBudgetRefundOutcome
+  | { status: 'held'; reason: WorkspaceHoldReason };

@@ -162,6 +162,18 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
         action TEXT NOT NULL,
         detail_json TEXT NOT NULL
       )`,
+      // Researcher sign-in attempt budget (gap F5): one row per salted client
+      // digest plus one global row, each a fixed window opened by its first
+      // counted attempt; `attempts` is failures plus attempts still being
+      // verified (see login.ts). Per-object operational state like
+      // operator_audit: excluded from operational backups and from the
+      // research mutation sequence.
+      `CREATE TABLE login_attempts (
+        scope_key TEXT PRIMARY KEY,
+        attempts INTEGER NOT NULL CHECK (attempts >= 0),
+        expires_at INTEGER NOT NULL
+      )`,
+      `CREATE INDEX login_attempts_by_expiry ON login_attempts (expires_at)`,
     ],
   },
 ];

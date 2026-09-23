@@ -33,6 +33,10 @@ import type {
   ExportPage,
   InterviewLoadResult,
   LinkListOutcome,
+  LoginAttemptBudgetPort,
+  LoginBudgetAdmitOutcome,
+  LoginBudgetInput,
+  LoginBudgetRefundOutcome,
   LinkLoadOutcome,
   LinkRevokeOutcome,
   ListInterviewsInput,
@@ -47,6 +51,7 @@ import type {
   StudyMutationOutcome,
   VerifyConsentOutcome,
 } from './types';
+import type { AdmissionIdentity } from '../runtime/workerInvocation';
 
 export type DurableWorkspaceConfig = {
   /** env.WORKSPACE_STORE (DurableObjectNamespace). */
@@ -375,4 +380,74 @@ export function createDurableWorkspaceStore(config: DurableWorkspaceConfig): Dur
     readAggregateInputs: (input) => call<AggregateInputsPage>('readAggregateInputs', input, unavailable),
   };
   return store;
+}
+
+// ---------- Researcher sign-in budget (gap F5) ----------
+
+/**
+ * The sign-in budget's client scope: an HMAC (keyed by RATE_LIMIT_SALT) of the
+ * admission identity, domain-separated from participant budget keys. Requests
+ * without a usable address share one `unknown` scope and Workers subrequests
+ * one `subrequest` scope; neither is ever an unlimited path.
+ */
+export function loginClientKey(rateLimitSalt: string, identity: AdmissionIdentity | null): Promise<string> {
+  const subject = identity?.kind === 'address'
+    ? `address:${identity.address}`
+    : identity?.kind === 'subrequest'
+      ? 'subrequest'
+      : 'unknown';
+  return hmacSha256Hex(rateLimitSalt, `login:v1\u0000${subject}`);
+}
+
+function isRetryAfter(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
+}
+
+/**
+ * Client for the WorkspaceStore sign-in budget RPCs. A thrown RPC, a hold or
+ * an unexpected reply is `unavailable`: the route fails closed on admission.
+ */
+export function createDurableLoginBudget(config: DurableWorkspaceConfig): LoginAttemptBudgetPort {
+  function stub(): WorkspaceStub {
+    const namespace = config.namespace as NamespaceLike;
+    if (config.jurisdiction) {
+      if (typeof namespace.jurisdiction !== 'function') throw new Error('Workspace namespace has no jurisdiction support');
+      return namespace.jurisdiction(config.jurisdiction).getByName(config.workspaceId);
+    }
+    return namespace.getByName(config.workspaceId);
+  }
+
+  async function invoke(method: 'admitLoginAttempt' | 'refundLoginAttempt', input: LoginBudgetInput): Promise<unknown> {
+    const clientKey = await loginClientKey(config.rateLimitSalt, input.identity);
+    // Member call, as in createDurableWorkspaceStore.
+    return stub()[method]({ clientKey, now: input.now });
+  }
+
+  return {
+    async admitLoginAttempt(input: LoginBudgetInput): Promise<LoginBudgetAdmitOutcome> {
+      try {
+        const outcome = await invoke('admitLoginAttempt', input);
+        if (!isOutcome(outcome)) return { status: 'unavailable' };
+        if (outcome.status === 'admitted') return { status: 'admitted' };
+        if (outcome.status === 'limited') {
+          const limited = outcome as { scope?: unknown; retryAfterSeconds?: unknown };
+          if ((limited.scope === 'client' || limited.scope === 'global') && isRetryAfter(limited.retryAfterSeconds)) {
+            return { status: 'limited', scope: limited.scope, retryAfterSeconds: limited.retryAfterSeconds };
+          }
+        }
+        return { status: 'unavailable' };
+      } catch {
+        return { status: 'unavailable' };
+      }
+    },
+
+    async refundLoginAttempt(input: LoginBudgetInput): Promise<LoginBudgetRefundOutcome> {
+      try {
+        const outcome = await invoke('refundLoginAttempt', input);
+        return isOutcome(outcome) && outcome.status === 'refunded' ? { status: 'refunded' } : { status: 'unavailable' };
+      } catch {
+        return { status: 'unavailable' };
+      }
+    },
+  };
 }

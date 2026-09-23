@@ -1,5 +1,11 @@
 // GET /api/auth/me - Returns current researcher profile
 // Used by client for displaying researcher info and onboarding status
+//
+// Cloudflare target: standalone only. The request context comes from the
+// target-aware getRequestContext (Worker invocation env and the workspace
+// Durable Object); no Redis client or hosted platform lookup is ever built.
+// An unsupported target configuration or missing workspace binding is a
+// 503, never a signed-out 401.
 
 export const dynamic = 'force-dynamic';
 
@@ -8,9 +14,36 @@ import { getHostedResearcherIdentity, getRequestContext } from '@/lib/researcher
 import { getResearcherByIdChecked, toResearcherProfile } from '@/lib/platformDb';
 import { isHostedMode } from '@/lib/mode';
 import { logRequestFailure } from '@/lib/requestLog';
+import { isCloudflareTarget, resolveCapabilities } from '@/lib/runtime/capabilities';
+
+function notConfigured(error?: string) {
+  return NextResponse.json(
+    { error: error || 'This deployment is not configured.', retryable: false },
+    { status: 503, headers: { 'Cache-Control': 'no-store' } },
+  );
+}
+
+async function cloudflareProfile() {
+  if (!resolveCapabilities().ok) return notConfigured();
+  const { authorized, context, error, statusCode } = await getRequestContext();
+  if (!authorized) {
+    return NextResponse.json({ error: error || 'Unauthorized' }, { status: 401 });
+  }
+  if (!context) {
+    return statusCode && statusCode !== 401
+      ? NextResponse.json({ error: error || 'Service unavailable' }, { status: statusCode, headers: { 'Cache-Control': 'no-store' } })
+      : notConfigured(error);
+  }
+  return NextResponse.json({
+    mode: 'standalone',
+    authenticated: true,
+  });
+}
 
 export async function GET() {
   try {
+    if (isCloudflareTarget()) return await cloudflareProfile();
+
     // In standalone mode, return basic info
     if (!isHostedMode()) {
       const { authorized, context, error } = await getRequestContext();

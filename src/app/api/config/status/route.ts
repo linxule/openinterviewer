@@ -1,5 +1,11 @@
 // GET /api/config/status - Returns provider availability for the active transport.
 // Only returns non-secret booleans and transport identity, never key values.
+//
+// Cloudflare target: the context comes from the target-aware
+// getRequestContext (provider keys from the Worker invocation env, the
+// workspace Durable Object as storage); no Redis client or hosted platform
+// lookup is ever built. The response adds the resolved storage capability
+// (`storage: 'workspace-do'`); key availability stays booleans only.
 
 export const dynamic = 'force-dynamic';
 
@@ -9,9 +15,42 @@ import { isHostedMode } from '@/lib/mode';
 import { getResearcherByIdChecked, toResearcherProfile } from '@/lib/platformDb';
 import { isGatewayAuthConfigured, resolveAITransport } from '@/lib/aiTransport';
 import { logRequestFailure } from '@/lib/requestLog';
+import { isCloudflareTarget, resolveCapabilities } from '@/lib/runtime/capabilities';
+
+function notConfigured(error?: string) {
+  return NextResponse.json(
+    { error: error || 'This deployment is not configured.', retryable: false },
+    { status: 503, headers: { 'Cache-Control': 'no-store' } },
+  );
+}
+
+async function cloudflareStatus() {
+  const resolved = resolveCapabilities();
+  if (!resolved.ok) return notConfigured();
+  const { authorized, context, error, statusCode } = await getRequestContext();
+  if (!authorized) {
+    return NextResponse.json({ error: error || 'Authentication required' }, { status: 401 });
+  }
+  if (!context) {
+    return statusCode && statusCode !== 401
+      ? NextResponse.json({ error: error || 'Service unavailable' }, { status: statusCode, headers: { 'Cache-Control': 'no-store' } })
+      : notConfigured(error);
+  }
+  return NextResponse.json({
+    mode: 'standalone',
+    aiTransport: resolved.capabilities.transport,
+    storage: resolved.capabilities.storage,
+    hasAnthropicKey: !!context.anthropicApiKey,
+    hasGeminiKey: !!context.geminiApiKey,
+    hasOpenAiKey: !!context.openaiApiKey,
+    hasOpenRouterKey: !!context.openrouterApiKey,
+  });
+}
 
 export async function GET() {
   try {
+    if (isCloudflareTarget()) return await cloudflareStatus();
+
     // Configuration remains inspectable while hosted BYOS setup is incomplete.
     // Return booleans from the encrypted account record without decrypting secrets.
     if (isHostedMode()) {

@@ -37,6 +37,7 @@ import type {
   FrozenAnalysisInput,
   ReadAnalysisStatusOutcome,
 } from './analysisProtocol';
+import type { AdmissionIdentity } from '../runtime/workerInvocation';
 
 export type {
   AggregateLoadResult,
@@ -307,4 +308,38 @@ export interface DurableWorkspaceStorePort extends WorkspaceStorePort {
 
 export function isDurableWorkspaceStore(store: WorkspaceStorePort): store is DurableWorkspaceStorePort {
   return store.backend === 'durable-object';
+}
+
+// ---------- Researcher sign-in budget (Cloudflare target only, gap F5) ----------
+
+/** Per-client attempts counted in one window opened by the first counted attempt. */
+export const LOGIN_CLIENT_MAX_FAILURES = 10;
+export const LOGIN_CLIENT_WINDOW_SECONDS = 15 * 60;
+/** Attempts counted across every client in one window opened by the first counted attempt. */
+export const LOGIN_GLOBAL_MAX_FAILURES = 200;
+export const LOGIN_GLOBAL_WINDOW_SECONDS = 60 * 60;
+
+export type LoginBudgetInput = {
+  /** The invocation's admission identity; the client digests it before any RPC. */
+  identity: AdmissionIdentity | null;
+  now: number;
+};
+
+export type LoginBudgetAdmitOutcome =
+  | { status: 'admitted' }
+  | { status: 'limited'; scope: 'client' | 'global'; retryAfterSeconds: number }
+  | { status: 'unavailable' };
+
+export type LoginBudgetRefundOutcome = { status: 'refunded' } | { status: 'unavailable' };
+
+/**
+ * The durable failed-sign-in budget. `admitLoginAttempt` atomically refuses at
+ * the limit or counts the attempt, before the password is compared; a correct
+ * password refunds it, so only failures stay counted. Any doubt on admission
+ * is `unavailable` (the route fails closed); a lost refund leaves the attempt
+ * counted.
+ */
+export interface LoginAttemptBudgetPort {
+  admitLoginAttempt(input: LoginBudgetInput): Promise<LoginBudgetAdmitOutcome>;
+  refundLoginAttempt(input: LoginBudgetInput): Promise<LoginBudgetRefundOutcome>;
 }

@@ -37,6 +37,7 @@
     "test:cloudflare:artifact": "vitest run --config vitest.artifact.config.mts",
     "setup:cloudflare": "node scripts/cloudflare/setup.mjs",
     "deploy:cloudflare": "node scripts/cloudflare/deploy.mjs",
+    "operator:cloudflare": "node scripts/cloudflare/operator.mjs",
     "test:setup:cloudflare": "node --test tests/setup-cloudflare/*.test.mjs",
     "test:e2e:cloudflare": "playwright test --config playwright.cloudflare.config.ts",
     "check:cloudflare": "node scripts/cloudflare/check.mjs"

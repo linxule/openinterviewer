@@ -19,6 +19,7 @@ import * as analysis from './analysis';
 import * as scheduler from './scheduler';
 import * as exporter from './exports';
 import * as operator from './operator';
+import * as login from './login';
 import type * as Rpc from './rpcTypes';
 
 type InitState =
@@ -325,6 +326,22 @@ export class WorkspaceStore extends DurableObject<WorkspaceEnv> {
     const held = this.requireInitialized();
     if (held) return { status: 'held', reason: held };
     return operator.activateRecoveryEpoch(this.ws, input);
+  }
+
+  // ---------- Researcher sign-in budget (gap F5) ----------
+  // Every maintenance state and every epoch/identity hold allows these, so an
+  // operator can sign in to a frozen, recovering or held workspace. Only a
+  // schema this build cannot read refuses: the table may not exist there.
+  // Admission counts the attempt atomically before the password is compared.
+
+  async admitLoginAttempt(input: Rpc.LoginAttemptInput): Promise<Rpc.LoginAdmitOutcome> {
+    if (this.requireInitialized() === 'schema-unsupported') return { status: 'held', reason: 'schema-unsupported' };
+    return login.admitLoginAttempt(this.ws, input);
+  }
+
+  async refundLoginAttempt(input: Rpc.LoginAttemptInput): Promise<Rpc.LoginRefundOutcome> {
+    if (this.requireInitialized() === 'schema-unsupported') return { status: 'held', reason: 'schema-unsupported' };
+    return login.refundLoginAttempt(this.ws, input);
   }
 
   // ---------- The single alarm (JOB-06/07) ----------
