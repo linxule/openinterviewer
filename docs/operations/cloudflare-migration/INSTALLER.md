@@ -278,6 +278,7 @@ This form checks a deploy made outside the installer, such as the CI promotion. 
   - The receipt is not read or updated.
   - The deployed version and remote vars or secrets are not read back.
   - Without a receipt, the Worker's own `workers.dev` URL is unknown, so another Worker answering `APP_BASE_URL` would look the same.
+  - On a `cloudflare-gateway` config, the gateway's settings and stored logs are never read (no receipt ties the gateway to the installation, and no Cloudflare API call is made, even with `CF_AI_GATEWAY_ADMIN_TOKEN` set), and pass-through and the Run token are not exercised. The result lists both limitations.
 
 It does not verify (remote gates in [04 — verification and cutover](04-verification-and-cutover.md), `VERIFY-04`):
 
@@ -387,7 +388,7 @@ Locally (`npm run test:setup:cloudflare`, simulated account):
   - the installer's probe headers, identifier patterns and route rules equal the Worker's (`tests/unit/installerGatewayContract.test.ts`).
 - `verify --config`:
   - reports ready, not ready, held and each config problem; a held or ready Worker reporting another AI transport than the config is not ready (as for `verify` against the receipt);
-  - is read-only;
+  - is read-only, and on a gateway config makes no Cloudflare API call and lists the gateway limitations;
   - refuses a missing file or mixed options.
 - `config` (`tests/setup-cloudflare/config-command.test.mjs`):
   - after the config is deleted or hand-edited, rewrites it identical to the one the installer deployed, and the result passes the real `deploy.mjs --check-config`;

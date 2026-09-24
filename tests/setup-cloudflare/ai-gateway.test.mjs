@@ -25,7 +25,7 @@ import { gatewayOwnership } from '../../scripts/cloudflare/installer/ownership.m
 import { suppliedSecretNames, validateSuppliedSecret } from '../../scripts/cloudflare/installer/secrets.mjs';
 import { buildInstallationConfig, firstIncompletePhase, newReceipt, readReceipt } from '../../scripts/cloudflare/installer/state.mjs';
 import { TRANSPORT_CONSENT_NOTES } from '../../scripts/cloudflare/installer/update.mjs';
-import { checkDeployedConfig } from '../../scripts/cloudflare/installer/verify.mjs';
+import { GATEWAY_CONFIG_UNCHECKED_LIMITATION, GATEWAY_LIMITATION, checkDeployedConfig } from '../../scripts/cloudflare/installer/verify.mjs';
 import { missingInstallationVars, realConfigDrift } from './fixtures/deploy-config-drift.mjs';
 import { ACCOUNT, digest } from './fixtures/fake-state.mjs';
 import {
@@ -438,6 +438,38 @@ describe('setup:cloudflare AI Gateway (simulated account)', { concurrency: 6 }, 
     state = sandbox.state();
     assert.equal(posts(sandbox).length, 1);
     assert.equal(state.gatewayApi.probes.length, 2);
+  });
+
+  test('verify --config on a gateway config states that the gateway was neither exercised nor read, and reads nothing', async (t) => {
+    const sandbox = await gatewayInstalled(t);
+    const file = path.join(sandbox.dir, 'promoted gateway wrangler.json');
+    writeFileSync(file, JSON.stringify(sandbox.config()));
+    // A drifted, logging gateway: verify --config cannot see it, so it must say so.
+    sandbox.update((state) => { state.gateways[KEY] = { ...state.gateways[KEY], collect_logs: true }; state.gatewayApi.logCounts[KEY] = 5; });
+    const calls = apiCalls(sandbox).length;
+    for (const env of [{}, ADMIN_ENV]) {
+      const run = await sandbox.run('verify', ['--config', file, '--json'], { extraArgs: false, env });
+      assert.equal(run.code, 0, run.output);
+      const result = JSON.parse(run.stdout);
+      assert.equal(result.status, 'ready');
+      assert.equal(result.checks.some((check) => check.id.startsWith('gateway.')), false);
+      assert.ok(result.limitations.includes(GATEWAY_LIMITATION), 'pass-through and Run token not exercised');
+      assert.ok(result.limitations.includes(GATEWAY_CONFIG_UNCHECKED_LIMITATION), 'settings and stored logs not read');
+      const text = await sandbox.run('verify', ['--config', file], { extraArgs: false, env });
+      assert.equal(text.code, 0, text.output);
+      assert.match(text.stdout, /AI Gateway pass-through per provider is not exercised/);
+      assert.match(text.stdout, /AI Gateway settings and stored logs were not read: verify --config/);
+    }
+    assert.equal(apiCalls(sandbox).length, calls, 'verify --config makes no Cloudflare API call');
+
+    // A direct config carries neither gateway limitation.
+    const direct = await directInstalled(t);
+    const directFile = path.join(direct.dir, 'promoted direct wrangler.json');
+    writeFileSync(directFile, JSON.stringify(direct.config()));
+    const run = await direct.run('verify', ['--config', directFile, '--json'], { extraArgs: false });
+    assert.equal(run.code, 0, run.output);
+    const limitations = JSON.parse(run.stdout).limitations.join('\n');
+    assert.doesNotMatch(limitations, /AI Gateway/);
   });
 
   test('update and verify refuse each settings drift of an installed gateway without deploying or correcting it', async (t) => {

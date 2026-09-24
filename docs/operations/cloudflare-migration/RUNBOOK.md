@@ -295,9 +295,11 @@ Never run mixed application versions against incompatible state, never use perce
 
 An installer from before receipt format 2 (`eaa30a2` and earlier) refuses a format-2 receipt with `unsupported formatVersion 2`, so running `update` from such a commit fails until its receipt is restored. When the newer installer first saved a migrated receipt it kept the original as `receipt.format1.json` next to `receipt.json` (INSTALLER.md, State files). Without that file the migration is one-way: do not roll the installer back past format 2; forward-fix instead.
 
-1. With the newer installer: switch the transport to direct (AI Gateway operations, Rollback) and finish or abandon any pending change, so `plan` reports none. If the default provider changed since the migration, switch back to the one in `receipt.format1.json` first (`update --provider <p> --change-provider --yes`); otherwise the older installer's regenerated config differs on `AI_PROVIDER` and it refuses with drift.
+1. With the newer installer: switch the transport to direct (AI Gateway operations, Rollback) and finish or abandon any pending change, so `plan` reports none. If the default provider changed since the migration, switch back to the one in `receipt.format1.json` first (`update --provider <p> --change-provider --yes`; when it records a `pendingProviderChange`, its `provider` or its `pendingProviderChange.to`); otherwise the older installer's regenerated config differs on `AI_PROVIDER` and it refuses with drift.
 2. In the installation's state directory, keep the current receipt and restore the copy: `mv receipt.json receipt.format2.json && cp -p receipt.format1.json receipt.json`. Never edit `receipt.format1.json` itself.
-3. Check out the older commit and run `build:cloudflare`, `check:cloudflare` and `setup:cloudflare -- update` there, as for any code-only rollback.
+3. Check out the older commit and run `build:cloudflare` and `check:cloudflare` there.
+4. If `receipt.format1.json` records a `pendingProviderChange` (a provider change that was unfinished when the receipt was migrated), the older installer refuses an ordinary `update` (and `resume`, `apply` and `config`) until that change is finished. Before anything else, finish it with the older installer's own command, `setup:cloudflare -- update --install <install> --env <env> --provider <to> --change-provider --yes`, where `<to>` is the recorded `pendingProviderChange.to`. It asks for that provider's key only if it is not bound, deploys the older artifact and clears the record.
+5. Otherwise run `setup:cloudflare -- update` there, as for any code-only rollback.
 
 What the older installer knows is only what the receipt recorded before the migration: the default provider and the keys it bound, resources and queue ids, the epoch fingerprint, and deployments up to the migration. It does not know anything added since. Provider keys added with `--add-provider-key` stay bound, and a Run token (`CF_AI_GATEWAY_TOKEN`) and the gateway itself stay too; the older installer checks only that its default provider's key is bound and ignores the rest, and its Worker routes direct only. Key rotations since the migration are simply the bound values.
 
@@ -367,6 +369,7 @@ CI does not:
 - update the installer receipt: the receipt's `deployments` and the `Version` that `setup:cloudflare verify --install` reports stay at the last installer deploy;
 - compare queue ids, bound secret names or the installation identity with the receipt, as `update` does;
 - prove that `APP_BASE_URL` is served by this Worker;
+- on a `cloudflare-gateway` installation, read the AI Gateway's settings or stored logs, exercise the gateway per provider or probe the bound Run token. The verify step makes no Cloudflare API call and lists these as limitations of its result. To check the gateway, run `npm run setup:cloudflare -- verify --install <install> --env production` with `CF_AI_GATEWAY_ADMIN_TOKEN` (AI Gateway Read) from the workstation that holds the receipt;
 - drain the workspace.
 
 ## Production transition (OPS-04)

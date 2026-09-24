@@ -52,6 +52,8 @@ export const CUSTOM_ORIGIN_LIMITATION = 'Routing of the custom origin to this Wo
 /** Cloudflare AI Gateway transport (RT-11): what verify cannot establish. */
 export const GATEWAY_LIMITATION = 'AI Gateway pass-through per provider is not exercised: no request reaches a provider through the gateway, and the bound Run token is not probed (its value is not readable).';
 export const GATEWAY_UNCHECKED_LIMITATION = `AI Gateway settings and stored logs were not read: ${GATEWAY_ADMIN_TOKEN_ENV} (AI Gateway Read) was not set for this run.`;
+/** verify --config on a gateway config: without a receipt the gateway cannot be tied to this installation, so it is never read. */
+export const GATEWAY_CONFIG_UNCHECKED_LIMITATION = `AI Gateway settings and stored logs were not read: verify --config has no receipt to tie the gateway to this installation and makes no Cloudflare API call, whatever ${GATEWAY_ADMIN_TOKEN_ENV} holds. Run verify --install <name> --env <env> with ${GATEWAY_ADMIN_TOKEN_ENV} (AI Gateway Read) from the workstation that holds the receipt.`;
 
 export function limitationsFor(receipt, { gatewayChecked = false } = {}) {
   const limitations = receipt.workersDevUrl && receipt.origin && receipt.origin !== receipt.workersDevUrl
@@ -382,7 +384,9 @@ export async function verifyConfiguredOrigin({ template, configPath, waitSeconds
     readinessErrors,
     terminal,
     config: { ok: local.ok, diffs: local.diffs, templateDrift: local.templateDrift },
-    limitations: [...CONFIG_LIMITATIONS],
+    limitations: config.vars?.AI_TRANSPORT === GATEWAY_TRANSPORT
+      ? [...CONFIG_LIMITATIONS, GATEWAY_LIMITATION, GATEWAY_CONFIG_UNCHECKED_LIMITATION]
+      : [...CONFIG_LIMITATIONS],
     verifiedAt: new Date().toISOString(),
   };
 }
