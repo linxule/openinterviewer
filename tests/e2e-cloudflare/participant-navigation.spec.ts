@@ -8,6 +8,9 @@ import { control, count, createStudy, fixtureState, generateLink } from './journ
 
 const HELD_ROUTES = new Set(['/consent', '/interview']);
 const NAVIGATION_DELAY_MS = 2_500;
+// Waits that span a held navigation get the delay on top of the usual margin;
+// the default 5 s expect timeout would leave only half of it for real work.
+const ACROSS_HELD_NAVIGATION = { timeout: NAVIGATION_DELAY_MS + 10_000 };
 
 test.beforeEach(async ({ request }) => {
   await control(request, 'reset');
@@ -29,13 +32,14 @@ test('a delayed route change neither shows a step early nor discards a typed ans
         held.push(new URL(flight.url()).pathname);
         await new Promise((resolve) => setTimeout(resolve, NAVIGATION_DELAY_MS));
       }
-      await route.continue();
+      // The page may already be closed when a held request is released.
+      await route.continue().catch(() => undefined);
     },
   );
 
   await participant.goto(linkPath);
   const consent = participant.getByRole('button', { name: 'I consent — begin the interview' });
-  await expect(consent).toBeVisible();
+  await expect(consent).toBeVisible(ACROSS_HELD_NAVIGATION);
   // Not a retrying assertion: with /consent held, a consent button can only be
   // visible here if the link page rendered one while the route change was pending.
   expect(new URL(participant.url()).pathname).toBe('/consent');
@@ -46,7 +50,7 @@ test('a delayed route change neither shows a step early nor discards a typed ans
   expect(new URL(participant.url()).pathname).toBe('/consent');
   await expect(participant.getByLabel('Your response')).toHaveCount(0);
 
-  await expect(participant.getByText(GREETING, { exact: true })).toBeVisible();
+  await expect(participant.getByText(GREETING, { exact: true })).toBeVisible(ACROSS_HELD_NAVIGATION);
   expect(new URL(participant.url()).pathname).toBe('/interview');
 
   const composer = participant.getByLabel('Your response');
@@ -59,5 +63,6 @@ test('a delayed route change neither shows a step early nor discards a typed ans
   // One greeting and one consent record: no step was mounted twice.
   expect(await count(request, 'greeting')).toBe(1);
   expect((await fixtureState(request)).inbound.filter((line) => line === 'POST /api/consent')).toHaveLength(1);
+  await participant.unrouteAll({ behavior: 'ignoreErrors' });
   await context.close();
 });
