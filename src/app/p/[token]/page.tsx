@@ -4,25 +4,22 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useStore } from '@/store';
 import { StudyConfig } from '@/types';
-import Consent from '@/components/Consent';
-import InterviewChat from '@/components/InterviewChat';
-import Synthesis from '@/components/Synthesis';
-import Export from '@/components/Export';
 import { Verbatim } from '@/components/ui';
 import type { AITransport } from '@/lib/aiTransport';
 
+/**
+ * Resolves a participant link and hands over to `/consent`. It never renders
+ * an interview step itself: a step shown here while the route change is still
+ * in flight would be replaced by the destination page's own copy, discarding
+ * whatever the participant had typed and repeating its mount-time requests.
+ */
 export default function ParticipantPage() {
   const params = useParams();
   const router = useRouter();
   const linkCode = params.token as string;
 
-  const {
-    currentStep,
-    beginParticipantSession,
-    studyConfig
-  } = useStore();
+  const beginParticipantSession = useStore((state) => state.beginParticipantSession);
 
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   // Resolve the opaque link code and establish a cookie-backed participant session.
@@ -30,7 +27,6 @@ export default function ParticipantPage() {
     const loadStudyFromLink = async () => {
       if (!linkCode) {
         setError('No participant link code provided');
-        setLoading(false);
         return;
       }
 
@@ -40,7 +36,6 @@ export default function ParticipantPage() {
 
         if (!result.valid || !result.data) {
           setError('Invalid or expired link');
-          setLoading(false);
           return;
         }
 
@@ -51,7 +46,6 @@ export default function ParticipantPage() {
         };
         if (!resolvedLink.sessionHandle) {
           setError('The participant session could not be established');
-          setLoading(false);
           return;
         }
         beginParticipantSession(
@@ -59,30 +53,17 @@ export default function ParticipantPage() {
           resolvedLink.sessionHandle,
           resolvedLink.aiTransport === 'gateway' ? 'gateway' : 'direct',
         );
-        setLoading(false);
+        // Stay on the loading view until /consent replaces this page.
         router.replace('/consent');
       } catch (err) {
         console.error('Error loading study from participant link:', err);
         setError('Failed to load study configuration');
-        setLoading(false);
       }
     };
 
     loadStudyFromLink();
   }, [linkCode, beginParticipantSession, router]);
 
-  // Loading state
-  if (loading) {
-    return (
-      <main className="flex min-h-dvh items-center justify-center bg-paper-0 px-4 py-12">
-        <div className="w-full max-w-measure">
-          <p className="font-sans text-[15px] text-ink-500">Loading interview...</p>
-        </div>
-      </main>
-    );
-  }
-
-  // Error state
   if (error) {
     return (
       <main className="flex min-h-dvh items-center justify-center bg-paper-0 px-4 py-12">
@@ -99,28 +80,11 @@ export default function ParticipantPage() {
     );
   }
 
-  // No study config loaded
-  if (!studyConfig) {
-    return (
-      <main className="flex min-h-dvh items-center justify-center bg-paper-0 px-4 py-12">
-        <div className="w-full max-w-measure">
-          <p className="font-sans text-[15px] text-ink-500">Study configuration not found.</p>
-        </div>
-      </main>
-    );
-  }
-
-  // Render the appropriate step
-  switch (currentStep) {
-    case 'consent':
-      return <Consent />;
-    case 'interview':
-      return <InterviewChat />;
-    case 'synthesis':
-      return <Synthesis />;
-    case 'export':
-      return <Export />;
-    default:
-      return <Consent />;
-  }
+  return (
+    <main className="flex min-h-dvh items-center justify-center bg-paper-0 px-4 py-12">
+      <div className="w-full max-w-measure">
+        <p role="status" className="font-sans text-[15px] text-ink-500">Loading interview...</p>
+      </div>
+    </main>
+  );
 }

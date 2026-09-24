@@ -106,6 +106,28 @@ describe('Consent server recording', () => {
     });
   });
 
+  it('keeps consent unavailable while the route change to /interview is still in flight', async () => {
+    // router.push resolves nothing here: the navigation is deliberately left pending.
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      success: true,
+      acceptedAt: 1_700_000_000_000,
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<Consent />);
+    fireEvent.click(screen.getByRole('button', { name: /I consent — begin the interview/i }));
+
+    const opening = await screen.findByRole('button', { name: 'Opening the interview…' });
+    expect(opening).toBeDisabled();
+    expect(opening).toHaveAttribute('aria-busy', 'true');
+    fireEvent.click(opening);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(navigation.push).toHaveBeenCalledTimes(1);
+  });
+
   it('does not advance or mark consent when the server cannot persist it', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       error: 'Consent storage is temporarily unavailable. Please try again.',
@@ -122,5 +144,6 @@ describe('Consent server recording', () => {
     expect(navigation.push).not.toHaveBeenCalled();
     expect(useStore.getState().consentGiven).toBe(false);
     expect(useStore.getState().currentStep).toBe('consent');
+    expect(screen.getByRole('button', { name: /I consent — begin the interview/i })).toBeEnabled();
   });
 });

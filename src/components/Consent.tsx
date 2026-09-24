@@ -19,10 +19,13 @@ const Consent: React.FC = () => {
     aiTransport,
   } = useStore();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Set once consent is recorded: the button stays unavailable until /interview
+  // replaces this page, so a slow route change cannot record consent twice.
+  const [isOpening, setIsOpening] = useState(false);
   const [consentError, setConsentError] = useState<string | null>(null);
 
   const handleConsent = async () => {
-    if (!studyConfig || isSubmitting) return;
+    if (!studyConfig || isSubmitting || isOpening) return;
 
     setIsSubmitting(true);
     setConsentError(null);
@@ -47,6 +50,7 @@ const Consent: React.FC = () => {
       // participant API routes independently verify the server-side record.
       giveConsent(data.acceptedAt!);
       initializeProfile(studyConfig.profileSchema);
+      setIsOpening(true);
       setStep('interview');
       router.push('/interview');
     } catch (error) {
@@ -148,7 +152,7 @@ const Consent: React.FC = () => {
 
         <div className="space-y-3">
           {viewMode !== 'participant' && (
-            <Button type="button" variant="quiet" onClick={handleBack} disabled={isSubmitting} className="w-full">
+            <Button type="button" variant="quiet" onClick={handleBack} disabled={isSubmitting || isOpening} className="w-full">
               Back
             </Button>
           )}
@@ -156,11 +160,11 @@ const Consent: React.FC = () => {
             type="button"
             variant="primary"
             onClick={handleConsent}
-            disabled={isSubmitting || !providerConfigurationReady}
-            aria-busy={isSubmitting}
+            disabled={isSubmitting || isOpening || !providerConfigurationReady}
+            aria-busy={isSubmitting || isOpening}
             className="w-full"
           >
-            {isSubmitting ? 'Recording consent…' : 'I consent — begin the interview'}
+            {isOpening ? 'Opening the interview…' : isSubmitting ? 'Recording consent…' : 'I consent — begin the interview'}
           </Button>
         </div>
       </div>
