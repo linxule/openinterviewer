@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { useStore } from '@/store';
+import { makeStudyConfig } from '../fixtures/models';
 
 const navigation = vi.hoisted(() => ({
   pathname: '/consent',
@@ -11,8 +12,11 @@ vi.mock('next/navigation', () => ({
   usePathname: () => navigation.pathname,
   useRouter: () => ({ push: navigation.push }),
 }));
+const api = vi.hoisted(() => ({ getInterviewGreeting: vi.fn(), generateInterviewResponse: vi.fn() }));
+vi.mock('@/services/interviewApi', () => api);
 
 import PreviewBanner from '@/components/PreviewBanner';
+import InterviewChat from '@/components/InterviewChat';
 
 beforeEach(() => {
   navigation.pathname = '/consent';
@@ -53,5 +57,27 @@ describe('PreviewBanner mode isolation', () => {
     expect(useStore.getState().viewMode).toBe('researcher');
     expect(useStore.getState().participantSessionHandle).toBeNull();
     expect(navigation.push).toHaveBeenCalledWith('/setup');
+  });
+
+  it('unmounts a preview before clearing it and ignores a greeting that arrives during the route change', async () => {
+    navigation.pathname = '/interview';
+    let answer!: (text: string) => void;
+    api.getInterviewGreeting.mockReturnValue(new Promise<string>((resolve) => { answer = resolve; }));
+    useStore.setState({ viewMode: 'preview', studyConfig: makeStudyConfig() });
+    const view = render(<PreviewBanner><InterviewChat /></PreviewBanner>);
+    expect(api.getInterviewGreeting).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Exit Preview' }));
+    expect(screen.getByRole('status')).toHaveTextContent('Returning to study setup');
+    expect(screen.queryByLabelText('Your response')).not.toBeInTheDocument();
+    await act(async () => { answer('A greeting from the abandoned preview'); });
+    expect(useStore.getState().interviewHistory).toEqual([]);
+    expect(api.getInterviewGreeting).toHaveBeenCalledTimes(1);
+    expect(navigation.push).toHaveBeenCalledTimes(1);
+
+    navigation.pathname = '/setup';
+    view.rerender(<PreviewBanner><p>Study setup destination</p></PreviewBanner>);
+    expect(screen.getByText('Study setup destination')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 });

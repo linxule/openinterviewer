@@ -24,6 +24,8 @@ export default function ParticipantPage() {
 
   // Resolve the opaque link code and establish a cookie-backed participant session.
   useEffect(() => {
+    let cancelled = false;
+    setError(null);
     const loadStudyFromLink = async () => {
       if (!linkCode) {
         setError('No participant link code provided');
@@ -33,6 +35,7 @@ export default function ParticipantPage() {
       try {
         const response = await fetch(`/api/generate-link?token=${encodeURIComponent(linkCode)}`);
         const result = await response.json();
+        if (cancelled) return;
 
         if (!result.valid || !result.data) {
           setError('Invalid or expired link');
@@ -56,12 +59,14 @@ export default function ParticipantPage() {
         // Stay on the loading view until /consent replaces this page.
         router.replace('/consent');
       } catch (err) {
+        if (cancelled) return;
         console.error('Error loading study from participant link:', err);
         setError('Failed to load study configuration');
       }
     };
 
     loadStudyFromLink();
+    return () => { cancelled = true; };
   }, [linkCode, beginParticipantSession, router]);
 
   if (error) {

@@ -64,6 +64,11 @@ const StudySetup: React.FC = () => {
 
   // Preview state
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   // Study save state
   const [isSaving, setIsSaving] = useState(false);
@@ -360,6 +365,7 @@ const StudySetup: React.FC = () => {
   };
 
   const handlePreview = async () => {
+    if (isPreviewLoading) return;
     if (!requireResearcherAuth()) return;
     if (!requireConfiguredProvider(setSaveError)) return;
     if (!requireValidModel(setSaveError)) return;
@@ -376,15 +382,18 @@ const StudySetup: React.FC = () => {
         throw new Error(data.error || 'Could not load the saved study.');
       }
       const data = await response.json();
+      if (!mounted.current) return;
       useStore.getState().resetParticipant();
       setStudyConfig(data.study.config);
       setViewMode('preview');
       setStep('consent');
       router.push('/consent');
     } catch (error) {
+      if (!mounted.current) return;
       console.error('Could not load saved preview:', error);
       setSaveError(error instanceof Error ? error.message : 'Could not load the saved study.');
-    } finally {
+      // A failed lookup is retryable; a successful one stays locked until
+      // /consent replaces this page.
       setIsPreviewLoading(false);
     }
   };

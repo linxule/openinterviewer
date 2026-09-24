@@ -252,6 +252,21 @@ They also listed older transitions that stay clickable during a slow navigation.
 
 `docs/design/slice-F-spec.md` and `slice-G-spec.md` are historical design records and still describe the old step switch.
 
+## 15. Outgoing screens and abandoned requests (Codex follow-up)
+
+The four older transitions listed in section 14 are now addressed:
+
+- Preview stays disabled after its saved-study lookup succeeds, until consent replaces the page. Lookup failure still allows a retry.
+- The root preview banner now contains the route content. Exit replaces the outgoing screen with a status message, unmounts its effects, and only then resets the preview and navigates to setup. A late greeting cannot repopulate the cleared session.
+- Leaving synthesis replaces its controls with a navigation status and invalidates its current attempt immediately. Retry buttons and a late analysis result cannot start another analysis or save while the route changes.
+- Leaving export replaces both downloads and session counts before resetting the session, preventing empty exports and misleading zero counts during navigation.
+
+The adjacent audit also found abandoned async requests: link resolution could replace a newer participant session, and consent or preview lookups could reopen a page the user had left. Their late results now have no client-side effects. This does not undo a request already accepted by the server or cancel an already-started provider call.
+
+Focused regression evidence: `PreviewBanner.test.tsx` covers exit during an outstanding greeting and arrival at setup; `Synthesis.lifecycle.test.tsx` covers both participant save retry and preview analysis retry during a held navigation; `Export.mode.test.tsx` covers all four reset actions; `StudySetup.document.test.tsx`, `Consent.serverConsent.test.tsx`, and `participantLinkPage.navigation.test.tsx` cover abandoned responses. The artifact browser navigation spec also holds setup navigation after preview exit and checks that the old composer is absent and the greeting count stays at one. Claude's delayed participant-navigation regression remains in place.
+
+The final full-matrix result is recorded in the generated artifact receipt and the review handoff. Live Cloudflare installation, recovery and memory gates remain pending; this follow-up does not provision or deploy anything.
+
 ## Appendix A. Requirement-to-evidence map
 
 Status: `met-local` implemented and proven by local tests; `remote-gate` implemented, acceptance needs a live account, provider or production data; `deviation` implemented differently or not delivered, recorded in DEVIATIONS.md; `partial` acceptance evidence still incomplete locally.

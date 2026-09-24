@@ -66,3 +66,32 @@ test('a delayed route change neither shows a step early nor discards a typed ans
   await participant.unrouteAll({ behavior: 'ignoreErrors' });
   await context.close();
 });
+
+test('leaving preview removes the old screen before clearing its session and awaiting setup', async ({ page, request }) => {
+  await createStudy(page);
+  await page.goto('/setup');
+  await page.getByRole('button', { name: 'Preview', exact: true }).click();
+  await page.getByRole('button', { name: 'I consent — begin the interview' }).click();
+  await expect(page.getByText(GREETING, { exact: true })).toBeVisible();
+  await page.getByLabel('Your response').fill('Unsubmitted preview draft');
+
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => { release = resolve; });
+  await page.route((url) => url.pathname === '/setup', async (route) => {
+    if (route.request().headers().rsc === '1') await hold;
+    await route.continue().catch(() => undefined);
+  });
+  await page.getByRole('button', { name: 'Exit Preview' }).click();
+  await expect(page.getByRole('status')).toHaveText('Returning to study setup…');
+  expect(new URL(page.url()).pathname).toBe('/interview');
+  await expect(page.getByLabel('Your response')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0);
+  expect(await count(request, 'greeting')).toBe(1);
+
+  release();
+  await expect(page).toHaveURL(/\/setup$/);
+  await expect(page.getByRole('status').filter({ hasText: 'Returning to study setup' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Preview', exact: true })).toBeEnabled();
+  expect((await fixtureState(request)).refused).toEqual([]);
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+});

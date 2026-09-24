@@ -4,9 +4,11 @@ import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useStore } from '@/store';
 import { Button, Coordinate, Icon, Label, Page, Rule, Verbatim } from '@/components/ui';
+import NavigationStatus from '@/components/NavigationStatus';
 
 const Export: React.FC = () => {
   const router = useRouter();
+  const [isLeaving, setIsLeaving] = useState(false);
   const {
     studyConfig,
     participantProfile,
@@ -171,32 +173,39 @@ const Export: React.FC = () => {
   };
 
   const handleNewParticipant = () => {
+    setIsLeaving(true);
     resetParticipant();
     router.push('/consent');
   };
 
   const handleNewStudy = () => {
+    setIsLeaving(true);
     reset();
     router.push('/setup');
   };
 
   const handleReturnToSynthesis = () => {
+    setIsLeaving(true);
     setStep('synthesis');
     router.replace('/synthesis');
   };
 
   const handleRunPreviewAgain = () => {
+    setIsLeaving(true);
     resetParticipant();
     setStep('consent');
     router.push('/consent');
   };
 
   const handleReturnToStudySetup = () => {
+    setIsLeaving(true);
     resetParticipant();
     setViewMode('researcher');
     setStep('setup');
     router.push('/setup');
   };
+
+  if (isLeaving) return <NavigationStatus>Opening the next screen…</NavigationStatus>;
 
   // Calculate extracted profile fields
   const extractedFields = participantProfile?.fields.filter(f => f.status === 'extracted') || [];

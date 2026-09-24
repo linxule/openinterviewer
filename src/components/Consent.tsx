@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useStore } from '@/store';
 import { PROVIDER_OPTIONS } from '@/lib/providerRegistry';
@@ -23,6 +23,11 @@ const Consent: React.FC = () => {
   // replaces this page, so a slow route change cannot record consent twice.
   const [isOpening, setIsOpening] = useState(false);
   const [consentError, setConsentError] = useState<string | null>(null);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   const handleConsent = async () => {
     if (!studyConfig || isSubmitting || isOpening) return;
@@ -42,6 +47,7 @@ const Consent: React.FC = () => {
         acceptedAt?: number;
         error?: string;
       };
+      if (!mounted.current) return;
       if (!response.ok || !Number.isSafeInteger(data.acceptedAt) || (data.acceptedAt ?? 0) <= 0) {
         throw new Error(data.error || 'Consent could not be recorded. Please try again.');
       }
@@ -54,9 +60,10 @@ const Consent: React.FC = () => {
       setStep('interview');
       router.push('/interview');
     } catch (error) {
+      if (!mounted.current) return;
       setConsentError(error instanceof Error ? error.message : 'Consent could not be recorded. Please try again.');
     } finally {
-      setIsSubmitting(false);
+      if (mounted.current) setIsSubmitting(false);
     }
   };
 

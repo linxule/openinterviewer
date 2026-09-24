@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useStore } from '@/store';
 import { makeStudyConfig } from '../fixtures/models';
 
@@ -26,6 +26,19 @@ afterEach(() => {
 });
 
 describe('Consent server recording', () => {
+  it('does not reopen an abandoned interview when consent returns after unmount', async () => {
+    let answer!: (response: Response) => void;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => { answer = resolve; })));
+    const page = render(<Consent />);
+    fireEvent.click(screen.getByRole('button', { name: /I consent/i }));
+    page.unmount();
+    useStore.getState().reset();
+    await act(async () => { answer(new Response(JSON.stringify({ acceptedAt: 123 }))); });
+    expect(navigation.push).not.toHaveBeenCalled();
+    expect(useStore.getState().consentGiven).toBe(false);
+    expect(useStore.getState().currentStep).toBe('setup');
+  });
+
   it('names the selected direct provider without exposing credential details', () => {
     render(<Consent />);
 

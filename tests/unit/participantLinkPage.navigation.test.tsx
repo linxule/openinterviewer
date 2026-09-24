@@ -37,6 +37,17 @@ afterEach(() => {
 });
 
 describe('participant link page during a delayed route change', () => {
+  it('does not replace the current session when an abandoned lookup answers late', async () => {
+    let answer!: (response: Response) => void;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => { answer = resolve; })));
+    const page = render(<ParticipantPage />);
+    page.unmount();
+    useStore.getState().beginParticipantSession(makeStudyConfig({ id: 'new-session' }), 'new-session-handle');
+    await act(async () => { answer(resolvedLink()); });
+    expect(navigation.replace).not.toHaveBeenCalled();
+    expect(useStore.getState().participantSessionHandle).toBe('new-session-handle');
+  });
+
   it('hands over to /consent without rendering any interview step itself', async () => {
     const fetchMock = vi.fn().mockResolvedValue(resolvedLink());
     vi.stubGlobal('fetch', fetchMock);
