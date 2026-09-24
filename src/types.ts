@@ -102,7 +102,7 @@ export const OPENROUTER_MODELS: AIModelOption[] = [
 ];
 
 // Default models for each provider
-export const DEFAULT_GEMINI_MODEL = 'gemini-3.7-flash';
+export const DEFAULT_GEMINI_MODEL = 'gemini-3.8-flash';
 export const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-5';
 export const DEFAULT_OPENAI_MODEL = 'gpt-5.6-terra';
 export const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-5.6-terra';
