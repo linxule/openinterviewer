@@ -9,20 +9,20 @@ The [v3.0.0 notes](docs/releases/v3.0.0.md) cover save-first completion and defe
 
 Contributing or working with a coding agent? Start with [`CONTRIBUTING.md`](CONTRIBUTING.md) and the repository map in [`AGENTS.md`](AGENTS.md).
 
-There are three deliberately different ways to use it:
+There are four deliberately different ways to use it:
 
 | Journey | Credentials | Persistence | Intended use |
 | --- | --- | --- | --- |
 | **Keyless public demo** (`/demo`) | None | None | See the participant and analysis experience with scripted sample data |
-| **Hosted researcher account** | Sign in, then add your own AI and Upstash credentials in the UI | Your Upstash database | Run research without administering a Vercel project |
-| **Self-hosted standalone** | Vercel AI Gateway/OIDC or server-side provider keys | Your deployment's Upstash database | Operate the full application and infrastructure yourself |
-| **Self-hosted standalone on Cloudflare** | Server-side provider keys: the default provider's, plus any of the other three | A SQLite Durable Object in your Cloudflare account (no Upstash) | Operate the application on Cloudflare Workers with durable background analysis |
+| **Self-hosted on Cloudflare** (recommended) | Server-side provider keys: the default provider's, plus any of the other three | A SQLite Durable Object in your Cloudflare account (no Upstash) | Run your own instance on Cloudflare Workers with durable background analysis; the project's own instance runs this way |
+| **Self-hosted on Node/Vercel** | Vercel AI Gateway/OIDC or server-side provider keys | Your deployment's Upstash database | Run your own instance on Vercel or any Node host |
+| **Hosted researcher accounts** | Sign in, then add your own AI and Upstash credentials in the UI | Your Upstash database | A multi-tenant service that an operator runs on the Node/Vercel target; the project does not currently operate one |
 
 The demo is not a disguised live interview: it is deterministic, does not call an AI provider, and does not save data. Real interviews require configured inference access and storage.
 
 ## Public deployment checks
 
-The canonical site is [openinterviewer.vercel.app](https://openinterviewer.vercel.app), and its public `/demo` is designed to work without provider or storage configuration. Deployment mode and persistent-workspace health are runtime state, so check them instead of preserving a dated snapshot in this README:
+The project's own instance is [open-interview.linxule.com](https://open-interview.linxule.com), a standalone installation on Cloudflare (EU-jurisdiction workspace, provider calls through its own Cloudflare AI Gateway). The former address, `openinterviewer.vercel.app`, redirects there. The public `/demo` works without provider or storage configuration. Deployment mode and persistent-workspace health are runtime state, so check them instead of preserving a dated snapshot in this README:
 
 - `/api/config/mode` reports the active mode and whether the configuration shape is valid;
 - `/api/config/readiness` exposes the same safe configuration contract for setup UI; and
@@ -30,7 +30,7 @@ The canonical site is [openinterviewer.vercel.app](https://openinterviewer.verce
 
 Both configuration endpoints also report `analysisExecution`: `synchronous` on Node/Vercel deployments and `queued-v2` on Cloudflare, where analysis runs as a durable background job.
 
-Deployments are created by Vercel's Git integration: pushes to `main` go to production and other branches get previews, except `dependabot/**`, which `vercel.json` excludes so dependency PRs do not build. Vercel retains deployments for one day (with its ten-deployment floor). If a push shows no deployment, check [vercel-status.com](https://www.vercel-status.com/) and allow 30 minutes before assuming the integration failed; do not submit a CLI deployment for a commit that already has one.
+Pushes to `main` deploy nothing. The maintainer deploys each release with the Cloudflare installer, staging first, after the full local release check on a clean checkout of the release commit ([INSTALLER.md, maintained instance](docs/operations/cloudflare-migration/INSTALLER.md#maintained-instance)). A Node/Vercel self-hoster who connects Vercel's Git integration gets production deploys from `main` and previews from other branches; `vercel.json` skips `dependabot/**` branches.
 
 ## 1. Try the keyless demo
 
@@ -50,7 +50,7 @@ The authenticated researcher workspace also offers **Load Sample**, which writes
 
 ## 2. Use a hosted researcher account
 
-In hosted mode, the platform operator configures the application once. Researchers should not need the Vercel dashboard or deployment environment variables.
+In hosted mode, the platform operator configures the application once. Researchers should not need the Vercel dashboard or deployment environment variables. Hosted mode runs on the Node/Vercel target only (not on Cloudflare), and the project's own instance does not offer hosted accounts.
 
 Hosted researcher BYOS intentionally uses the direct provider adapters (`AI_TRANSPORT=direct`). This keeps each request bound to that researcher's encrypted credential and retains full Gemini, Claude, OpenAI, and OpenRouter support. The platform operator's Gateway balance or provider keys never substitute for a missing researcher credential.
 
@@ -111,7 +111,53 @@ Do not use `NEXT_PUBLIC_` for credentials or signing keys. `APP_BASE_URL` is int
 
 ## 3. Run a self-hosted standalone instance
 
-### Requirements
+A standalone instance has one researcher login (`ADMIN_PASSWORD`) and the instance's own provider keys. Two targets run the same application:
+
+| | Cloudflare (recommended) | Node/Vercel |
+| --- | --- | --- |
+| Runtime | One Worker: the Next.js app via OpenNext, a SQLite Durable Object workspace, and a Queue for background analysis | Next.js on Vercel or any Node host |
+| Storage | Durable Object in your Cloudflare account, with a chosen jurisdiction (`eu` recommended) | Your Upstash Redis database |
+| Provider transport | Direct, or your installation's own Cloudflare AI Gateway | Direct, or Vercel AI Gateway |
+| Install and update | `npm run setup:cloudflare` (guided installer: plan, apply, resume, update, verify) | Vercel project settings, or your Node host's |
+| Operations | Maintenance modes, backup/import and point-in-time restore via `npm run operator:cloudflare` | Upstash backups and your host's tooling |
+
+To try the application locally without any account or credentials, run `npm ci && npm run build:cloudflare && npm run preview:cloudflare`: the built Worker runs in local workerd with synthetic provider responses and throwaway storage.
+
+### Cloudflare
+
+The Next.js app runs through [OpenNext](https://opennext.js.org/cloudflare). Provider keys belong to the installation and are sent directly or through the installation's own Cloudflare AI Gateway (`--ai-transport cloudflare-gateway`: logging, caching, retries and fallback off; see [INSTALLER.md](docs/operations/cloudflare-migration/INSTALLER.md#ai-transport-cloudflare-ai-gateway)). Vercel AI Gateway and hosted researcher accounts are not available on this target. Design, limits and every deviation from the migration specification are recorded in [`docs/operations/cloudflare-migration/`](docs/operations/cloudflare-migration/IMPLEMENTATION.md).
+
+Requirements: a Cloudflare account with Workers, Durable Objects and Queues; `npx wrangler login`; the key of the default provider (`--provider`), and optionally the keys of the other providers (`--provider-keys`, or later with `update --add-provider-key`, no redeploy); an administrator password of 16 characters or more whose sign-in body fits Cloudflare's 1 KiB limit (at most 1,009 ASCII characters, fewer with multi-byte or JSON-escaped characters; the installer refuses a longer one, and `npm run setup:check -- --target cloudflare` reports it as `env.ADMIN_PASSWORD.too_long`). For the local release check: a clean checkout (no uncommitted changes and no untracked files outside `.gitignore`), a local `redis-server` (or Docker) and Playwright browsers.
+
+Worker size does not decide the plan. The bundle is about 27 MiB uncompressed and 5.3 MiB gzip (27,403 KiB and 5,440 KiB in September 2026; `build:cloudflare` prints it as `Total Upload`). Since [4 September 2026](https://developers.cloudflare.com/changelog/post/2026-09-04-increased-worker-size-limit/) the [Worker size limit](https://developers.cloudflare.com/workers/platform/limits/#worker-size) is 64 MiB uncompressed on both Free and Paid, with no compressed limit. Under the earlier compressed limits (3 MB Free, 10 MB Paid) this bundle would have needed Workers Paid. Workers Paid is still recommended, because the Free plan allows [10 ms of CPU time](https://developers.cloudflare.com/workers/platform/limits/#cpu-time) per HTTP request, which server rendering is unlikely to fit (not measured on a live Worker). Provider usage is billed by your provider separately.
+
+Use the checked-in tooling; it never provisions or deploys implicitly:
+
+```bash
+npm ci
+npm run build:cloudflare                  # builds dist/cloudflare/artifact; refuses if .env*/.dev.vars files are present
+npm run check:cloudflare -- --skip-build  # full local release matrix on that artifact; writes the receipt deploy requires
+npm run setup:cloudflare -- plan --install <name> --env production --provider openai --jurisdiction eu
+# Credentials come from your secret manager on stdin. The template holds op:// references only
+# and lives outside the checkout: an untracked file there makes the checkout dirty and apply refuses.
+op inject -i ~/secure/secrets.tpl.json | npm run setup:cloudflare -- apply --install <name> --env production --provider openai \
+  --jurisdiction eu --secrets-stdin --yes --operator-token-file <path outside this repository>
+npm run setup:cloudflare -- verify --install <name> --env production
+```
+
+Without `--origin`, the installer discovers the Worker's `workers.dev` URL from the first deploy and keeps the app not-ready until that origin is set. To use a custom domain, pass `--origin https://…` and attach the domain to the Worker in the Cloudflare dashboard; the installer never changes DNS or routes. `npm run preview:cloudflare` runs the built artifact in local workerd with synthetic provider responses, no credentials and throwaway storage. Operator actions (maintenance modes, operational backup/import, point-in-time restore, recovery activation) use `npm run operator:cloudflare`, which needs the administrator password and the generated operator token.
+
+The JSON on stdin holds only `{"ADMIN_PASSWORD": "…", "OPENAI_API_KEY": "…"}`, plus one key per extra provider named with `--provider-keys`. Never keep it in a file inside the checkout, where `git add` can pick it up: pipe it from a secret manager as above (the template holds references such as `{{ op://<vault>/<item>/password }}`, not values, and is kept outside the checkout like any other file you add), or drop `--secrets-stdin` and type the values at the installer's hidden prompt. If you must use a file, keep it outside the repository and delete it afterwards. The installer generates the session, participant, rate-limit and operator secrets and the recovery epoch, and sends all secrets to Cloudflare through stdin. It records a non-secret receipt in `cloudflare/installations/`. Updates use `setup:cloudflare -- update`; interrupted installs use `resume`. The project's own production installation is deployed the same way, with `update` from the owner's workstation after `npm run check:cloudflare` ([Maintained instance](docs/operations/cloudflare-migration/INSTALLER.md#maintained-instance)); the `promote-cloudflare` job in `.github/workflows/ci.yml` is an unconfigured option for installations that choose CI ownership ([Optional: CI-owned deployment](docs/operations/cloudflare-migration/INSTALLER.md#optional-ci-owned-deployment)). See [INSTALLER.md](docs/operations/cloudflare-migration/INSTALLER.md) and the operator [RUNBOOK.md](docs/operations/cloudflare-migration/RUNBOOK.md) for maintenance modes, operational backup/import, restore and rollback. A coding agent can drive the same commands with [`skills/openinterviewer-cloudflare`](skills/openinterviewer-cloudflare/SKILL.md).
+
+Choose the Durable Object jurisdiction (`eu` recommended) before the first install; it restricts where the workspace is stored, not where every request or provider call is processed, and changing it later is a migration. Staging is always a separately named Worker with its own storage, Queue, secrets and origin. A one-click Deploy to Cloudflare button is not offered. The button deploys through Workers Builds, which would become a second deployment owner and cannot perform the installer's secret generation or its origin and workspace bootstrap. The guided installer is the supported path (see `SETUP-04` in [DEVIATIONS.md](docs/operations/cloudflare-migration/evidence/DEVIATIONS.md)). A button will be published only after a complete fresh-account installation through it has been tested.
+
+On Cloudflare, analysis after a participant saves runs as a background job. The researcher sees queued, running, complete, failed or needs-recovery states; "needs recovery" means a paid provider call may have run but its result could not be confirmed, and running it again may make another paid request.
+
+### Node/Vercel
+
+The Node/Vercel target needs an Upstash database. The subsections below cover requirements, local setup, production variables and a Vercel deploy.
+
+#### Requirements
 
 - Node.js 24.19 or newer (`.nvmrc` and `.node-version` are included)
 - either Vercel AI Gateway authentication or one Google Gemini, Anthropic Claude, OpenAI, or OpenRouter API key
@@ -120,7 +166,7 @@ Do not use `NEXT_PUBLIC_` for credentials or signing keys. `APP_BASE_URL` is int
 
 Storage is required for real studies and interviews. The app does not auto-create, auto-connect, or silently substitute a database. Create Upstash Redis yourself, whether directly in Upstash or through the Vercel Marketplace, then configure the exact REST variables below.
 
-### Local setup
+#### Local setup
 
 ```bash
 git clone https://github.com/linxule/openinterviewer.git
@@ -147,7 +193,7 @@ npm run dev
 
 Open `http://localhost:3000`. The researcher dashboard uses `ADMIN_PASSWORD`; participant access uses opaque links exchanged for short-lived, HttpOnly session cookies.
 
-### Standalone production variables
+#### Production variables
 
 | Variable | Requirement |
 | --- | --- |
@@ -176,7 +222,26 @@ Choose one transport:
 
 A per-study selection can override `AI_PROVIDER`, but it must be available through the active transport. Each provider-specific model variable takes precedence over the legacy `AI_MODEL` migration fallback. The study's configured provider and model — the researcher's own choice — drive interview turns, per-interview synthesis, aggregate analysis, and follow-up generation alike; there is no separate fixed synthesis model. Provenance records the requested model and the provider-reported response model actually used. Model availability changes, so verify the IDs currently enabled on your provider account rather than relying on an old README list.
 
+For a production readiness check:
+
+```bash
+npm run setup:check -- --mode standalone --production
+```
+
+#### Deploy on Vercel
+
+1. Import the repository into a new Vercel project.
+2. Create an Upstash Redis database separately and obtain its REST URL and write token.
+3. Set `AI_TRANSPORT=gateway` to use Vercel OIDC and Gateway credits, or keep `direct` and add a matching provider key. Add every other required standalone variable to the intended Vercel environment. Use the interactive `vercel env add NAME` command or the project's environment-variable settings; avoid putting secret values in shell history.
+4. Keep Preview and Production storage and secrets separate.
+5. Deploy a preview first and run the production-mode setup checker against an environment file pulled for that project, if desired.
+6. Put a project-scoped monthly AI Gateway budget in place before public interviews. Verify login, study save, participant consent, one interview, export, expiry, and revocation before assigning the production domain.
+
+`vercel env pull .env.local` overwrites that file. Keep manual local-only overrides in `.env.development.local`, or back them up before pulling. Never commit any `.env*.local` file.
+
 ### Provider API and model contract
+
+This applies to both targets, except where a transport is named.
 
 The Vercel transport uses [`ai`](https://ai-sdk.dev/docs) with [Vercel AI Gateway](https://vercel.com/docs/ai-gateway), strict `Output.object` JSON Schema, project OIDC (or `AI_GATEWAY_API_KEY` off Vercel), creator-endpoint pinning, and no model fallback. The direct transport retains first-class native adapters:
 
@@ -188,53 +253,6 @@ The Vercel transport uses [`ai`](https://ai-sdk.dev/docs) with [Vercel AI Gatewa
 OpenRouter is a routing service: interview content is sent to the selected upstream inference endpoint under the researcher's OpenRouter account. The application records the OpenRouter adapter, requested model, resolved response model, and routed upstream provider in generation provenance. Provenance is written server-side when the deferred analysis attaches its result; the browser never supplies it. Privacy and structured-output routing constraints can make some models unavailable; the application reports that as a provider error instead of silently relaxing the policy.
 
 The built-in model catalog was reviewed against the official [Gemini](https://ai.google.dev/gemini-api/docs/models), [Claude](https://platform.claude.com/docs/en/about-claude/models/overview), [OpenAI](https://developers.openai.com/api/docs/models), and [OpenRouter](https://openrouter.ai/models) catalogs on **2026-08-14**. Without an environment or per-study override, the built-in defaults are `gemini-3.8-flash`, `claude-sonnet-5`, `gpt-5.6-terra`, and `openai/gpt-5.6-terra`, respectively. Existing saved studies that use the catalogued Gemini 2.5/3.1 or Claude 4.5 model IDs remain accepted; changing a default does not rewrite them. OpenRouter offers curated entries plus a bounded `provider/model` slug, but it does not support `openrouter/auto` or promise that every catalog model satisfies this application's strict-schema and zero-data-retention requirements.
-
-For a production readiness check:
-
-```bash
-npm run setup:check -- --mode standalone --production
-```
-
-### Deploy standalone on Vercel
-
-1. Import the repository into a new Vercel project.
-2. Create an Upstash Redis database separately and obtain its REST URL and write token.
-3. Set `AI_TRANSPORT=gateway` to use Vercel OIDC and Gateway credits, or keep `direct` and add a matching provider key. Add every other required standalone variable to the intended Vercel environment. Use the interactive `vercel env add NAME` command or the project's environment-variable settings; avoid putting secret values in shell history.
-4. Keep Preview and Production storage and secrets separate.
-5. Deploy a preview first and run the production-mode setup checker against an environment file pulled for that project, if desired.
-6. Put a project-scoped monthly AI Gateway budget in place before public interviews. Verify login, study save, participant consent, one interview, export, expiry, and revocation before assigning the production domain.
-
-`vercel env pull .env.local` overwrites that file. Keep manual local-only overrides in `.env.development.local`, or back them up before pulling. Never commit any `.env*.local` file.
-
-### Deploy standalone on Cloudflare
-
-The Cloudflare target runs the same application as one Worker: the Next.js app (via [OpenNext](https://opennext.js.org/cloudflare)), a SQLite-backed Durable Object that holds the workspace, and a Queue that runs interview analysis in the background. It needs no Upstash database and supports standalone mode with the installation's own provider keys, sent directly or through the installation's own Cloudflare AI Gateway (`--ai-transport cloudflare-gateway`: logging, caching, retries and fallback off; see [INSTALLER.md](docs/operations/cloudflare-migration/INSTALLER.md#ai-transport-cloudflare-ai-gateway)), and no Vercel AI Gateway or hosted researcher accounts. Design, limits and every deviation from the migration specification are recorded in [`docs/operations/cloudflare-migration/`](docs/operations/cloudflare-migration/IMPLEMENTATION.md).
-
-Requirements: a Cloudflare account with Workers, Durable Objects and Queues; `npx wrangler login`; the key of the default provider (`--provider`), and optionally the keys of the other providers (`--provider-keys`, or later with `update --add-provider-key`, no redeploy); an administrator password of 16 characters or more whose sign-in body fits Cloudflare's 1 KiB limit (at most 1,009 ASCII characters, fewer with multi-byte or JSON-escaped characters; the installer refuses a longer one, and `npm run setup:check -- --target cloudflare` reports it as `env.ADMIN_PASSWORD.too_long`). For the local release check: a clean checkout (no uncommitted changes and no untracked files outside `.gitignore`), a local `redis-server` (or Docker) and Playwright browsers.
-
-Worker size does not decide the plan. The bundle is about 27 MiB uncompressed and 5.3 MiB gzip (27,403 KiB and 5,440 KiB in September 2026; `build:cloudflare` prints it as `Total Upload`). Since [4 September 2026](https://developers.cloudflare.com/changelog/post/2026-09-04-increased-worker-size-limit/) the [Worker size limit](https://developers.cloudflare.com/workers/platform/limits/#worker-size) is 64 MiB uncompressed on both Free and Paid, with no compressed limit. Under the earlier compressed limits (3 MB Free, 10 MB Paid) this bundle would have needed Workers Paid. Workers Paid is still recommended, because the Free plan allows [10 ms of CPU time](https://developers.cloudflare.com/workers/platform/limits/#cpu-time) per HTTP request, which server rendering is unlikely to fit (not measured on a live Worker). Provider usage is billed by your provider separately.
-
-Use the checked-in tooling; it never provisions or deploys implicitly:
-
-```bash
-npm ci
-npm run build:cloudflare                  # builds dist/cloudflare/artifact; refuses if .env*/.dev.vars files are present
-npm run check:cloudflare -- --skip-build  # full local release matrix on that artifact; writes the receipt deploy requires
-npm run setup:cloudflare -- plan --install <name> --env production --provider openai --jurisdiction eu
-# Credentials come from your secret manager on stdin. The template holds op:// references only
-# and lives outside the checkout: an untracked file there makes the checkout dirty and apply refuses.
-op inject -i ~/secure/secrets.tpl.json | npm run setup:cloudflare -- apply --install <name> --env production --provider openai \
-  --jurisdiction eu --secrets-stdin --yes --operator-token-file <path outside this repository>
-npm run setup:cloudflare -- verify --install <name> --env production
-```
-
-Without `--origin`, the installer discovers the Worker's `workers.dev` URL from the first deploy and keeps the app not-ready until that origin is set. To use a custom domain, pass `--origin https://…` and attach the domain to the Worker in the Cloudflare dashboard; the installer never changes DNS or routes. `npm run preview:cloudflare` runs the built artifact in local workerd with synthetic provider responses, no credentials and throwaway storage. Operator actions (maintenance modes, operational backup/import, point-in-time restore, recovery activation) use `npm run operator:cloudflare`, which needs the administrator password and the generated operator token.
-
-The JSON on stdin holds only `{"ADMIN_PASSWORD": "…", "OPENAI_API_KEY": "…"}`, plus one key per extra provider named with `--provider-keys`. Never keep it in a file inside the checkout, where `git add` can pick it up: pipe it from a secret manager as above (the template holds references such as `{{ op://<vault>/<item>/password }}`, not values, and is kept outside the checkout like any other file you add), or drop `--secrets-stdin` and type the values at the installer's hidden prompt. If you must use a file, keep it outside the repository and delete it afterwards. The installer generates the session, participant, rate-limit and operator secrets and the recovery epoch, and sends all secrets to Cloudflare through stdin. It records a non-secret receipt in `cloudflare/installations/`. Updates use `setup:cloudflare -- update`; interrupted installs use `resume`. The project's own production installation is deployed the same way, with `update` from the owner's workstation after `npm run check:cloudflare` ([Maintained instance](docs/operations/cloudflare-migration/INSTALLER.md#maintained-instance)); the `promote-cloudflare` job in `.github/workflows/ci.yml` is an unconfigured option for installations that choose CI ownership ([Optional: CI-owned deployment](docs/operations/cloudflare-migration/INSTALLER.md#optional-ci-owned-deployment)). See [INSTALLER.md](docs/operations/cloudflare-migration/INSTALLER.md) and the operator [RUNBOOK.md](docs/operations/cloudflare-migration/RUNBOOK.md) for maintenance modes, operational backup/import, restore and rollback. A coding agent can drive the same commands with [`skills/openinterviewer-cloudflare`](skills/openinterviewer-cloudflare/SKILL.md).
-
-Choose the Durable Object jurisdiction (`eu` recommended) before the first install; it restricts where the workspace is stored, not where every request or provider call is processed, and changing it later is a migration. Staging is always a separately named Worker with its own storage, Queue, secrets and origin. A one-click Deploy to Cloudflare button is not offered. The button deploys through Workers Builds, which would become a second deployment owner and cannot perform the installer's secret generation or its origin and workspace bootstrap. The guided installer is the supported path (see `SETUP-04` in [DEVIATIONS.md](docs/operations/cloudflare-migration/evidence/DEVIATIONS.md)). A button will be published only after a complete fresh-account installation through it has been tested.
-
-On Cloudflare, analysis after a participant saves runs as a background job. The researcher sees queued, running, complete, failed or needs-recovery states; "needs recovery" means a paid provider call may have run but its result could not be confirmed, and running it again may make another paid request.
 
 ## Setup diagnostics
 
@@ -406,7 +424,7 @@ SMOKE_PROVIDER=gemini GEMINI_API_KEY=... npx vitest run --config vitest.smoke.co
 
 It refuses to run with more than one provider credential present, writes nothing, and prints only provider, requested and served model, and a failure class.
 
-For ordinary updates to an already configured deployment, use a reviewed pull request, require the CI and preview checks, merge to `main`, then verify the exact Git-backed production deployment on the canonical domain and scan runtime errors. The longer runbook above is for the first hosted-mode infrastructure cutover, not every application release.
+For ordinary updates, use a reviewed pull request and require CI before merging to `main`. On Cloudflare, run `npm run check:cloudflare` on a clean checkout of the release commit, then `npm run setup:cloudflare -- update` for staging, check it, and then production; `update` runs `verify` itself. On Vercel, verify the production deployment the Git integration created from `main` and scan runtime errors. The hosted cutover runbook above is for the first hosted-mode infrastructure cutover, not every application release.
 
 ## Project structure
 
@@ -422,9 +440,15 @@ src/
 ├── store.ts             Participant/researcher client state
 └── types.ts             Shared domain types
 
+cloudflare/              Worker entry, Durable Object workspace, analysis Queue consumer, OpenNext wrapper
+scripts/cloudflare/      Build, release check, deploy, installer (setup:cloudflare) and operator CLI
 scripts/check-setup.mjs  Redacted local setup diagnostics
 scripts/check-sync-artifacts.mjs  Fails the check gate on iCloud sync-conflict copies
-tests/                   Unit and browser regressions
+docs/operations/cloudflare-migration/  Installer, runbook, transition and evidence for the Cloudflare target
+docs/releases/           Release notes
+skills/                  Agent skill for installing and operating a Cloudflare instance
+tests/                   Unit, integration, Workers, artifact and browser regressions
+wrangler.jsonc           Cloudflare Worker template (installations are generated from it)
 ```
 
 ## License
