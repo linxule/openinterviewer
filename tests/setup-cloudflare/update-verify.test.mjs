@@ -19,6 +19,18 @@ async function installed(t, overrides = {}) {
 
 const UPDATE = ['--install', 'acme', '--env', 'production', '--yes'];
 
+/** The deployed Worker (not the local config) switched to a valid Cloudflare AI Gateway route. */
+function onGateway(state) {
+  const worker = state.workers['oi-acme'];
+  Object.assign(worker.vars, { AI_TRANSPORT: 'cloudflare-gateway', CF_AI_GATEWAY_ACCOUNT_ID: 'a'.repeat(32), CF_AI_GATEWAY_ID: 'oi-acme' });
+  worker.secrets.CF_AI_GATEWAY_TOKEN = 'fixture-digest';
+}
+
+function holdOnGateway(state) {
+  onGateway(state);
+  for (const object of Object.values(state.objects)) object.maintenance = 'draining';
+}
+
 // Every test owns an isolated sandbox, so they run concurrently.
 describe('setup:cloudflare update and verify', { concurrency: 6 }, () => {
   test('update deploys the new artifact with identical names and vars and never touches secrets', async (t) => {
@@ -295,6 +307,24 @@ describe('setup:cloudflare update and verify', { concurrency: 6 }, () => {
     });
   }
 
+  for (const [label, prepare, code, status] of [
+    ['a held workspace', (state) => { for (const object of Object.values(state.objects)) object.maintenance = 'draining'; }, 3, 'held-maintenance'],
+    ['a held workspace whose Worker runs another AI transport', holdOnGateway, 1, 'not-ready'],
+    ['a ready Worker on another AI transport', onGateway, 1, 'not-ready'],
+  ]) {
+    test(`verify reports ${label} as ${status}`, async (t) => {
+      const sandbox = await installed(t);
+      sandbox.update(prepare);
+      const run = await sandbox.run('verify', ['--install', 'acme', '--env', 'production', '--json']);
+      assert.equal(run.code, code, run.output);
+      const result = JSON.parse(run.stdout);
+      assert.equal(result.status, status);
+      assert.equal(result.aiTransport, 'direct');
+      assert.deepEqual(result.config.diffs, []);
+      assert.equal(result.checks.find((check) => check.id === 'mode.matches').detail.includes(`aiTransport=${status === 'not-ready' ? 'cloudflare-gateway' : 'direct'}`), true);
+    });
+  }
+
   test('update after an import target was reopened expects ready like any installation', async (t) => {
     const sandbox = await createSandbox(t, {});
     assert.equal((await sandbox.run('apply', applyArgs(sandbox, { extra: ['--import-target'] }), { input: stdinSecrets() })).code, 0);
@@ -475,6 +505,9 @@ describe('setup:cloudflare update and verify', { concurrency: 6 }, () => {
     ['a not-ready deployment', (state) => { state.http.forceNotReady = true; }, null, 1, 'not-ready', null],
     ['an origin no Worker answers', null, (config) => { config.vars.APP_BASE_URL = 'https://elsewhere.example.org'; }, 1, 'not-ready', null],
     ['a held (drained) workspace', (state) => { for (const object of Object.values(state.objects)) object.maintenance = 'draining'; }, null, 3, 'held-maintenance', null],
+    // RT-11: a held Worker on another transport than the config is not "held", it is not ready.
+    ['a held workspace whose Worker runs the gateway transport', (state) => { holdOnGateway(state); }, null, 1, 'not-ready', null],
+    ['a ready Worker on the gateway transport', (state) => { onGateway(state); }, null, 1, 'not-ready', null],
   ]) {
     test(`verify --config reports ${label}`, async (t) => {
       const sandbox = await installed(t);

@@ -141,9 +141,14 @@ export function evaluateProbe(probe, { aiTransport = 'direct' } = {}) {
   add('readiness.analysisExecution', r.analysisExecution === 'queued-v2', `analysisExecution=${r.analysisExecution}`);
   add('readiness.noRedisErrors', !errors.some((code) => code.includes('redis')), 'no Redis error codes');
   add('mode.response', mode.status === 200 && mode.body, responseDetail(mode));
+  // The installation this is (standalone, queued-v2, the expected transport),
+  // required whether or not the workspace is held. /api/config/mode reports
+  // configuration readiness only, so it may say ready while held.
+  const modeIdentity = mode.status === 200
+    && m.mode === 'standalone' && m.aiTransport === aiTransport && m.analysisExecution === 'queued-v2';
   add(
     'mode.matches',
-    m.mode === 'standalone' && m.aiTransport === aiTransport && m.analysisExecution === 'queued-v2' && m.ready === r.ready,
+    modeIdentity && m.ready === r.ready,
     `mode=${m.mode}, aiTransport=${m.aiTransport}, analysisExecution=${m.analysisExecution}, ready=${m.ready}`,
   );
 
@@ -154,6 +159,7 @@ export function evaluateProbe(probe, { aiTransport = 'direct' } = {}) {
     errors.length === 1 && errors[0] === 'workspace_maintenance'
     && r.mode === 'standalone' && r.analysisExecution === 'queued-v2' && h.target === 'cloudflare'
     && hc.configuration === true && hc.analysisQueue === true
+    && modeIdentity
   ) status = 'held-maintenance';
   else status = 'not-ready';
   const terminal = errors.find((code) => TERMINAL_WORKSPACE_ERRORS.includes(code)) ?? null;

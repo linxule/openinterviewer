@@ -259,6 +259,8 @@ It requires:
 - no readiness errors and no Redis checks or error codes;
 - on the gateway transport, when `CF_AI_GATEWAY_ADMIN_TOKEN` (AI Gateway Read suffices) is set for the run: `gateway.settings` (the gateway exists, is the recorded one and meets the [policy](#ai-gateway-policy); a settings digest that changed since it was recorded is noted) and `gateway.logs` (the logs listing reports a count, and it is 0). A failure gives the status `gateway-mismatch` (exit 1). Without the token, verify states that the gateway was not read.
 
+A workspace whose only readiness error is `workspace_maintenance` is reported as held (exit 3) only when everything else identifies this installation, including `/api/config/mode` reporting `standalone`, `queued-v2` and the expected `aiTransport`. A held Worker on another transport is not ready (exit 1), like a ready one.
+
 Without a recorded `workers.dev` URL of this Worker it reports not-ready: the template keeps `workers_dev: true`, and every deploy re-enables it. It never authenticates, writes, dispatches work or calls a provider, and never prints secrets.
 
 ### Verify without a receipt (`--config`)
@@ -270,7 +272,7 @@ npm run setup:cloudflare -- verify --config <installation wrangler.jsonc> [--wai
 This form checks a deploy made outside the installer, such as the CI promotion. It reads no receipt and writes nothing.
 
 - **Config checks.** The required vars are set. `WORKSPACE_BOOTSTRAP` is empty. The config selects `cloudflare`/`standalone`, and either `direct` with both gateway vars empty or `cloudflare-gateway` with a 32-hex account ID and a gateway ID other than `default` (the Worker's own route rules). `deploy.mjs` refuses the same var sets before upload. `WORKSPACE_ID` is `ws_` followed by 32 hex characters. The jurisdiction is `eu`, `fedramp` or empty. `APP_BASE_URL` is HTTPS. Template drift is also reported.
-- **Readiness.** It probes `APP_BASE_URL` with the same readiness rules as `verify`. A held workspace ends the wait.
+- **Readiness.** It probes `APP_BASE_URL` with the same readiness rules as `verify`, expecting the config's `AI_TRANSPORT`. A held workspace ends the wait; a held workspace reporting another transport is not ready.
 - **Exit codes.** `0` ready. `1` not ready, or a config problem. `2` refused: a missing file, or options other than `--json` and `--wait-seconds`. `3` held.
 - **Limits.**
   - The receipt is not read or updated.
@@ -384,7 +386,7 @@ Locally (`npm run test:setup:cloudflare`, simulated account):
   - a gateway deleted by hand while on direct is recreated by the next switch (also after a lost create reply) and accepted by later `update` and `verify`; a resume probes the Run token it is given and refuses one the gateway rejects before any upload; a switch refuses a Run token bound outside the installer; a switch whose token upload reply was lost records the binding when it finishes; `plan` lists the gateway as not checked during a Cloudflare API outage;
   - the installer's probe headers, identifier patterns and route rules equal the Worker's (`tests/unit/installerGatewayContract.test.ts`).
 - `verify --config`:
-  - reports ready, not ready, held and each config problem;
+  - reports ready, not ready, held and each config problem; a held or ready Worker reporting another AI transport than the config is not ready (as for `verify` against the receipt);
   - is read-only;
   - refuses a missing file or mixed options.
 - `config` (`tests/setup-cloudflare/config-command.test.mjs`):

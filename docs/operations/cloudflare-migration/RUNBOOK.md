@@ -347,7 +347,7 @@ Concurrency:
 | Outcome | What it means | Next |
 | --- | --- | --- |
 | Job succeeds | Deployed, and `verify --config` found `APP_BASE_URL` ready | Record the deployed commit. |
-| Succeeds with the warning "held in a maintenance state" (verify exit 3) | Deployed; the workspace is held, for example because you drained it | Reopen it (`maintenance open …`), then `npm run setup:cloudflare -- verify --config <file with the variable's JSON> --wait-seconds 180`. |
+| Succeeds with the warning "held in a maintenance state" (verify exit 3) | Deployed; the workspace is held, for example because you drained it. A held Worker that reports another AI transport than the config fails the verify step instead | Reopen it (`maintenance open …`), then `npm run setup:cloudflare -- verify --config <file with the variable's JSON> --wait-seconds 180`. |
 | Fails in the config check or the release check | Nothing was uploaded | Fix the cause and dispatch again. |
 | The deploy step fails, the run is cancelled or times out, or the verify step fails | The live version is unknown | See below. |
 

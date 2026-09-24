@@ -371,6 +371,35 @@ test('readiness evaluation distinguishes ready, held, not-ready and Redis leakag
   assert.equal(evaluateProbe({ health: ok({ ready: false, target: 'node', checks: { configuration: true, workspaceStore: false, analysisQueue: true } }, 503), readiness: ok(held), mode: ok(held) }).status, 'not-ready');
 });
 
+test('a held workspace is held-maintenance only when the mode endpoint reports the expected installation', () => {
+  const ok = (body, status = 200) => ({ status, body });
+  const view = (extra = {}) => ({ mode: 'standalone', aiTransport: 'direct', ready: true, errors: [], analysisExecution: 'queued-v2', ...extra });
+  const heldHealth = ok({ ready: false, target: 'cloudflare', checks: { configuration: true, workspaceStore: false, analysisQueue: true } }, 503);
+  const heldReadiness = (extra = {}) => ok(view({ ready: false, errors: ['workspace_maintenance'], ...extra }));
+  // /api/config/mode reports configuration readiness only, so on the real
+  // Worker it says ready while /api/config/readiness reports the hold.
+  const heldMode = (extra = {}) => ok(view(extra));
+  const status = (probe, options) => evaluateProbe(probe, options).status;
+
+  for (const aiTransport of ['direct', 'cloudflare-gateway']) {
+    assert.equal(status({ health: heldHealth, readiness: heldReadiness({ aiTransport }), mode: heldMode({ aiTransport }) }, { aiTransport }), 'held-maintenance', aiTransport);
+    assert.equal(status({ health: heldHealth, readiness: heldReadiness({ aiTransport }), mode: heldMode({ aiTransport, ready: false, errors: ['workspace_maintenance'] }) }, { aiTransport }), 'held-maintenance', aiTransport);
+  }
+  // A transport the installation does not expect is not ready, held or not (RT-11).
+  for (const [expected, reported] of [['direct', 'cloudflare-gateway'], ['cloudflare-gateway', 'direct'], ['direct', null], ['direct', 'gateway']]) {
+    const held = { health: heldHealth, readiness: heldReadiness({ aiTransport: reported }), mode: heldMode({ aiTransport: reported }) };
+    assert.equal(status(held, { aiTransport: expected }), 'not-ready', `held: expected ${expected}, reported ${reported}`);
+    const ready = { health: ok({ ready: true, target: 'cloudflare', checks: { configuration: true, workspaceStore: true, analysisQueue: true } }), readiness: ok(view({ aiTransport: reported })), mode: ok(view({ aiTransport: reported })) };
+    assert.equal(status(ready, { aiTransport: expected }), 'not-ready', `ready: expected ${expected}, reported ${reported}`);
+  }
+  // So is any other mode mismatch reported by the mode endpoint, or no mode answer at all.
+  for (const extra of [{ mode: 'hosted' }, { analysisExecution: 'synchronous' }, { analysisExecution: null }]) {
+    assert.equal(status({ health: heldHealth, readiness: heldReadiness(), mode: heldMode(extra) }), 'not-ready', JSON.stringify(extra));
+  }
+  assert.equal(status({ health: heldHealth, readiness: heldReadiness(), mode: { status: 0, body: null, error: 'unreachable' } }), 'not-ready');
+  assert.equal(status({ health: heldHealth, readiness: heldReadiness(), mode: ok({ error: 'not found' }, 404) }), 'not-ready');
+});
+
 test('ownership evidence: a receipt attempt alone never adopts an existing resource', () => {
   const at = '2026-09-23T10:00:00.000Z';
   const plus = (ms) => new Date(Date.parse(at) + ms).toISOString();
