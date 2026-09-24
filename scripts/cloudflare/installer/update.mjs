@@ -232,7 +232,7 @@ async function assertLatestDeploymentRecorded(receipt, wrangler, pending) {
   const lastDeploy = receipt.deployments.at(-1);
   const hints = [
     'A secret upload deploys a new version from the Worker\'s latest version, so the installer refuses while that version was not deployed from a checked artifact (a dashboard deploy, wrangler rollback or gradual deployment).',
-    'Redeploy a checked release first (update without a key operation, or the CI promotion on the maintained instance), then retry.',
+    'Redeploy a checked release first (update without a key operation, or the CI promotion on an installation that CI deploys), then retry.',
   ];
   if (!latest || !lastDeploy) throw refuse(`${receipt.names.worker} lists no deployment this installer recorded`, hints);
   const versions = Array.isArray(latest.versions) ? latest.versions : [];

@@ -261,7 +261,9 @@ jobs:
           path: playwright-report-cloudflare
           if-no-files-found: ignore
 
-  # SETUP-05: the single production deployment owner. Runs only on a manual
+  # SETUP-05, optional: the deployment owner for an installation that chooses
+  # CI (INSTALLER.md, optional CI-owned deployment; the project's own instance
+  # is installer-deployed and does not configure this job). Runs only on a manual
   # dispatch from main, after every required lane passed for this exact commit,
   # with the production environment's protection rules and secrets. It builds
   # the artifact once, runs the complete local release check on it (which
