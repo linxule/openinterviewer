@@ -2,7 +2,8 @@
 
 OpenInterviewer is an open-source platform for adaptive, AI-assisted qualitative interviews. Researchers configure a study, share an opaque participant link, and review transcripts and synthesis in a dashboard.
 
-See the [v4.0.0 release notes](docs/releases/v4.0.0.md) for the Cloudflare standalone
+See the [v4.1.0 release notes](docs/releases/v4.1.0.md) for participant-session and link-privacy fixes and
+admin-password rotation, and the [v4.0.0 notes](docs/releases/v4.0.0.md) for the Cloudflare standalone
 target, the Cloudflare AI Gateway transport, and provider fixes that also affect v3.0.0.
 The [v3.0.0 notes](docs/releases/v3.0.0.md) cover save-first completion and deferred analysis.
 
