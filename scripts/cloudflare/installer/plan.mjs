@@ -100,6 +100,8 @@ export async function planCommand(ctx) {
     notes.push(`AI transport: a change from ${pendingChange.from} to ${pendingChange.to} has not finished; finish it with update --change-ai-transport --ai-transport ${pendingChange.to}`);
   } else if (pendingChange?.kind === 'rotate-ai-gateway-token') {
     notes.push('AI Gateway Run token: a rotation has not finished; finish it with update --rotate-ai-gateway-token');
+  } else if (pendingChange?.kind === 'rotate-admin-password') {
+    notes.push('administrator password: a rotation has not finished; finish it with update --rotate-admin-password');
   }
   if (receipt && options.jurisdiction && options.jurisdiction !== receipt.jurisdiction) {
     notes.push(`jurisdiction: installed ${receipt.jurisdiction}; changing it is a data migration that update refuses`);
@@ -231,7 +233,7 @@ export async function planCommand(ctx) {
   out.line('Vars');
   for (const [name, value] of Object.entries(vars)) out.line(`  ${name.padEnd(24)} ${value === '' ? "''" : value}`);
   out.line('Secrets (names only; values never displayed)');
-  if (secretsSet) out.line(`  already set, never rotated by apply; provider keys rotate only with update --rotate-provider-key: ${plan.secrets.alreadySet.join(', ')}`);
+  if (secretsSet) out.line(`  already set, never rotated by apply; provider keys rotate only with update --rotate-provider-key, ADMIN_PASSWORD with update --rotate-admin-password: ${plan.secrets.alreadySet.join(', ')}`);
   else {
     out.line(`  generated at apply: ${plan.secrets.generate.join(', ')}`);
     out.line(`  you supply (stdin JSON or hidden prompt): ${plan.secrets.request.join(', ')}`);

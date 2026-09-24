@@ -37,8 +37,8 @@ Commands
             with --config and no --install/--env: the config's APP_BASE_URL, without a receipt
             (for a deploy made outside the installer, such as the CI promotion job)
   update    deploy the current checked artifact to an existing installation (--yes), or run one
-            provider-key operation (--add-provider-key, --rotate-provider-key) or
-            --rotate-ai-gateway-token without deploying, or switch --change-provider / --change-ai-transport
+            provider-key operation (--add-provider-key, --rotate-provider-key), --rotate-ai-gateway-token
+            or --rotate-admin-password without deploying, or switch --change-provider / --change-ai-transport
   config    local only: (re)write cloudflare/installations/<install>-<env>/wrangler.jsonc from
             the receipt and print its path; refused until the bootstrap was cleared. This is the
             file to store as CLOUDFLARE_INSTALL_CONFIG for the CI promotion job
@@ -57,7 +57,8 @@ Options
   --account-id <id>             Cloudflare account (must be accessible to wrangler)
   --import-target               initialize the fresh workspace in 'recovery' for an operational import
   --secrets-stdin               read {"ADMIN_PASSWORD": ..., "<PROVIDER>_API_KEY": ..., ...} as JSON from stdin
-                                (plus "CF_AI_GATEWAY_TOKEN" with cloudflare-gateway; update operations: only the named keys)
+                                (plus "CF_AI_GATEWAY_TOKEN" with cloudflare-gateway; update operations: only the named keys,
+                                or {"ADMIN_PASSWORD": ...} alone with --rotate-admin-password)
   --operator-token-file <path>  write the generated OPERATOR_TOKEN once (mode 0600, outside the repository)
   --reveal-operator-token       print the generated OPERATOR_TOKEN once (interactive terminal only)
   --change-provider             update only: switch AI_PROVIDER (adds that provider's key if absent)
@@ -66,6 +67,8 @@ Options
   --change-ai-transport         update only, with --ai-transport: switch AI_TRANSPORT (provisions or adopts the
                                 gateway and binds the Run token when needed), then deploy
   --rotate-ai-gateway-token     update only: replace the bound Run token after probing it; no deploy
+  --rotate-admin-password       update only: replace ADMIN_PASSWORD (stdin JSON or a hidden prompt, asked twice);
+                                no deploy; existing researcher sessions stay valid until they expire
   --yes                         confirm the reviewed plan (apply, resume, update)
   --json                        machine-readable result on stdout (progress goes to stderr)
   --wait-seconds <n>            readiness wait budget (default 180; verify: 0)
@@ -95,6 +98,7 @@ const OPTIONS = {
   'ai-transport': { type: 'string' },
   'change-ai-transport': { type: 'boolean' },
   'rotate-ai-gateway-token': { type: 'boolean' },
+  'rotate-admin-password': { type: 'boolean' },
   yes: { type: 'boolean' },
   json: { type: 'boolean' },
   'wait-seconds': { type: 'string' },

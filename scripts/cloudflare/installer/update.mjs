@@ -1,8 +1,9 @@
 // update (SETUP-01, SETUP-02, SETUP-05): deploy a new checked artifact to an
-// existing installation, or run one explicit provider-key operation.
+// existing installation, or run one explicit key operation.
 // Regenerates the installation config from the current template + receipt,
 // refuses on drift, never rotates generated secrets or the epoch, and never
-// deletes resources; provider keys rotate only on an explicit operation.
+// deletes resources; provider keys, the Run token and the administrator
+// password rotate only on an explicit operation.
 //
 // Operations, at most one per run:
 //   (none)                      deploy the current artifact
@@ -13,6 +14,7 @@
 //                               Cloudflare AI Gateway: provision or adopt the
 //                               gateway, bind the Run token if unbound; then deploy
 //   --rotate-ai-gateway-token   replace the bound Run token (probed first); no deploy
+//   --rotate-admin-password     replace ADMIN_PASSWORD; no deploy
 // Each records a pendingChange in the receipt before its first remote write
 // and clears it once its effect is observed, so rerunning the same update
 // finishes it.
@@ -24,6 +26,7 @@ import {
   GATEWAY_TRANSPORT,
   HELD,
   InstallerError,
+  PASSWORD_SECRET,
   PROVIDER_KEYS,
   REFUSED,
   parseProviderList,
@@ -43,7 +46,18 @@ import { verifyInstallation } from './verify.mjs';
 const refuse = (message, hints = []) => new InstallerError(message, { exitCode: REFUSED, hints });
 const now = () => new Date().toISOString();
 const DEPLOY_MESSAGE = /^openinterviewer ([0-9a-f]{12})$/;
-const OPERATIONS = ['change-provider', 'add-provider-key', 'rotate-provider-key', 'change-ai-transport', 'rotate-ai-gateway-token'];
+const OPERATIONS = ['change-provider', 'add-provider-key', 'rotate-provider-key', 'change-ai-transport', 'rotate-ai-gateway-token', 'rotate-admin-password'];
+/** Operations that upload secrets only and never deploy (keyOperation). */
+const KEY_OPERATIONS = ['add-provider-key', 'rotate-provider-key', 'rotate-ai-gateway-token', 'rotate-admin-password'];
+
+/**
+ * Researcher sessions are JWTs signed with SESSION_SECRET and carry no trace
+ * of the password (src/lib/auth.ts), so a new ADMIN_PASSWORD ends none of them.
+ */
+export const ADMIN_PASSWORD_SESSION_NOTES = [
+  'Researcher sessions signed in before this rotation stay valid until they expire (up to 7 days after sign-in): a session is signed with SESSION_SECRET, not the password, and sign-out only clears the cookie in that browser.',
+  'The installer never rotates SESSION_SECRET. To end every researcher session after a leaked password, see RUNBOOK.md, administrator password.',
+];
 
 /**
  * What a transport switch means for consent (RT-11, D9; RUNBOOK, transport
@@ -88,6 +102,7 @@ function selectOperation(options, receipt) {
     return { kind: 'ai-transport', to: options['ai-transport'] };
   }
   if (options['rotate-ai-gateway-token']) return { kind: 'rotate-ai-gateway-token' };
+  if (options['rotate-admin-password']) return { kind: 'rotate-admin-password' };
   return { kind: 'deploy', provider: receipt.provider };
 }
 
@@ -105,6 +120,8 @@ function finishes(operation, options) {
         return operation.kind === 'ai-transport' && (operation.to === pending.to || operation.to === pending.from);
       case 'rotate-ai-gateway-token':
         return operation.kind === 'rotate-ai-gateway-token';
+      case 'rotate-admin-password':
+        return operation.kind === 'rotate-admin-password';
       default:
         return false;
     }
@@ -281,16 +298,18 @@ async function finishWithVerification(ctx, receipt, { operation, version, onHeld
 }
 
 /**
- * --add-provider-key / --rotate-provider-key / --rotate-ai-gateway-token: one
- * secret upload, no deploy. A new Run token is probed against the gateway
- * before anything is recorded or uploaded.
+ * --add-provider-key / --rotate-provider-key / --rotate-ai-gateway-token /
+ * --rotate-admin-password: one secret upload, no deploy. A new Run token is
+ * probed against the gateway before anything is recorded or uploaded; a new
+ * password passes the same validation as apply's.
  */
 async function keyOperation(ctx, receipt, wrangler, bound, operation, pending, { gatewayApi = null } = {}) {
   const { names } = receipt;
   const token = operation.kind === 'rotate-ai-gateway-token';
-  const providers = token ? [] : operation.kind === 'add-provider-key' ? operation.providers : [operation.provider];
-  const keyNames = token ? [GATEWAY_TOKEN_SECRET] : providers.map((provider) => PROVIDER_KEYS[provider]);
-  const label = token ? 'the AI Gateway Run token' : keyNames.join(', ');
+  const password = operation.kind === 'rotate-admin-password';
+  const providers = token || password ? [] : operation.kind === 'add-provider-key' ? operation.providers : [operation.provider];
+  const keyNames = token ? [GATEWAY_TOKEN_SECRET] : password ? [PASSWORD_SECRET] : providers.map((provider) => PROVIDER_KEYS[provider]);
+  const label = token ? 'the AI Gateway Run token' : password ? 'the administrator password (ADMIN_PASSWORD)' : keyNames.join(', ');
   let upload;
   if (operation.kind === 'add-provider-key') {
     if (!pending) {
@@ -335,6 +354,7 @@ async function keyOperation(ctx, receipt, wrangler, bound, operation, pending, {
   if (!pending) {
     if (operation.kind === 'add-provider-key') receipt.pendingChange = { kind: 'add-provider-key', providers, startedAt: now(), deploymentBefore };
     else if (token) receipt.pendingChange = { kind: 'rotate-ai-gateway-token', startedAt: now(), deploymentBefore };
+    else if (password) receipt.pendingChange = { kind: 'rotate-admin-password', startedAt: now(), deploymentBefore };
     else receipt.pendingChange = { kind: 'rotate-provider-key', provider: operation.provider, startedAt: now(), deploymentBefore };
     saveReceipt(ctx, receipt);
   }
@@ -342,7 +362,9 @@ async function keyOperation(ctx, receipt, wrangler, bound, operation, pending, {
     ? `The key operation is recorded as pending in the receipt; rerun update --add-provider-key ${providers.join(',')} to finish it.`
     : token
       ? 'The rotation is recorded as pending in the receipt; rerun update --rotate-ai-gateway-token with the new token to finish it.'
-      : `The rotation is recorded as pending in the receipt; rerun update --rotate-provider-key ${operation.provider} with the new key to finish it.`;
+      : password
+        ? 'The rotation is recorded as pending in the receipt; rerun update --rotate-admin-password with the new password to finish it.'
+        : `The rotation is recorded as pending in the receipt; rerun update --rotate-provider-key ${operation.provider} with the new key to finish it.`;
   try {
     if (upload.length > 0) {
       await wrangler.putSecrets(names.worker, ctx.paths.config, supplied);
@@ -371,6 +393,7 @@ async function keyOperation(ctx, receipt, wrangler, bound, operation, pending, {
 
   const version = receipt.deployments.at(-1)?.commit ?? null;
   const verb = operation.kind === 'add-provider-key' ? 'Added' : 'Rotated';
+  if (password) for (const line of ADMIN_PASSWORD_SESSION_NOTES) ctx.out.line(line);
   return finishWithVerification(ctx, receipt, {
     operation: operation.kind,
     version,
@@ -380,10 +403,12 @@ async function keyOperation(ctx, receipt, wrangler, bound, operation, pending, {
       'Run verify after reopening it (RUNBOOK.md, maintenance modes).',
     ],
     failure: `update ${verb.toLowerCase()} ${label}`,
-    onFailureHints: [`${token ? 'The token' : 'The key'} is bound; check the readiness errors above (for example a placeholder value) and rotate it if needed.`],
+    onFailureHints: [`${token ? 'The token' : password ? 'The password' : 'The key'} is bound; check the readiness errors above (for example a placeholder value) and rotate it if needed.`],
     doneLine: token
       ? `Rotated the AI Gateway Run token on ${names.worker}. No redeploy or config regeneration is needed.`
-      : `${verb} ${keyNames.join(', ')} on ${names.worker}; provider keys: ${receipt.providerKeys.join(', ')}. No redeploy or config regeneration is needed.`,
+      : password
+        ? `Rotated ADMIN_PASSWORD on ${names.worker}; sign in with the new password (the operator CLI too). No redeploy or config regeneration is needed.`
+        : `${verb} ${keyNames.join(', ')} on ${names.worker}; provider keys: ${receipt.providerKeys.join(', ')}. No redeploy or config regeneration is needed.`,
   });
 }
 
@@ -551,7 +576,7 @@ export async function updateCommand(ctx) {
     const { names } = receipt;
     const bound = await checkDrift(ctx, receipt, wrangler, account, pending, { gatewayApi, checkGateway });
 
-    if (['add-provider-key', 'rotate-provider-key', 'rotate-ai-gateway-token'].includes(operation.kind)) {
+    if (KEY_OPERATIONS.includes(operation.kind)) {
       return await keyOperation(ctx, receipt, wrangler, bound, operation, pending, { gatewayApi });
     }
 
