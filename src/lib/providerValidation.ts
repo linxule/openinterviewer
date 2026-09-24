@@ -393,7 +393,7 @@ export function validateResolvedAggregateSynthesis(
   input: unknown
 ): Omit<AggregateSynthesisResult,
   'studyId' | 'studyRevision' | 'interviewIds' | 'interviewCount'
-  | 'aiProvider' | 'aiModel' | 'requestedAiModel' | 'routedProvider'
+  | 'aiProvider' | 'aiModel' | 'requestedAiModel' | 'routedProvider' | 'aiTransport'
   | 'generatedAt'
 > {
   return validateAggregateCore<AggregateTheme>(input, (rawTheme, theme, frequency, i) => {

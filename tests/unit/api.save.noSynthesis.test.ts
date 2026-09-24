@@ -2,6 +2,8 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeStoredInterview } from '../fixtures/models';
+import { standaloneTestContext } from '../helpers/workspaceStoreFixture';
+import type { RedisPort } from '@/lib/redisPort';
 
 /**
  * The headline test of slice P: "Provider down, participant saved."
@@ -28,7 +30,10 @@ vi.mock('@/lib/researcherContext', () => contextMock);
 const canonicalMock = vi.hoisted(() => ({ loadCanonicalStudy: vi.fn() }));
 vi.mock('@/lib/canonicalStudy', () => canonicalMock);
 
-const rateLimitMock = vi.hoisted(() => ({ getSavePersistRatePlan: vi.fn() }));
+const rateLimitMock = vi.hoisted(() => ({
+  savePersistRatePlanOrResponse: vi.fn(),
+  participantAdmissionRefusal: vi.fn(() => null),
+}));
 vi.mock('@/lib/rateLimit', () => rateLimitMock);
 
 const consentMock = vi.hoisted(() => ({ verifyParticipantConsent: vi.fn() }));
@@ -72,7 +77,7 @@ beforeEach(() => {
   synthesizeInterview.mockRejectedValue(new Error('provider down'));
   contextMock.getParticipantRequestContext.mockResolvedValue({
     valid: true,
-    context: { kvClient: {} },
+    context: standaloneTestContext({} as RedisPort),
     studyId: 'study-a',
     isAdmin: false,
     linkId: 'a'.repeat(64),
@@ -98,9 +103,10 @@ beforeEach(() => {
       acceptedAt: 1_700_000_000_000,
     },
   });
-  rateLimitMock.getSavePersistRatePlan.mockReturnValue([
-    { key: 'interview-rate:session:0', maximum: 2, windowSeconds: 86_400, windowStart: 0 },
-  ]);
+  rateLimitMock.savePersistRatePlanOrResponse.mockReturnValue({
+    status: 'planned',
+    rows: [{ key: 'interview-rate:session:0', maximum: 2, windowSeconds: 86_400, windowStart: 0 }],
+  });
   kvMock.persistCompletedInterview.mockResolvedValue({ status: 'created' });
 });
 

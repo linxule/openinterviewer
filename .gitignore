@@ -10,7 +10,7 @@ dist
 
 # Testing
 coverage
-playwright-report
+playwright-report*
 test-results
 
 # Env files
@@ -43,3 +43,12 @@ next-env.d.ts
 # iCloud Drive sync-conflict copies ("file 2.ts"); scripts/check-sync-artifacts.mjs fails the gate on them
 * 2
 * 2.*
+
+# Cloudflare build/runtime outputs
+.open-next
+.wrangler
+.dev.vars*
+!.dev.vars.example
+
+# Per-installation Cloudflare receipts and generated configs (non-secret, account-specific)
+cloudflare/installations/

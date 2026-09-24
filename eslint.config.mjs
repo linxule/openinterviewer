@@ -97,5 +97,8 @@ export default defineConfig([
     'coverage/**',
     'playwright-report/**',
     'test-results/**',
+    '**/.open-next/**',
+    '**/.wrangler/**',
+    'cloudflare/worker-configuration.d.ts',
   ]),
 ]);

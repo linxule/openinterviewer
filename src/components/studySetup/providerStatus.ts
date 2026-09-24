@@ -5,7 +5,9 @@ import { AIProviderType } from '@/types';
 
 export type ConfigStatus = {
   mode: 'hosted' | 'standalone';
-  aiTransport: 'direct' | 'gateway';
+  /** Present only on the Cloudflare target, whose keys are installer-managed. */
+  target?: 'cloudflare';
+  aiTransport: 'direct' | 'gateway' | 'cloudflare-gateway';
   hasAnthropicKey: boolean;
   hasGeminiKey: boolean;
   hasOpenAiKey: boolean;
@@ -17,7 +19,7 @@ export const PROVIDER_STATUS_FIELD = {
   claude: 'hasAnthropicKey',
   openai: 'hasOpenAiKey',
   openrouter: 'hasOpenRouterKey',
-} as const satisfies Record<AIProviderType, keyof Omit<ConfigStatus, 'mode' | 'aiTransport'>>;
+} as const satisfies Record<AIProviderType, keyof Omit<ConfigStatus, 'mode' | 'target' | 'aiTransport'>>;
 
 export const PROVIDER_ENV_NAME = {
   gemini: 'GEMINI_API_KEY',

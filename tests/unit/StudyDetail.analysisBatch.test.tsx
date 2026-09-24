@@ -6,20 +6,28 @@ const router = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
 
 const storageMock = vi.hoisted(() => ({
-  getStudy: vi.fn(),
-  getStudyInterviews: vi.fn(),
+  readStudy: vi.fn(),
+  readStudyInterviews: vi.fn(),
 }));
 vi.mock('@/services/storageService', async (importOriginal) => {
   const actual = (await importOriginal()) as typeof import('@/services/storageService');
   return {
     ...actual,
-    getStudy: storageMock.getStudy,
-    getStudyInterviews: storageMock.getStudyInterviews,
+    readStudy: storageMock.readStudy,
+    readStudyInterviews: storageMock.readStudyInterviews,
   };
 });
 
+// This suite is the Node deployment: its readiness advertises synchronous
+// analysis. The durable protocol is covered in StudyDetail.durableBatch.
+vi.mock('@/services/analysisExecution', () => ({
+  loadAnalysisExecution: async () => 'synchronous',
+}));
+
 import { BreadcrumbProvider } from '@/components/shell/breadcrumb';
 import StudyDetail from '@/components/StudyDetail';
+
+const ok = <T,>(value: T) => ({ status: 'ok' as const, value });
 
 function renderStudyDetail(studyId: string) {
   return render(
@@ -37,14 +45,14 @@ const analyzedSynthesis = {
 beforeEach(() => {
   vi.clearAllMocks();
   const config = makeStudyConfig({ id: 'study-batch', name: 'Batch Study' });
-  storageMock.getStudy.mockResolvedValue(
+  storageMock.readStudy.mockResolvedValue(ok(
     makeStoredStudy({ id: 'study-batch', config, revision: 1, interviewCount: 3 })
-  );
+  ));
 });
 
 describe('StudyDetail — analysis batch action', () => {
   it('shows the awaiting count and issues one POST per pending interview, sequentially, in createdAt order', async () => {
-    storageMock.getStudyInterviews.mockResolvedValue([
+    storageMock.readStudyInterviews.mockResolvedValue(ok([
       makeStoredInterview({
         id: 'interview-pending', studyId: 'study-batch', createdAt: 1_000,
         analysis: { status: 'pending', attempts: 0, lastAttemptAt: 1 },
@@ -58,7 +66,7 @@ describe('StudyDetail — analysis batch action', () => {
         synthesis: analyzedSynthesis,
         analysis: { status: 'complete', attempts: 1, lastAttemptAt: 1 },
       }),
-    ]);
+    ]));
 
     const callOrder: string[] = [];
     let resolveFirst!: () => void;
@@ -93,7 +101,7 @@ describe('StudyDetail — analysis batch action', () => {
   });
 
   it('renders neither the clause nor the button when every interview is analyzed', async () => {
-    storageMock.getStudyInterviews.mockResolvedValue([
+    storageMock.readStudyInterviews.mockResolvedValue(ok([
       makeStoredInterview({
         id: 'interview-a', studyId: 'study-batch', synthesis: analyzedSynthesis,
         analysis: { status: 'complete', attempts: 1, lastAttemptAt: 1 },
@@ -102,14 +110,14 @@ describe('StudyDetail — analysis batch action', () => {
         id: 'interview-b', studyId: 'study-batch', synthesis: analyzedSynthesis,
         analysis: { status: 'complete', attempts: 1, lastAttemptAt: 1 },
       }),
-    ]);
-    storageMock.getStudy.mockResolvedValue(
+    ]));
+    storageMock.readStudy.mockResolvedValue(ok(
       makeStoredStudy({
         id: 'study-batch',
         config: makeStudyConfig({ id: 'study-batch', name: 'Batch Study' }),
         revision: 1, interviewCount: 2,
       }),
-    );
+    ));
 
     renderStudyDetail('study-batch');
     await screen.findByRole('heading', { name: 'Batch Study' });
@@ -120,19 +128,19 @@ describe('StudyDetail — analysis batch action', () => {
   });
 
   it('disables Analyze All Interviews with one analyzed interview and names analyzed interviews in the prompt', async () => {
-    storageMock.getStudyInterviews.mockResolvedValue([
+    storageMock.readStudyInterviews.mockResolvedValue(ok([
       makeStoredInterview({
         id: 'interview-a', studyId: 'study-batch', studyRevision: 1, synthesis: analyzedSynthesis,
         analysis: { status: 'complete', attempts: 1, lastAttemptAt: 1 },
       }),
-    ]);
-    storageMock.getStudy.mockResolvedValue(
+    ]));
+    storageMock.readStudy.mockResolvedValue(ok(
       makeStoredStudy({
         id: 'study-batch',
         config: makeStudyConfig({ id: 'study-batch', name: 'Batch Study' }),
         revision: 1, interviewCount: 1,
       }),
-    );
+    ));
 
     renderStudyDetail('study-batch');
     await screen.findByRole('heading', { name: 'Batch Study' });
@@ -149,7 +157,7 @@ describe('StudyDetail — analysis batch action', () => {
       id: `interview-${index}`, studyId: 'study-batch', createdAt: index * 1_000,
       analysis: { status: 'pending', attempts: 0, lastAttemptAt: 1 },
     }));
-    storageMock.getStudyInterviews.mockResolvedValueOnce(pending).mockResolvedValue([]);
+    storageMock.readStudyInterviews.mockResolvedValueOnce(ok(pending)).mockResolvedValue(ok([]));
     const analyzedIds: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       if (!url.includes('/analyze')) return new Response('{}', { status: 404 });
@@ -167,15 +175,15 @@ describe('StudyDetail — analysis batch action', () => {
     expect(await screen.findByRole('button', { name: 'Analyze 3 pending' })).toBeEnabled();
     expect(analyzedIds).toHaveLength(2);
     expect(analyzedIds[1]).toContain('interview-2');
-    expect(storageMock.getStudyInterviews).toHaveBeenCalledTimes(1);
+    expect(storageMock.readStudyInterviews).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('heading', { name: 'Batch Study' })).toBeInTheDocument();
     expect(screen.queryByText('Private upstream error details')).not.toBeInTheDocument();
   });
 
   it('stops and explains a network failure without requesting the next interview', async () => {
-    storageMock.getStudyInterviews.mockResolvedValue([1, 2].map(index => makeStoredInterview({
+    storageMock.readStudyInterviews.mockResolvedValue(ok([1, 2].map(index => makeStoredInterview({
       id: `interview-${index}`, studyId: 'study-batch', createdAt: index * 1_000,
-    })));
+    }))));
     const analyzedIds: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       if (!url.includes('/analyze')) return new Response('{}', { status: 404 });
@@ -190,13 +198,13 @@ describe('StudyDetail — analysis batch action', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Check your connection and try again.');
     expect(await screen.findByRole('button', { name: 'Analyze 2 pending' })).toBeEnabled();
     expect(analyzedIds).toHaveLength(1);
-    expect(storageMock.getStudyInterviews).toHaveBeenCalledTimes(1);
+    expect(storageMock.readStudyInterviews).toHaveBeenCalledTimes(1);
   });
 
   it('continues to the next interview after a successfully recorded provider failure', async () => {
-    storageMock.getStudyInterviews.mockResolvedValue([1, 2].map(index => makeStoredInterview({
+    storageMock.readStudyInterviews.mockResolvedValue(ok([1, 2].map(index => makeStoredInterview({
       id: `interview-${index}`, studyId: 'study-batch', createdAt: index * 1_000,
-    })));
+    }))));
     const analyzedIds: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       if (!url.includes('/analyze')) return new Response('{}', { status: 404 });
@@ -208,8 +216,92 @@ describe('StudyDetail — analysis batch action', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Interviews' }));
     fireEvent.click(screen.getByRole('button', { name: 'Analyze 2 pending' }));
 
-    await waitFor(() => expect(storageMock.getStudyInterviews).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(storageMock.readStudyInterviews).toHaveBeenCalledTimes(2));
     expect(analyzedIds).toHaveLength(2);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  // API-04 changes the earlier behavior, where `busy` counted as progress and
+  // the batch moved on: a busy interview is awaiting, not analyzed.
+  it('API-04: a busy interview stops the Node batch as awaiting and is not counted', async () => {
+    storageMock.readStudyInterviews.mockResolvedValue(ok([1, 2].map(index => makeStoredInterview({
+      id: `interview-${index}`, studyId: 'study-batch', createdAt: index * 1_000,
+    }))));
+    const analyzedIds: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (!url.includes('/analyze')) return new Response('{}', { status: 404 });
+      analyzedIds.push(url);
+      return new Response(JSON.stringify({ status: 'busy' }));
+    }));
+    renderStudyDetail('study-batch');
+    await screen.findByRole('heading', { name: 'Batch Study' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Interviews' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze 2 pending' }));
+
+    expect(await screen.findByText('Analysis still pending')).toBeInTheDocument();
+    expect(screen.getByText(/^The analysis of Interview 1 is still pending, so the batch stopped/)).toBeInTheDocument();
+    expect(analyzedIds).toHaveLength(1);
+    expect(analyzedIds[0]).toContain('interview-1');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText('Batch stopped: 0 of 2 finished. Interview 1 is still pending.')).toHaveAttribute('role', 'status');
+  });
+
+  it('UI-CF-04: a busy stop whose refresh meets a pending study operation keeps the loaded register', async () => {
+    storageMock.readStudyInterviews
+      .mockResolvedValueOnce(ok([1, 2].map(index => makeStoredInterview({
+        id: `interview-${index}`, studyId: 'study-batch', createdAt: index * 1_000,
+      }))))
+      .mockResolvedValue({ status: 'pending', error: 'A study operation is already in progress.' });
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (!url.includes('/analyze')) return new Response('{}', { status: 404 });
+      return new Response(JSON.stringify({ status: 'busy' }));
+    }));
+    renderStudyDetail('study-batch');
+    await screen.findByRole('heading', { name: 'Batch Study' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Interviews' }));
+    expect(screen.getAllByRole('button', { name: /^View interview/ })).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze 2 pending' }));
+
+    expect(await screen.findByText('Pending reconciliation')).toBeInTheDocument();
+    expect(storageMock.readStudyInterviews).toHaveBeenCalledTimes(2);
+    expect(screen.getAllByRole('button', { name: /^View interview/ })).toHaveLength(2);
+    expect(screen.getByText('Analysis still pending')).toBeInTheDocument();
+  });
+
+  it('API-04: a Node running interview stays in the batch selection (legacy eligibility unchanged)', async () => {
+    storageMock.readStudyInterviews.mockResolvedValue(ok([
+      makeStoredInterview({
+        id: 'interview-running', studyId: 'study-batch', createdAt: 1_000,
+        analysis: { status: 'running', attempts: 1, lastAttemptAt: 1, claimId: 'c', claimedAt: 1 },
+      }),
+      makeStoredInterview({ id: 'interview-pending', studyId: 'study-batch', createdAt: 2_000 }),
+    ]));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 404 })));
+    renderStudyDetail('study-batch');
+    await screen.findByRole('heading', { name: 'Batch Study' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Interviews' }));
+
+    expect(screen.getByRole('button', { name: 'Analyze 2 pending' })).toBeInTheDocument();
+    expect(screen.queryByText(/queued or running/)).not.toBeInTheDocument();
+  });
+
+  it('API-04: a finished Node batch reports persisted outcomes and refreshes the register in place', async () => {
+    storageMock.readStudyInterviews.mockResolvedValue(ok([1, 2].map(index => makeStoredInterview({
+      id: `interview-${index}`, studyId: 'study-batch', createdAt: index * 1_000,
+    }))));
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (!url.includes('/analyze')) return new Response('{}', { status: 404 });
+      return url.includes('interview-1')
+        ? new Response(JSON.stringify({ status: 'complete' }))
+        : new Response(JSON.stringify({ status: 'failed', failureKind: 'too-large' }));
+    }));
+    renderStudyDetail('study-batch');
+    await screen.findByRole('heading', { name: 'Batch Study' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Interviews' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze 2 pending' }));
+
+    expect(await screen.findByText('Batch complete: 2 of 2 finished · 1 failed.')).toHaveAttribute('aria-live', 'polite');
+    expect(storageMock.readStudyInterviews).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
   });
 });

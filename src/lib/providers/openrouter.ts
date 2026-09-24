@@ -1,10 +1,13 @@
-import { OpenRouter } from '@openrouter/sdk';
+import { HTTPClient, OpenRouter } from '@openrouter/sdk';
 import {
   AIProvider,
   buildInterviewSystemPrompt,
   cleanJSON,
+  DEFAULT_EXECUTION_POLICY,
+  type ProviderExecutionPolicy,
   type ProviderResult,
 } from '../ai';
+import { withExactGatewayHeaders, type EffectiveTransport, type ProviderEndpoint } from './endpoint';
 import {
   buildAggregateSynthesisPrompt,
   buildGreetingPrompt,
@@ -49,7 +52,9 @@ import {
   GREETING_DEADLINE_MS,
   INTERVIEW_DEADLINE_MS,
   providerResult,
+  singleAttempt,
   SYNTHESIS_DEADLINE_MS,
+  synthesisDeadlineMs,
   type AggregateSynthesisPayload,
 } from './shared';
 import { isKnownProviderModel } from '../providerRegistry';
@@ -67,18 +72,61 @@ type OpenRouterChatResponse = Awaited<ReturnType<OpenRouter['chat']['send']>> & 
   model: string;
   openrouterMetadata?: {
     attempts?: Array<{ provider: string; status: number }>;
+    endpoints?: { available?: Array<{ provider?: string; selected?: boolean }> };
   };
 };
+
+/**
+ * The upstream provider that served the response. The last successful entry
+ * of `attempts` when OpenRouter reports attempts (and nothing if none
+ * succeeded); otherwise the one endpoint marked `selected`. OpenRouter omits `attempts` on a single-endpoint route
+ * (observed 24 September 2026: `attempt: 1`, `strategy: "direct"`, no
+ * `attempts`, `endpoints.available[{ provider: "Azure", selected: true }]`;
+ * @openrouter/sdk 1.2.117 types `attempts` as optional). None, or more than
+ * one selected endpoint, identifies nothing.
+ */
+export function upstreamProvider(metadata: OpenRouterChatResponse['openrouterMetadata']): string | null {
+  if (metadata?.attempts?.length) {
+    const attempt = metadata.attempts.findLast((entry) => entry.status >= 200 && entry.status < 300);
+    return attempt?.provider?.trim() || null;
+  }
+  const selected = metadata?.endpoints?.available?.filter((endpoint) => endpoint.selected === true) ?? [];
+  if (selected.length !== 1) return null;
+  return selected[0].provider?.trim() || null;
+}
 
 export class OpenRouterProvider implements AIProvider {
   private readonly client: OpenRouter;
   private readonly model: string;
+  private readonly transport: EffectiveTransport;
 
-  constructor(model?: string, apiKey?: string | null) {
+  /**
+   * `endpoint` (Cloudflare target): an explicit server URL, so the SDK never
+   * reads OPENROUTER_BASE_URL. The SDK has no default headers, so gateway
+   * headers are set, exactly, by a beforeRequest hook on its HTTP client.
+   * Without it, construction is unchanged.
+   */
+  constructor(model?: string, apiKey?: string | null, endpoint?: ProviderEndpoint) {
     const key = apiKey !== undefined ? (apiKey || undefined) : process.env.OPENROUTER_API_KEY;
     if (!key) throw new Error('OPENROUTER_API_KEY is required for OpenRouter provider');
 
-    this.client = new OpenRouter({ apiKey: key, appTitle: 'OpenInterviewer' });
+    this.transport = endpoint?.transport ?? 'direct';
+    if (endpoint) {
+      const gatewayHeaders = endpoint.headers;
+      const httpClient = Object.keys(gatewayHeaders).length > 0
+        ? new HTTPClient().addHook('beforeRequest', (request) => {
+          withExactGatewayHeaders(request.headers, gatewayHeaders);
+        })
+        : undefined;
+      this.client = new OpenRouter({
+        apiKey: key,
+        appTitle: 'OpenInterviewer',
+        serverURL: endpoint.baseURL,
+        ...(httpClient ? { httpClient } : {}),
+      });
+    } else {
+      this.client = new OpenRouter({ apiKey: key, appTitle: 'OpenInterviewer' });
+    }
     this.model = model
       || process.env.OPENROUTER_MODEL
       || process.env.AI_MODEL
@@ -98,6 +146,7 @@ export class OpenRouterProvider implements AIProvider {
     maxCompletionTokens: number;
     deadlineMs: number;
     operation: string;
+    policy?: ProviderExecutionPolicy;
   }): Promise<OpenRouterChatResponse> {
     const messages = [
       ...(options.system ? [{ role: 'system' as const, content: options.system }] : []),
@@ -130,7 +179,12 @@ export class OpenRouterProvider implements AIProvider {
                 }
               : {}),
           },
-        }, { signal, timeoutMs: options.deadlineMs })
+        }, {
+          signal,
+          timeoutMs: options.deadlineMs,
+          // @openrouter/sdk 1.2.117 per-call RequestOptions.retries (lib/retries RetryConfig).
+          ...(singleAttempt(this.transport, options.policy) ? { retries: { strategy: 'none' as const } } : {}),
+        })
       );
       if (!('choices' in response)) {
         throw new ProviderFailure('invalid-response', 'OpenRouter returned a stream unexpectedly');
@@ -186,6 +240,7 @@ export class OpenRouterProvider implements AIProvider {
     studyConfig: StudyConfig,
     behaviorData: BehaviorData,
     participantProfile: ParticipantProfile | null,
+    policy: ProviderExecutionPolicy = DEFAULT_EXECUTION_POLICY,
   ): Promise<ProviderResult<SynthesisResult>> {
     const requestedModel = resolveSynthesisModel(studyConfig);
     const response = await this.send({
@@ -195,8 +250,9 @@ export class OpenRouterProvider implements AIProvider {
       schemaName: 'interview_synthesis',
       enableReasoning: studyConfig.enableReasoning ?? true,
       maxCompletionTokens: 8192,
-      deadlineMs: SYNTHESIS_DEADLINE_MS,
+      deadlineMs: synthesisDeadlineMs(policy),
       operation: 'synthesis',
+      policy,
     });
     const value = this.parseStructured(response, 'synthesis', validateSynthesisResult);
     return providerResult(value, this.executionFor(response, requestedModel));
@@ -251,16 +307,15 @@ export class OpenRouterProvider implements AIProvider {
   }
 
   private executionFor(response: OpenRouterChatResponse, requestedModel: string) {
-    const routedAttempt = response.openrouterMetadata?.attempts
-      ?.findLast((attempt) => attempt.status >= 200 && attempt.status < 300);
     const resolvedModel = response.choices[0]?.message.model || response.model;
-    if (!routedAttempt?.provider?.trim()) {
+    const upstream = upstreamProvider(response.openrouterMetadata);
+    if (!upstream) {
       throw new ProviderFailure(
         'invalid-response',
         'OpenRouter response did not identify the upstream provider',
       );
     }
-    return execution('openrouter', requestedModel, resolvedModel, routedAttempt.provider);
+    return execution('openrouter', requestedModel, resolvedModel, upstream, this.transport);
   }
 
   private parseStructured<T>(

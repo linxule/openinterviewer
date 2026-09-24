@@ -102,7 +102,7 @@ export const OPENROUTER_MODELS: AIModelOption[] = [
 ];
 
 // Default models for each provider
-export const DEFAULT_GEMINI_MODEL = 'gemini-3.7-flash';
+export const DEFAULT_GEMINI_MODEL = 'gemini-3.8-flash';
 export const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-5';
 export const DEFAULT_OPENAI_MODEL = 'gpt-5.6-terra';
 export const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-5.6-terra';
@@ -281,6 +281,17 @@ export interface InterviewAnalysisState {
   claimedAt?: number;
   failureKind?: InterviewAnalysisFailureKind;  // only when `status === 'failed'`
   studyRevision?: number;    // the revision the successful analysis ran under
+  /**
+   * Durable (Cloudflare) analysis only. The generation this state describes;
+   * 0 for a legacy record that never had a job. Absent on Node records.
+   */
+  generation?: number;
+  /**
+   * Durable (Cloudflare) analysis only. True when a paid provider call may have
+   * run but its outcome could not be confirmed; `status` is then `failed` with
+   * `failureKind: 'timeout'`, and another run may make another paid request.
+   */
+  recoveryRequired?: boolean;
 }
 
 // ============================================
@@ -312,6 +323,16 @@ export interface StoredInterview {
   aiModel?: string;
   requestedAiModel?: string;
   routedProvider?: string;
+  /** The synthesis request went through Cloudflare AI Gateway (RT-11); absent otherwise. */
+  aiTransport?: 'cloudflare-gateway';
+
+  /**
+   * The provider transport disclosed to the participant at consent, copied
+   * from the verified consent record at save time (Cloudflare only). Absent
+   * means direct. A provider call carrying this transcript runs only on a
+   * transport the disclosure covers (gw-final D9).
+   */
+  consentTransport?: 'cloudflare-gateway';
 
   /**
    * The provider and model that conducted the CONVERSATION — the researcher's
@@ -406,7 +427,26 @@ export interface PendingStudyStub {
   phase: string;
 }
 
-export type StudyWorkspaceItem = StoredStudy | PendingStudyStub;
+/**
+ * A study as the study list (GET /api/studies) carries it: what the list
+ * shows, never the whole configuration, so a full list stays small on every
+ * target (ST-08). Editing reads the full study from GET /api/studies/[id].
+ */
+export interface StudyListItem extends Omit<StoredStudy, 'config'> {
+  config: Pick<StudyConfig, 'name' | 'description'>;
+  coreQuestionCount: number;
+}
+
+export function toStudyListItem(study: StoredStudy): StudyListItem {
+  const { config, ...metadata } = study;
+  return {
+    ...metadata,
+    config: { name: config.name, description: config.description },
+    coreQuestionCount: Array.isArray(config.coreQuestions) ? config.coreQuestions.length : 0,
+  };
+}
+
+export type StudyWorkspaceItem = StudyListItem | PendingStudyStub;
 
 export function isPendingStudyStub(study: StudyWorkspaceItem): study is PendingStudyStub {
   return 'reconciliationPending' in study && study.reconciliationPending === true;
@@ -462,6 +502,8 @@ export interface AggregateSynthesisResult {
   aiModel: string;
   requestedAiModel?: string;
   routedProvider?: string;
+  /** The aggregate request went through Cloudflare AI Gateway (RT-11); absent otherwise. */
+  aiTransport?: 'cloudflare-gateway';
   commonThemes: AggregateTheme[];
   divergentViews: { topic: string; viewA: string; viewB: string }[];
   keyFindings: string[];
@@ -488,6 +530,6 @@ export type StoredAggregateSynthesis =
 export type AggregateSynthesisProviderPayload = Omit<
   AggregateSynthesisResult,
   | 'studyId' | 'studyRevision' | 'interviewIds' | 'interviewCount'
-  | 'aiProvider' | 'aiModel' | 'requestedAiModel' | 'routedProvider'
+  | 'aiProvider' | 'aiModel' | 'requestedAiModel' | 'routedProvider' | 'aiTransport'
   | 'generatedAt' | 'commonThemes'
 > & { commonThemes: AggregateThemeClaim[] };

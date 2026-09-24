@@ -6,21 +6,23 @@ const router = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
 
 const storageMock = vi.hoisted(() => ({
-  getStudy: vi.fn(),
-  getStudyInterviews: vi.fn(),
+  readStudy: vi.fn(),
+  readStudyInterviews: vi.fn(),
 }));
 vi.mock('@/services/storageService', async (importOriginal) => {
   const actual = (await importOriginal()) as typeof import('@/services/storageService');
   return {
     ...actual,
-    getStudy: storageMock.getStudy,
-    getStudyInterviews: storageMock.getStudyInterviews,
+    readStudy: storageMock.readStudy,
+    readStudyInterviews: storageMock.readStudyInterviews,
   };
 });
 
 // StudyDetail wires useSetTrailingCrumb, which requires a BreadcrumbProvider ancestor.
 import { BreadcrumbProvider } from '@/components/shell/breadcrumb';
 import StudyDetail from '@/components/StudyDetail';
+
+const ok = <T,>(value: T) => ({ status: 'ok' as const, value });
 
 function renderStudyDetail(studyId: string) {
   return render(
@@ -102,7 +104,7 @@ function stubFetch(overrides: FetchOverrides = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   const config = makeStudyConfig({ id: 'study-aggregate', name: 'Aggregate Study' });
-  storageMock.getStudy.mockResolvedValue(makeStoredStudy({ id: 'study-aggregate', config, revision: 4 }));
+  storageMock.readStudy.mockResolvedValue(ok(makeStoredStudy({ id: 'study-aggregate', config, revision: 4 })));
   // Distinct createdAt values, chronologically REVERSED from insertion order,
   // so the P-numbering below is exercised rather than accidental: interview-b
   // is older and becomes P01, interview-a is newer and becomes P02.
@@ -113,7 +115,7 @@ beforeEach(() => {
     statedPreferences: [], revealedPreferences: [], themes: [],
     contradictions: [], keyInsights: [], bottomLine: 'Per-interview bottom line',
   };
-  storageMock.getStudyInterviews.mockResolvedValue([
+  storageMock.readStudyInterviews.mockResolvedValue(ok([
     makeStoredInterview({
       id: 'interview-a', studyId: 'study-aggregate', createdAt: 2_000, studyRevision: 4,
       synthesis: analyzedSynthesis,
@@ -130,7 +132,7 @@ beforeEach(() => {
         { id: 'm-2', role: 'user', content: 'I never write anything down.', timestamp: 1_100 },
       ],
     }),
-  ]);
+  ]));
   stubFetch();
 });
 
@@ -205,7 +207,7 @@ describe('StudyDetail aggregate reading', () => {
   });
 
   it('appends "covers N of M interviews" when a stored aggregate covers fewer than the eligible set', async () => {
-    storageMock.getStudyInterviews.mockResolvedValue([
+    storageMock.readStudyInterviews.mockResolvedValue(ok([
       makeStoredInterview({ id: 'interview-a', studyId: 'study-aggregate', studyRevision: 4, synthesis: {
         statedPreferences: [], revealedPreferences: [], themes: [], contradictions: [], keyInsights: [], bottomLine: 'x',
       } }),
@@ -215,7 +217,7 @@ describe('StudyDetail aggregate reading', () => {
       makeStoredInterview({ id: 'interview-c', studyId: 'study-aggregate', studyRevision: 4, synthesis: {
         statedPreferences: [], revealedPreferences: [], themes: [], contradictions: [], keyInsights: [], bottomLine: 'x',
       } }),
-    ]);
+    ]));
     stubFetch({
       getAggregate: () => jsonResponse({
         aggregate: { ...aggregateFixture, interviewCount: 2, savedAt: Date.now() },
@@ -247,9 +249,9 @@ describe('StudyDetail aggregate reading', () => {
   });
 
   it('renders a stored aggregate even with fewer than two interviews, and hides the two-interview prompt', async () => {
-    storageMock.getStudyInterviews.mockResolvedValue([
+    storageMock.readStudyInterviews.mockResolvedValue(ok([
       makeStoredInterview({ id: 'interview-a', studyId: 'study-aggregate' }),
-    ]);
+    ]));
     stubFetch({
       getAggregate: () => jsonResponse({
         aggregate: { ...aggregateFixture, savedAt: Date.now() },
@@ -259,7 +261,8 @@ describe('StudyDetail aggregate reading', () => {
     renderStudyDetail('study-aggregate');
     await screen.findByText('The aggregate bottom line.');
 
-    expect(screen.queryByText('Need at least 2 interviews to generate aggregate analysis.')).not.toBeInTheDocument();
+    // Matches the current copy ('Need at least 2 analyzed interviews ...') and any rewording of it.
+    expect(screen.queryByText(/Need at least 2/)).not.toBeInTheDocument();
   });
 
   it('issues a follow-up POST with no body when the aggregate is current', async () => {

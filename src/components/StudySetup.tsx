@@ -64,6 +64,11 @@ const StudySetup: React.FC = () => {
 
   // Preview state
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   // Study save state
   const [isSaving, setIsSaving] = useState(false);
@@ -153,7 +158,10 @@ const StudySetup: React.FC = () => {
         if (
           !res.ok ||
           (data.mode !== 'hosted' && data.mode !== 'standalone') ||
-          (data.aiTransport !== 'direct' && data.aiTransport !== 'gateway') ||
+          (data.aiTransport !== 'direct' && data.aiTransport !== 'gateway' && data.aiTransport !== 'cloudflare-gateway') ||
+          // Cloudflare AI Gateway exists only on the Cloudflare target.
+          (data.aiTransport === 'cloudflare-gateway' && data.target !== 'cloudflare') ||
+          (data.target !== undefined && data.target !== 'cloudflare') ||
           typeof data.hasAnthropicKey !== 'boolean' ||
           typeof data.hasGeminiKey !== 'boolean' ||
           (data.hasOpenAiKey !== undefined && typeof data.hasOpenAiKey !== 'boolean') ||
@@ -164,6 +172,7 @@ const StudySetup: React.FC = () => {
         if (!cancelled) {
           setConfigStatus({
             mode: data.mode,
+            ...(data.target === 'cloudflare' ? { target: 'cloudflare' as const } : {}),
             aiTransport: data.aiTransport,
             hasAnthropicKey: data.hasAnthropicKey,
             hasGeminiKey: data.hasGeminiKey,
@@ -360,6 +369,7 @@ const StudySetup: React.FC = () => {
   };
 
   const handlePreview = async () => {
+    if (isPreviewLoading) return;
     if (!requireResearcherAuth()) return;
     if (!requireConfiguredProvider(setSaveError)) return;
     if (!requireValidModel(setSaveError)) return;
@@ -376,15 +386,18 @@ const StudySetup: React.FC = () => {
         throw new Error(data.error || 'Could not load the saved study.');
       }
       const data = await response.json();
+      if (!mounted.current) return;
       useStore.getState().resetParticipant();
       setStudyConfig(data.study.config);
       setViewMode('preview');
       setStep('consent');
       router.push('/consent');
     } catch (error) {
+      if (!mounted.current) return;
       console.error('Could not load saved preview:', error);
       setSaveError(error instanceof Error ? error.message : 'Could not load the saved study.');
-    } finally {
+      // A failed lookup is retryable; a successful one stays locked until
+      // /consent replaces this page.
       setIsPreviewLoading(false);
     }
   };
@@ -614,7 +627,7 @@ const StudySetup: React.FC = () => {
   const isValid = hasRequiredFields && selectedModelValid;
 
   const providerOptions = configStatus
-    && (configStatus.mode === 'hosted' || configStatus.aiTransport === 'gateway')
+    && (configStatus.mode === 'hosted' || configStatus.aiTransport === 'gateway' || configStatus.target === 'cloudflare')
     ? PROVIDER_OPTIONS.filter(provider => isProviderConfigured(provider.id, configStatus))
     : PROVIDER_OPTIONS;
 

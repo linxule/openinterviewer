@@ -69,6 +69,7 @@ function ProviderUnavailableNotice({
   configStatus,
   configStatusError,
   selectedProviderConfigured,
+  selectedProviderId,
   selectedProviderName,
   selectedProviderEnvName,
   onOpenSettings,
@@ -78,6 +79,7 @@ function ProviderUnavailableNotice({
   configStatus: ConfigStatus | null;
   configStatusError: string | null;
   selectedProviderConfigured: boolean;
+  selectedProviderId: AIProviderType;
   selectedProviderName: string;
   selectedProviderEnvName: string;
   onOpenSettings: () => void;
@@ -96,6 +98,8 @@ function ProviderUnavailableNotice({
             ? `${selectedProviderName} is not enabled for this Vercel AI Gateway deployment. Choose Gemini, Claude, or OpenAI.`
           : configStatus?.mode === 'hosted'
             ? `This account does not have a ${selectedProviderName} key. Add one in Account & connections or finish onboarding before saving or sharing this study.`
+          : configStatus?.target === 'cloudflare'
+            ? <>This installation has no {selectedProviderName} key. The operator adds it with <code className="font-mono text-ink-900">npm run setup:cloudflare -- update --add-provider-key {selectedProviderId} --yes</code>; no redeploy is needed. Choose another provider meanwhile.</>
             : <>This deployment does not have <code className="font-mono text-ink-900">{selectedProviderEnvName}</code>. Add it server-side, run <code className="font-mono text-ink-900">npm run setup:check</code>, and redeploy before saving or sharing this study.</>}
       </p>
       {!configStatusError && configStatus?.mode === 'hosted' && (
@@ -159,6 +163,7 @@ export function ProviderSection({
         configStatus={configStatus}
         configStatusError={configStatusError}
         selectedProviderConfigured={selectedProviderConfigured}
+        selectedProviderId={draft.aiProvider}
         selectedProviderName={selectedProviderName}
         selectedProviderEnvName={selectedProviderEnvName}
         onOpenSettings={onOpenSettings}
@@ -176,7 +181,11 @@ export function ProviderSection({
       description={
         <>
           Choose which AI model powers your interviews
-          {configStatus?.aiTransport === 'gateway' ? ' through Vercel AI Gateway.' : '.'}
+          {configStatus?.aiTransport === 'gateway'
+            ? ' through Vercel AI Gateway.'
+            : configStatus?.aiTransport === 'cloudflare-gateway'
+              ? ' through Cloudflare AI Gateway.'
+              : '.'}
         </>
       }
       read={
@@ -318,6 +327,7 @@ export function ProviderSection({
         configStatus={configStatus}
         configStatusError={configStatusError}
         selectedProviderConfigured={selectedProviderConfigured}
+        selectedProviderId={draft.aiProvider}
         selectedProviderName={selectedProviderName}
         selectedProviderEnvName={selectedProviderEnvName}
         onOpenSettings={onOpenSettings}

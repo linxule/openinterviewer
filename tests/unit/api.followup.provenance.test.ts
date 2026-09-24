@@ -2,6 +2,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeStoredInterview, makeStoredStudy } from '../fixtures/models';
+import { standaloneTestContext } from '../helpers/workspaceStoreFixture';
+import type { RedisPort } from '@/lib/redisPort';
 import { StoredStudy } from '@/types';
 import { ProviderFailure } from '@/lib/providerErrors';
 
@@ -73,13 +75,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   contextMock.getRequestContext.mockResolvedValue({
     authorized: true,
-    context: {
-      kvClient: {},
-      geminiApiKey: 'key',
-      anthropicApiKey: null,
-      openaiApiKey: null,
-      openrouterApiKey: null,
-    },
+    context: standaloneTestContext({} as RedisPort, { geminiApiKey: 'key' }),
     researcherId: 'researcher-a',
   });
   contextMock.getAuthorizedResearcherStudyContext.mockImplementation(

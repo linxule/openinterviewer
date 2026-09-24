@@ -1,11 +1,11 @@
 // Researcher-only opaque participant-link management for one canonical study.
 // GET returns metadata only; DELETE revokes one hashed link ID atomically.
+// Hosted links keep their platform-gated operations; standalone links (Node
+// Redis or the Cloudflare durable workspace) go through the workspace store.
 
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
-import type { RedisPort } from '../../../../../lib/redisPort';
-import { getStudyChecked } from '@/lib/kv';
 import { isHostedMode } from '@/lib/mode';
 import {
   asStudyAuthorityFromLink,
@@ -14,16 +14,50 @@ import {
 } from '@/lib/participantLinks';
 import { readBoundedJsonObject } from '@/lib/requestBody';
 import { configurationRequiredResponse } from '@/lib/researcherAccess';
-import { getAuthorizedResearcherStudyContext, presentStudyAuthority } from '@/lib/researcherContext';
+import {
+  getAuthorizedResearcherStudyContext,
+  presentStudyAuthority,
+  type ResearcherContext,
+} from '@/lib/researcherContext';
 import { mapStudyLoad } from '@/lib/ownedStudies';
+import { researcherHeldCopy, workspaceHeldResponse } from '@/lib/canonicalStudy';
+import { logRequestFailure } from '@/lib/requestLog';
+import { deploymentNotReadyResponse } from '@/lib/runtime/readinessGate';
 
 const STUDY_ID_PATTERN = /^[A-Za-z0-9-]{1,128}$/;
 const LINK_ID_PATTERN = /^[a-f0-9]{64}$/;
 const MAX_DELETE_BODY_BYTES = 4_096;
+const MAX_LISTED_LINKS = 1_000;
+const ROUTE = '/api/studies/[id]/participant-links';
 
 type StudyLinkAccess =
-  | { ok: true; studyId: string; researcherId: string | null; standaloneClient: RedisPort }
+  | { ok: true; studyId: string; researcherId: string | null; hosted: boolean; context: ResearcherContext }
   | { ok: false; response: NextResponse };
+
+function serviceUnavailable(): NextResponse {
+  return NextResponse.json(
+    { error: 'Participant link service is temporarily unavailable', retryable: true },
+    { status: 503, headers: { 'Cache-Control': 'no-store' } }
+  );
+}
+
+// Denials and storage failures from either backend use the shared authority
+// presenter, exactly as the pre-store route did.
+function linkAuthorityDenialResponse(result: { status: string; phase?: 'reserving' | 'pending' | 'resolving' | 'publishing' }): NextResponse | null {
+  const authority = asStudyAuthorityFromLink(result);
+  if (!authority) return null;
+  const presented = presentStudyAuthority(authority, 'researcher');
+  if (presented.ok) return null;
+  return NextResponse.json(
+    {
+      error: presented.error,
+      retryable: presented.retryable,
+      ...(presented.code ? { code: presented.code } : {}),
+      ...(presented.reason ? { reason: presented.reason } : {}),
+    },
+    { status: presented.statusCode },
+  );
+}
 
 async function authorizeStudyLinkAccess(studyId: string): Promise<StudyLinkAccess> {
   if (!STUDY_ID_PATTERN.test(studyId)) {
@@ -53,17 +87,19 @@ async function authorizeStudyLinkAccess(studyId: string): Promise<StudyLinkAcces
 
   // Both modes require a real canonical BYOS/standalone study record. A link
   // index alone is never authority to inspect or mutate a study's links.
-  const loaded = await getStudyChecked(studyId, gated.context.kvClient);
+  const loaded = await gated.context.store.getStudy(studyId);
   const mapped = mapStudyLoad(loaded);
   if (!mapped.ok) {
     return { ok: false, response: NextResponse.json(mapped.body, { status: mapped.status }) };
   }
 
+  const hosted = isHostedMode();
   return {
     ok: true,
     studyId,
-    researcherId: isHostedMode() ? (gated.researcherId ?? null) : null,
-    standaloneClient: gated.context.kvClient,
+    researcherId: hosted ? (gated.researcherId ?? null) : null,
+    hosted,
+    context: gated.context,
   };
 }
 
@@ -72,103 +108,98 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   void request;
-  const { id } = await params;
-  const access = await authorizeStudyLinkAccess(id);
-  if (!access.ok) return access.response;
+  try {
+    const { id } = await params;
+    const access = await authorizeStudyLinkAccess(id);
+    if (!access.ok) return access.response;
 
-  const result = await listParticipantLinksForStudy({
-    studyId: access.studyId,
-    researcherId: access.researcherId,
-    standaloneClient: access.standaloneClient,
-    maximum: 1_000,
-  });
-  const listAuthority = asStudyAuthorityFromLink(result);
-  if (listAuthority) {
-    const presented = presentStudyAuthority(listAuthority, 'researcher');
-    if (!presented.ok) {
-      return NextResponse.json(
-        {
-          error: presented.error,
-          retryable: presented.retryable,
-          ...(presented.code ? { code: presented.code } : {}),
-          ...(presented.reason ? { reason: presented.reason } : {}),
-        },
-        { status: presented.statusCode },
-      );
-    }
-  }
-  if (result.status !== 'ok') {
+    const result = access.hosted
+      ? await listParticipantLinksForStudy({
+        studyId: access.studyId,
+        researcherId: access.researcherId,
+        standaloneClient: access.context.kvClient,
+        maximum: MAX_LISTED_LINKS,
+      })
+      : await access.context.store.listParticipantLinks({
+        studyId: access.studyId,
+        maximum: MAX_LISTED_LINKS,
+        now: Date.now(),
+      });
+    const denied = linkAuthorityDenialResponse(result);
+    if (denied) return denied;
+    if (result.status !== 'ok') return serviceUnavailable();
+
     return NextResponse.json(
-      { error: 'Participant link service is temporarily unavailable', retryable: true },
-      { status: 503 }
+      { links: result.links, truncated: result.truncated },
+      { headers: { 'Cache-Control': 'no-store' } }
     );
+  } catch (error) {
+    logRequestFailure({ event: 'route.failure', route: ROUTE, method: 'GET', status: 503 }, error);
+    return serviceUnavailable();
   }
-
-  return NextResponse.json(
-    { links: result.links, truncated: result.truncated },
-    { headers: { 'Cache-Control': 'no-store' } }
-  );
 }
 
 export async function DELETE(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { id } = await params;
-  const access = await authorizeStudyLinkAccess(id);
-  if (!access.ok) return access.response;
+  const notReady = deploymentNotReadyResponse(ROUTE);
+  if (notReady) return notReady;
+  try {
+    const { id } = await params;
+    const access = await authorizeStudyLinkAccess(id);
+    if (!access.ok) return access.response;
 
-  const parsed = await readBoundedJsonObject(request, MAX_DELETE_BODY_BYTES);
-  if (!parsed.ok) {
-    return NextResponse.json(
-      { error: parsed.status === 413 ? 'Request body is too large' : 'Invalid request body' },
-      { status: parsed.status }
-    );
-  }
-  const linkId = parsed.value.linkId;
-  if (typeof linkId !== 'string' || !LINK_ID_PATTERN.test(linkId)) {
-    return NextResponse.json({ error: 'Invalid participant link ID' }, { status: 400 });
-  }
-
-  const result = await revokeParticipantLink({
-    linkId,
-    studyId: access.studyId,
-    researcherId: access.researcherId,
-    standaloneClient: access.standaloneClient,
-  });
-  const revokeAuthority = asStudyAuthorityFromLink(result);
-  if (revokeAuthority) {
-    const presented = presentStudyAuthority(revokeAuthority, 'researcher');
-    if (!presented.ok) {
+    const parsed = await readBoundedJsonObject(request, MAX_DELETE_BODY_BYTES);
+    if (!parsed.ok) {
       return NextResponse.json(
-        {
-          error: presented.error,
-          retryable: presented.retryable,
-          ...(presented.code ? { code: presented.code } : {}),
-          ...(presented.reason ? { reason: presented.reason } : {}),
-        },
-        { status: presented.statusCode },
+        { error: parsed.status === 413 ? 'Request body is too large' : 'Invalid request body' },
+        { status: parsed.status }
       );
     }
-  }
-  if (result.status === 'not-found') {
-    return NextResponse.json({ error: 'Participant link not found' }, { status: 404 });
-  }
-  if (result.status === 'owner-conflict') {
-    return NextResponse.json({ error: 'Participant link ownership does not match this account' }, { status: 403 });
-  }
-  if (result.status === 'unavailable') {
-    return NextResponse.json(
-      { error: 'Participant link service is temporarily unavailable', retryable: true },
-      { status: 503 }
-    );
-  }
+    const linkId = parsed.value.linkId;
+    if (typeof linkId !== 'string' || !LINK_ID_PATTERN.test(linkId)) {
+      return NextResponse.json({ error: 'Invalid participant link ID' }, { status: 400 });
+    }
 
-  return NextResponse.json({
-    link: {
-      id: linkId,
-      revoked: true,
-      ...(result.status === 'revoked' ? { revokedAt: result.revokedAt } : {}),
-    },
-  });
+    const result = access.hosted
+      ? await revokeParticipantLink({
+        linkId,
+        studyId: access.studyId,
+        researcherId: access.researcherId,
+        standaloneClient: access.context.kvClient,
+      })
+      : await access.context.store.revokeParticipantLink({
+        studyId: access.studyId,
+        linkId,
+        now: Date.now(),
+      });
+    const denied = linkAuthorityDenialResponse(result);
+    if (denied) return denied;
+    if (result.status === 'held') {
+      return workspaceHeldResponse({
+        route: ROUTE,
+        reason: result.reason,
+        ...researcherHeldCopy('Participant links cannot be revoked'),
+      });
+    }
+    if (result.status === 'not-found') {
+      return NextResponse.json({ error: 'Participant link not found' }, { status: 404 });
+    }
+    if (result.status === 'owner-conflict') {
+      return NextResponse.json({ error: 'Participant link ownership does not match this account' }, { status: 403 });
+    }
+    if (result.status !== 'revoked' && result.status !== 'already-revoked') return serviceUnavailable();
+
+    return NextResponse.json({
+      link: {
+        id: linkId,
+        revoked: true,
+        ...(result.status === 'revoked' ? { revokedAt: result.revokedAt } : {}),
+      },
+    });
+  } catch (error) {
+    logRequestFailure({ event: 'route.failure', route: ROUTE, method: 'DELETE', status: 503 }, error);
+    return serviceUnavailable();
+  }
 }

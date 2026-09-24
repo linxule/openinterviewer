@@ -10,6 +10,7 @@ import { SynthesisReading } from '@/components/SynthesisReading';
 import type { SynthesisResult } from '@/types';
 import { formatConsentTimestamp, formatElapsed, participantTurnCount, transcriptElapsedMs } from '@/lib/receiptFacts';
 import { defaultThankYouText } from '@/lib/thankYouText';
+import NavigationStatus from '@/components/NavigationStatus';
 
 type CompletionInputs = Pick<ReturnType<typeof useStore.getState>,
   'studyConfig' | 'participantProfile' | 'interviewHistory' | 'behaviorData' | 'viewMode' | 'participantSessionHandle'
@@ -57,6 +58,8 @@ const Synthesis: React.FC = () => {
   >(null);
 
   const mounted = useRef(false);
+  const leaving = useRef(false);
+  const [destination, setDestination] = useState<string | null>(null);
   const activeAttempt = useRef<CompletionAttempt | null>(null);
 
   // Keep the attempt across StrictMode's cleanup/setup replay, while preventing
@@ -68,6 +71,7 @@ const Synthesis: React.FC = () => {
 
   const isCurrentAttempt = useCallback((attempt: CompletionAttempt) => (
     mounted.current
+    && !leaving.current
     && activeAttempt.current === attempt
     && sameCompletionInputs(attempt.inputs, useStore.getState())
   ), []);
@@ -127,12 +131,14 @@ const Synthesis: React.FC = () => {
   };
 
   const handleRetryAnalysis = () => {
+    if (leaving.current) return;
     setAnalysisError(null);
     activeAttempt.current = null;
     setRetryTrigger(prev => prev + 1);
   };
 
   useEffect(() => {
+    if (leaving.current) return;
     const inputs = { studyConfig, participantProfile, interviewHistory, behaviorData, viewMode, participantSessionHandle };
     const previousAttempt = activeAttempt.current;
     if (previousAttempt && sameCompletionInputs(previousAttempt.inputs, inputs)) return;
@@ -199,14 +205,22 @@ const Synthesis: React.FC = () => {
     synthesis, setSynthesis, retryTrigger, doSave, isCurrentAttempt]);
 
   const handleBack = () => {
+    if (leaving.current) return;
+    leaving.current = true;
+    setDestination('Returning to the interview…');
     setStep('interview');
     router.push('/interview');
   };
 
   const handleExport = () => {
+    if (leaving.current) return;
+    leaving.current = true;
+    setDestination('Opening export…');
     setStep('export');
     router.push('/export');
   };
+
+  if (destination) return <NavigationStatus>{destination}</NavigationStatus>;
 
   if (!studyConfig) {
     return (

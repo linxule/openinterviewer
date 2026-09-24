@@ -10,18 +10,48 @@ import {
 } from '@/lib/providers';
 import { getAuthorizedResearcherStudyContext, providerKeysFromContext } from '@/lib/researcherContext';
 import { configurationRequiredResponse } from '@/lib/researcherAccess';
-import { getStudyChecked, getStudyInterviewsChecked, saveStudyAggregate } from '@/lib/kv';
-import { mapCollectionLoad, mapStudyLoad } from '@/lib/ownedStudies';
-import { providerErrorResponse } from '@/lib/providerErrors';
+import {
+  aggregateInputTooLargeBody,
+  loadDurableAggregateInputs,
+  MAX_AGGREGATE_INTERVIEWS,
+  mapCollectionLoad,
+  mapReadinessHold,
+  mapStudyLoad,
+  RESEARCHER_MUTATION_STATES,
+} from '@/lib/ownedStudies';
+import { providerErrorResponse } from '@/lib/providerErrorResponse';
 import { aggregateProvenance } from '@/lib/synthesisProvenance';
 import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
-import { AggregateSynthesisResult, AggregateTheme, StoredAggregateSynthesis, SynthesisResult } from '@/types';
+import type {
+  AggregateSynthesisResult,
+  AggregateTheme,
+  StoredAggregateSynthesis,
+  StoredInterview,
+  SynthesisResult,
+} from '@/types';
 import { readBoundedJsonObject } from '@/lib/requestBody';
 import { createRequestId, logRequestEvent, logRequestFailure } from '@/lib/requestLog';
 import { resolveEvidenceRef, withRecordBackedEvidence } from '@/lib/evidence';
+import { deploymentNotReadyResponse } from '@/lib/runtime/readinessGate';
+import { isDurableWorkspaceStore } from '@/lib/storage/types';
+import {
+  currentProviderTransport,
+  providerNotConfiguredResponse,
+  researcherTransportNotDisclosedResponse,
+  uncoveredCount,
+} from '@/lib/transportDisclosure';
+
+const ROUTE = '/api/synthesis/aggregate';
+const INTERVIEW_MESSAGES = {
+  unavailable: 'Interview storage is temporarily unavailable.',
+  tooLarge: 'This study has too many interviews for an interactive aggregate analysis.',
+};
 
 export async function POST(request: Request) {
   try {
+    const notReady = deploymentNotReadyResponse(ROUTE);
+    if (notReady) return notReady;
+
     const parsedBody = await readBoundedJsonObject(request, 4_096);
     if (!parsedBody.ok) {
       return NextResponse.json(
@@ -55,23 +85,55 @@ export async function POST(request: Request) {
       );
     }
 
-    const loadedStudy = await getStudyChecked(studyId, gated.context.kvClient);
+    const store = gated.context.store;
+    // A paid call that ends in a researcher mutation (the aggregate write,
+    // which the durable workspace accepts only while open). OPS-01 refuses new
+    // researcher mutations while draining, frozen or in recovery, so the call
+    // is refused before the provider is paid; only preview and follow-up are
+    // paid no-write calls allowed while draining (gap F26).
+    if (isDurableWorkspaceStore(store)) {
+      const readiness = await store.readiness();
+      if (readiness.status === 'unavailable') {
+        return NextResponse.json({ error: 'Study storage is temporarily unavailable.', retryable: true }, { status: 503 });
+      }
+      const held = mapReadinessHold(readiness, RESEARCHER_MUTATION_STATES, ROUTE);
+      if (held) return held;
+    }
+
+    const loadedStudy = await store.getStudy(studyId);
     const studyMapped = mapStudyLoad(loadedStudy);
     if (!studyMapped.ok) return NextResponse.json(studyMapped.body, { status: studyMapped.status });
     const study = studyMapped.study;
 
-    const loadedInterviews = await getStudyInterviewsChecked(studyId, gated.context.kvClient, 1_000);
-    const interviewsMapped = mapCollectionLoad(loadedInterviews, {
-      unavailable: 'Interview storage is temporarily unavailable.',
-      tooLarge: 'This study has too many interviews for an interactive aggregate analysis.',
-    });
-    if (!interviewsMapped.ok) {
-      return NextResponse.json(interviewsMapped.body, { status: interviewsMapped.status });
+    let currentRevisionInterviews: StoredInterview[];
+    if (isDurableWorkspaceStore(store)) {
+      // Bounded keyset pages of current-revision analyzed interviews only,
+      // never the 1,000 full-record collection (RT-09).
+      const inputs = await loadDurableAggregateInputs(store, study);
+      if (inputs.status === 'unavailable') {
+        return NextResponse.json({ error: INTERVIEW_MESSAGES.unavailable, retryable: true }, { status: 503 });
+      }
+      if (inputs.status === 'too-large') {
+        return NextResponse.json({ error: INTERVIEW_MESSAGES.tooLarge }, { status: 413 });
+      }
+      if (inputs.status === 'input-too-large') {
+        return NextResponse.json(aggregateInputTooLargeBody(), { status: 413 });
+      }
+      currentRevisionInterviews = inputs.interviews;
+    } else {
+      const loadedInterviews = await store.listInterviews({
+        scope: 'study',
+        studyId,
+        maximum: MAX_AGGREGATE_INTERVIEWS,
+      });
+      const interviewsMapped = mapCollectionLoad(loadedInterviews, INTERVIEW_MESSAGES);
+      if (!interviewsMapped.ok) {
+        return NextResponse.json(interviewsMapped.body, { status: interviewsMapped.status });
+      }
+      currentRevisionInterviews = interviewsMapped.items.filter(
+        interview => interview.studyRevision === study.revision && interview.synthesis
+      );
     }
-    const interviews = interviewsMapped.items;
-    const currentRevisionInterviews = interviews.filter(
-      interview => interview.studyRevision === study.revision && interview.synthesis
-    );
 
     if (currentRevisionInterviews.length < 2) {
       return NextResponse.json(
@@ -82,6 +144,19 @@ export async function POST(request: Request) {
         },
         { status: 400 }
       );
+    }
+
+    // D9 (Cloudflare): every included transcript's consent must cover the
+    // transport this call would use. An uncovered interview refuses the whole
+    // call; interviews are never silently dropped from an aggregate.
+    const current = currentProviderTransport(gated.context, study.config.aiProvider);
+    if (current.applies) {
+      if (!current.ok) return providerNotConfiguredResponse();
+      const uncovered = uncoveredCount(
+        currentRevisionInterviews.map(interview => interview.consentTransport),
+        current.transport,
+      );
+      if (uncovered > 0) return researcherTransportNotDisclosedResponse(uncovered);
     }
 
     // The route holds the transcripts; the prompt builder does not. So the
@@ -154,6 +229,7 @@ export async function POST(request: Request) {
       requestedAiModel: aggregateResult.execution.requestedModel,
       aiModel: aggregateResult.execution.model,
       routedProvider: aggregateResult.execution.routedProvider,
+      ...(aggregateResult.execution.aiTransport ? { aiTransport: aggregateResult.execution.aiTransport } : {}),
       generatedAt: Date.now()
     };
 
@@ -169,10 +245,12 @@ export async function POST(request: Request) {
     // Persist before responding, but never at the cost of the result: a write
     // that fails returns the aggregate anyway, without `savedAt`, and the
     // footer reads `not saved — regenerate to refresh`. The paid call is not
-    // thrown away because Redis blinked.
+    // thrown away because storage blinked, the workspace entered a hold after
+    // the readiness check, or the study was deleted meanwhile (the durable
+    // store refuses the orphan).
     const savedAt = Date.now();
     const stored: StoredAggregateSynthesis = { ...fullResult, savedAt };
-    const write = await saveStudyAggregate(stored, gated.context.kvClient);
+    const write = await store.saveAggregate(stored);
 
     // Match-rate telemetry (ADR-003: counts only — never quote, turn, or
     // interview-id text). This is the only place the server runs the matcher
@@ -182,7 +260,7 @@ export async function POST(request: Request) {
       logRequestEvent({
         event: 'synthesis.evidence',
         requestId: createRequestId(request.headers.get('x-request-id')),
-        route: '/api/synthesis/aggregate',
+        route: ROUTE,
         refsOffered: claims.length,
         refsLocated: claims.filter(claim => {
           const interview = currentRevisionInterviews[claim.interviewIndex - 1];

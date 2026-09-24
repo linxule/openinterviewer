@@ -4,7 +4,6 @@
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
-import { getStudyAggregateChecked } from '@/lib/kv';
 import { getAuthorizedResearcherStudyContext } from '@/lib/researcherContext';
 import { configurationRequiredResponse } from '@/lib/researcherAccess';
 import { createRequestId, logRequestFailure } from '@/lib/requestLog';
@@ -26,7 +25,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       );
     }
 
-    const loaded = await getStudyAggregateChecked(id, gated.context.kvClient);
+    const loaded = await gated.context.store.getAggregate(id);
     if (loaded.status === 'unavailable') {
       return NextResponse.json(
         { error: 'Analysis storage is temporarily unavailable.', retryable: true },

@@ -36,6 +36,7 @@ describe('hosted config validator', () => {
       ready: true,
       oauth: { google: true, github: false },
       errors: [],
+      analysisExecution: 'synchronous',
     });
   });
 
@@ -118,6 +119,7 @@ describe('hosted config validator', () => {
       ready: true,
       oauth: { google: false, github: false },
       errors: [],
+      analysisExecution: 'synchronous',
     });
     expect(getPublicConfig({ NODE_ENV: 'production', DEPLOYMENT_MODE: 'standalone' }).ready)
       .toBe(false);
@@ -198,6 +200,31 @@ describe('hosted config validator', () => {
       .toContain('gateway_not_supported_hosted');
   });
 
+  // Intentional change from the pre-Cloudflare code (RT-06): every loopback
+  // spelling is refused in production, not only the literal 127.0.0.1.
+  it.each([
+    'https://127.0.0.2',
+    'https://[::1]',
+    'https://[::ffff:127.0.0.1]',
+    'https://localhost.',
+  ])('RT-06 rejects the loopback APP_BASE_URL %s in Node production', (origin) => {
+    expect(validateHostedConfig(hostedEnv({ APP_BASE_URL: origin }))).toEqual(['insecure_app_base_url']);
+    const standalone: NodeJS.ProcessEnv = {
+      NODE_ENV: 'production',
+      DEPLOYMENT_MODE: 'standalone',
+      APP_BASE_URL: origin,
+      ADMIN_PASSWORD: 'standalone-admin-password',
+      SESSION_SECRET: SECRET_A,
+      PARTICIPANT_TOKEN_SECRET: SECRET_B,
+      RATE_LIMIT_SALT: SECRET_C,
+      KV_REST_API_URL: 'https://standalone.upstash.io',
+      KV_REST_API_TOKEN: 'redis-token',
+      GEMINI_API_KEY: 'gemini-key',
+    };
+    expect(validateStandaloneConfig(standalone)).toEqual(['insecure_app_base_url']);
+    expect(validateStandaloneConfig({ ...standalone, NODE_ENV: 'development' })).toEqual([]);
+  });
+
   it('fails closed on production mode misconfiguration without leaking the typo', () => {
     const view = getPublicConfig({
       NODE_ENV: 'production',
@@ -209,6 +236,7 @@ describe('hosted config validator', () => {
       ready: false,
       oauth: { google: false, github: false },
       errors: ['invalid_deployment_mode'],
+      analysisExecution: null,
     });
     expect(JSON.stringify(view)).not.toContain('hostd');
   });

@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeStoredStudy } from '../fixtures/models';
+import { standaloneTestContext } from '../helpers/workspaceStoreFixture';
+import type { RedisPort } from '@/lib/redisPort';
 
 const contextMock = vi.hoisted(() => ({
   getRequestContext: vi.fn(),
@@ -11,6 +13,7 @@ vi.mock('@/lib/researcherContext', () => contextMock);
 const kvMock = vi.hoisted(() => ({
   deleteStudy: vi.fn(),
   getStudy: vi.fn(),
+  getStudyChecked: vi.fn(),
   isKVAvailable: vi.fn(),
   replaceStudyConfigAtomic: vi.fn(),
   setStudyLinksEnabled: vi.fn(),
@@ -29,10 +32,14 @@ const request = (body: unknown) => new Request('http://localhost/api/studies/stu
 
 beforeEach(() => {
   vi.clearAllMocks();
-  const access = { authorized: true, context: { kvClient: {} } };
+  const access = { authorized: true, context: standaloneTestContext({} as RedisPort) };
   contextMock.getRequestContext.mockResolvedValue(access);
   contextMock.getAuthorizedResearcherStudyContext.mockResolvedValue(access);
   kvMock.isKVAvailable.mockResolvedValue(true);
+  kvMock.getStudyChecked.mockImplementation(async (id: string) => {
+    const study = await kvMock.getStudy(id);
+    return study ? { status: 'found', study } : { status: 'not-found' };
+  });
 });
 
 describe('study participant-link status updates', () => {

@@ -1,7 +1,16 @@
 // Storage Service - Client-side interface for interview storage
 // Calls API routes which interact with Upstash Redis
 
-import { AggregateSynthesisResult, isPendingStudyStub, PendingStudyStub, StoredInterview, StoredStudy, StudyConfig, StudyWorkspaceItem } from '@/types';
+import {
+  AggregateSynthesisResult,
+  isPendingStudyStub,
+  PendingStudyStub,
+  StoredInterview,
+  StoredStudy,
+  StudyConfig,
+  StudyWorkspaceItem,
+  toStudyListItem,
+} from '@/types';
 import { logRequestEvent, logRequestFailure } from '@/lib/requestLog';
 import { buildParticipantOrPreviewHeaders } from '@/services/participantHeaders';
 export { isPendingStudyStub };
@@ -15,6 +24,8 @@ export type ResearcherStorageOutcome<T> =
   | { status: 'not-found'; error: string }
   | { status: 'too-large'; error: string }
   | { status: 'error'; error: string };
+
+export type ResearcherStorageFailure = Exclude<ResearcherStorageOutcome<never>, { status: 'ok' }>;
 
 export class ResearcherStorageUnavailableError extends Error {
   readonly status = 503;
@@ -201,13 +212,84 @@ export async function exportAllInterviews(): Promise<Blob | null> {
   return null;
 }
 
+const ZIP_END_OF_CENTRAL_DIRECTORY_SIGNATURE = 0x06054b50;
+const ZIP_CENTRAL_HEADER_SIGNATURE = 0x02014b50;
+const ZIP_END_OF_CENTRAL_DIRECTORY_BYTES = 22;
+const ZIP_CENTRAL_HEADER_BYTES = 46;
+
+/**
+ * True only for a finished ZIP archive as both export writers produce it
+ * (JSZip on Node, the streaming writer on Cloudflare): a comment-less
+ * end-of-central-directory record in the last 22 bytes whose central
+ * directory ends exactly there and holds exactly the recorded entries, each
+ * pointing before the directory. Both writers emit these records last, only
+ * after every entry, so a truncated download never passes.
+ */
+export async function isCompleteZipArchive(archive: Blob): Promise<boolean> {
+  const size = archive.size;
+  if (size < ZIP_END_OF_CENTRAL_DIRECTORY_BYTES) return false;
+  const end = new DataView(await archive.slice(size - ZIP_END_OF_CENTRAL_DIRECTORY_BYTES).arrayBuffer());
+  if (end.byteLength !== ZIP_END_OF_CENTRAL_DIRECTORY_BYTES) return false;
+  if (end.getUint32(0, true) !== ZIP_END_OF_CENTRAL_DIRECTORY_SIGNATURE) return false;
+  const entries = end.getUint16(10, true);
+  const directorySize = end.getUint32(12, true);
+  const directoryOffset = end.getUint32(16, true);
+  if (
+    end.getUint16(4, true) !== 0
+    || end.getUint16(6, true) !== 0
+    || end.getUint16(8, true) !== entries
+    || end.getUint16(20, true) !== 0
+    || directoryOffset + directorySize !== size - ZIP_END_OF_CENTRAL_DIRECTORY_BYTES
+  ) {
+    return false;
+  }
+  const directory = new DataView(await archive.slice(directoryOffset, directoryOffset + directorySize).arrayBuffer());
+  if (directory.byteLength !== directorySize) return false;
+  let position = 0;
+  let count = 0;
+  while (position < directorySize) {
+    if (position + ZIP_CENTRAL_HEADER_BYTES > directorySize) return false;
+    if (directory.getUint32(position, true) !== ZIP_CENTRAL_HEADER_SIGNATURE) return false;
+    if (directory.getUint32(position + 42, true) >= directoryOffset) return false;
+    position += ZIP_CENTRAL_HEADER_BYTES
+      + directory.getUint16(position + 28, true)
+      + directory.getUint16(position + 30, true)
+      + directory.getUint16(position + 32, true);
+    count += 1;
+  }
+  return position === directorySize && count === entries;
+}
+
 export async function exportAllInterviewsChecked(): Promise<ResearcherStorageOutcome<Blob>> {
   try {
     const response = await fetch('/api/interviews/export');
     if (response.ok) {
-      return { status: 'ok', value: await response.blob() };
+      // A streamed export that fails after the headers is not reliably an
+      // errored body: the Cloudflare runtime (through OpenNext) can end it as
+      // a clean 200 with the bytes written so far. The archive is therefore
+      // checked for its closing records, written only after every entry and
+      // the final snapshot check, and a truncated one is never offered.
+      const archive = await response.blob();
+      if (!(await isCompleteZipArchive(archive))) {
+        logRequestEvent({
+          event: 'route.failure',
+          route: '/api/interviews/export',
+          method: 'GET',
+          errorType: 'IncompleteExportArchive',
+        });
+        return { status: 'unavailable', error: 'The export did not complete. Try the export again.', retryable: true };
+      }
+      return { status: 'ok', value: archive };
     }
     const data = await response.json().catch(() => ({})) as { code?: string; error?: string };
+    // The interviews changed before the streamed export started (ST-08): retry.
+    if (response.status === 409 && data.code === 'EXPORT_CHANGED') {
+      return {
+        status: 'unavailable',
+        error: data.error || 'The interviews changed while the export was being prepared. Try the export again.',
+        retryable: true,
+      };
+    }
     return classifyResearcherStorageFailure(response, data);
   } catch (error) {
     if (error instanceof StudyOperationPendingError || error instanceof ResearcherStorageUnavailableError) {
@@ -231,7 +313,7 @@ export class StudyOperationPendingError extends Error {
 function classifyResearcherStorageFailure(
   response: Response,
   data: { code?: string; error?: string },
-): Exclude<ResearcherStorageOutcome<never>, { status: 'ok' }> {
+): ResearcherStorageFailure {
   if (response.status === 409 && data.code === 'STUDY_OPERATION_PENDING') {
     return { status: 'pending', error: data.error || 'A study operation is already in progress.' };
   }
@@ -268,29 +350,58 @@ function throwIfTypedStorageFailure(response: Response, data: { code?: string; e
   }
 }
 
-// Get interviews for a specific study
-export async function getStudyInterviews(studyId: string): Promise<StoredInterview[]> {
+/**
+ * The checked study readers below report every failure as a typed outcome and
+ * never as an empty value, so a caller can tell "no interviews" from "the list
+ * could not be read" and keep what it already shows (UI-CF-02/04).
+ */
+async function readResearcherResource<T, D>(
+  url: string,
+  init: RequestInit | undefined,
+  select: (data: D) => T | undefined,
+  messages: {
+    unreadable: string;
+    unavailable: string;
+    /** When set, a 403 is `not-found` with this text instead of the server's. */
+    forbiddenAsNotFound?: string;
+  },
+): Promise<ResearcherStorageOutcome<T>> {
   try {
-    const response = await fetch(`/api/interviews?studyId=${encodeURIComponent(studyId)}`);
-    const data = await response.json().catch(() => ({})) as {
-      interviews?: StoredInterview[];
-      code?: string;
-      error?: string;
-    };
-    throwIfTypedStorageFailure(response, data);
-
-    if (!response.ok) {
-      throw new Error(`API error: ${response.status}`);
+    const response = await fetch(url, init);
+    const data = await response.json().catch(() => ({})) as D & { code?: string; error?: string };
+    if (response.status === 403 && messages.forbiddenAsNotFound !== undefined) {
+      return { status: 'not-found', error: messages.forbiddenAsNotFound };
     }
-
-    return data.interviews || [];
+    if (!response.ok) return classifyResearcherStorageFailure(response, data);
+    const value = select(data);
+    if (value === undefined) return { status: 'error', error: messages.unreadable };
+    return { status: 'ok', value };
   } catch (error) {
-    if (error instanceof StudyOperationPendingError || error instanceof ResearcherStorageUnavailableError) {
-      throw error;
-    }
     logRequestFailure({ event: 'route.failure' }, error);
-    return [];
+    return { status: 'unavailable', error: messages.unavailable, retryable: true };
   }
+}
+
+/** One study's interviews; `ok` is a confirmed list (possibly empty). */
+export function readStudyInterviews(studyId: string): Promise<ResearcherStorageOutcome<StoredInterview[]>> {
+  return readResearcherResource(
+    `/api/interviews?studyId=${encodeURIComponent(studyId)}`,
+    undefined,
+    (data: { interviews?: StoredInterview[] }) => (Array.isArray(data.interviews) ? data.interviews : undefined),
+    {
+      unreadable: 'The interview list could not be read.',
+      unavailable: 'Interview storage is temporarily unavailable.',
+    },
+  );
+}
+
+/**
+ * A server from before the summary view ignores `?view=summary` and answers
+ * whole studies; those are projected here, so the list renders either way.
+ */
+function asStudyListEntry(item: StudyWorkspaceItem | StoredStudy): StudyWorkspaceItem {
+  if ('coreQuestionCount' in item || 'reconciliationPending' in item) return item;
+  return toStudyListItem(item);
 }
 
 // Get all studies (researcher only)
@@ -301,9 +412,9 @@ export async function getAllStudies(): Promise<{
   outcome: ResearcherStorageOutcome<{ studies: StudyWorkspaceItem[]; pendingStudies: PendingStudyStub[] }>;
 }> {
   try {
-    const response = await fetch('/api/studies');
+    const response = await fetch('/api/studies?view=summary');
     const data = await response.json().catch(() => ({})) as {
-      studies?: StudyWorkspaceItem[];
+      studies?: Array<StudyWorkspaceItem | StoredStudy>;
       pendingStudies?: PendingStudyStub[];
       warning?: string;
       code?: string;
@@ -319,7 +430,7 @@ export async function getAllStudies(): Promise<{
       };
     }
     const value = {
-      studies: data.studies || [],
+      studies: (data.studies || []).map(asStudyListEntry),
       pendingStudies: data.pendingStudies || [],
     };
     return {
@@ -337,50 +448,35 @@ export async function getAllStudies(): Promise<{
   }
 }
 
-// Get single study by ID
-export async function getStudy(id: string): Promise<StoredStudy | null> {
-  try {
-    const response = await fetch(`/api/studies/${id}`);
-    const data = await response.json().catch(() => ({})) as {
-      study?: StoredStudy;
-      code?: string;
-      error?: string;
-    };
-    throwIfTypedStorageFailure(response, data);
-
-    if (!response.ok) {
-      return null;
-    }
-
-    return data.study || null;
-  } catch (error) {
-    if (error instanceof StudyOperationPendingError || error instanceof ResearcherStorageUnavailableError) {
-      throw error;
-    }
-    logRequestFailure({ event: 'route.failure' }, error);
-    return null;
-  }
+/**
+ * One study; `not-found` only when the server answered 404, or 403: hosted
+ * answers 403 for another researcher's study, which the page must show
+ * exactly as a missing one (the text a 404 carries, not the server's).
+ */
+export function readStudy(id: string): Promise<ResearcherStorageOutcome<StoredStudy>> {
+  return readResearcherResource(
+    `/api/studies/${encodeURIComponent(id)}`,
+    undefined,
+    (data: { study?: StoredStudy }) => data.study ?? undefined,
+    {
+      unreadable: 'The study could not be read.',
+      unavailable: 'Study storage is temporarily unavailable.',
+      forbiddenAsNotFound: 'Study not found',
+    },
+  );
 }
 
-// Get the stored aggregate synthesis for a study, or null if none exists yet.
-export async function getStudyAggregate(id: string): Promise<AggregateSynthesisResult | null> {
-  try {
-    const response = await fetch(`/api/studies/${encodeURIComponent(id)}/aggregate`, { cache: 'no-store' });
-    const data = await response.json().catch(() => ({})) as {
-      aggregate?: AggregateSynthesisResult | null;
-      code?: string;
-      error?: string;
-    };
-    throwIfTypedStorageFailure(response, data);
-    if (!response.ok) return null;
-    return data.aggregate ?? null;
-  } catch (error) {
-    if (error instanceof StudyOperationPendingError || error instanceof ResearcherStorageUnavailableError) {
-      throw error;
-    }
-    logRequestFailure({ event: 'route.failure' }, error);
-    return null;
-  }
+/** The stored aggregate synthesis; `ok` with null means none exists yet. */
+export function readStudyAggregate(id: string): Promise<ResearcherStorageOutcome<AggregateSynthesisResult | null>> {
+  return readResearcherResource(
+    `/api/studies/${encodeURIComponent(id)}/aggregate`,
+    { cache: 'no-store' },
+    (data: { aggregate?: AggregateSynthesisResult | null }) => data.aggregate ?? null,
+    {
+      unreadable: 'The aggregate analysis could not be read.',
+      unavailable: 'Analysis storage is temporarily unavailable.',
+    },
+  );
 }
 
 // Delete study

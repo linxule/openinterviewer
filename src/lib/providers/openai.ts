@@ -3,8 +3,11 @@ import {
   AIProvider,
   buildInterviewSystemPrompt,
   cleanJSON,
+  DEFAULT_EXECUTION_POLICY,
+  type ProviderExecutionPolicy,
   type ProviderResult,
 } from '../ai';
+import { gatewayFetch, type EffectiveTransport, type ProviderEndpoint } from './endpoint';
 import {
   buildAggregateSynthesisPrompt,
   buildGreetingPrompt,
@@ -49,7 +52,9 @@ import {
   GREETING_DEADLINE_MS,
   INTERVIEW_DEADLINE_MS,
   providerResult,
+  singleAttempt,
   SYNTHESIS_DEADLINE_MS,
+  synthesisDeadlineMs,
   type AggregateSynthesisPayload,
 } from './shared';
 import { isKnownProviderModel } from '../providerRegistry';
@@ -65,12 +70,30 @@ export function getOpenAIReasoning(
 export class OpenAIProvider implements AIProvider {
   private readonly client: OpenAI;
   private readonly model: string;
+  private readonly transport: EffectiveTransport;
 
-  constructor(model?: string, apiKey?: string | null) {
+  /**
+   * `endpoint` (Cloudflare target): an explicit base URL and headers and no
+   * organization or project, so no SDK environment default is ever read.
+   * Gateway headers are made exact on every request (gatewayFetch). Without
+   * it, construction is unchanged.
+   */
+  constructor(model?: string, apiKey?: string | null, endpoint?: ProviderEndpoint) {
     const key = apiKey !== undefined ? (apiKey || undefined) : process.env.OPENAI_API_KEY;
     if (!key) throw new Error('OPENAI_API_KEY is required for OpenAI provider');
 
-    this.client = new OpenAI({ apiKey: key });
+    this.transport = endpoint?.transport ?? 'direct';
+    this.client = endpoint
+      ? new OpenAI({
+        apiKey: key,
+        organization: null,
+        project: null,
+        baseURL: endpoint.baseURL,
+        ...(Object.keys(endpoint.headers).length > 0
+          ? { defaultHeaders: { ...endpoint.headers }, fetch: gatewayFetch(endpoint.headers) }
+          : {}),
+      })
+      : new OpenAI({ apiKey: key });
     this.model = model
       || process.env.OPENAI_MODEL
       || process.env.AI_MODEL
@@ -90,6 +113,7 @@ export class OpenAIProvider implements AIProvider {
     maxOutputTokens: number;
     deadlineMs: number;
     operation: string;
+    policy?: ProviderExecutionPolicy;
   }) {
     try {
       return await withProviderDeadline(options.deadlineMs, (signal) =>
@@ -117,6 +141,8 @@ export class OpenAIProvider implements AIProvider {
         }, {
           signal,
           timeout: options.deadlineMs,
+          // OpenAI SDK 7.15.0 per-call RequestOptions.maxRetries (client.js makeRequest).
+          ...(singleAttempt(this.transport, options.policy) ? { maxRetries: 0 } : {}),
         })
       );
     } catch (error) {
@@ -170,6 +196,7 @@ export class OpenAIProvider implements AIProvider {
     studyConfig: StudyConfig,
     behaviorData: BehaviorData,
     participantProfile: ParticipantProfile | null,
+    policy: ProviderExecutionPolicy = DEFAULT_EXECUTION_POLICY,
   ): Promise<ProviderResult<SynthesisResult>> {
     const requestedModel = resolveSynthesisModel(studyConfig);
     const response = await this.createResponse({
@@ -179,11 +206,12 @@ export class OpenAIProvider implements AIProvider {
       schemaName: 'interview_synthesis',
       enableReasoning: studyConfig.enableReasoning ?? true,
       maxOutputTokens: 8192,
-      deadlineMs: SYNTHESIS_DEADLINE_MS,
+      deadlineMs: synthesisDeadlineMs(policy),
       operation: 'synthesis',
+      policy,
     });
     const value = this.parseStructured(response.output_text, 'synthesis', validateSynthesisResult);
-    return providerResult(value, execution('openai', requestedModel, response.model));
+    return providerResult(value, execution('openai', requestedModel, response.model, undefined, this.transport));
   }
 
   async synthesizeAggregate(
@@ -207,7 +235,7 @@ export class OpenAIProvider implements AIProvider {
       'aggregate-synthesis',
       validateAggregateSynthesisPayload,
     );
-    return providerResult(value, execution('openai', requestedModel, response.model));
+    return providerResult(value, execution('openai', requestedModel, response.model, undefined, this.transport));
   }
 
   async generateFollowupStudy(
@@ -226,7 +254,7 @@ export class OpenAIProvider implements AIProvider {
       operation: 'follow-up',
     });
     const value = this.parseStructured(response.output_text, 'follow-up', validateFollowupStudy);
-    return providerResult(value, execution('openai', requestedModel, response.model));
+    return providerResult(value, execution('openai', requestedModel, response.model, undefined, this.transport));
   }
 
   private parseStructured<T>(

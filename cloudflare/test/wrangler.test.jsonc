@@ -1,0 +1,37 @@
+// Test-only configuration (vitest.workers.config.mts). Synthetic values only;
+// never deployed. Jurisdiction stays empty: workerd does not implement DO
+// jurisdictions locally. The compatibility flags match production
+// (wrangler.jsonc), including global_fetch_strictly_public (VERIFY-01).
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "openinterviewer-test",
+  "main": "entry.ts",
+  "compatibility_date": "2026-09-15",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "vars": {
+    "DEPLOYMENT_TARGET": "cloudflare",
+    "DEPLOYMENT_MODE": "standalone",
+    "AI_TRANSPORT": "direct",
+    "AI_PROVIDER": "openai",
+    "CF_AI_GATEWAY_ACCOUNT_ID": "",
+    "CF_AI_GATEWAY_ID": "",
+    "APP_BASE_URL": "https://workflow.example.test",
+    "WORKSPACE_ID": "ws_00000000000000000000000000000001",
+    "WORKSPACE_JURISDICTION": "",
+    "WORKSPACE_BOOTSTRAP": "open",
+    "ANALYSIS_RECOVERY_EPOCH": "ep_00000000000000000000000000000001",
+    "RATE_LIMIT_SALT": "synthetic-rate-limit-salt-0123456789abcdef",
+    "SESSION_SECRET": "synthetic-session-secret-0123456789abcdefgh",
+    "PARTICIPANT_TOKEN_SECRET": "synthetic-participant-secret-0123456789abcd",
+    "OPENAI_API_KEY": "sk-synthetic-openai-test-key",
+    "ANTHROPIC_API_KEY": "sk-ant-synthetic-test-key",
+    "GEMINI_API_KEY": "synthetic-gemini-test-key",
+    "OPENROUTER_API_KEY": "sk-or-synthetic-test-key"
+  },
+  "durable_objects": { "bindings": [{ "name": "WORKSPACE_STORE", "class_name": "WorkspaceStore" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["WorkspaceStore"] }],
+  "queues": {
+    "producers": [{ "binding": "ANALYSIS_QUEUE", "queue": "oi-test-analysis" }],
+    "consumers": [{ "queue": "oi-test-analysis", "max_batch_size": 1, "max_concurrency": 1, "max_retries": 3, "retry_delay": 30, "dead_letter_queue": "oi-test-analysis-dlq" }]
+  }
+}

@@ -459,3 +459,40 @@ it('sends empty strings when clearing saved text and disables Preview until save
   fireEvent.click(screen.getByRole('button', { name: 'Update Study' }));
   await waitFor(() => expect(sentConfig).toMatchObject({ interviewerInstructions: '', thankYouText: '' }));
 });
+
+it.each([false, true])('a preview lookup cannot duplicate navigation or reopen an abandoned setup (unmount=%s)', async (unmount) => {
+  const config = makeStudyConfig({ id: '4e52c093-96b2-4b56-88a9-330d740a42ea' });
+  storeMock.state.studyConfig = config;
+  routerMock.push.mockClear();
+  let answer!: (response: Response) => void;
+  let studyReads = 0;
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    const path = new URL(url, 'http://localhost').pathname;
+    if (path === '/api/auth') return new Response(JSON.stringify({ authenticated: true }));
+    if (path === '/api/config/status') return new Response(JSON.stringify({
+      mode: 'hosted', aiTransport: 'direct', hasGeminiKey: true, hasAnthropicKey: true, hasOpenAiKey: true, hasOpenRouterKey: true,
+    }));
+    if (path === `/api/studies/${config.id}`) {
+      studyReads += 1;
+      if (studyReads === 1) return new Response(JSON.stringify({ study: { config, revision: 1 } }));
+      return new Promise<Response>((resolve) => { answer = resolve; });
+    }
+    return new Response('{}', { status: 404 });
+  }));
+  const page = render(<StudySetup />);
+  const preview = screen.getByRole('button', { name: 'Preview Saved Study' });
+  await waitFor(() => expect(preview).toBeEnabled());
+  fireEvent.click(preview);
+  await waitFor(() => expect(studyReads).toBe(2));
+  if (unmount) page.unmount();
+  await act(async () => { answer(new Response(JSON.stringify({ study: { config } }))); });
+  if (unmount) {
+    expect(routerMock.push).not.toHaveBeenCalled();
+    expect(storeMock.state.resetParticipant).not.toHaveBeenCalled();
+  } else {
+    expect(preview).toBeDisabled();
+    fireEvent.click(preview);
+    expect(studyReads).toBe(2);
+    expect(routerMock.push).toHaveBeenCalledExactlyOnceWith('/consent');
+  }
+});

@@ -11,7 +11,7 @@ vi.mock('next/navigation', () => ({
 
 import Export from '@/components/Export';
 
-function seedStore(viewMode: 'participant' | 'preview') {
+function seedStore(viewMode: 'participant' | 'preview' | 'researcher') {
   useStore.setState(useStore.getInitialState(), true);
   useStore.setState({
     viewMode,
@@ -25,6 +25,21 @@ beforeEach(() => {
 });
 
 describe('Export view-mode boundaries', () => {
+  it.each([
+    ['preview', 'Run preview again'],
+    ['preview', 'Return to study setup'],
+    ['researcher', 'New Participant (Same Study)'],
+    ['researcher', 'Create New Study'],
+  ] as const)('removes exports and stale counts after %s chooses %s', (mode, action) => {
+    seedStore(mode);
+    render(<Export />);
+    fireEvent.click(screen.getByRole('button', { name: action }));
+    expect(screen.getByRole('status')).toHaveTextContent('Opening the next screen');
+    expect(screen.queryByRole('group', { name: 'Session summary' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /download json/i })).not.toBeInTheDocument();
+    expect(useStore.getState().interviewHistory).toEqual([]);
+  });
+
   it('does not expose researcher export or reset controls to participants', () => {
     seedStore('participant');
     render(<Export />);

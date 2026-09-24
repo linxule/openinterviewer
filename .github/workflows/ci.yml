@@ -4,13 +4,25 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      promote_cloudflare:
+        description: Promote the checked Cloudflare artifact to the production installation (main only)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
+# Pushes and pull requests supersede older runs of the same ref. Manual
+# dispatches (the only runs that can promote to production) have their own
+# group and never cancel in progress: a push to main can no longer stop a
+# promotion mid-deploy, and a second dispatch waits instead of cancelling it.
+# (GitHub applies the cancel-in-progress value of the run that arrives, so
+# the group must differ too; tests/setup-cloudflare/ci-workflow.test.mjs.)
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
   quality:
@@ -155,6 +167,14 @@ jobs:
         run: npm run test:redis-crash
         env:
           REDIS_URL: ''
+      - name: WorkspaceStore contract on real Redis
+        run: npm run test:contract:redis
+        env:
+          REDIS_URL: ''
+      - name: Old-storage inventory tool (OPS-04, metadata only)
+        run: npm run test:inventory:redis
+        env:
+          REDIS_URL: ''
 
   adversarial:
     runs-on: ubuntu-latest
@@ -170,3 +190,130 @@ jobs:
         run: npm run test:adversarial
         env:
           REDIS_URL: ''
+
+  cloudflare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.19.0
+          cache: npm
+      - run: npm ci
+      - name: Installer and operator tooling
+        run: npm run test:setup:cloudflare
+      - name: Validate Cloudflare deployment contract
+        run: npm run setup:check -- --target cloudflare --mode standalone --production
+        env:
+          DEPLOYMENT_TARGET: cloudflare
+          DEPLOYMENT_MODE: standalone
+          AI_TRANSPORT: direct
+          AI_PROVIDER: openai
+          APP_BASE_URL: https://cloudflare-build.example.org
+          ADMIN_PASSWORD: cloudflare-build-admin-password
+          SESSION_SECRET: cloudflare-build-session-secret-1234567890
+          PARTICIPANT_TOKEN_SECRET: cloudflare-build-participant-secret-1234567890
+          RATE_LIMIT_SALT: cloudflare-build-rate-limit-salt-1234567890
+          OPENAI_API_KEY: cloudflare-build-openai-key
+          WORKSPACE_ID: ws_0123456789abcdef0123456789abcdef
+          WORKSPACE_JURISDICTION: ''
+          ANALYSIS_RECOVERY_EPOCH: ep_0123456789abcdef0123456789abcdef
+      - name: Validate Cloudflare AI Gateway deployment contract
+        run: npm run setup:check -- --target cloudflare --mode standalone --production
+        env:
+          DEPLOYMENT_TARGET: cloudflare
+          DEPLOYMENT_MODE: standalone
+          AI_TRANSPORT: cloudflare-gateway
+          AI_PROVIDER: openai
+          APP_BASE_URL: https://cloudflare-build.example.org
+          ADMIN_PASSWORD: cloudflare-build-admin-password
+          SESSION_SECRET: cloudflare-build-session-secret-1234567890
+          PARTICIPANT_TOKEN_SECRET: cloudflare-build-participant-secret-1234567890
+          RATE_LIMIT_SALT: cloudflare-build-rate-limit-salt-1234567890
+          GEMINI_API_KEY: cloudflare-build-gemini-key
+          ANTHROPIC_API_KEY: cloudflare-build-anthropic-key
+          OPENAI_API_KEY: cloudflare-build-openai-key
+          OPENROUTER_API_KEY: cloudflare-build-openrouter-key
+          CF_AI_GATEWAY_ACCOUNT_ID: '0123456789abcdef0123456789abcdef'
+          CF_AI_GATEWAY_ID: oi-cloudflare-build
+          CF_AI_GATEWAY_TOKEN: cloudflare-build-ai-gateway-run-token-1234567890
+          WORKSPACE_ID: ws_0123456789abcdef0123456789abcdef
+          WORKSPACE_JURISDICTION: ''
+          ANALYSIS_RECOVERY_EPOCH: ep_0123456789abcdef0123456789abcdef
+      - name: Workers runtime (real local SQLite, alarms, Queue)
+        run: npm run test:cloudflare
+      - name: Worker-only import boundary
+        run: node scripts/cloudflare/check-import-boundary.mjs
+      - name: Build Cloudflare artifact
+        run: npm run build:cloudflare
+      - name: Production-artifact runtime tests
+        run: npm run test:cloudflare:artifact
+      - name: Production-object restart lane (process kill and restart)
+        run: npm run test:cloudflare:restart
+      - run: npx playwright install --with-deps chromium
+      - name: Production-artifact browser journeys
+        run: npm run test:e2e:cloudflare
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report-cloudflare
+          path: playwright-report-cloudflare
+          if-no-files-found: ignore
+
+  # SETUP-05: the single production deployment owner. Runs only on a manual
+  # dispatch from main, after every required lane passed for this exact commit,
+  # with the production environment's protection rules and secrets. It builds
+  # the artifact once, runs the complete local release check on it (which
+  # writes the receipt deploy requires), then deploys that same artifact.
+  # Workers Builds push deployments must stay disconnected for this Worker.
+  # vars.CLOUDFLARE_INSTALL_CONFIG is the installer-generated installation
+  # config after bootstrap-clear (WORKSPACE_BOOTSTRAP empty). deploy.mjs is
+  # never given --bootstrap here, so a bootstrap config is refused before the
+  # release check and again before upload. The job does not read or update the
+  # installer receipt; readiness is verified from the config's APP_BASE_URL.
+  promote-cloudflare:
+    if: github.event_name == 'workflow_dispatch' && inputs.promote_cloudflare && github.ref == 'refs/heads/main'
+    needs: [quality, browser, redis-crash, adversarial, cloudflare]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: cloudflare-production
+    concurrency:
+      group: cloudflare-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.19.0
+          cache: npm
+      - name: Write installation configuration (non-secret)
+        run: printf '%s' "$CLOUDFLARE_INSTALL_CONFIG" > "$RUNNER_TEMP/install.wrangler.json"
+        env:
+          CLOUDFLARE_INSTALL_CONFIG: ${{ vars.CLOUDFLARE_INSTALL_CONFIG }}
+      - name: Refuse a bootstrap or incomplete installation configuration
+        run: node scripts/cloudflare/deploy.mjs --install "$RUNNER_TEMP/install.wrangler.json" --check-config
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Build and run the full release check on one artifact
+        run: npm run check:cloudflare
+        env:
+          REDIS_URL: ''
+      - name: Deploy the checked artifact
+        run: npm run deploy:cloudflare -- --install "$RUNNER_TEMP/install.wrangler.json" --confirm
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      # Same readiness rules as setup:cloudflare verify, without a receipt.
+      # Exit 3 means deployed but held in a maintenance state (for example
+      # drained before the deploy, RUNBOOK OPS-03): reported, not failed.
+      - name: Verify readiness of the promoted installation
+        run: |
+          set +e
+          node scripts/cloudflare/setup.mjs verify --config "$RUNNER_TEMP/install.wrangler.json" --wait-seconds 180
+          status=$?
+          if [ "$status" -eq 3 ]; then
+            echo "::warning::Deployed, but the workspace is held in a maintenance state. Reopen it (RUNBOOK.md) and run verify again."
+            exit 0
+          fi
+          exit "$status"

@@ -12,6 +12,12 @@ vi.mock('@/services/storageService', async (importOriginal) => {
   return { ...actual, getInterview: storageMock.getInterview };
 });
 
+// This suite is the Node deployment: its readiness advertises synchronous
+// analysis. The durable protocol is covered in InterviewDetail.durableAnalysis.
+vi.mock('@/services/analysisExecution', () => ({
+  loadAnalysisExecution: async () => 'synchronous',
+}));
+
 import { BreadcrumbProvider } from '@/components/shell/breadcrumb';
 import InterviewDetail from '@/components/InterviewDetail';
 
@@ -194,5 +200,47 @@ describe('InterviewDetail — four-way analysis state switch', () => {
 
     await waitFor(() => expect(storageMock.getInterview).toHaveBeenCalledTimes(2));
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('UI-CF-05: a completed analysis refreshes in place and is announced once, politely', async () => {
+    storageMock.getInterview
+      .mockResolvedValueOnce(baseInterview)
+      .mockResolvedValueOnce({
+        ...baseInterview,
+        synthesis: {
+          statedPreferences: [], revealedPreferences: [], themes: [],
+          contradictions: [], keyInsights: [], bottomLine: 'Now analyzed.',
+        },
+        analysis: { status: 'complete', attempts: 1, lastAttemptAt: 1 },
+      });
+    renderInterviewDetail();
+    await openAnalysisTab();
+    const region = screen.getByRole('status');
+    expect(region).toHaveAttribute('aria-live', 'polite');
+    expect(region).toHaveTextContent('');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run analysis' }));
+    expect(await screen.findByText('Now analyzed.')).toBeInTheDocument();
+    await waitFor(() => expect(region).toHaveTextContent('Analysis complete.'));
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
+  });
+
+  it('UI-CF-02: a refresh that cannot be read keeps the transcript and the last confirmed state', async () => {
+    storageMock.getInterview
+      .mockResolvedValueOnce(baseInterview)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(baseInterview);
+    renderInterviewDetail();
+    await openAnalysisTab();
+    fireEvent.click(screen.getByRole('button', { name: 'Run analysis' }));
+
+    expect(await screen.findByText('Status not checked')).toBeInTheDocument();
+    expect(screen.getByText('Analysis pending')).toBeInTheDocument();
+    expect(screen.queryByText('Interview Not Found')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Check status' }));
+    await waitFor(() => expect(screen.queryByText('Status not checked')).not.toBeInTheDocument());
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('tab', { name: 'Transcript' }));
+    expect(screen.getByText('Hello')).toBeInTheDocument();
   });
 });

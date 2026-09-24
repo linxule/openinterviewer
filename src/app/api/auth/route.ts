@@ -1,12 +1,23 @@
 // POST /api/auth - Researcher login
 // Uses signed JWT session tokens for security
 // In hosted mode, password login is disabled (use OAuth instead)
+//
+// Cloudflare target (gap F5; Node behavior unchanged): the body is bounded to
+// 1 KiB while it streams in, ADMIN_PASSWORD comes from the Worker invocation
+// env, and a durable failed-attempt budget in the WorkspaceStore object (10
+// per client per 15 minutes, 200 across all clients per hour) admits the
+// attempt atomically, counting it, before the password is compared. A correct
+// password refunds the attempt, so only failures stay counted; concurrent
+// guesses cannot outrun the count. Limited → 429 with Retry-After; budget
+// storage unavailable → 503 (fail closed). Sign-in is deliberately not gated
+// on deployment readiness or maintenance state, so an operator can sign in to
+// a held, frozen or recovering workspace.
 
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { timingSafeEqual } from 'crypto';
+import { createHash, timingSafeEqual } from 'crypto';
 import {
   createSessionToken,
   verifySessionToken,
@@ -15,9 +26,139 @@ import {
 } from '@/lib/auth';
 import { isHostedMode } from '@/lib/mode';
 import { createRequestId, logRequestEvent, logRequestFailure } from '@/lib/requestLog';
+import { isCloudflareTarget, resolveCapabilities } from '@/lib/runtime/capabilities';
+import { currentWorkerInvocation } from '@/lib/runtime/workerInvocation';
+import { createDurableLoginBudget } from '@/lib/storage/durableObject';
+import { durableWorkspaceSettings } from '@/lib/storage/resolve';
+import type { LoginAttemptBudgetPort } from '@/lib/storage/types';
+import { MAX_CLOUDFLARE_LOGIN_BODY_BYTES } from '@/lib/loginBody';
+
+function noStoreJson(body: Record<string, unknown>, status: number, headers: Record<string, string> = {}) {
+  return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store', ...headers } });
+}
+
+function signInUnavailable(reason: 'unavailable' | 'binding-missing' | 'not-configured') {
+  logRequestEvent({ event: 'workspace.store', route: '/api/auth', method: 'POST', operation: 'login', status: 503, reason });
+  return noStoreJson(
+    { error: 'Sign-in is temporarily unavailable. Please try again later.', retryable: true },
+    503,
+  );
+}
+
+type LoginBody = { ok: true; value: Record<string, unknown> } | { ok: false; status: 400 | 413 };
+
+/**
+ * Reads at most MAX_CLOUDFLARE_LOGIN_BODY_BYTES and cancels the stream as soon
+ * as it exceeds them, so an unauthenticated upload without Content-Length is
+ * never buffered whole.
+ */
+async function readLoginBody(request: Request): Promise<LoginBody> {
+  const declaredLength = Number(request.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_CLOUDFLARE_LOGIN_BODY_BYTES) {
+    return { ok: false, status: 413 };
+  }
+  if (!request.body) return { ok: false, status: 400 };
+  const reader = request.body.getReader();
+  const bytes = new Uint8Array(MAX_CLOUDFLARE_LOGIN_BODY_BYTES);
+  let length = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (length + value.byteLength > MAX_CLOUDFLARE_LOGIN_BODY_BYTES) {
+        reader.cancel().catch(() => undefined);
+        return { ok: false, status: 413 };
+      }
+      bytes.set(value, length);
+      length += value.byteLength;
+    }
+  } catch {
+    return { ok: false, status: 400 };
+  }
+  try {
+    const value: unknown = JSON.parse(new TextDecoder().decode(bytes.subarray(0, length)));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return { ok: false, status: 400 };
+    return { ok: true, value: value as Record<string, unknown> };
+  } catch {
+    return { ok: false, status: 400 };
+  }
+}
+
+/** Equal-length digests, so neither content nor length leaks through timing. */
+function passwordMatches(presented: string, configured: string): boolean {
+  const digest = (value: string) => createHash('sha256').update(value, 'utf8').digest();
+  return timingSafeEqual(digest(presented), digest(configured));
+}
+
+async function setSessionCookie(): Promise<void> {
+  // Create signed session token (no researcherId in standalone mode)
+  const sessionToken = await createSessionToken();
+  const cookieStore = await cookies();
+  cookieStore.set(SESSION_COOKIE_NAME, sessionToken, getSessionCookieOptions());
+}
+
+async function cloudflareLogin(request: Request) {
+  const capabilities = resolveCapabilities();
+  if (!capabilities.ok) return signInUnavailable('not-configured');
+
+  const parsed = await readLoginBody(request);
+  if (!parsed.ok) {
+    return parsed.status === 413
+      ? noStoreJson({ error: 'Request body is too large' }, 413)
+      : noStoreJson({ error: 'Password is required' }, 400);
+  }
+  const password = parsed.value.password;
+  if (!password || typeof password !== 'string') {
+    return noStoreJson({ error: 'Password is required' }, 400);
+  }
+
+  const invocation = currentWorkerInvocation();
+  const adminPassword = invocation?.env.ADMIN_PASSWORD;
+  if (typeof adminPassword !== 'string' || adminPassword.length === 0) {
+    // SECURITY: Never allow access without ADMIN_PASSWORD configured
+    logRequestEvent({ event: 'route.failure', route: '/api/auth', method: 'POST', status: 500, reason: 'not-configured' });
+    return noStoreJson(
+      { error: 'Authentication not configured. Set ADMIN_PASSWORD environment variable.' },
+      500,
+    );
+  }
+
+  let budget: LoginAttemptBudgetPort;
+  try {
+    budget = createDurableLoginBudget(durableWorkspaceSettings());
+  } catch {
+    return signInUnavailable('binding-missing');
+  }
+  const identity = invocation?.identity ?? null;
+
+  // Counts this attempt before the comparison, atomically with the limit check.
+  const admission = await budget.admitLoginAttempt({ identity, now: Date.now() });
+  if (admission.status === 'limited') {
+    logRequestEvent({ event: 'route.failure', route: '/api/auth', method: 'POST', operation: 'login', status: 429 });
+    return noStoreJson(
+      { error: 'Too many sign-in attempts. Please wait before trying again.', retryable: true },
+      429,
+      { 'Retry-After': String(admission.retryAfterSeconds) },
+    );
+  }
+  if (admission.status !== 'admitted') return signInUnavailable('unavailable');
+
+  // A wrong password keeps its admitted attempt counted: no further call.
+  if (!passwordMatches(password, adminPassword)) return noStoreJson({ error: 'Invalid password' }, 401);
+
+  // A lost refund leaves the attempt counted (fail closed); sign-in still succeeds.
+  const refund = await budget.refundLoginAttempt({ identity, now: Date.now() });
+  if (refund.status !== 'refunded') {
+    logRequestEvent({ event: 'workspace.store', route: '/api/auth', method: 'POST', operation: 'login.refund', status: 200, reason: 'unavailable' });
+  }
+  await setSessionCookie();
+  return noStoreJson({ success: true }, 200);
+}
 
 export async function POST(request: Request) {
   try {
+    if (isCloudflareTarget()) return await cloudflareLogin(request);
+
     // In hosted mode, password login is disabled — use OAuth
     if (isHostedMode()) {
       return NextResponse.json(

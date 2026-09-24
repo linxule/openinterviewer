@@ -17,37 +17,113 @@ import {
   getParticipantSessionCookieName,
   PARTICIPANT_SESSION_HEADER_NAME,
 } from '@/lib/auth';
-import { getStudyChecked } from '@/lib/kv';
 import { isHostedMode } from '@/lib/mode';
 import { consumePlatformRateLimit } from '@/lib/platformDb';
-import { asStudyAuthorityFromLink, createParticipantLinkRecord, getParticipantLinkByCode } from '@/lib/participantLinks';
+import {
+  asStudyAuthorityFromLink,
+  createParticipantLinkRecord,
+  getParticipantLinkByCode,
+  type ParticipantLinkLoadResult,
+} from '@/lib/participantLinks';
 import { getAppBaseUrl } from '@/lib/appBaseUrl';
 import { missingProviderCredential } from '@/lib/providerAvailability';
 import { validateStudyConfig } from '@/lib/studyConfigValidation';
-import { resolveAITransport } from '@/lib/aiTransport';
+import type { AITransport } from '@/lib/aiTransport';
+import { activeAITransport } from '@/lib/runtime/capabilities';
+import { currentProviderTransport } from '@/lib/transportDisclosure';
 import { createRequestId, logRequestFailure } from '@/lib/requestLog';
+import { readBoundedJsonObject } from '@/lib/requestBody';
+import { getKVClient } from '@/lib/kvClient';
+import { PARTICIPANT_EXCHANGE_HELD_COPY, researcherHeldCopy, workspaceHeldResponse } from '@/lib/canonicalStudy';
+import { deploymentNotReadyResponse } from '@/lib/runtime/readinessGate';
+import { isProductionStrict } from '@/lib/runtime/target';
+import { resolveWorkspaceStore } from '@/lib/storage/resolve';
+import type { LinkLoadOutcome, WorkspaceStorePort } from '@/lib/storage/types';
 
 const STUDY_ID_PATTERN = /^[a-zA-Z0-9-]+$/;
+const ROUTE = '/api/generate-link';
 
-const getExpirationTime = (option?: LinkExpirationOption): number | null => {
+// Legacy researcher clients (StudyDetail) still post the complete saved study
+// config although only its id is read. The cap admits every valid 128 KiB
+// study config plus its wrapper, the same bound as the greeting route.
+const GENERATE_LINK_REQUEST_MAX_BYTES = 140_000;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const getExpirationTime = (option: LinkExpirationOption | undefined, now: number): number | null => {
   switch (option) {
-    case '7days': return Date.now() + 7 * 24 * 60 * 60 * 1000;
-    case '30days': return Date.now() + 30 * 24 * 60 * 60 * 1000;
-    case '90days': return Date.now() + 90 * 24 * 60 * 60 * 1000;
+    case '7days': return now + 7 * DAY_MS;
+    case '30days': return now + 30 * DAY_MS;
+    case '90days': return now + 90 * DAY_MS;
     case 'never': return null;
-    default: return Date.now() + 30 * 24 * 60 * 60 * 1000;
+    default: return now + 30 * DAY_MS;
   }
 };
 
+// The participant URL origin is the configured APP_BASE_URL wherever the
+// deployment is production-strict (Node production, every Cloudflare Worker);
+// the request host is used only for local development.
 function publicBaseUrl(request: Request): string {
-  if (process.env.APP_BASE_URL || process.env.NODE_ENV === 'production') return getAppBaseUrl();
+  if (process.env.APP_BASE_URL || isProductionStrict()) return getAppBaseUrl();
   return new URL(request.url).origin;
 }
 
-export async function POST(request: Request) {
+// Link results that carry a study-authority denial (hosted platform gate) or a
+// storage failure use the shared authority presenter, exactly as before the
+// workspace store existed; other store outcomes fall through.
+function linkAuthorityDenialResponse(
+  result: { status: string; phase?: 'reserving' | 'pending' | 'resolving' | 'publishing' },
+  audience: 'researcher' | 'participant',
+  extra: Record<string, unknown> = {},
+  headers?: HeadersInit,
+): NextResponse | null {
+  const authority = asStudyAuthorityFromLink(result);
+  if (!authority) return null;
+  const presented = presentStudyAuthority(authority, audience);
+  if (presented.ok) return null;
+  const researcherDetail = audience === 'researcher'
+    ? {
+      ...(presented.code ? { code: presented.code } : {}),
+      ...(presented.reason ? { reason: presented.reason } : {}),
+    }
+    : {};
+  return NextResponse.json(
+    { ...extra, error: presented.error, retryable: presented.retryable, ...researcherDetail },
+    { status: presented.statusCode, headers },
+  );
+}
+
+// Participant exchange responses set (or refuse) a session cookie: never cache.
+const NO_STORE = { 'Cache-Control': 'no-store' } as const;
+
+// Standalone link exchange resolves the opaque code through the workspace
+// store (Redis on Node, the durable workspace on Cloudflare). Hosted links
+// keep their platform-gated exchange. A store that cannot be constructed is
+// the same retryable storage failure the Redis read reported before.
+async function exchangeLink(code: string): Promise<ParticipantLinkLoadResult | LinkLoadOutcome> {
+  if (isHostedMode()) return getParticipantLinkByCode(code);
+  let store: WorkspaceStorePort;
   try {
-    const body = await request.json();
-    const { studyConfig } = body as { studyConfig?: Partial<StudyConfig> };
+    store = resolveWorkspaceStore({ redisClient: () => getKVClient(), researcherId: null });
+  } catch (error) {
+    logRequestFailure({ event: 'workspace.store', route: ROUTE, method: 'GET', reason: 'unavailable' }, error);
+    return { status: 'unavailable' };
+  }
+  return store.resolveParticipantLinkByCode({ code, now: Date.now(), purpose: 'exchange' });
+}
+
+export async function POST(request: Request) {
+  const notReady = deploymentNotReadyResponse(ROUTE);
+  if (notReady) return notReady;
+  try {
+    const parsedBody = await readBoundedJsonObject(request, GENERATE_LINK_REQUEST_MAX_BYTES);
+    if (!parsedBody.ok) {
+      return NextResponse.json(
+        { error: parsedBody.status === 413 ? 'Request body is too large' : 'Invalid request body' },
+        { status: parsedBody.status }
+      );
+    }
+    const { studyConfig } = parsedBody.value as { studyConfig?: Partial<StudyConfig> };
 
     // Accept only the study id from legacy studyConfig input
     const studyId = typeof studyConfig?.id === 'string' ? studyConfig.id : '';
@@ -74,7 +150,7 @@ export async function POST(request: Request) {
     }
 
     // Mint links only for canonically saved studies
-    const loaded = await getStudyChecked(studyId, gated.context.kvClient);
+    const loaded = await gated.context.store.getStudy(studyId);
     const mapped = mapStudyLoad(
       loaded,
       'Study not found. Save the study before generating a participant link.',
@@ -132,27 +208,48 @@ export async function POST(request: Request) {
       }
     }
 
-    const created = await createParticipantLinkRecord({
-      studyId,
-      studyRevision: mapped.study.revision ?? 1,
-      researcherId: isHostedMode() ? (gated.researcherId ?? null) : null,
-      expiresAt: getExpirationTime(savedConfig.linkExpiration),
-      standaloneClient: gated.context.kvClient,
-    });
-    const createdAuthority = asStudyAuthorityFromLink(created);
-    if (createdAuthority) {
-      const presented = presentStudyAuthority(createdAuthority, 'researcher');
-      if (!presented.ok) {
-        return NextResponse.json(
-          {
-            error: presented.error,
-            retryable: presented.retryable,
-            ...(presented.code ? { code: presented.code } : {}),
-            ...(presented.reason ? { reason: presented.reason } : {}),
-          },
-          { status: presented.statusCode },
-        );
-      }
+    const now = Date.now();
+    const studyRevision = mapped.study.revision ?? 1;
+    const expiresAt = getExpirationTime(savedConfig.linkExpiration, now);
+    // Hosted links live in the platform database behind its authority gate
+    // (unchanged saga path). Standalone links go through the workspace store,
+    // which on the durable backend re-checks the study, its revision and link
+    // status at the write.
+    const created = isHostedMode()
+      ? await createParticipantLinkRecord({
+        studyId,
+        studyRevision,
+        researcherId: gated.researcherId ?? null,
+        expiresAt,
+        standaloneClient: gated.context.kvClient,
+      })
+      : await gated.context.store.createParticipantLink({ studyId, studyRevision, expiresAt, now });
+    const linkDenied = linkAuthorityDenialResponse(created, 'researcher');
+    if (linkDenied) return linkDenied;
+    if (created.status === 'held') {
+      return workspaceHeldResponse({
+        route: ROUTE,
+        reason: created.reason,
+        ...researcherHeldCopy('Participant links cannot be created'),
+      });
+    }
+    if (created.status === 'study-not-found') {
+      return NextResponse.json(
+        { error: 'Study not found. Save the study before generating a participant link.' },
+        { status: 404 }
+      );
+    }
+    if (created.status === 'links-disabled') {
+      return NextResponse.json(
+        { error: 'Participant links are disabled for this study.' },
+        { status: 409 }
+      );
+    }
+    if (created.status === 'revision-stale') {
+      return NextResponse.json(
+        { error: 'This study changed while the link was being created. Reload the study and try again.' },
+        { status: 409 }
+      );
     }
     if (created.status === 'quota-exceeded') {
       return NextResponse.json(
@@ -190,6 +287,8 @@ export async function POST(request: Request) {
 // retained for link compatibility; the value is not a JWT or browser bearer.
 // Strips sensitive fields (researcherId) from response
 export async function GET(request: Request) {
+  const notReady = deploymentNotReadyResponse(ROUTE);
+  if (notReady) return notReady;
   try {
     const { searchParams } = new URL(request.url);
     const code = searchParams.get('token');
@@ -197,26 +296,34 @@ export async function GET(request: Request) {
     if (!code) {
       return NextResponse.json(
         { error: 'Missing token parameter' },
-        { status: 400 }
+        { status: 400, headers: NO_STORE }
       );
     }
 
-    const loaded = await getParticipantLinkByCode(code);
-    const exchangeAuthority = asStudyAuthorityFromLink(loaded);
-    if (exchangeAuthority) {
-      const presented = presentStudyAuthority(exchangeAuthority, 'participant');
-      if (!presented.ok) {
-        return NextResponse.json(
-          { valid: false, error: presented.error, retryable: presented.retryable },
-          { status: presented.statusCode },
-        );
-      }
+    const loaded = await exchangeLink(code);
+    const linkDenied = linkAuthorityDenialResponse(loaded, 'participant', { valid: false }, NO_STORE);
+    if (linkDenied) return linkDenied;
+    // A draining, frozen or recovering workspace starts no new collection
+    // (OPS-01); other holds need operator action.
+    if (loaded.status === 'held') {
+      return workspaceHeldResponse({
+        route: ROUTE,
+        reason: loaded.reason,
+        ...PARTICIPANT_EXCHANGE_HELD_COPY,
+        body: { valid: false },
+      });
     }
     if (loaded.status === 'unavailable') {
-      return NextResponse.json({ valid: false, error: 'Unable to verify participant link.', retryable: true }, { status: 503 });
+      return NextResponse.json(
+        { valid: false, error: 'Unable to verify participant link.', retryable: true },
+        { status: 503, headers: NO_STORE },
+      );
     }
     if (loaded.status !== 'found') {
-      return NextResponse.json({ valid: false, error: 'This participant link is invalid, expired, or revoked.' }, { status: 403 });
+      return NextResponse.json(
+        { valid: false, error: 'This participant link is invalid, expired, or revoked.' },
+        { status: 403, headers: NO_STORE },
+      );
     }
 
     const sessionHandle = crypto.randomUUID();
@@ -229,15 +336,41 @@ export async function GET(request: Request) {
       },
     });
     const live = await getParticipantRequestContext(liveRequest);
+    // A hold that began after the exchange refuses like the exchange's own.
+    if (live.holdReason !== undefined) {
+      return workspaceHeldResponse({
+        route: ROUTE,
+        reason: live.holdReason,
+        ...PARTICIPANT_EXCHANGE_HELD_COPY,
+        body: { valid: false },
+      });
+    }
     if (!live.valid) {
       return NextResponse.json(
         { valid: false, error: live.error || 'Participant link is no longer active', retryable: live.retryable },
-        { status: live.statusCode ?? 403 }
+        { status: live.statusCode ?? 403, headers: NO_STORE }
       );
     }
 
     if (!live.study) {
-      return NextResponse.json({ valid: false, error: 'Study is no longer active.' }, { status: 403 });
+      return NextResponse.json({ valid: false, error: 'Study is no longer active.' }, { status: 403, headers: NO_STORE });
+    }
+
+    // The transport the consent page discloses. On Cloudflare it is the one a
+    // request for this study's provider uses on the current route (D14 seam);
+    // an invalid route starts no session rather than disclosing a guess.
+    let aiTransport: AITransport;
+    const current = currentProviderTransport(live.context ?? {}, live.study.config.aiProvider);
+    if (current.applies) {
+      if (!current.ok) {
+        return NextResponse.json(
+          { valid: false, error: 'This study is not available right now.', retryable: false },
+          { status: 503, headers: NO_STORE },
+        );
+      }
+      aiTransport = current.transport;
+    } else {
+      aiTransport = activeAITransport();
     }
 
     // Prompts are built server-side from the canonical study; the researcher's
@@ -248,9 +381,9 @@ export async function GET(request: Request) {
       data: {
         studyConfig: participantStudyConfig,
         sessionHandle,
-        aiTransport: isHostedMode() ? 'direct' : resolveAITransport(),
+        aiTransport,
       },
-    });
+    }, { headers: NO_STORE });
     const remainingSeconds = loaded.link.expiresAt
       ? Math.min(4 * 60 * 60, Math.max(1, Math.floor((loaded.link.expiresAt - Date.now()) / 1000)))
       : undefined;
@@ -270,7 +403,7 @@ export async function GET(request: Request) {
     }, error);
     return NextResponse.json(
       { valid: false, error: 'Invalid or expired token' },
-      { status: 400 }
+      { status: 400, headers: NO_STORE }
     );
   }
 }

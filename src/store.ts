@@ -84,7 +84,11 @@ interface ResearchState {
   currentStep: AppStep;
   previousStep: AppStep | null;
   viewMode: ViewMode;
-  aiTransport: AITransport;
+  /**
+   * The transport the consent page discloses. `null` means it could not be
+   * established (an unknown persisted value): consent fails closed.
+   */
+  aiTransport: AITransport | null;
 
   // Study Configuration (Researcher-defined)
   studyConfig: StudyConfig | null;
@@ -157,6 +161,19 @@ interface ResearchState {
   reset: () => void;
   resetParticipant: () => void;
 }
+
+/**
+ * v6 keeps the three known transports. Before v6 an unknown value meant
+ * direct (only direct and Vercel gateway existed); from v6 an unknown value
+ * is `null`, so the consent page refuses rather than disclose a guess.
+ */
+export function migratedTransport(value: unknown, version: number): AITransport | null {
+  if (value === 'direct' || value === 'gateway' || value === 'cloudflare-gateway') return value;
+  return version < 6 ? 'direct' : null;
+}
+
+/** The sessionStorage key of the persisted store (src/lib/participantLinkHandover.ts reads it back). */
+export const RESEARCH_STORE_KEY = 'research-tool-storage';
 
 export const useStore = create<ResearchState>()(
   persist(
@@ -358,16 +375,16 @@ export const useStore = create<ResearchState>()(
       }))
     }),
     {
-      name: 'research-tool-storage',
+      name: RESEARCH_STORE_KEY,
       storage: createJSONStorage(() => sessionStorage),
-      version: 5,
-      migrate: (persistedState) => {
+      version: 6,
+      migrate: (persistedState, version) => {
         if (!persistedState || typeof persistedState !== 'object') {
           return persistedState as ResearchState;
         }
         const cleanState = { ...(persistedState as Record<string, unknown>) };
         delete cleanState.participantToken;
-        if (cleanState.aiTransport !== 'gateway') cleanState.aiTransport = 'direct';
+        cleanState.aiTransport = migratedTransport(cleanState.aiTransport, version);
         return cleanState as unknown as ResearchState;
       },
       partialize: (state) => ({

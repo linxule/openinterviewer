@@ -3,8 +3,11 @@ import {
   AIProvider,
   buildInterviewSystemPrompt,
   cleanJSON,
+  DEFAULT_EXECUTION_POLICY,
+  type ProviderExecutionPolicy,
   type ProviderResult,
 } from '../ai';
+import { gatewayFetch, type EffectiveTransport, type ProviderEndpoint } from './endpoint';
 import {
   buildAggregateSynthesisPrompt,
   buildGreetingPrompt,
@@ -48,11 +51,66 @@ import {
   GREETING_DEADLINE_MS,
   INTERVIEW_DEADLINE_MS,
   providerResult,
+  singleAttempt,
   SYNTHESIS_DEADLINE_MS,
+  synthesisDeadlineMs,
   type AggregateSynthesisPayload,
 } from './shared';
 import { isKnownProviderModel } from '../providerRegistry';
 import { resolveSynthesisModel } from './synthesisModel';
+
+// Keywords Claude structured outputs refuses with 400 invalid_request_error
+// (observed 24 September 2026, claude-sonnet-5: "For 'integer' type, property
+// 'minimum' is not supported", and the same for 'maxItems' on arrays).
+// The final validators enforce every bound removed here.
+const CLAUDE_UNSUPPORTED_KEYWORDS = new Set([
+  'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf', 'maxItems',
+]);
+const claudeSchemas = new WeakMap<object, ProviderJsonSchema>();
+
+/**
+ * The provider-neutral schema in the subset Claude accepts: unsupported
+ * bounds removed, and a nullable enum (`type: [T, 'null']` with `enum`, which
+ * Claude refuses: "Enum value … does not match declared type") rewritten as
+ * `anyOf` of the enum and `null`.
+ */
+export function claudeOutputSchema(schema: ProviderJsonSchema): ProviderJsonSchema {
+  const cached = claudeSchemas.get(schema);
+  if (cached) return cached;
+  const converted = convertForClaude(schema) as ProviderJsonSchema;
+  claudeSchemas.set(schema, converted);
+  return converted;
+}
+
+function convertForClaude(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(convertForClaude);
+  if (!node || typeof node !== 'object') return node;
+  const source = node as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (CLAUDE_UNSUPPORTED_KEYWORDS.has(key)) continue;
+    if (key === 'properties' && value && typeof value === 'object') {
+      out.properties = Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(([name, child]) => [name, convertForClaude(child)]),
+      );
+    } else {
+      out[key] = convertForClaude(value);
+    }
+  }
+  const type = out.type;
+  if (Array.isArray(out.enum) && Array.isArray(type) && type.includes('null')) {
+    const nonNull = type.filter((entry) => entry !== 'null');
+    const { type: _type, enum: values, ...rest } = out;
+    return {
+      ...rest,
+      anyOf: [
+        { type: nonNull.length === 1 ? nonNull[0] : nonNull, enum: (values as unknown[]).filter((value) => value !== null) },
+        { type: 'null' },
+      ],
+    };
+  }
+  return out;
+}
 
 function supportsAdaptiveThinking(model: string): boolean {
   return /^claude-(?:sonnet|opus|fable|mythos)-5(?:$|-)/.test(model)
@@ -71,12 +129,29 @@ export function getClaudeThinkingConfig(
 export class ClaudeProvider implements AIProvider {
   private readonly client: Anthropic;
   private readonly model: string;
+  private readonly transport: EffectiveTransport;
 
-  constructor(model?: string, apiKey?: string | null) {
+  /**
+   * `endpoint` (Cloudflare target): an explicit base URL and headers, and no
+   * bearer token, so no SDK environment default is ever read. Gateway
+   * headers are made exact on every request (gatewayFetch). Without it,
+   * construction is unchanged.
+   */
+  constructor(model?: string, apiKey?: string | null, endpoint?: ProviderEndpoint) {
     const key = apiKey !== undefined ? (apiKey || undefined) : process.env.ANTHROPIC_API_KEY;
     if (!key) throw new Error('ANTHROPIC_API_KEY is required for Claude provider');
 
-    this.client = new Anthropic({ apiKey: key });
+    this.transport = endpoint?.transport ?? 'direct';
+    this.client = endpoint
+      ? new Anthropic({
+        apiKey: key,
+        authToken: null,
+        baseURL: endpoint.baseURL,
+        ...(Object.keys(endpoint.headers).length > 0
+          ? { defaultHeaders: { ...endpoint.headers }, fetch: gatewayFetch(endpoint.headers) }
+          : {}),
+      })
+      : new Anthropic({ apiKey: key });
     this.model = model
       || process.env.CLAUDE_MODEL
       || process.env.AI_MODEL
@@ -95,6 +170,7 @@ export class ClaudeProvider implements AIProvider {
     maxTokens: number;
     deadlineMs: number;
     operation: string;
+    policy?: ProviderExecutionPolicy;
   }) {
     const thinking = getClaudeThinkingConfig(options.model, options.enableReasoning);
     try {
@@ -108,12 +184,14 @@ export class ClaudeProvider implements AIProvider {
           output_config: {
             format: {
               type: 'json_schema',
-              schema: options.schema,
+              schema: claudeOutputSchema(options.schema),
             },
           },
         }, {
           signal,
           timeout: options.deadlineMs,
+          // Anthropic SDK 0.125.0 per-call RequestOptions.maxRetries (client.js makeRequest).
+          ...(singleAttempt(this.transport, options.policy) ? { maxRetries: 0 } : {}),
         })
       );
     } catch (error) {
@@ -158,6 +236,7 @@ export class ClaudeProvider implements AIProvider {
         }, {
           signal,
           timeout: GREETING_DEADLINE_MS,
+          ...(singleAttempt(this.transport) ? { maxRetries: 0 } : {}),
         })
       );
     } catch (error) {
@@ -175,6 +254,7 @@ export class ClaudeProvider implements AIProvider {
     studyConfig: StudyConfig,
     behaviorData: BehaviorData,
     participantProfile: ParticipantProfile | null,
+    policy: ProviderExecutionPolicy = DEFAULT_EXECUTION_POLICY,
   ): Promise<ProviderResult<SynthesisResult>> {
     const requestedModel = resolveSynthesisModel(studyConfig);
     const response = await this.createStructured({
@@ -186,11 +266,12 @@ export class ClaudeProvider implements AIProvider {
       schema: synthesisResponseSchema,
       enableReasoning: studyConfig.enableReasoning ?? true,
       maxTokens: 8192,
-      deadlineMs: SYNTHESIS_DEADLINE_MS,
+      deadlineMs: synthesisDeadlineMs(policy),
       operation: 'synthesis',
+      policy,
     });
     const value = this.parseStructured(response, 'synthesis', validateSynthesisResult);
-    return providerResult(value, execution('claude', requestedModel, response.model));
+    return providerResult(value, execution('claude', requestedModel, response.model, undefined, this.transport));
   }
 
   async synthesizeAggregate(
@@ -216,7 +297,7 @@ export class ClaudeProvider implements AIProvider {
       'aggregate-synthesis',
       validateAggregateSynthesisPayload,
     );
-    return providerResult(value, execution('claude', requestedModel, response.model));
+    return providerResult(value, execution('claude', requestedModel, response.model, undefined, this.transport));
   }
 
   async generateFollowupStudy(
@@ -234,7 +315,7 @@ export class ClaudeProvider implements AIProvider {
       operation: 'follow-up',
     });
     const value = this.parseStructured(response, 'follow-up', validateFollowupStudy);
-    return providerResult(value, execution('claude', requestedModel, response.model));
+    return providerResult(value, execution('claude', requestedModel, response.model, undefined, this.transport));
   }
 
   private toMessages(history: InterviewMessage[]): Anthropic.MessageParam[] {

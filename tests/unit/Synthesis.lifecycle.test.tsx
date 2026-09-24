@@ -67,6 +67,23 @@ beforeEach(() => {
 });
 
 describe('Synthesis signed submission lifecycle', () => {
+  it.each(['participant', 'preview'] as const)('locks %s retries while Back to interview is navigating', async (viewMode) => {
+    useStore.setState({ viewMode });
+    services.saveCompletedInterview.mockResolvedValue({ success: false, id: '' });
+    services.synthesizeInterview.mockRejectedValue(new Error('synthetic provider failure'));
+    render(<Synthesis />);
+    const retry = await screen.findByRole('button', { name: viewMode === 'participant' ? 'Retry save' : 'Retry Analysis' });
+    const calls = { save: services.saveCompletedInterview.mock.calls.length, analysis: services.synthesizeInterview.mock.calls.length };
+
+    fireEvent.click(screen.getByRole('button', { name: /Back to interview/i }));
+    fireEvent.click(retry);
+    expect(screen.getByRole('status')).toHaveTextContent('Returning to the interview');
+    expect(screen.queryByRole('button', { name: /Retry/i })).not.toBeInTheDocument();
+    expect(services.saveCompletedInterview).toHaveBeenCalledTimes(calls.save);
+    expect(services.synthesizeInterview).toHaveBeenCalledTimes(calls.analysis);
+    expect(router.push).toHaveBeenCalledWith('/interview');
+  });
+
   it('saves the same null profile, transcript and behavior with no synthesis call', async () => {
     render(<Synthesis />);
     await screen.findByText('Thank you');

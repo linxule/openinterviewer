@@ -1,10 +1,11 @@
 // Typed AI provider failures and deadline enforcement
 // Provider calls never masquerade as success: routes map these failures to
 // explicit non-200 responses (502 unavailable, 504 timeout) without exposing
-// provider error bodies, credentials, or request data in responses.
+// provider error bodies, credentials, or request data in responses. The HTTP
+// mapping lives in providerErrorResponse.ts so this module stays free of
+// Next imports (the Cloudflare Queue consumer bundles it).
 
-import { NextResponse } from 'next/server';
-import { logRequestFailure, wasErrorLogged } from './requestLog';
+import { logRequestFailure } from './requestLog';
 
 // Failure classification (see providerErrorResponse for the wire mapping):
 // - 'config': provider rejected the request itself (auth, invalid model, bad
@@ -41,8 +42,47 @@ export class ProviderTimeoutError extends Error {
   }
 }
 
+const MAX_GATEWAY_BODY_CHARS = 4_096;
+
+function gatewayErrorName(candidate: unknown): boolean {
+  if (typeof candidate === 'string') {
+    // A raw error body (OpenRouter keeps it as text). Parsed only to read its
+    // `name`; never logged. Bounded so a large provider body is not parsed.
+    if (candidate.length > MAX_GATEWAY_BODY_CHARS || !candidate.trimStart().startsWith('{')) return false;
+    try {
+      return gatewayErrorName(JSON.parse(candidate));
+    } catch {
+      return false;
+    }
+  }
+  return typeof candidate === 'object'
+    && candidate !== null
+    && !Array.isArray(candidate)
+    && (candidate as { name?: unknown }).name === 'AiGatewayError';
+}
+
+/**
+ * Whether an SDK error carries a Cloudflare AI Gateway error body
+ * (`{"name":"AiGatewayError","internalCode":…}`): the gateway answered
+ * itself, before or instead of the provider (D12). Reads only the body's
+ * `name`, never the message or any other member. Log-only: classification is
+ * unchanged.
+ */
+export function isAiGatewayError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const record = err as { error?: unknown; body?: unknown; cause?: unknown };
+  if (gatewayErrorName(record.error) || gatewayErrorName(record.body)) return true;
+  const cause = record.cause;
+  if (cause && typeof cause === 'object' && cause !== err) {
+    const nested = cause as { error?: unknown; body?: unknown };
+    return gatewayErrorName(nested.error) || gatewayErrorName(nested.body);
+  }
+  return false;
+}
+
 // Redacted provider failure logging: never log SDK error bodies, response
-// payloads, prompts, keys, or user content — only the error type and status.
+// payloads, prompts, keys, or user content — only the error type, status and,
+// for an error AI Gateway answered itself, `origin: 'gateway'`.
 export function logProviderFailure(provider: string, operation: string, err: unknown): void {
   const safe: {
     event: 'provider.failure';
@@ -50,6 +90,7 @@ export function logProviderFailure(provider: string, operation: string, err: unk
     operation: string;
     errorType: string;
     status?: number;
+    origin?: 'gateway';
   } = {
     event: 'provider.failure',
     provider,
@@ -61,6 +102,7 @@ export function logProviderFailure(provider: string, operation: string, err: unk
   } else if (err && typeof err === 'object' && 'statusCode' in err && typeof err.statusCode === 'number') {
     safe.status = err.statusCode;
   }
+  if (isAiGatewayError(err)) safe.origin = 'gateway';
   logRequestFailure(safe, err);
 }
 
@@ -159,50 +201,4 @@ export async function withProviderDeadline<T>(
   } finally {
     clearTimeout(timer!);
   }
-}
-
-// Map a provider failure to a safe, honest JSON error response.
-// Messages are generic on purpose: they never echo provider details.
-export function providerErrorResponse(err: unknown): NextResponse {
-  if (err instanceof ProviderTimeoutError) {
-    return NextResponse.json(
-      { error: 'The AI provider took too long to respond. Please try again.', retryable: true },
-      { status: 504 }
-    );
-  }
-  if (err instanceof ProviderFailure) {
-    switch (err.kind) {
-      case 'config':
-        return NextResponse.json(
-          {
-            error: 'The AI provider rejected the request. Please check the provider configuration and try again.',
-            retryable: false,
-          },
-          { status: 502 }
-        );
-      case 'rate-limited':
-        return NextResponse.json(
-          { error: 'The AI provider is receiving too many requests right now. Please try again shortly.', retryable: true },
-          { status: 503 }
-        );
-      case 'invalid-response':
-        return NextResponse.json(
-          { error: 'The AI provider returned an invalid response. Please try again.', retryable: true },
-          { status: 502 }
-        );
-      case 'unavailable':
-        return NextResponse.json(
-          { error: 'The AI provider is temporarily unavailable. Please try again.', retryable: true },
-          { status: 502 }
-        );
-    }
-  }
-  if (!wasErrorLogged(err)) {
-    logRequestFailure({
-      event: 'route.failure',
-      route: 'provider',
-      errorType: err instanceof Error ? err.name : 'UnknownError',
-    }, err);
-  }
-  return NextResponse.json({ error: 'Failed to generate response' }, { status: 500 });
 }

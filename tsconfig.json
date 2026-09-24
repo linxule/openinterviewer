@@ -36,6 +36,10 @@
     ".next/dev/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "cloudflare",
+    "tests/workers",
+    ".open-next",
+    ".wrangler"
   ]
 }

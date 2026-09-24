@@ -2,6 +2,8 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeStoredInterview, makeStoredStudy } from '../fixtures/models';
+import { standaloneTestContext } from '../helpers/workspaceStoreFixture';
+import type { RedisPort } from '@/lib/redisPort';
 // Fixture models standing in for the study's researcher-configured model.
 const GEMINI_SYNTHESIS_MODEL = 'gemini-3.7-flash';
 const OPENROUTER_SYNTHESIS_MODEL = 'openai/gpt-5.6-terra';
@@ -79,13 +81,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   contextMock.getRequestContext.mockResolvedValue({
     authorized: true,
-    context: {
-      kvClient: {},
-      geminiApiKey: 'test-key',
-      anthropicApiKey: null,
-      openaiApiKey: null,
-      openrouterApiKey: null,
-    },
+    context: standaloneTestContext({} as RedisPort, { geminiApiKey: 'test-key' }),
     researcherId: 'researcher-a',
   });
   contextMock.getAuthorizedResearcherStudyContext.mockImplementation(

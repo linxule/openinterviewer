@@ -6,11 +6,12 @@ import { isPendingStudyStub, StoredInterview, StudyWorkspaceItem } from '@/types
 import {
   readAllInterviews,
   exportAllInterviews,
-  getStudyInterviews,
+  readStudyInterviews,
   getAllStudies,
   reconcileStudyOperations,
   ResearcherStorageUnavailableError,
   StudyOperationPendingError,
+  type ResearcherStorageFailure,
 } from '@/services/storageService';
 import { Button, Coordinate, Field, Measure, Notice, Rule } from '@/components/ui';
 import { shortInterviewId } from '@/lib/interviewId';
@@ -25,6 +26,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [warning, setWarning] = useState<string | null>(null);
+  const [listFailure, setListFailure] = useState<string | null>(null);
   const [operationPending, setOperationPending] = useState(false);
   const [isReconciling, setIsReconciling] = useState(false);
 
@@ -65,8 +67,18 @@ export default function Dashboard() {
     }
   };
 
+  // A failed read lists nothing and says why; "No Interviews Yet" is only for
+  // a list the server confirmed empty (UI-CF-02).
+  const applyListFailure = (failure: ResearcherStorageFailure) => {
+    setInterviews([]);
+    if (failure.status === 'pending') setOperationPending(true);
+    else if (failure.status === 'unavailable') setWarning(failure.error);
+    else setListFailure(failure.error);
+  };
+
   const loadInterviews = async (studyId: string | null) => {
     setLoading(true);
+    setListFailure(null);
     try {
       const selected = studies.find((study) => study.id === studyId);
       if (selected && isPendingStudyStub(selected)) {
@@ -75,7 +87,9 @@ export default function Dashboard() {
         return;
       }
       if (studyId) {
-        setInterviews(await getStudyInterviews(studyId));
+        const outcome = await readStudyInterviews(studyId);
+        if (outcome.status === 'ok') setInterviews(outcome.value);
+        else applyListFailure(outcome);
         return;
       }
       const outcome = await readAllInterviews();
@@ -84,22 +98,7 @@ export default function Dashboard() {
         if (outcome.value.pendingStudies.length > 0) setOperationPending(true);
         return;
       }
-      if (outcome.status === 'pending') {
-        setOperationPending(true);
-        setInterviews([]);
-        return;
-      }
-      setInterviews([]);
-      setWarning(outcome.error);
-    } catch (error) {
-      if (error instanceof StudyOperationPendingError) {
-        setOperationPending(true);
-        setInterviews([]);
-      } else if (error instanceof ResearcherStorageUnavailableError) {
-        setWarning(error.message);
-      } else {
-        console.error('Error loading interviews:', error);
-      }
+      applyListFailure(outcome);
     } finally {
       setLoading(false);
     }
@@ -254,6 +253,11 @@ export default function Dashboard() {
               <p className="mt-2 text-[15px] text-ink-700">
                 Interview export and collection reads will resume after reconciliation.
               </p>
+            </>
+          ) : listFailure ? (
+            <>
+              <h2 className="font-sans text-[18px] font-semibold text-ink-900">Interviews could not be loaded</h2>
+              <p className="mt-2 text-[15px] text-ink-700">{listFailure}</p>
             </>
           ) : warning ? (
             <>

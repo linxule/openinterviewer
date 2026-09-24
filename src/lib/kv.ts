@@ -1031,6 +1031,68 @@ export async function saveStudy(study: StoredStudy, client?: RedisPort): Promise
   }
 }
 
+/**
+ * Sample-workspace collision check: whether any of these study keys holds a
+ * value, decodable or not. Seeding never overwrites a present key.
+ */
+export async function studyKeysExist(
+  studyIds: string[],
+  client: RedisPort,
+): Promise<'present' | 'absent' | 'unavailable'> {
+  if (studyIds.length === 0) return 'absent';
+  try {
+    const count = await client.exists(...studyIds.map(id => `${STUDY_PREFIX}${id}`));
+    return count > 0 ? 'present' : 'absent';
+  } catch (error) {
+    logRequestFailure({ event: 'kv.unavailable' }, error);
+    return 'unavailable';
+  }
+}
+
+export type SampleWorkspaceClearResult =
+  | { status: 'cleared'; studiesDeleted: number; interviewsDeleted: number }
+  | { status: 'unavailable' }
+  | { status: 'ambiguous' };
+
+/**
+ * The sample-workspace clear sequence, formerly inline in DELETE
+ * /api/demo/seed, plus removal of each sample study's aggregate so a re-seed
+ * cannot resurrect it. Per study: DEL body, SREM all-studies, DEL aggregate.
+ * Per interview: DEL body, SREM from every sample study's index, SREM
+ * all-interviews. Not atomic: a failure after any write is ambiguous. Counts
+ * are the sample set sizes, as the route has always reported.
+ */
+export async function clearSampleWorkspaceRecords(
+  input: { studyIds: string[]; interviewIds: string[] },
+  client: RedisPort,
+): Promise<SampleWorkspaceClearResult> {
+  let wrote = false;
+  try {
+    for (const studyId of input.studyIds) {
+      await client.del(`${STUDY_PREFIX}${studyId}`);
+      wrote = true;
+      await client.srem(ALL_STUDIES_KEY, studyId);
+      await client.del(`${STUDY_AGGREGATE_PREFIX}${studyId}`);
+    }
+    for (const interviewId of input.interviewIds) {
+      await client.del(`${INTERVIEW_PREFIX}${interviewId}`);
+      wrote = true;
+      for (const studyId of input.studyIds) {
+        await client.srem(`${STUDY_INDEX_PREFIX}${studyId}`, interviewId);
+      }
+      await client.srem(ALL_INTERVIEWS_KEY, interviewId);
+    }
+    return {
+      status: 'cleared',
+      studiesDeleted: input.studyIds.length,
+      interviewsDeleted: input.interviewIds.length,
+    };
+  } catch (error) {
+    logRequestFailure({ event: 'kv.unavailable' }, error);
+    return { status: wrote || classifyCommitError(error) === 'ambiguous' ? 'ambiguous' : 'unavailable' };
+  }
+}
+
 export type CreateStudyResult =
   | 'created'
   | 'conflict'

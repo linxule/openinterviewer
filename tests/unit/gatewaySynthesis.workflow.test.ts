@@ -81,6 +81,9 @@ import { POST as save } from '@/app/api/interviews/save/route';
 import { POST as aggregate } from '@/app/api/synthesis/aggregate/route';
 import { POST as followup } from '@/app/api/studies/[id]/generate-followup/route';
 import { runInterviewAnalysis } from '@/lib/interviewAnalysis';
+import { createRedisWorkspaceStore } from '@/lib/storage/redis';
+import type { WorkspaceStorePort } from '@/lib/storage/types';
+import type { RedisPort } from '@/lib/redisPort';
 
 function fakeKvClient() {
   const store = new Map<string, unknown>();
@@ -123,14 +126,23 @@ function request(path: string, body: unknown) {
   });
 }
 
-let sharedContext: { kvClient: ReturnType<typeof fakeKvClient>; researcherId: undefined };
+let sharedContext: {
+  kvClient: ReturnType<typeof fakeKvClient>;
+  store: WorkspaceStorePort;
+  researcherId: undefined;
+};
 
 beforeEach(() => {
   vi.stubEnv('DEPLOYMENT_MODE', 'standalone');
   vi.stubEnv('AI_TRANSPORT', 'gateway');
   vi.stubEnv('VERCEL', '1');
   vi.stubEnv('PARTICIPANT_TOKEN_SECRET', 'gateway-workflow-fixture-secret-1234567890');
-  const context = { kvClient: fakeKvClient(), researcherId: undefined };
+  const kvClient = fakeKvClient();
+  const context = {
+    kvClient,
+    store: createRedisWorkspaceStore(kvClient as unknown as RedisPort, { researcherId: null }),
+    researcherId: undefined,
+  };
   sharedContext = context;
   contextMock.resolveParticipantOrPreviewContext.mockResolvedValue({
     valid: true, context, studyId, isAdmin: false,

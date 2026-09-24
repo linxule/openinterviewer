@@ -1,11 +1,12 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useStore } from '@/store';
 import { PROVIDER_OPTIONS } from '@/lib/providerRegistry';
 import { buildParticipantOrPreviewHeaders } from '@/services/participantHeaders';
 import { Button, Disclosure, Label, Verbatim } from '@/components/ui';
+import NavigationStatus from '@/components/NavigationStatus';
 
 const Consent: React.FC = () => {
   const router = useRouter();
@@ -19,10 +20,24 @@ const Consent: React.FC = () => {
     aiTransport,
   } = useStore();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Set once consent is recorded: the button stays unavailable until /interview
+  // replaces this page, so a slow route change cannot record consent twice.
+  const [isOpening, setIsOpening] = useState(false);
+  const [isReturning, setIsReturning] = useState(false);
   const [consentError, setConsentError] = useState<string | null>(null);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+
+  // Only a known transport is disclosed; anything else fails closed.
+  const disclosedTransport = aiTransport === 'direct' || aiTransport === 'gateway' || aiTransport === 'cloudflare-gateway'
+    ? aiTransport
+    : null;
 
   const handleConsent = async () => {
-    if (!studyConfig || isSubmitting) return;
+    if (!studyConfig || !disclosedTransport || isSubmitting || isOpening || isReturning) return;
 
     setIsSubmitting(true);
     setConsentError(null);
@@ -33,12 +48,15 @@ const Consent: React.FC = () => {
           researcherPreview: viewMode === 'preview',
           participantSessionHandle,
         }),
-        body: JSON.stringify({ studyId: studyConfig.id }),
+        // The transport this page disclosed; the server records consent only
+        // when it is still the one the study uses (Cloudflare, D9).
+        body: JSON.stringify({ studyId: studyConfig.id, disclosedTransport }),
       });
       const data = await response.json().catch(() => ({})) as {
         acceptedAt?: number;
         error?: string;
       };
+      if (!mounted.current) return;
       if (!response.ok || !Number.isSafeInteger(data.acceptedAt) || (data.acceptedAt ?? 0) <= 0) {
         throw new Error(data.error || 'Consent could not be recorded. Please try again.');
       }
@@ -47,19 +65,25 @@ const Consent: React.FC = () => {
       // participant API routes independently verify the server-side record.
       giveConsent(data.acceptedAt!);
       initializeProfile(studyConfig.profileSchema);
+      setIsOpening(true);
       setStep('interview');
       router.push('/interview');
     } catch (error) {
+      if (!mounted.current) return;
       setConsentError(error instanceof Error ? error.message : 'Consent could not be recorded. Please try again.');
     } finally {
-      setIsSubmitting(false);
+      if (mounted.current) setIsSubmitting(false);
     }
   };
 
   const handleBack = () => {
+    if (isSubmitting || isOpening || isReturning) return;
+    setIsReturning(true);
     setStep('setup');
     router.push('/setup');
   };
+
+  if (isReturning) return <NavigationStatus>Returning to study setup…</NavigationStatus>;
 
   if (!studyConfig) {
     return (
@@ -71,10 +95,18 @@ const Consent: React.FC = () => {
 
   const selectedProviderId = studyConfig.aiProvider;
   const selectedProviderName = PROVIDER_OPTIONS.find(provider => provider.id === selectedProviderId)?.label;
-  const providerConfigurationReady = Boolean(selectedProviderId && selectedProviderName && studyConfig.aiModel);
-  const providerDisclosure = !providerConfigurationReady
+  const providerConfigurationReady = Boolean(
+    selectedProviderId && selectedProviderName && studyConfig.aiModel && disclosedTransport,
+  );
+  const providerDisclosure = !disclosedTransport
+    ? 'This page could not confirm how your responses are sent. Reopen the study link before continuing.'
+    : !providerConfigurationReady
     ? 'The researcher must review and save this study\'s AI provider settings before interviews can begin.'
-    : aiTransport === 'gateway'
+    : disclosedTransport === 'cloudflare-gateway'
+    ? selectedProviderId === 'openrouter'
+      ? 'Your responses are sent through Cloudflare AI Gateway, a relay operated by Cloudflare (which also hosts this study), to OpenRouter and a ZDR-compatible upstream inference provider selected for that model. The relay is configured not to log or cache your responses. Cloudflare may process them outside the EU.'
+      : `Your responses are sent to ${selectedProviderName} through Cloudflare AI Gateway, a relay operated by Cloudflare, which also hosts this study. The relay is configured not to log or cache your responses and does not send them to any other provider. Cloudflare may process them outside the EU.`
+    : disclosedTransport === 'gateway'
     ? `Your responses are sent through Vercel AI Gateway to ${selectedProviderName}. Routing is pinned to that provider and model fallback is disabled.`
     : selectedProviderId === 'openrouter'
     ? 'Your responses are sent to OpenRouter and a ZDR-compatible upstream inference provider selected for that model.'
@@ -136,7 +168,9 @@ const Consent: React.FC = () => {
 
         {!providerConfigurationReady && (
           <Disclosure role="alert">
-            This interview is unavailable until the researcher reviews and saves its AI provider settings.
+            {disclosedTransport
+              ? 'This interview is unavailable until the researcher reviews and saves its AI provider settings.'
+              : 'This interview is unavailable until you reopen the study link.'}
           </Disclosure>
         )}
 
@@ -148,7 +182,7 @@ const Consent: React.FC = () => {
 
         <div className="space-y-3">
           {viewMode !== 'participant' && (
-            <Button type="button" variant="quiet" onClick={handleBack} disabled={isSubmitting} className="w-full">
+            <Button type="button" variant="quiet" onClick={handleBack} disabled={isSubmitting || isOpening} className="w-full">
               Back
             </Button>
           )}
@@ -156,11 +190,11 @@ const Consent: React.FC = () => {
             type="button"
             variant="primary"
             onClick={handleConsent}
-            disabled={isSubmitting || !providerConfigurationReady}
-            aria-busy={isSubmitting}
+            disabled={isSubmitting || isOpening || !providerConfigurationReady}
+            aria-busy={isSubmitting || isOpening}
             className="w-full"
           >
-            {isSubmitting ? 'Recording consent…' : 'I consent — begin the interview'}
+            {isOpening ? 'Opening the interview…' : isSubmitting ? 'Recording consent…' : 'I consent — begin the interview'}
           </Button>
         </div>
       </div>

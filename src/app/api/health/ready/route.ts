@@ -1,12 +1,15 @@
 // Public deployment readiness. It exposes check booleans only and never
 // configuration values, provider identifiers, URLs, prefixes, or secrets.
+// It never writes, dispatches work or calls a provider.
 
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
-import { getPublicConfig } from '@/lib/hostedConfig';
-import { getKVClient, getPlatformClient } from '@/lib/kvClient';
+import { getPublicConfig, workerBindingPresence, workspaceReadinessError } from '@/lib/hostedConfig';
+import { createFencedRedisPort, getKVClient, getPlatformClient } from '@/lib/kvClient';
 import { ensurePlatformSchemaLineage } from '@/lib/platformSchema';
+import { isCloudflareTarget } from '@/lib/runtime/capabilities';
+import { resolveWorkspaceStore } from '@/lib/storage/resolve';
 
 const READINESS_TIMEOUT_MS = 2_000;
 
@@ -39,9 +42,42 @@ async function schemaLineageReady(): Promise<boolean> {
   }
 }
 
+async function workspaceStoreReady(): Promise<boolean> {
+  try {
+    const store = resolveWorkspaceStore({ redisClient: createFencedRedisPort, researcherId: null });
+    return workspaceReadinessError(await withTimeout(store.readiness())) === null;
+  } catch {
+    return false;
+  }
+}
+
+function respond(body: Record<string, unknown>, ready: boolean) {
+  return NextResponse.json(body, {
+    status: ready ? 200 : 503,
+    headers: { 'Cache-Control': 'no-store' },
+  });
+}
+
 export async function GET() {
   const config = getPublicConfig();
   const configurationReady = config.ready;
+
+  if (isCloudflareTarget()) {
+    // Binding presence only: it does not prove the Queue is being consumed.
+    const analysisQueue = workerBindingPresence().analysisQueue;
+    const workspaceStore = configurationReady ? await workspaceStoreReady() : false;
+    const ready = Boolean(configurationReady && workspaceStore && analysisQueue);
+    return respond(
+      {
+        ready,
+        mode: config.mode,
+        target: 'cloudflare',
+        checks: { configuration: configurationReady, workspaceStore, analysisQueue },
+      },
+      ready,
+    );
+  }
+
   const platformReady = config.mode && configurationReady
     ? await databaseReady(config.mode)
     : false;
@@ -50,7 +86,7 @@ export async function GET() {
     : config.mode !== 'hosted';
   const ready = Boolean(configurationReady && platformReady && schemaReady);
 
-  return NextResponse.json(
+  return respond(
     {
       ready,
       mode: config.mode,
@@ -60,9 +96,6 @@ export async function GET() {
         ...(config.mode === 'hosted' ? { schemaLineage: schemaReady } : {}),
       },
     },
-    {
-      status: ready ? 200 : 503,
-      headers: { 'Cache-Control': 'no-store' },
-    }
+    ready,
   );
 }

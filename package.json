@@ -1,6 +1,6 @@
 {
   "name": "openinterviewer",
-  "version": "3.0.0",
+  "version": "4.0.0",
   "description": "Open-source platform for adaptive, AI-assisted qualitative interviews.",
   "private": true,
   "license": "MIT",
@@ -20,7 +20,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint . --max-warnings=0",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p cloudflare/tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:unit": "vitest run",
@@ -29,7 +29,22 @@
     "test:redis-crash": "vitest run --config vitest.integration.config.mts tests/integration/redis.crashCuts.test.ts",
     "test:adversarial": "vitest run --config vitest.integration.config.mts tests/unit/hosted.sharedByos.adversarial.test.ts tests/integration/hosted.sharedByos.realredis.test.ts",
     "setup:check": "node scripts/check-setup.mjs",
-    "check": "node scripts/check-sync-artifacts.mjs && npm run lint && npm run typecheck && npm run test"
+    "check": "node scripts/check-sync-artifacts.mjs && npm run lint && npm run typecheck && npm run test",
+    "test:cloudflare": "vitest run --config vitest.workers.config.mts",
+    "test:contract:redis": "vitest run --config vitest.integration.config.mts tests/integration/workspaceStore.redis.contract.test.ts",
+    "test:inventory:redis": "vitest run --config vitest.integration.config.mts tests/integration/inventoryRedis.test.ts",
+    "typegen:cloudflare": "wrangler types --strict-vars=false cloudflare/worker-configuration.d.ts",
+    "build:cloudflare": "node scripts/cloudflare/build.mjs",
+    "test:cloudflare:artifact": "vitest run --config vitest.artifact.config.mts",
+    "test:cloudflare:restart": "vitest run --config vitest.restart.config.mts",
+    "setup:cloudflare": "node scripts/cloudflare/setup.mjs",
+    "deploy:cloudflare": "node scripts/cloudflare/deploy.mjs",
+    "preview:cloudflare": "node scripts/cloudflare/preview.mjs",
+    "operator:cloudflare": "node scripts/cloudflare/operator.mjs",
+    "inventory:redis": "node scripts/cloudflare/inventory-redis.mjs",
+    "test:setup:cloudflare": "node --test tests/setup-cloudflare/*.test.mjs",
+    "test:e2e:cloudflare": "playwright test --config playwright.cloudflare.config.ts",
+    "check:cloudflare": "node scripts/cloudflare/check.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
@@ -50,6 +65,8 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.2.3",
+    "@opennextjs/cloudflare": "1.20.6",
     "@playwright/test": "^1.63.0",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
@@ -66,6 +83,7 @@
     "redis": "^6.2.1",
     "tailwindcss": "^3.4.0",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "wrangler": "4.136.3"
   }
 }

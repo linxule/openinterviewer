@@ -13,6 +13,8 @@ const kvMock = vi.hoisted(() => ({
 vi.mock('@/lib/kv', () => kvMock);
 
 import { GET } from '@/app/api/studies/[id]/aggregate/route';
+import { standaloneTestContext } from '../helpers/workspaceStoreFixture';
+import type { RedisPort } from '@/lib/redisPort';
 
 const STUDY_ID = '11111111-1111-4111-8111-111111111111';
 const routeParams = { params: Promise.resolve({ id: STUDY_ID }) };
@@ -26,7 +28,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   contextMock.getAuthorizedResearcherStudyContext.mockResolvedValue({
     authorized: true,
-    context: { kvClient },
+    context: standaloneTestContext(kvClient as unknown as RedisPort),
   });
 });
 

@@ -6,9 +6,9 @@ import {
   ProviderTimeoutError,
   classifyProviderError,
   providerCallError,
-  providerErrorResponse,
   withProviderDeadline,
 } from '@/lib/providerErrors';
+import { providerErrorResponse } from '@/lib/providerErrorResponse';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -199,5 +199,45 @@ describe('providerErrorResponse', () => {
       const body = await providerErrorResponse(err).json();
       expect(JSON.stringify(body)).not.toContain('internal detail');
     }
+  });
+});
+
+describe('D12: Cloudflare AI Gateway error origin (log-only)', () => {
+  const gatewayBody = (httpCode: number) => ({ success: false, name: 'AiGatewayError', httpCode, internalCode: 2009, message: 'synthetic gateway detail' });
+
+  function loggedFailure(err: unknown): Record<string, unknown> {
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((line: unknown) => { lines.push(String(line)); });
+    try {
+      providerCallError('claude', 'synthesis', err);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(lines.join('\n')).not.toContain('synthetic gateway detail');
+    return JSON.parse(lines[0]);
+  }
+
+  it.each([
+    [401, 'config'],
+    [400, 'config'],
+    [429, 'rate-limited'],
+    [502, 'unavailable'],
+    [524, 'unavailable'],
+  ] as const)('keeps the classification of a gateway %i (%s) and tags only its origin', (status, kind) => {
+    const err = Object.assign(new Error('synthetic gateway detail'), { status, error: gatewayBody(status) });
+    expect(classifyProviderError('claude', 'synthesis', err)).toMatchObject({ kind });
+    expect(loggedFailure(err)).toMatchObject({ event: 'provider.failure', status, origin: 'gateway' });
+  });
+
+  it('reads a gateway body kept as text (OpenRouter) without logging it', () => {
+    const err = Object.assign(new Error('x'), { statusCode: 401, body: JSON.stringify(gatewayBody(401)) });
+    expect(loggedFailure(err)).toMatchObject({ status: 401, origin: 'gateway' });
+  });
+
+  it('does not tag a provider error, or a body that merely mentions the name elsewhere', () => {
+    const provider = Object.assign(new Error('x'), { status: 401, error: { type: 'authentication_error', message: 'AiGatewayError' } });
+    expect(loggedFailure(provider)).not.toHaveProperty('origin');
+    const oversized = Object.assign(new Error('x'), { statusCode: 500, body: `{"name":"AiGatewayError","pad":"${'x'.repeat(5000)}"}` });
+    expect(loggedFailure(oversized)).not.toHaveProperty('origin');
   });
 });

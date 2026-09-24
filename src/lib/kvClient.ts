@@ -2,11 +2,63 @@
 // Provides RedisPort clients for standalone mode (env var singleton), hosted
 // mode (per-researcher dynamic clients), and the platform DB. Every adapter
 // implements RedisPort; never expose @upstash/redis `Redis` to callers.
+//
+// Cloudflare fence (RT-01): inside a Worker runtime, or whenever the
+// deployment target is `cloudflare`, every factory refuses before any client
+// is constructed. This is a fence, not a fallback.
 
 import { Redis as UpstashRedis } from '@upstash/redis';
 import { createHash } from 'crypto';
 import { isStandaloneMode } from './mode';
 import type { RedisEvalArg, RedisPort } from './redisPort';
+import { isWorkerRuntime } from './runtime/workerInvocation';
+
+export class RedisAccessFencedError extends Error {
+  constructor() {
+    super('Redis access is not available on the Cloudflare runtime');
+    this.name = 'RedisAccessFencedError';
+  }
+}
+
+export function isRedisAccessFenced(): boolean {
+  return isWorkerRuntime() || process.env.DEPLOYMENT_TARGET === 'cloudflare';
+}
+
+function assertRedisAccessAllowed(): void {
+  if (isRedisAccessFenced()) throw new RedisAccessFencedError();
+}
+
+/**
+ * A RedisPort whose every method rejects with RedisAccessFencedError without
+ * I/O. Used where a context shape still carries a Redis port on Cloudflare.
+ */
+export function createFencedRedisPort(): RedisPort {
+  const refuse = (): Promise<never> => Promise.reject(new RedisAccessFencedError());
+  return {
+    get: refuse,
+    set: refuse,
+    del: refuse,
+    exists: refuse,
+    expire: refuse,
+    eval: refuse,
+    hget: refuse,
+    hset: refuse,
+    hdel: refuse,
+    hgetall: refuse,
+    hexists: refuse,
+    hlen: refuse,
+    sadd: refuse,
+    srem: refuse,
+    scard: refuse,
+    smembers: refuse,
+    sismember: refuse,
+    zadd: refuse,
+    zrem: refuse,
+    zscore: refuse,
+    zcard: refuse,
+    ping: refuse,
+  };
+}
 
 // Only allow Upstash Redis URLs to prevent SSRF against internal services
 export function isValidUpstashUrl(url: string): boolean {
@@ -263,6 +315,7 @@ function getStandaloneClient(): RedisPort {
 let platformClient: UpstashRedisAdapter | null = null;
 
 export function getPlatformClient(): RedisPort {
+  assertRedisAccessAllowed();
   if (!platformClient) {
     const url = process.env.PLATFORM_KV_REST_API_URL;
     const token = process.env.PLATFORM_KV_REST_API_TOKEN;
@@ -283,6 +336,7 @@ export function getResearcherClient(
   redisToken: string,
   identity: ResearcherClientIdentity,
 ): RedisPort {
+  assertRedisAccessAllowed();
   if (!isValidUpstashUrl(redisUrl)) {
     throw new Error('Invalid Redis URL: only Upstash Redis URLs (https://*.upstash.io) are supported');
   }
@@ -331,6 +385,7 @@ export function getKVClient(credentials?: {
   researcherId: string;
   storageId?: string;
 }): RedisPort {
+  assertRedisAccessAllowed();
   if (isStandaloneMode()) {
     return getStandaloneClient();
   }

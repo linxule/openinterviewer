@@ -12,6 +12,12 @@ export interface SynthesisProvenance {
   aiModel: string;
   requestedAiModel: string;
   routedProvider?: string;
+  /**
+   * Present only when the request went through Cloudflare AI Gateway (RT-11).
+   * It names the transport, not a provider: the model is still the one the
+   * provider reported and `routedProvider` keeps its meaning.
+   */
+  aiTransport?: 'cloudflare-gateway';
 }
 
 export function validBoundedText(value: unknown): value is string {
@@ -23,11 +29,14 @@ export function validateProvenance(value: {
   aiModel: unknown;
   requestedAiModel?: unknown;
   routedProvider?: unknown;
+  aiTransport?: unknown;
 }): SynthesisProvenance | null {
   if (!validBoundedText(value.aiModel)
     || !validBoundedText(value.requestedAiModel)) {
     return null;
   }
+  // Absent (direct, Vercel AI Gateway, every older record) or the exact literal.
+  if (value.aiTransport !== undefined && value.aiTransport !== 'cloudflare-gateway') return null;
   if (value.aiProvider === 'openrouter') {
     if (!isKnownProviderModel(value.aiProvider, value.requestedAiModel)
       || !validBoundedText(value.routedProvider)) return null;
@@ -35,6 +44,8 @@ export function validateProvenance(value: {
     if (value.routedProvider === undefined) {
       if (!isKnownProviderModel(value.aiProvider, value.requestedAiModel)) return null;
     } else {
+      // A Vercel AI Gateway route never runs through Cloudflare AI Gateway.
+      if (value.aiTransport !== undefined) return null;
       // Describes generation-time execution, regardless of the current
       // transport setting. Gateway requests use mapped model IDs and one exact
       // creator route; actual response model IDs remain provider-reported.
@@ -52,6 +63,7 @@ export function validateProvenance(value: {
     aiModel: value.aiModel,
     requestedAiModel: value.requestedAiModel,
     ...(typeof value.routedProvider === 'string' ? { routedProvider: value.routedProvider } : {}),
+    ...(value.aiTransport === 'cloudflare-gateway' ? { aiTransport: 'cloudflare-gateway' as const } : {}),
   };
 }
 

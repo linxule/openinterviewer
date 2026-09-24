@@ -104,7 +104,10 @@ vi.mock('@/lib/providers', () => providersMock);
 
 vi.mock('@/lib/rateLimit', () => ({
   participantRateLimitResponse: vi.fn(async () => null),
+  participantStoreAdmissionResponse: vi.fn(async () => null),
+  participantAdmissionRefusal: vi.fn(() => null),
   getSavePersistRatePlan: vi.fn(() => []),
+  savePersistRatePlanOrResponse: vi.fn(() => ({ status: 'planned', rows: [] })),
 }));
 vi.mock('@/lib/platformAiRateLimit', () => ({
   hostedAiRateLimitResponse: vi.fn(async () => null),
@@ -527,10 +530,17 @@ describe('hosted shared-BYOS researcher list/export/link adversarial matrix', ()
 
   it('lists only owned studies and never reads all-interviews for B', async () => {
     researcherSession(RESEARCHER_B);
-    const list = await studiesGET();
+    const list = await studiesGET(new Request('http://localhost/api/studies'));
     const body = await list.json();
     expect(list.status).toBe(200);
     expect(body.studies.map((study: { id: string }) => study.id)).toEqual([STUDY_B]);
+    // Without a view, hosted keeps the legacy list of whole stored studies (ST-08).
+    expect(Array.isArray(body.studies[0].config.coreQuestions)).toBe(true);
+    expect(body.studies[0]).not.toHaveProperty('coreQuestionCount');
+    const summary = await (await studiesGET(new Request('http://localhost/api/studies?view=summary'))).json();
+    expect(summary.studies.map((study: { id: string }) => study.id)).toEqual([STUDY_B]);
+    expect(Object.keys(summary.studies[0].config).sort()).toEqual(['description', 'name']);
+    expect(summary.studies[0].coreQuestionCount).toBe(body.studies[0].config.coreQuestions.length);
     expect(kvMock.getStudyChecked).toHaveBeenCalledWith(STUDY_B, expect.anything());
     expect(kvMock.getStudyChecked).not.toHaveBeenCalledWith(STUDY_A, expect.anything());
 
@@ -603,7 +613,7 @@ describe('hosted shared-BYOS researcher list/export/link adversarial matrix', ()
     await expect(filtered.json()).resolves.toMatchObject({ code: 'STUDY_OPERATION_PENDING' });
     expect(kvMock.getStudyInterviewsChecked).not.toHaveBeenCalled();
 
-    const listed = await studiesGET();
+    const listed = await studiesGET(new Request('http://localhost/api/studies'));
     const body = await listed.json();
     expect(body.studies).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: STUDY_A, reconciliationPending: true }),
@@ -699,7 +709,7 @@ describe('hosted shared-BYOS researcher list/export/link adversarial matrix', ()
   it('skips a cross-tagged A id in B’s index and still serves B’s own study', async () => {
     platform.sets.set(`researcher-studies:${RESEARCHER_B}`, new Set([STUDY_A, STUDY_B]));
     researcherSession(RESEARCHER_B);
-    const listed = await studiesGET();
+    const listed = await studiesGET(new Request('http://localhost/api/studies'));
     const body = await listed.json();
     expect(body.studies.map((study: { id: string }) => study.id)).toEqual([STUDY_B]);
     expect(kvMock.getStudyChecked).not.toHaveBeenCalledWith(STUDY_A, expect.anything());
@@ -818,7 +828,7 @@ describe('hosted shared-BYOS researcher list/export/link adversarial matrix', ()
     journal.set(RESEARCHER_A, 'oi:adel-journal:{"version":2}');
     platform.hashes.set('account-delete-journal', journal);
     researcherSession(RESEARCHER_A);
-    const listed = await studiesGET();
+    const listed = await studiesGET(new Request('http://localhost/api/studies'));
     const interviews = await interviewsGET(new Request('http://localhost/api/interviews'));
     const exported = await exportGET();
     expect([listed.status, interviews.status, exported.status]).toEqual([503, 503, 503]);
@@ -833,7 +843,7 @@ describe('hosted shared-BYOS researcher list/export/link adversarial matrix', ()
   it('fails closed on poisoned owner, reverse, and cross-tagged index records', async () => {
     researcherSession(RESEARCHER_A);
     platform.strings.set(`study-owner:${STUDY_A}`, 'poisoned-owner');
-    const poisonedOwner = await studiesGET();
+    const poisonedOwner = await studiesGET(new Request('http://localhost/api/studies'));
     expect(poisonedOwner.status).toBe(503);
     expect(cryptoMock.decrypt).not.toHaveBeenCalled();
 
