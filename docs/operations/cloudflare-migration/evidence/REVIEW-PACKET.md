@@ -4,8 +4,8 @@ For Codex's independent review and deployment strategy (VERIFY-05). This packet 
 
 ## 1. Status
 
-- Branch `feat/cloudflare-standalone`, base `35f90c7` (main, specification package), head `2e72fe3` (last code commit, after the Codex review round in section 12; this packet revision is committed on top of it). Worktree: `/Users/xulelin/code/openinterviewer-cloudflare`. Not pushed.
-- Local release candidate: complete through M6 on this branch. The full local release matrix (`npm run check:cloudflare`, 18 lanes) passed on `2e72fe3`, a clean checkout (and earlier on `d8bb26e`; Codex reran it independently on `7235c80`); its receipt binds that commit and artifact. The packet itself is added in the following docs-only commit, which changes nothing else; rerunning the check on the branch head re-binds the receipt.
+- Branch `feat/cloudflare-standalone`, base `35f90c7` (main, specification package), head `b0a90a8` (last code commit, after the Codex review rounds in sections 12 and 13; this packet revision is committed on top of it). Worktree: `/Users/xulelin/code/openinterviewer-cloudflare`. Not pushed.
+- Local release candidate: complete through M6 on this branch. The full local release matrix (`npm run check:cloudflare`, 18 lanes) passed on `b0a90a8`, a clean checkout (and earlier on `d8bb26e` and `2e72fe3`; Codex reran it independently on `7235c80` and `4056f81`); its receipt binds that commit and artifact. The packet itself is added in the following docs-only commit, which changes nothing else; rerunning the check on the branch head re-binds the receipt.
 - Requirement map (appendix A): of 55 requirement IDs, met locally 40, implemented with acceptance at a remote gate 11, recorded deviations 4, partial 0.
 - Remote-only gates (section 9) and operational decisions (section 10) remain, as VERIFY-05 allows. Production migration and the deploy button remain incomplete by design.
 
@@ -24,26 +24,26 @@ Individual lanes: `npm run check` (lint, typecheck, unit), `npm run test:setup`,
 
 | Lane | Command | Result | Duration |
 | --- | --- | --- | --- |
-| sync-artifacts+lint+typecheck+unit | `npm run check` | 2735 passed (2735) | 22.2 s |
+| sync-artifacts+lint+typecheck+unit | `npm run check` | 2757 passed (2757) | 17.6 s |
 | setup-checker | `npm run test:setup` | 44 passed, 0 failed | 0.9 s |
-| installer | `npm run test:setup:cloudflare` | 202 passed, 0 failed | 31.0 s |
+| installer | `npm run test:setup:cloudflare` | 202 passed, 0 failed | 27.8 s |
 | audit-production | `npm audit --omit=dev --audit-level=high` | 0 vulnerabilities (production dependencies, high and above) | 0.7 s |
 | diff-check | `git diff --check` | exit 0 | 0.0 s |
-| workers-runtime | `npm run test:cloudflare` | 390 passed (390) | 9.8 s |
+| workers-runtime | `npm run test:cloudflare` | 397 passed (397) | 9.0 s |
 | worker-import-boundary | `node scripts/cloudflare/check-import-boundary.mjs` | Worker-only graph reaches no Next, Redis or hosted modules | 0.2 s |
-| redis-contract | `npm run test:contract:redis` | 26 passed, 2 skipped (28) | 1.5 s |
+| redis-contract | `npm run test:contract:redis` | 27 passed, 2 skipped (29) | 1.5 s |
 | redis-crash | `npm run test:redis-crash` | 34 passed (34) | 0.9 s |
 | adversarial | `npm run test:adversarial` | 24 passed (24) | 0.9 s |
 | redis-inventory | `npm run test:inventory:redis` | 14 passed (14) | 3.0 s |
 | build:node-standalone | `npm run build` | build succeeded | 5.2 s |
 | build:node-gateway | `npm run build` | build succeeded | 4.3 s |
 | build:node-hosted | `npm run build` | build succeeded | 4.3 s |
-| node-browser | `npm run test:e2e` | 5 passed (9.8s) | 10.3 s |
-| cloudflare-artifact | `npm run test:cloudflare:artifact` | 35 passed (35) | 19.5 s |
-| cloudflare-restart | `npm run test:cloudflare:restart` | 4 passed (4) | 188.6 s |
-| cloudflare-browser | `npm run test:e2e:cloudflare` | 9 passed (51.2s) | 51.7 s |
+| node-browser | `npm run test:e2e` | 5 passed (10.1s) | 10.5 s |
+| cloudflare-artifact | `npm run test:cloudflare:artifact` | 35 passed (35) | 17.9 s |
+| cloudflare-restart | `npm run test:cloudflare:restart` | 4 passed (4) | 188.1 s |
+| cloudflare-browser | `npm run test:e2e:cloudflare` | 9 passed (49.2s) | 49.7 s |
 
-Receipt: `status: passed`, commit `2e72fe36fa6d257157525dee797c1ce35ae56c08`, worker bundle SHA-256 `8685051e6ac42d4cb5f6f9b763b10d6096ffcec349c1565339b32dcd5ad1b284`, checked on 2026-09-24. Artifact upload 27534.37 KiB, gzip 5464.85 KiB. The other lanes are unchanged from `d8bb26e`, except for small timing differences. The previous run, on `d8bb26e`, had unit 2724, installer 181, workers 371 and upload 27413.90 KiB. Credential-like variables removed from the lanes (names only): CLAUDE_CODE_MESSAGING_TOKEN, MINERU_API_KEY.
+Receipt: `status: passed`, commit `b0a90a8be2e26db8f0bcce004b2cf88b3112f1fd`, worker bundle SHA-256 `0bd1bdfad7b1090d1b9d961cf73f9a3a0291a4daeae929bf69add6fe9485ad2e`, checked at 2026-09-24T00:07:57.753Z. Artifact upload 27537.77 KiB, gzip 5465.91 KiB. The other lanes are unchanged from `d8bb26e`, except for small timing differences. The previous run, on `d8bb26e`, had unit 2724, installer 181, workers 371 and upload 27413.90 KiB. Credential-like variables removed from the lanes (names only): CLAUDE_CODE_MESSAGING_TOKEN, MINERU_API_KEY.
 
 ## 4. Branch and scoped diff
 
@@ -126,7 +126,7 @@ Scoped diff `35f90c7..d8bb26e`: 313 files changed, 81357 insertions(+), 2778 del
 - **Operator API** (Cloudflare only): `GET /api/operator/status`, `POST /api/operator/maintenance`, `GET /api/operator/backup`, `POST /api/operator/backup/import`, `POST /api/operator/recovery/activate`, `POST /api/operator/recovery/restore`. Each needs `Authorization: Bearer <OPERATOR_TOKEN>` and a researcher session issued within 15 minutes.
 - **Configuration** (`wrangler.jsonc`): vars `DEPLOYMENT_TARGET`, `DEPLOYMENT_MODE`, `AI_TRANSPORT`, `AI_PROVIDER`, `APP_BASE_URL`, `WORKSPACE_ID`, `WORKSPACE_JURISDICTION`, `WORKSPACE_BOOTSTRAP` (installer-only); secrets `ADMIN_PASSWORD`, `SESSION_SECRET`, `PARTICIPANT_TOKEN_SECRET`, `RATE_LIMIT_SALT`, `OPERATOR_TOKEN`, `ANALYSIS_RECOVERY_EPOCH` and the one selected provider key; bindings `WORKSPACE_STORE` (SQLite DO, migration tag `v1`), `ANALYSIS_QUEUE` producer and consumer (batch 1, concurrency 1, 3 retries, 30 s delay, dead-letter queue). Invocation logs are off and query strings redacted.
 - **Schema**: SQLite migration 1 (studies, interviews, analysis, analysis_jobs, participant_links, consents, idempotency_receipts, deletion_fences, budget windows and members, aggregates, workspace_meta, operator_audit, login_attempts) and the `schema_migrations` ledger with `min_reader_version`. IMPLEMENTATION.md §4.
-- **Study list** (all targets, Codex round): `GET /api/studies` returns list items (metadata, `config.name`, `config.description`, `coreQuestionCount`), not whole configurations; Edit reads `GET /api/studies/[id]`. The port's `listStudies` returns `StudyListItem`; the Durable Object pages it by keyset (4 MiB of stored configuration per page requested, 12 MiB and 1,000 rows capped) and the Worker assembles at most 16 MiB, else 413.
+- **Study list** (Codex rounds): `GET /api/studies?view=summary` returns list items (metadata, `config.name`, `config.description`, `coreQuestionCount`); no `view` (or `view=full`) keeps the legacy response of whole stored studies (on Cloudflare within the same paged 16 MiB ceiling, else 413); any other value is 400. The UI requests the summary; Edit reads `GET /api/studies/[id]`. The port's `listStudies(maximum, { view })` returns `StoredStudy` or `StudyListItem`; the Durable Object pages it by keyset (4 MiB of stored configuration per page requested, 12 MiB and 1,000 rows capped) and the Worker assembles at most 16 MiB, else 413.
 - **Node-visible changes** are listed in DEVIATIONS.md (Node rows): loopback `APP_BASE_URL` rejection in Node production, `busy` stops a researcher batch, some error bodies, the study-scoped 413 copy, a failed refresh no longer empties the register.
 
 ## 7. Installer, update and restore behavior
@@ -220,6 +220,18 @@ Decisions and residuals from this round, for review:
 - **Polling.** Inside a live session, a stalled read keeps "Checking…" until the deadline; the worst case for the batch is 210 s. A refresh during an outstanding read is still ignored.
 - **Installer.** There is no abandon command for a pending provider change. The way back is to finish it, then change back (both keys stay bound). `verify` during a pending change can report an `AI_PROVIDER` mismatch.
 - **Remote gates added.** Peak memory for a 16 MiB study list (ST-08/RT-09 row). A lost reply against real Cloudflare for operator commands and installer updates, covered by the staging rehearsal (VERIFY-04).
+
+## 13. Codex follow-up round (2026-09-24)
+
+Codex reran all 18 lanes on `4056f81` (all passed). It confirmed that the four original failures were fixed, accepted the shared cursor format, finishing a pending provider change before switching back, and the new remote gates, and asked for two follow-ups plus a specification update:
+
+| Follow-up | Commit | Fix | Regression evidence |
+| --- | --- | --- | --- |
+| [P2] Keep the study-list response compatible: the compact response broke older tabs (they read `config.coreQuestions`) and scripts | `7a5f60a` | The summary must be requested with `?view=summary`. With no `view`, or `view=full`, Node and hosted return the pre-`655b426` response byte for byte, and Cloudflare returns whole studies within the paged 16 MiB ceiling (413 beyond it, never a partial list). An unknown or repeated `view` gets 400 before any storage read. The port takes the view explicitly. The UI requests the summary and converts whole studies from an older server itself | Unit: the legacy response is byte-identical and the old rendering path works; 400 cases; hosted legacy and summary; Redis adapter; client skew fallback; StudyList skew render. Contract (Redis and Durable Object): both views. Workers: 300 maximum-size studies answer 200 with every item in the summary view and 413 in the full view (never 503 or partial), a full view that fits, projection-only paging, view validation. The fixer reported 23 unit and 9 workers failures against the previous code; not rerun by me |
+| [P3] Discard superseded status reads: a late failure from a read still outstanding when a stored outcome settled the poller turned it `halted` | `b0a90a8` | When `seed()` settles the poller, it aborts the outstanding read and clears any earlier read error. A late rejection, failure or answer is dropped, and a refresh can read at once. A `seed()` confirming work still running leaves the read alone | `tests/unit/analysisExecution.polling.test.ts`: late rejection, failed result, network failure, older pending work, a newer generation, and a refresh straight after. With the previous poller restored, 7 of these fail (rerun by me) |
+| Specification: describe the polling maximum | `b0a90a8` | API-03 in `03-analysis-jobs.md` now states the per-read bound: a GET is aborted at the end of the budget or 30 s after it began, whichever is later. Polling after one 202 therefore ends within 210 s while the page stays visible and online | — |
+
+This supersedes the "Study list shape" item in section 12: whole configurations are again the default response, so existing tabs and scripts keep working, and only the current UI asks for the compact list. On Cloudflare, the legacy full view fits about 130 maximum-size studies before it answers 413. Before these changes, a list past 32 MiB failed with 503.
 
 ## Appendix A. Requirement-to-evidence map
 
