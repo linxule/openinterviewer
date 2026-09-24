@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useStore } from '@/store';
 import { StudyConfig } from '@/types';
 import { Verbatim } from '@/components/ui';
@@ -24,10 +24,13 @@ function participantTransport(value: unknown): AITransport | null {
  * document is served with `Referrer-Policy: no-referrer` (next.config.js,
  * ./layout.tsx), the exchange fetch sets it again, and the hand-over is a
  * document navigation: the client router would send the current path in its
- * `Next-Url` header. The session survives it in sessionStorage (src/store.ts).
+ * `Next-Url` header. The session survives it in sessionStorage (src/store.ts);
+ * where it cannot, the hand-over falls back to the client router
+ * (src/lib/participantLinkHandover.ts).
  */
 export default function ParticipantPage() {
   const params = useParams();
+  const router = useRouter();
   const linkCode = params.token as string;
 
   const beginParticipantSession = useStore((state) => state.beginParticipantSession);
@@ -78,7 +81,7 @@ export default function ParticipantPage() {
           aiTransport,
         );
         // Stay on the loading view until /consent replaces this document.
-        leaveLinkPage();
+        leaveLinkPage(resolvedLink.sessionHandle, (href) => router.replace(href));
       } catch (err) {
         if (cancelled) return;
         console.error('Error loading study from participant link:', err);
@@ -88,7 +91,7 @@ export default function ParticipantPage() {
 
     loadStudyFromLink();
     return () => { cancelled = true; };
-  }, [linkCode, beginParticipantSession]);
+  }, [linkCode, beginParticipantSession, router]);
 
   if (error) {
     return (

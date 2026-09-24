@@ -99,6 +99,27 @@ test('the link code never leaves the link page in a request header', async ({ br
   await context.close();
 });
 
+test('a browser without sessionStorage still reaches the interview from a link', async ({ browser, page }) => {
+  await createStudy(page);
+  const linkPath = await generateLink(page);
+
+  const context = await browser.newContext();
+  // Storage access throws (as with DOM storage disabled): the store runs in
+  // memory only, so the hand-over must keep it rather than reload the page.
+  await context.addInitScript(() => {
+    Object.defineProperty(window, 'sessionStorage', {
+      configurable: true,
+      get() { throw new DOMException('The operation is insecure.', 'SecurityError'); },
+    });
+  });
+  const participant = await context.newPage();
+  await participant.goto(linkPath);
+  await participant.getByRole('button', { name: 'I consent — begin the interview' }).click();
+  await expect(participant.getByText(GREETING, { exact: true })).toBeVisible();
+  expect(new URL(participant.url()).pathname).toBe('/interview');
+  await context.close();
+});
+
 test('leaving preview removes the old screen before clearing its session and awaiting setup', async ({ page, request }) => {
   await createStudy(page);
   await page.goto('/setup');

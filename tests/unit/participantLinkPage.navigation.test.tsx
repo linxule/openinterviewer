@@ -62,8 +62,13 @@ describe('participant link page during a delayed route change', () => {
     render(<ParticipantPage />);
 
     await waitFor(() => expect(handover.leaveLinkPage).toHaveBeenCalledTimes(1));
+    expect(handover.leaveLinkPage).toHaveBeenCalledWith('participant-handle-link-123456', expect.any(Function));
     expect(navigation.replace).not.toHaveBeenCalled();
     expect(navigation.push).not.toHaveBeenCalled();
+    // The fallback it is given is the client router's replace.
+    handover.leaveLinkPage.mock.calls[0][1]('/consent');
+    expect(navigation.replace).toHaveBeenCalledWith('/consent');
+    navigation.replace.mockReset();
     expect(useStore.getState()).toMatchObject({ currentStep: 'consent', viewMode: 'participant' });
     expect(screen.getByRole('status')).toHaveTextContent('Loading interview...');
     expect(screen.queryByRole('button', { name: /I consent/i })).not.toBeInTheDocument();
@@ -115,10 +120,40 @@ describe('participant link page transport disclosure (RT-11)', () => {
 });
 
 describe('participant link hand-over', () => {
-  it('is a document navigation to /consent', async () => {
-    const actual = await vi.importActual<typeof import('@/lib/participantLinkHandover')>('@/lib/participantLinkHandover');
+  const actual = () => vi.importActual<typeof import('@/lib/participantLinkHandover')>('@/lib/participantLinkHandover');
+  const persisted = (handle: string) => () => ({
+    getItem: (key: string) => (key === 'research-tool-storage'
+      ? JSON.stringify({ state: { participantSessionHandle: handle }, version: 6 })
+      : null),
+  });
+
+  it('is a document navigation to /consent when the session is persisted', async () => {
+    const { leaveLinkPage } = await actual();
     const location = { replace: vi.fn() };
-    actual.leaveLinkPage(location);
+    const clientNavigate = vi.fn();
+    leaveLinkPage('handle-1', clientNavigate, location, persisted('handle-1'));
     expect(location.replace).toHaveBeenCalledWith('/consent');
+    expect(clientNavigate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['storage access throws', () => { throw new DOMException('denied', 'SecurityError'); }],
+    ['nothing persisted', () => ({ getItem: () => null })],
+    ['another session persisted', persisted('handle-other')],
+    ['a corrupt entry', () => ({ getItem: () => '{not json' })],
+  ])('keeps the in-memory session with the client router when %s', async (_label, storage) => {
+    const { leaveLinkPage } = await actual();
+    const location = { replace: vi.fn() };
+    const clientNavigate = vi.fn();
+    leaveLinkPage('handle-1', clientNavigate, location, storage as () => Pick<Storage, 'getItem'>);
+    expect(location.replace).not.toHaveBeenCalled();
+    expect(clientNavigate).toHaveBeenCalledWith('/consent');
+  });
+
+  it('reads back what the store actually persists for a new participant session', async () => {
+    const { sessionSurvivesDocumentLoad } = await actual();
+    useStore.getState().beginParticipantSession(makeStudyConfig({ id: 'persisted-study' }), 'persisted-handle', 'direct');
+    expect(sessionSurvivesDocumentLoad('persisted-handle')).toBe(true);
+    expect(sessionSurvivesDocumentLoad('another-handle')).toBe(false);
   });
 });

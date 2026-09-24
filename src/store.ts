@@ -172,6 +172,9 @@ export function migratedTransport(value: unknown, version: number): AITransport 
   return version < 6 ? 'direct' : null;
 }
 
+/** The sessionStorage key of the persisted store (src/lib/participantLinkHandover.ts reads it back). */
+export const RESEARCH_STORE_KEY = 'research-tool-storage';
+
 export const useStore = create<ResearchState>()(
   persist(
     (set) => ({
@@ -372,7 +375,7 @@ export const useStore = create<ResearchState>()(
       }))
     }),
     {
-      name: 'research-tool-storage',
+      name: RESEARCH_STORE_KEY,
       storage: createJSONStorage(() => sessionStorage),
       version: 6,
       migrate: (persistedState, version) => {
