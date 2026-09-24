@@ -51,8 +51,8 @@ import {
   formatInterviewHistory,
   GREETING_DEADLINE_MS,
   INTERVIEW_DEADLINE_MS,
-  isQueuedSynthesis,
   providerResult,
+  singleAttempt,
   SYNTHESIS_DEADLINE_MS,
   synthesisDeadlineMs,
   type AggregateSynthesisPayload,
@@ -170,7 +170,7 @@ export class GeminiProvider implements AIProvider {
           fetchOptions: { signal },
           // @google/genai 2.22.0 Interactions per-call maxRetries: the bridge maps
           // it to retries.maxRetries, and 0 permits a single attempt.
-          ...(isQueuedSynthesis(options.policy) ? { maxRetries: 0 } : {}),
+          ...(singleAttempt(this.transport, options.policy) ? { maxRetries: 0 } : {}),
         })
       );
     } catch (error) {

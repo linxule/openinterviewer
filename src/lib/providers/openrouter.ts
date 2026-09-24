@@ -51,8 +51,8 @@ import {
   formatInterviewHistory,
   GREETING_DEADLINE_MS,
   INTERVIEW_DEADLINE_MS,
-  isQueuedSynthesis,
   providerResult,
+  singleAttempt,
   SYNTHESIS_DEADLINE_MS,
   synthesisDeadlineMs,
   type AggregateSynthesisPayload,
@@ -163,7 +163,7 @@ export class OpenRouterProvider implements AIProvider {
           signal,
           timeoutMs: options.deadlineMs,
           // @openrouter/sdk 1.2.117 per-call RequestOptions.retries (lib/retries RetryConfig).
-          ...(isQueuedSynthesis(options.policy) ? { retries: { strategy: 'none' as const } } : {}),
+          ...(singleAttempt(this.transport, options.policy) ? { retries: { strategy: 'none' as const } } : {}),
         })
       );
       if (!('choices' in response)) {

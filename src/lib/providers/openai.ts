@@ -51,8 +51,8 @@ import {
   formatInterviewHistory,
   GREETING_DEADLINE_MS,
   INTERVIEW_DEADLINE_MS,
-  isQueuedSynthesis,
   providerResult,
+  singleAttempt,
   SYNTHESIS_DEADLINE_MS,
   synthesisDeadlineMs,
   type AggregateSynthesisPayload,
@@ -142,7 +142,7 @@ export class OpenAIProvider implements AIProvider {
           signal,
           timeout: options.deadlineMs,
           // OpenAI SDK 7.15.0 per-call RequestOptions.maxRetries (client.js makeRequest).
-          ...(isQueuedSynthesis(options.policy) ? { maxRetries: 0 } : {}),
+          ...(singleAttempt(this.transport, options.policy) ? { maxRetries: 0 } : {}),
         })
       );
     } catch (error) {

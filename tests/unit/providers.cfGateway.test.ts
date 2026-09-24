@@ -367,3 +367,79 @@ describe('RT-11 the direct route carries no cf-aig header and records no transpo
     expect(result.execution).not.toHaveProperty('aiTransport');
   });
 });
+
+// RT-11: a gateway request is never retried by the SDK, whatever the call
+// site. The Cloudflare AI Gateway already sends each request at most once
+// (cf-aig-max-attempts: 1); an SDK retry would be a second paid, logged
+// provider attempt with the participant's content. The stub fails the first
+// request of each call with a retryable failure and answers every later one,
+// so an SDK retry would turn the failure into a success with two requests.
+type FirstFailure = '503' | 'connection';
+
+function failFirstRequest(failure: FirstFailure, answer: (url: string) => AIProviderType): void {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init);
+    captured.push({ url: request.url, method: request.method, headers: Object.fromEntries(request.headers.entries()) });
+    if (captured.length === 1) {
+      if (failure === 'connection') throw new TypeError('fetch failed');
+      return new Response(JSON.stringify({ error: { type: 'overloaded_error', message: 'synthetic' } }), {
+        status: 503,
+        headers: { 'content-type': 'application/json', 'retry-after-ms': '1' },
+      });
+    }
+    return Response.json(successBody(answer(request.url), nextText));
+  }));
+}
+
+const ALL_OPERATIONS: Operation[] = ['greeting', 'interview', 'synthesis', 'queued-synthesis', 'aggregate', 'followup'];
+
+describe.each(PROVIDERS)('RT-11 %s: no SDK retry on the Cloudflare AI Gateway transport', (provider) => {
+  it.each(ALL_OPERATIONS.flatMap((operation) => (['503', 'connection'] as const).map((failure) => [operation, failure] as const)))(
+    '%s after a %s failure: exactly one request and a failure, never a second attempt',
+    async (operation, failure) => {
+      failFirstRequest(failure, providerOf);
+
+      await expect(run(provider, operation)).rejects.toBeInstanceOf(ProviderFailure);
+
+      expect(captured).toHaveLength(1);
+      expectGatewayRequest(provider, captured[0]);
+    },
+  );
+});
+
+describe.each(PROVIDERS)('RT-11 control: %s on the direct transport keeps the SDK retry policy', (provider) => {
+  function directAdapter(): AIProvider {
+    process.env.AI_TRANSPORT = 'direct';
+    return getInterviewProvider(config(provider), {
+      anthropicApiKey: KEYS.claude, openaiApiKey: KEYS.openai, geminiApiKey: KEYS.gemini, openrouterApiKey: KEYS.openrouter,
+      route: { transport: 'direct' },
+    });
+  }
+
+  it.each(['greeting', 'interview'] as const)('%s: a 503 is retried by the SDK and the retry answers', async (operation) => {
+    failFirstRequest('503', () => provider);
+    const p = directAdapter();
+    if (operation === 'greeting') {
+      nextText = PAYLOADS.greeting;
+      await expect(p.getInterviewGreeting(config(provider))).resolves.toBe(PAYLOADS.greeting);
+    } else {
+      nextText = PAYLOADS.interview;
+      await expect(p.generateInterviewResponse(history, config(provider), null, progress, '')).resolves.toMatchObject({
+        message: 'Tell me more about your first week.',
+      });
+    }
+    expect(captured).toHaveLength(2);
+    expect(captured[1].url).toBe(captured[0].url);
+    expect(captured[0].url).not.toContain('gateway.ai.cloudflare.com');
+  });
+
+  it('queued synthesis stays a single attempt', async () => {
+    failFirstRequest('503', () => provider);
+    nextText = PAYLOADS.synthesis;
+    const outcome = directAdapter().synthesizeInterview(
+      history, config(provider), behavior, null, { kind: 'queued-synthesis', deadlineMs: 5_000 },
+    );
+    await expect(outcome).rejects.toBeInstanceOf(ProviderFailure);
+    expect(captured).toHaveLength(1);
+  });
+});

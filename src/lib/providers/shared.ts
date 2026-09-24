@@ -1,6 +1,7 @@
 import type { ProviderExecution, ProviderExecutionPolicy, ProviderResult } from '../ai';
 import type { AIProviderType, AggregateSynthesisProviderPayload, AggregateSynthesisResult, StudyConfig } from '@/types';
 import type { FollowupStudy } from '../providerValidation';
+import type { EffectiveTransport } from './endpoint';
 import { ProviderFailure } from '../providerErrors';
 
 export const GREETING_DEADLINE_MS = 30_000;
@@ -13,6 +14,19 @@ export function isQueuedSynthesis(
   policy: ProviderExecutionPolicy | undefined,
 ): policy is Extract<ProviderExecutionPolicy, { kind: 'queued-synthesis' }> {
   return policy?.kind === 'queued-synthesis';
+}
+
+/**
+ * Whether a provider call must be one HTTP attempt with no SDK retry: queued
+ * synthesis (JOB-09) and every call on the Cloudflare AI Gateway transport
+ * (RT-11, like the Vercel gateway adapter). Direct interactive calls keep the
+ * SDK defaults.
+ */
+export function singleAttempt(
+  transport: EffectiveTransport,
+  policy?: ProviderExecutionPolicy,
+): boolean {
+  return transport === 'cloudflare-gateway' || isQueuedSynthesis(policy);
 }
 
 /** The synthesis deadline for a policy; a queued deadline never exceeds the default. */
