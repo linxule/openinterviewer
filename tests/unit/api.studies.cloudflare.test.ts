@@ -9,7 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { makeStoredInterview, makeStoredStudy, makeStudyConfig } from '../fixtures/models';
-import type { StoredAggregateSynthesis, StoredInterview, StoredStudy } from '@/types';
+import { toStudyListItem, type StoredAggregateSynthesis, type StoredInterview, type StoredStudy } from '@/types';
 
 const contextMock = vi.hoisted(() => ({
   getRequestContext: vi.fn(),
@@ -234,7 +234,7 @@ describe('GET /api/studies on Cloudflare (ST-01)', () => {
   it('ST-01: an unavailable durable store is a 503, never an empty successful list', async () => {
     store.readiness.mockResolvedValue({ status: 'unavailable' });
 
-    const response = await listStudies();
+    const response = await listStudies(new Request('http://localhost/api/studies'));
 
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({ error: 'Study storage is temporarily unavailable.', retryable: true });
@@ -246,7 +246,7 @@ describe('GET /api/studies on Cloudflare (ST-01)', () => {
     async (reason) => {
       store.readiness.mockResolvedValue({ status: 'held', reason });
 
-      const response = await listStudies();
+      const response = await listStudies(new Request('http://localhost/api/studies'));
 
       expect(response.status).toBe(503);
       await expect(response.json()).resolves.toMatchObject({ retryable: false, reason: 'workspace-unavailable' });
@@ -259,11 +259,11 @@ describe('GET /api/studies on Cloudflare (ST-01)', () => {
     store.readiness.mockResolvedValue({ status: 'held', reason: 'recovery-epoch-mismatch', maintenance: 'recovery' });
     store.listStudies.mockResolvedValue({ status: 'ok', items: [study] });
 
-    const response = await listStudies();
+    const response = await listStudies(new Request('http://localhost/api/studies'));
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ studies: [JSON.parse(JSON.stringify(study))] });
-    expect(store.listStudies).toHaveBeenCalledWith(1_000);
+    expect(store.listStudies).toHaveBeenCalledWith(1_000, { view: 'full' });
   });
 
   it('OPS-01: reads continue while frozen and keep the collection mappings', async () => {
@@ -271,16 +271,43 @@ describe('GET /api/studies on Cloudflare (ST-01)', () => {
     store.readiness.mockResolvedValue(ready('frozen'));
     store.listStudies.mockResolvedValue({ status: 'ok', items: [study] });
 
-    const response = await listStudies();
+    const response = await listStudies(new Request('http://localhost/api/studies'));
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ studies: [JSON.parse(JSON.stringify(study))] });
-    expect(store.listStudies).toHaveBeenCalledWith(1_000);
+    expect(store.listStudies).toHaveBeenCalledWith(1_000, { view: 'full' });
 
     store.listStudies.mockResolvedValue({ status: 'too-large', count: 1_001, maximum: 1_000 });
-    const tooLarge = await listStudies();
+    const tooLarge = await listStudies(new Request('http://localhost/api/studies'));
     expect(tooLarge.status).toBe(413);
   });
+
+  it('ST-08: ?view=summary asks the store for list items; view=full and no view ask for whole studies', async () => {
+    store.readiness.mockResolvedValue(ready('open'));
+    const item = toStudyListItem(studyAt(1));
+    store.listStudies.mockResolvedValue({ status: 'ok', items: [item] });
+
+    const summary = await listStudies(new Request('http://localhost/api/studies?view=summary'));
+    expect(summary.status).toBe(200);
+    await expect(summary.json()).resolves.toEqual({ studies: [JSON.parse(JSON.stringify(item))] });
+    expect(store.listStudies).toHaveBeenLastCalledWith(1_000, { view: 'summary' });
+
+    await listStudies(new Request('http://localhost/api/studies?view=full'));
+    expect(store.listStudies).toHaveBeenLastCalledWith(1_000, { view: 'full' });
+    await listStudies(new Request('http://localhost/api/studies?studyId=ignored'));
+    expect(store.listStudies).toHaveBeenLastCalledWith(1_000, { view: 'full' });
+  });
+
+  it.each(['view=compact', 'view=', 'view=SUMMARY', 'view=summary&view=summary'])(
+    'ST-08: %s is a 400 without reading storage',
+    async (query) => {
+      const response = await listStudies(new Request(`http://localhost/api/studies?${query}`));
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: 'view must be summary or full.' });
+      expect(store.readiness).not.toHaveBeenCalled();
+      expect(store.listStudies).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe('POST /api/studies on Cloudflare (ST-01 create idempotency)', () => {

@@ -10,7 +10,7 @@
 // (or hold reason) is outside the operation's closed union is treated the same
 // way: it is never passed through to a route.
 
-import type { StoredAggregateSynthesis, StoredInterview, StoredStudy, StudyListItem } from '@/types';
+import type { StoredAggregateSynthesis, StoredInterview, StoredStudy } from '@/types';
 import type {
   AcceptAnalysisRetryInput,
   AcceptAnalysisRetryOutcome,
@@ -51,6 +51,8 @@ import type {
   SeedSampleInput,
   SeedSampleOutcome,
   StoreReadiness,
+  StudyListEntry,
+  StudyListView,
   StudyLoadResult,
   StudyMutationOutcome,
   VerifyConsentOutcome,
@@ -95,18 +97,21 @@ export const LIST_INTERVIEWS_PAGE_BYTES = 12 * 1024 * 1024;
  */
 export const MAX_LIST_INTERVIEWS_BYTES = 16 * 1024 * 1024;
 /**
- * Stored bytes the object may load per listStudies page. A page replies with
- * list items projected from what it loaded, so the reply is smaller than the
- * budget (the object caps any page at 12 MiB and 1,000 rows).
+ * Stored bytes the object may load per listStudies page. A summary page
+ * replies with list items projected from what it loaded, so the reply is
+ * smaller than the budget; a full page replies with about the budget (the
+ * object caps any page at 12 MiB and 1,000 rows).
  */
 export const LIST_STUDIES_PAGE_BYTES = 4 * 1024 * 1024;
 /**
- * Serialized (UTF-8 JSON) list-item bytes one listStudies result may assemble
- * in a Worker, across all its pages; more is `too-large` (HTTP 413), never a
- * truncated list. Sized as MAX_LIST_INTERVIEWS_BYTES is. An item carries the
- * name (≤ 200 characters), the description (≤ 10,000) and metadata, so 1,000
- * studies fit unless their descriptions average more than about 16 KB of
- * UTF-8 (roughly 5,500 characters of CJK text).
+ * Serialized (UTF-8 JSON) bytes one listStudies result may assemble in a
+ * Worker, across all its pages, in either view; more is `too-large` (HTTP
+ * 413), never a truncated list. Sized as MAX_LIST_INTERVIEWS_BYTES is. A
+ * summary item carries the name (≤ 200 characters), the description
+ * (≤ 10,000) and metadata, so 1,000 studies fit unless their descriptions
+ * average more than about 16 KB of UTF-8 (roughly 5,500 characters of CJK
+ * text). The full view fits only about 16 MiB of whole studies (some 130 at
+ * the create body cap).
  */
 export const MAX_LIST_STUDIES_BYTES = 16 * 1024 * 1024;
 
@@ -387,7 +392,7 @@ export function createDurableWorkspaceStore(config: DurableWorkspaceConfig): Dur
   // ceiling has left, so a refusal holds at most one row past it.
   async function listPaged<T>(
     method: string,
-    input: { maximum: number },
+    input: { maximum: number; view?: StudyListView },
     pageBytes: number,
     ceiling: number,
   ): Promise<CollectionLoadResult<T>> {
@@ -434,8 +439,8 @@ export function createDurableWorkspaceStore(config: DurableWorkspaceConfig): Dur
 
     getStudy: (studyId: string) => call<StudyLoadResult>('getStudy', { studyId }, unavailable, inUnion(STUDY_LOAD)),
 
-    listStudies: (maximum: number) =>
-      listPaged<StudyListItem>('listStudies', { maximum }, LIST_STUDIES_PAGE_BYTES, MAX_LIST_STUDIES_BYTES),
+    listStudies: <V extends StudyListView>(maximum: number, { view }: { view: V }) =>
+      listPaged<StudyListEntry<V>>('listStudies', { maximum, view }, LIST_STUDIES_PAGE_BYTES, MAX_LIST_STUDIES_BYTES),
 
     createStudy: (input: CreateStudyInput) =>
       call<CreateStudyOutcome>('createStudy', input, ambiguous, inUnion(CREATE_STUDY)),

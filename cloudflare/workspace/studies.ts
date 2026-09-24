@@ -206,18 +206,19 @@ export function parseKeysetCursor(cursor: string): KeysetCursor | null {
 }
 
 /**
- * Paged listStudies request (the durable client always sends `page`); its
- * pages carry list items, not configurations. Without `page` the whole
- * collection of full studies must fit one response, otherwise it is
- * too-large, so a caller unaware of paging never receives a partial list or a
- * reply past the RPC limit.
+ * listStudies request (the durable client always sends `page` and `view`).
+ * `view` only chooses each study's projection: `summary` list items or `full`
+ * studies (the default). Without `page` the whole collection must fit one
+ * response, otherwise it is too-large, so a caller unaware of paging never
+ * receives a partial list or a reply past the RPC limit.
  */
 export type ListStudiesRequest = Rpc.MaximumInput & {
+  view?: Port.StudyListView;
   page?: { cursor: string | null; maxPageBytes: number };
 };
 
 export type ListStudiesPage =
-  | { status: 'ok'; items: StudyListItem[]; nextCursor: string | null; count: number }
+  | { status: 'ok'; items: Array<StoredStudy | StudyListItem>; nextCursor: string | null; count: number }
   | { status: 'too-large'; count: number; maximum: number }
   | { status: 'unavailable' };
 
@@ -233,10 +234,12 @@ export type ListStudiesPage =
 export async function listStudies(
   ws: WorkspaceContext,
   input: ListStudiesRequest,
-): Promise<Port.CollectionLoadResult<Rpc.StoredStudy> | ListStudiesPage> {
+): Promise<Port.CollectionLoadResult<Rpc.StoredStudy | StudyListItem> | ListStudiesPage> {
   try {
     const maximum = input?.maximum;
     if (typeof maximum !== 'number' || !Number.isSafeInteger(maximum) || maximum < 0) return { status: 'unavailable' };
+    const view = input.view === undefined ? 'full' : input.view;
+    if (view !== 'full' && view !== 'summary') return { status: 'unavailable' };
     const page = input.page;
     let cursor: KeysetCursor | null = null;
     if (page !== undefined) {
@@ -256,7 +259,7 @@ export async function listStudies(
     const keyset = cursor ? `WHERE created_at < ? OR (created_at = ? AND id < ?)` : '';
     const keysetBindings = cursor ? [cursor.createdAt, cursor.createdAt, cursor.id] : [];
 
-    return ws.storage.transactionSync((): Port.CollectionLoadResult<Rpc.StoredStudy> | ListStudiesPage => {
+    return ws.storage.transactionSync((): Port.CollectionLoadResult<Rpc.StoredStudy | StudyListItem> | ListStudiesPage => {
       if (!gate(ws, 'read').ok) return { status: 'unavailable' };
       const count = ws.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM studies`).one().n;
       if (count > maximum) return { status: 'too-large', count, maximum };
@@ -295,12 +298,13 @@ export async function listStudies(
       }
       // Redis parity: undecodable members are dropped from the collection.
       if (items.length !== rows.length) logCorruptRecord('listStudies');
-      if (!page) return { status: 'ok', items };
+      const projected = view === 'summary' ? items.map(toStudyListItem) : items;
+      if (!page) return { status: 'ok', items: projected };
       // The cursor follows the last row read, decodable or not, so paging always advances.
       const last = rows[rows.length - 1];
       return {
         status: 'ok',
-        items: items.map(toStudyListItem),
+        items: projected,
         nextCursor: more && last ? keysetCursorAfter(last) : null,
         count,
       };

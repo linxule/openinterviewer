@@ -27,7 +27,7 @@ beforeEach(() => {
   studyList = () => new Response(JSON.stringify({ interviews: [interview] }));
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
-    if (url === '/api/studies') return new Response(JSON.stringify({ studies: [study] }));
+    if (url === '/api/studies?view=summary') return new Response(JSON.stringify({ studies: [study] }));
     if (url === '/api/interviews') return new Response(JSON.stringify({ interviews: [interview] }));
     if (url === `/api/interviews?studyId=${STUDY_ID}`) return studyList();
     throw new Error(`Unexpected fetch: ${url}`);

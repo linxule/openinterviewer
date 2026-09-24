@@ -56,16 +56,30 @@ import {
 import { getPlatformClient } from '@/lib/kvClient';
 import { createRequestId, logRequestFailure } from '@/lib/requestLog';
 import { deploymentNotReadyResponse } from '@/lib/runtime/readinessGate';
-import { isDurableWorkspaceStore, type WorkspaceStorePort } from '@/lib/storage/types';
+import { isDurableWorkspaceStore, type StudyListView, type WorkspaceStorePort } from '@/lib/storage/types';
 
 const COLLECTION_MESSAGES = {
   unavailable: 'Study storage is temporarily unavailable.',
   tooLarge: 'This study list is too large to load at once.',
 };
 
+/**
+ * `?view=summary` lists study list items (ST-08); no `view` (or `view=full`)
+ * keeps the legacy response of whole stored studies for older tabs and scripts.
+ */
+function studyListView(request: Request): StudyListView | null {
+  const views = new URL(request.url).searchParams.getAll('view');
+  if (views.length === 0) return 'full';
+  return views.length === 1 && (views[0] === 'full' || views[0] === 'summary') ? views[0] : null;
+}
+
 // GET /api/studies - List all saved studies
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    const view = studyListView(request);
+    if (!view) {
+      return NextResponse.json({ error: 'view must be summary or full.' }, { status: 400 });
+    }
     if (isHostedMode()) {
       const identity = await getHostedResearcherIdentity();
       if (!identity.authorized || !identity.researcherId) {
@@ -105,7 +119,7 @@ export async function GET() {
       });
       if (!mapped.ok) return NextResponse.json(mapped.body, { status: mapped.status });
       return NextResponse.json({
-        studies: [...inspection.pendingStudies, ...mapped.items.map(toStudyListItem)],
+        studies: [...inspection.pendingStudies, ...(view === 'summary' ? mapped.items.map(toStudyListItem) : mapped.items)],
         pendingStudies: inspection.pendingStudies,
       });
     }
@@ -139,7 +153,7 @@ export async function GET() {
     const held = mapReadReadinessHold(readiness, '/api/studies');
     if (held) return held;
 
-    const loaded = await store.listStudies(1_000);
+    const loaded = await store.listStudies(1_000, { view });
     const mapped = mapCollectionLoad(loaded, COLLECTION_MESSAGES);
     if (!mapped.ok) return NextResponse.json(mapped.body, { status: mapped.status });
     return NextResponse.json({ studies: mapped.items });

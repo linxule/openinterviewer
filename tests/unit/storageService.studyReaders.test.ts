@@ -1,8 +1,9 @@
 // The checked study readers (UI-CF-02/04): every failure is a typed outcome,
 // never an empty list or a missing study, so a page can keep what it shows.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { makeStoredInterview, makeStoredStudy } from '../fixtures/models';
-import { readStudy, readStudyAggregate, readStudyInterviews } from '@/services/storageService';
+import { makeStoredInterview, makeStoredStudy, makeStudyConfig } from '../fixtures/models';
+import { getAllStudies, readStudy, readStudyAggregate, readStudyInterviews } from '@/services/storageService';
+import { toStudyListItem, type PendingStudyStub } from '@/types';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -94,5 +95,28 @@ describe('readStudyAggregate', () => {
       error: 'Analysis storage is temporarily unavailable.',
       retryable: true,
     });
+  });
+});
+
+describe('getAllStudies (ST-08)', () => {
+  const pending: PendingStudyStub = { id: 'pending-1', reconciliationPending: true, operationId: 'op-1', phase: 'begun' };
+
+  it('asks for the summary view and passes list items and pending studies through', async () => {
+    const item = toStudyListItem(makeStoredStudy({ config: makeStudyConfig({ coreQuestions: ['One?'] }) }));
+    const fetchMock = reply({ studies: [pending, item], pendingStudies: [pending] });
+
+    const listed = await getAllStudies();
+    expect(fetchMock).toHaveBeenCalledWith('/api/studies?view=summary');
+    expect(listed.studies).toEqual([pending, item]);
+    expect(listed.outcome).toEqual({ status: 'ok', value: { studies: [pending, item], pendingStudies: [pending] } });
+  });
+
+  it('projects whole studies from a server that predates the summary view', async () => {
+    const study = makeStoredStudy({ config: makeStudyConfig({ coreQuestions: ['One?', 'Two?', 'Three?'] }) });
+    reply({ studies: [pending, study], pendingStudies: [pending] });
+
+    const listed = await getAllStudies();
+    expect(listed.studies).toEqual([pending, JSON.parse(JSON.stringify(toStudyListItem(study)))]);
+    expect(listed.studies[1]).toMatchObject({ coreQuestionCount: 3 });
   });
 });

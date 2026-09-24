@@ -21,6 +21,7 @@ import * as exporter from './exports';
 import * as operator from './operator';
 import * as login from './login';
 import type * as Rpc from './rpcTypes';
+import type { StudyListItem } from '../../src/types';
 
 type InitState =
   | { status: 'ready' }
@@ -108,7 +109,7 @@ export class WorkspaceStore extends DurableObject<WorkspaceEnv> {
 
   async listStudies(
     input: studies.ListStudiesRequest,
-  ): Promise<Port.CollectionLoadResult<Rpc.StoredStudy> | studies.ListStudiesPage> {
+  ): Promise<Port.CollectionLoadResult<Rpc.StoredStudy | StudyListItem> | studies.ListStudiesPage> {
     if (this.requireInitialized()) return { status: 'unavailable' };
     return studies.listStudies(this.ws, input);
   }

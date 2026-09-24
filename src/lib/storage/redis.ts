@@ -39,6 +39,7 @@ import {
   standaloneCreateMarkerId,
   studyKeysExist,
   studyOperationMarkerId,
+  type CollectionLoadResult,
 } from '../kv';
 import {
   beginCreateIdempotencyForHash,
@@ -68,6 +69,8 @@ import type {
   LinkLoadOutcome,
   LinkRevokeOutcome,
   SeedSampleOutcome,
+  StudyListEntry,
+  StudyListView,
   WorkspaceStorePort,
 } from './types';
 
@@ -177,9 +180,10 @@ export function createRedisWorkspaceStore(client: RedisPort, options: RedisWorks
     },
 
     getStudy: (studyId) => getStudyChecked(studyId, client),
-    async listStudies(maximum) {
+    async listStudies<V extends StudyListView>(maximum: number, { view }: { view: V }) {
       const loaded = await getAllStudiesChecked(client, maximum);
-      return loaded.status === 'ok' ? { status: 'ok', items: loaded.items.map(toStudyListItem) } : loaded;
+      if (view === 'full' || loaded.status !== 'ok') return loaded as CollectionLoadResult<StudyListEntry<V>>;
+      return { status: 'ok', items: loaded.items.map(toStudyListItem) } as CollectionLoadResult<StudyListEntry<V>>;
     },
 
     async createStudy(input) {

@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeStoredInterview, makeStoredStudy, makeStudyConfig } from '../fixtures/models';
 import type { RedisPort } from '@/lib/redisPort';
 import { RedisCommitAmbiguousError } from '@/lib/redisPort';
-import type { StoredAggregateSynthesis, StoredStudy } from '@/types';
+import { toStudyListItem, type StoredAggregateSynthesis, type StoredStudy } from '@/types';
 import type { CreateIdempotencyRecord } from '@/lib/createIdempotency';
 
 const contextMock = vi.hoisted(() => ({
@@ -482,7 +482,7 @@ describe('study mutations and reads (ST-01)', () => {
 
     expect(await store.getStudy('study-a')).toEqual({ status: 'unavailable' });
     expect(kvMock.getStudyChecked).toHaveBeenCalledWith('study-a', client);
-    expect(await store.listStudies(5)).toEqual({ status: 'too-large', count: 9, maximum: 5 });
+    expect(await store.listStudies(5, { view: 'summary' })).toEqual({ status: 'too-large', count: 9, maximum: 5 });
     expect(kvMock.getAllStudiesChecked).toHaveBeenCalledWith(client, 5);
     expect(await store.getInterview('session-a')).toEqual({ status: 'not-found' });
     expect(kvMock.getInterviewChecked).toHaveBeenCalledWith('session-a', client);
@@ -493,6 +493,18 @@ describe('study mutations and reads (ST-01)', () => {
     expect(kvMock.getAllInterviewsChecked).toHaveBeenCalledWith(client, 500);
     expect(await store.getAggregate('study-a')).toEqual({ status: 'not-found' });
     expect(kvMock.getStudyAggregateChecked).toHaveBeenCalledWith('study-a', client);
+  });
+
+  it('ST-08: the full view returns the checked collection unchanged; the summary view projects list items', async () => {
+    const store = standaloneStore();
+    const study = makeStoredStudy({ config: makeStudyConfig({ coreQuestions: ['One?', 'Two?'] }) });
+    kvMock.getAllStudiesChecked.mockResolvedValue({ status: 'ok', items: [study] });
+
+    const full = await store.listStudies(1_000, { view: 'full' });
+    expect(full).toEqual({ status: 'ok', items: [study] });
+    expect(full.status === 'ok' && full.items[0]).toBe(study);
+    expect(await store.listStudies(1_000, { view: 'summary' })).toEqual({ status: 'ok', items: [toStudyListItem(study)] });
+    expect(toStudyListItem(study).coreQuestionCount).toBe(2);
   });
 
   it('ST-01: aggregate saves keep the existing latest-value result vocabulary', async () => {

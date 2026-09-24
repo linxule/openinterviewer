@@ -503,7 +503,7 @@ const CASES: HeldCase[] = [
     hold: readinessHold,
     call: async () => {
       await researcherRequest('/api/studies', { method: 'GET' });
-      return studiesGET();
+      return studiesGET(new Request('http://localhost/api/studies'));
     },
     heldRpc: 'readiness',
     copy: RESEARCHER_COPY,

@@ -120,6 +120,25 @@ describe('StudyList register table', () => {
     expect(JSON.parse(sessionStorage.getItem('prefillStudyConfig')!)).toEqual(JSON.parse(JSON.stringify(study.config)));
   });
 
+  it('ST-08: whole studies from a server that ignores ?view=summary still render their question count', async () => {
+    const actual = await vi.importActual<typeof import('@/services/storageService')>('@/services/storageService');
+    storageMock.getAllStudies.mockImplementation(actual.getAllStudies);
+    const study = makeStoredStudy({
+      config: makeStudyConfig({ name: 'Study Alpha', coreQuestions: ['One?', 'Two?', 'Three?', 'Four?'] }),
+    });
+    const fetchMock = vi.fn(async (url: string) => new Response(
+      JSON.stringify(url.startsWith('/api/studies') ? { studies: [study] } : { mode: 'standalone' }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<StudyList />);
+    const table = await screen.findByRole('table');
+    const row = within(table).getByRole('button', { name: 'Study Alpha' }).closest('tr')!;
+    expect(within(row).getByText('4')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith('/api/studies?view=summary');
+  });
+
   it('ST-08: a study that cannot be read is not opened for editing', async () => {
     const study = makeStoredStudy({ config: makeStudyConfig({ name: 'Study Alpha' }) });
     storageMock.getAllStudies.mockResolvedValue({ studies: [toStudyListItem(study)], outcome: { status: 'ok' } });

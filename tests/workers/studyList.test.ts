@@ -1,7 +1,8 @@
 // Study lists past one RPC response (ST-08). The object pages studies by
 // keyset over (created_at DESC, id DESC) within a stored-byte budget and
-// replies with list items, never whole configurations; the durable client
-// assembles pages up to a Worker byte ceiling and answers too-large past it.
+// replies in the requested view: list items (summary) or whole studies (full);
+// the durable client assembles pages up to a Worker byte ceiling and answers
+// too-large past it.
 // Every RPC here crosses real workerd, whose 32 MiB limit refused the
 // single-response list of 300 maximum-size studies.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,11 +18,13 @@ import {
   MAX_LIST_STUDIES_BYTES,
 } from '../../src/lib/storage/durableObject';
 import { STUDY_MUTATION_MAX_BYTES, validateStudyConfigForCreate } from '../../src/lib/studyConfigValidation';
-import { toStudyListItem, type StudyConfig, type StudyListItem } from '../../src/types';
+import { toStudyListItem, type StoredStudy, type StudyConfig, type StudyListItem } from '../../src/types';
 import { testEnv, workspaceStub } from './helpers';
 import { captureStoreEvents, DAY, sql, studyConfig, T0 } from './fixtures';
 
 const SALT = 'synthetic-rate-limit-salt-0123456789abcdef';
+const SUMMARY = { view: 'summary' } as const;
+const FULL = { view: 'full' } as const;
 const RPC_LIMIT_BYTES = 32 * 1024 * 1024;
 
 beforeEach(async () => {
@@ -52,12 +55,15 @@ function largeConfig(id: string): StudyConfig {
   });
 }
 
+/** The whole study insertLargeStudies' study `index` reads back as. */
+function fullStudy(index: number): StoredStudy {
+  const id = studyId(index);
+  return { id, config: largeConfig(id), createdAt: T0 - index, updatedAt: T0 - index, interviewCount: 0, isLocked: false, revision: 1 };
+}
+
 /** The list item insertLargeStudies' study `index` lists as. */
 function listItem(index: number): StudyListItem {
-  const id = studyId(index);
-  return toStudyListItem({
-    id, config: largeConfig(id), createdAt: T0 - index, updatedAt: T0 - index, interviewCount: 0, isLocked: false, revision: 1,
-  });
+  return toStudyListItem(fullStudy(index));
 }
 
 type Row = { id: string; config: StudyConfig; createdAt: number };
@@ -91,11 +97,15 @@ async function insertSmallStudies(createdAts: number[]): Promise<string[]> {
   return rows.map((row) => row.id);
 }
 
-function listPage(input: { maximum: number; page?: { cursor: string | null; maxPageBytes: number } }): Promise<ListStudiesPage> {
+function listPage(input: {
+  maximum: number;
+  view?: 'full' | 'summary';
+  page?: { cursor: string | null; maxPageBytes: number };
+}): Promise<ListStudiesPage> {
   return workspaceStub().listStudies(input) as Promise<ListStudiesPage>;
 }
 
-async function okPage(input: { maximum: number; page: { cursor: string | null; maxPageBytes: number } }) {
+async function okPage(input: { maximum: number; view?: 'full' | 'summary'; page: { cursor: string | null; maxPageBytes: number } }) {
   const page = await listPage(input);
   if (page.status !== 'ok') throw new Error(page.status);
   return page;
@@ -145,7 +155,7 @@ describe('study lists in workerd (ST-08)', () => {
     const events = captureStoreEvents();
 
     const { namespace, calls } = recordingNamespace();
-    const listed = await storeOn(namespace).listStudies(1_000);
+    const listed = await storeOn(namespace).listStudies(1_000, SUMMARY);
     if (listed.status !== 'ok') throw new Error(listed.status);
     expect(listed.items.map((study) => study.id)).toEqual(Array.from({ length: 300 }, (_, index) => studyId(index)));
     expect(listed.items[0]).toEqual(listItem(0));
@@ -162,12 +172,12 @@ describe('study lists in workerd (ST-08)', () => {
     const bytes = await insertLargeStudies(1_000);
     expect(bytes).toBeGreaterThan(3 * RPC_LIMIT_BYTES);
 
-    const listed = await storeOn(testEnv.WORKSPACE_STORE).listStudies(1_000);
+    const listed = await storeOn(testEnv.WORKSPACE_STORE).listStudies(1_000, SUMMARY);
     if (listed.status !== 'ok') throw new Error(listed.status);
     expect(listed.items).toHaveLength(1_000);
     expect(listed.items.at(-1)).toEqual(listItem(999));
     expect(encoder.encode(JSON.stringify(listed.items)).byteLength).toBeLessThan(MAX_LIST_STUDIES_BYTES);
-    expect(await storeOn(testEnv.WORKSPACE_STORE).listStudies(999)).toEqual({ status: 'too-large', count: 1_000, maximum: 999 });
+    expect(await storeOn(testEnv.WORKSPACE_STORE).listStudies(999, SUMMARY)).toEqual({ status: 'too-large', count: 1_000, maximum: 999 });
   });
 
   it('ST-08: past the Worker ceiling (1,000 studies with 10,000-character CJK descriptions) the list is too-large, never partial', async () => {
@@ -183,7 +193,36 @@ describe('study lists in workerd (ST-08)', () => {
     })))).byteLength;
     expect(items).toBeGreaterThan(MAX_LIST_STUDIES_BYTES);
 
-    expect(await storeOn(testEnv.WORKSPACE_STORE).listStudies(1_000)).toEqual({ status: 'too-large', count: 1_000, maximum: 1_000 });
+    expect(await storeOn(testEnv.WORKSPACE_STORE).listStudies(1_000, SUMMARY)).toEqual({ status: 'too-large', count: 1_000, maximum: 1_000 });
+  });
+
+  it('ST-08: in the full view, 300 maximum-size studies are too-large at the Worker ceiling, never a failed RPC or a partial list', async () => {
+    const bytes = await insertLargeStudies(300);
+    expect(bytes).toBeGreaterThan(RPC_LIMIT_BYTES);
+    const events = captureStoreEvents();
+
+    const { namespace, calls } = recordingNamespace();
+    expect(await storeOn(namespace).listStudies(1_000, FULL)).toEqual({ status: 'too-large', count: 300, maximum: 1_000 });
+    expect(calls.every((call) => (call.input as { view: string }).view === 'full')).toBe(true);
+    // Each full page stays within its stored-byte budget, and assembly stops at the ceiling.
+    expect(Math.max(...calls.map((call) => call.replyBytes))).toBeLessThan(LIST_STUDIES_PAGE_BYTES + 64 * 1024);
+    const loaded = calls.reduce((total, call) => total + (call.rows ?? 0), 0);
+    expect(loaded).toBeLessThan(300);
+    expect(loaded * (bytes / 300)).toBeGreaterThan(MAX_LIST_STUDIES_BYTES);
+    expect(events().filter((event) => event.reason === 'unavailable')).toEqual([]);
+  });
+
+  it('ST-08: a full view that fits spans several pages and lists whole studies, newest first, once each', async () => {
+    const rows = 80;
+    const bytes = await insertLargeStudies(rows);
+    expect(bytes).toBeGreaterThan(2 * LIST_STUDIES_PAGE_BYTES);
+
+    const { namespace, calls } = recordingNamespace();
+    const listed = await storeOn(namespace).listStudies(1_000, FULL);
+    if (listed.status !== 'ok') throw new Error(listed.status);
+    expect(listed.items).toEqual(Array.from({ length: rows }, (_, index) => fullStudy(index)));
+    expect(calls.length).toBeGreaterThanOrEqual(3);
+    expect(encoder.encode(JSON.stringify(listed.items)).byteLength).toBeLessThan(MAX_LIST_STUDIES_BYTES);
   });
 
   it('ST-08: an unpaged request whose studies exceed one response is too-large at the object, never a reply past the RPC limit', async () => {
@@ -198,7 +237,7 @@ describe('study lists in workerd (ST-08)', () => {
     expect(bytes).toBeGreaterThan(2 * LIST_STUDIES_PAGE_BYTES);
 
     const { namespace, calls } = recordingNamespace();
-    const listed = await storeOn(namespace).listStudies(1_000);
+    const listed = await storeOn(namespace).listStudies(1_000, SUMMARY);
     if (listed.status !== 'ok') throw new Error(listed.status);
     expect(listed.items).toEqual(Array.from({ length: rows }, (_, index) => listItem(index)));
     expect(calls.length).toBeGreaterThanOrEqual(3);
@@ -315,8 +354,28 @@ describe('listStudies keyset pages (ST-08)', () => {
     expect([first.items, first.nextCursor]).toEqual([[], cursorAt('not a time', ids[3])]);
     expect(await drain(1)).toEqual([ids[0], ids[4]]);
     expect(await drain(LIST_STUDIES_PAGE_BYTES)).toEqual([ids[0], ids[4]]);
-    const listed = await storeOn(testEnv.WORKSPACE_STORE).listStudies(1_000);
+    const listed = await storeOn(testEnv.WORKSPACE_STORE).listStudies(1_000, SUMMARY);
     expect(listed.status === 'ok' && listed.items.map((study) => study.id)).toEqual([ids[0], ids[4]]);
+  });
+
+  it('ST-08: the view only chooses the projection (full by default); pages and cursors are the same, and an unknown view is unavailable', async () => {
+    const ids = await insertSmallStudies([T0 - 1, T0 - 2]);
+    const first = { cursor: null, maxPageBytes: 1 };
+
+    const summary = await okPage({ maximum: 10, view: 'summary', page: first });
+    const full = await okPage({ maximum: 10, view: 'full', page: first });
+    expect(await okPage({ maximum: 10, page: first })).toEqual(full);
+    expect([summary.nextCursor, summary.count]).toEqual([full.nextCursor, full.count]);
+    const [study] = full.items as StoredStudy[];
+    expect(study.id).toBe(ids[0]);
+    expect(Array.isArray(study.config.coreQuestions)).toBe(true);
+    expect(summary.items).toEqual([toStudyListItem(study)]);
+
+    expect(await listPage({ maximum: 10, view: 'summary' })).toMatchObject({ status: 'ok', items: [toStudyListItem(study), expect.anything()] });
+    for (const view of ['compact', 7, null]) {
+      expect(await listPage({ maximum: 10, view: view as 'full', page: first })).toEqual({ status: 'unavailable' });
+      expect(await listPage({ maximum: 10, view: view as 'full' })).toEqual({ status: 'unavailable' });
+    }
   });
 
   it('ST-08: malformed page requests are unavailable and the object caps any requested budget', async () => {
@@ -364,27 +423,27 @@ describe('durable client study list assembly (ST-08)', () => {
       '2:b': { status: 'ok', items: [study('a')], nextCursor: null, count: 3 },
     };
     const fake = fakeNamespace((input) => pages[input.page.cursor ?? 'start']);
-    expect(await storeOn(fake.namespace).listStudies(3)).toEqual({ status: 'ok', items: [study('c'), study('b'), study('a')] });
+    expect(await storeOn(fake.namespace).listStudies(3, SUMMARY)).toEqual({ status: 'ok', items: [study('c'), study('b'), study('a')] });
     expect(fake.calls).toEqual([
-      { maximum: 3, page: { cursor: null, maxPageBytes: LIST_STUDIES_PAGE_BYTES } },
-      { maximum: 3, page: { cursor: '2:b', maxPageBytes: LIST_STUDIES_PAGE_BYTES } },
+      { maximum: 3, view: 'summary', page: { cursor: null, maxPageBytes: LIST_STUDIES_PAGE_BYTES } },
+      { maximum: 3, view: 'summary', page: { cursor: '2:b', maxPageBytes: LIST_STUDIES_PAGE_BYTES } },
     ]);
     // Studies created between pages can push the assembled total past the maximum.
-    expect(await storeOn(fake.namespace).listStudies(2)).toEqual({ status: 'too-large', count: 3, maximum: 2 });
+    expect(await storeOn(fake.namespace).listStudies(2, SUMMARY)).toEqual({ status: 'too-large', count: 3, maximum: 2 });
 
     const stuck = fakeNamespace(() => ({ status: 'ok', items: [study('x')], nextCursor: '1:x', count: 5 }));
-    expect(await storeOn(stuck.namespace).listStudies(5)).toEqual({ status: 'unavailable' });
+    expect(await storeOn(stuck.namespace).listStudies(5, SUMMARY)).toEqual({ status: 'unavailable' });
 
     const malformed = fakeNamespace(() => ({ status: 'ok', nextCursor: null }));
-    expect(await storeOn(malformed.namespace).listStudies(5)).toEqual({ status: 'unavailable' });
+    expect(await storeOn(malformed.namespace).listStudies(5, SUMMARY)).toEqual({ status: 'unavailable' });
 
     const refused = fakeNamespace(() => ({ status: 'too-large', count: 7, maximum: 5 }));
-    expect(await storeOn(refused.namespace).listStudies(5)).toEqual({ status: 'too-large', count: 7, maximum: 5 });
+    expect(await storeOn(refused.namespace).listStudies(5, SUMMARY)).toEqual({ status: 'too-large', count: 7, maximum: 5 });
 
     const thrown = fakeNamespace(() => {
       throw new Error('RPC reply exceeded the size limit');
     });
-    expect(await storeOn(thrown.namespace).listStudies(5)).toEqual({ status: 'unavailable' });
+    expect(await storeOn(thrown.namespace).listStudies(5, SUMMARY)).toEqual({ status: 'unavailable' });
   });
 
   it('ST-08: the assembled bytes stop at the Worker ceiling, and later pages ask only for what is left', async () => {
@@ -394,7 +453,7 @@ describe('durable client study list assembly (ST-08)', () => {
       served += 1;
       return { status: 'ok', items: [big], nextCursor: `${served}:big`, count: 900 };
     });
-    expect(await storeOn(endless.namespace).listStudies(1_000)).toEqual({ status: 'too-large', count: 900, maximum: 1_000 });
+    expect(await storeOn(endless.namespace).listStudies(1_000, SUMMARY)).toEqual({ status: 'too-large', count: 900, maximum: 1_000 });
     const budgets = (endless.calls as Array<{ page: { maxPageBytes: number } }>).map((call) => call.page.maxPageBytes);
     expect(served).toBe(Math.floor(MAX_LIST_STUDIES_BYTES / (3 * 1024 * 1024)) + 1);
     expect(budgets[0]).toBe(LIST_STUDIES_PAGE_BYTES);

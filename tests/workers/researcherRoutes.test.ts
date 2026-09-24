@@ -285,30 +285,67 @@ describe('interview lists past the Worker byte ceiling (ST-08)', () => {
 });
 
 describe('study lists past one RPC response (ST-08)', () => {
-  it('ST-08: /api/studies lists 300 maximum-size studies (over 32 MiB stored) as list items, never a 503 or a 413', async () => {
-    await researcherRequest(`${ORIGIN}/api/studies`, 'GET');
-    for (let index = 0; index < 300; index += 1) {
+  function largeStudyConfig(id: string) {
+    return studyConfig(id, {
+      description: 'd'.repeat(10_000),
+      consentText: 'c'.repeat(20_000),
+      coreQuestions: Array.from({ length: 45 }, () => 'x'.repeat(2_000)),
+    });
+  }
+
+  async function insertLargeStudies(rows: number): Promise<void> {
+    for (let index = 0; index < rows; index += 1) {
       const id = `b0000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
-      const config = studyConfig(id, {
-        description: 'd'.repeat(10_000),
-        consentText: 'c'.repeat(20_000),
-        coreQuestions: Array.from({ length: 45 }, () => 'x'.repeat(2_000)),
-      });
       await sql(
         `INSERT INTO studies (id, config_json, revision, created_at, updated_at, interview_count, is_locked, sample_fixture)
          VALUES (?, ?, 1, ?, ?, 0, 0, 0)`,
         id,
-        JSON.stringify(config),
+        JSON.stringify(largeStudyConfig(id)),
         T0 - index,
         T0 - index,
       );
     }
+  }
 
-    const response = await studiesGET();
+  it('ST-08: ?view=summary lists 300 maximum-size studies (over 32 MiB stored) as list items, never a 503 or a 413', async () => {
+    await researcherRequest(`${ORIGIN}/api/studies`, 'GET');
+    await insertLargeStudies(300);
+
+    const response = await studiesGET(await researcherRequest(`${ORIGIN}/api/studies?view=summary`, 'GET'));
     expect(response.status).toBe(200);
     const body = await response.json() as { studies: Array<{ id: string; config: object; coreQuestionCount: number }> };
     expect(body.studies).toHaveLength(300);
     expect(body.studies[0]).toMatchObject({ id: 'b0000000-0000-4000-8000-000000000000', coreQuestionCount: 45 });
     expect(Object.keys(body.studies[0].config).sort()).toEqual(['description', 'name']);
+  });
+
+  it('ST-08: without a view the same 300 studies answer 413 (whole studies past the Worker ceiling), never a 503 or a partial list', async () => {
+    await researcherRequest(`${ORIGIN}/api/studies`, 'GET');
+    await insertLargeStudies(300);
+
+    for (const url of [`${ORIGIN}/api/studies`, `${ORIGIN}/api/studies?view=full`]) {
+      const response = await studiesGET(await researcherRequest(url, 'GET'));
+      expect(response.status).toBe(413);
+      expect(await response.json()).toEqual({ error: 'This study list is too large to load at once.' });
+    }
+  });
+
+  it('ST-08: without a view, studies that fit are listed whole (the legacy response)', async () => {
+    await researcherRequest(`${ORIGIN}/api/studies`, 'GET');
+    await insertLargeStudies(40);
+
+    const response = await studiesGET(await researcherRequest(`${ORIGIN}/api/studies`, 'GET'));
+    expect(response.status).toBe(200);
+    const body = await response.json() as { studies: Array<{ id: string; config: ReturnType<typeof largeStudyConfig> }> };
+    expect(body.studies).toHaveLength(40);
+    expect(body.studies[39].config).toEqual(largeStudyConfig('b0000000-0000-4000-8000-000000000039'));
+    expect(body.studies[0]).not.toHaveProperty('coreQuestionCount');
+  });
+
+  it('ST-08: an unknown or repeated view is a 400', async () => {
+    for (const query of ['view=compact', 'view=', 'view=summary&view=full']) {
+      const response = await studiesGET(await researcherRequest(`${ORIGIN}/api/studies?${query}`, 'GET'));
+      expect(response.status).toBe(400);
+    }
   });
 });

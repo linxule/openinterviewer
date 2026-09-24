@@ -1,7 +1,16 @@
 // Storage Service - Client-side interface for interview storage
 // Calls API routes which interact with Upstash Redis
 
-import { AggregateSynthesisResult, isPendingStudyStub, PendingStudyStub, StoredInterview, StoredStudy, StudyConfig, StudyWorkspaceItem } from '@/types';
+import {
+  AggregateSynthesisResult,
+  isPendingStudyStub,
+  PendingStudyStub,
+  StoredInterview,
+  StoredStudy,
+  StudyConfig,
+  StudyWorkspaceItem,
+  toStudyListItem,
+} from '@/types';
 import { logRequestEvent, logRequestFailure } from '@/lib/requestLog';
 import { buildParticipantOrPreviewHeaders } from '@/services/participantHeaders';
 export { isPendingStudyStub };
@@ -386,6 +395,15 @@ export function readStudyInterviews(studyId: string): Promise<ResearcherStorageO
   );
 }
 
+/**
+ * A server from before the summary view ignores `?view=summary` and answers
+ * whole studies; those are projected here, so the list renders either way.
+ */
+function asStudyListEntry(item: StudyWorkspaceItem | StoredStudy): StudyWorkspaceItem {
+  if ('coreQuestionCount' in item || 'reconciliationPending' in item) return item;
+  return toStudyListItem(item);
+}
+
 // Get all studies (researcher only)
 export async function getAllStudies(): Promise<{
   studies: StudyWorkspaceItem[];
@@ -394,9 +412,9 @@ export async function getAllStudies(): Promise<{
   outcome: ResearcherStorageOutcome<{ studies: StudyWorkspaceItem[]; pendingStudies: PendingStudyStub[] }>;
 }> {
   try {
-    const response = await fetch('/api/studies');
+    const response = await fetch('/api/studies?view=summary');
     const data = await response.json().catch(() => ({})) as {
-      studies?: StudyWorkspaceItem[];
+      studies?: Array<StudyWorkspaceItem | StoredStudy>;
       pendingStudies?: PendingStudyStub[];
       warning?: string;
       code?: string;
@@ -412,7 +430,7 @@ export async function getAllStudies(): Promise<{
       };
     }
     const value = {
-      studies: data.studies || [],
+      studies: (data.studies || []).map(asStudyListEntry),
       pendingStudies: data.pendingStudies || [],
     };
     return {

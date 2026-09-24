@@ -28,7 +28,7 @@ beforeEach(() => {
 
 describe('researcher API setup boundary', () => {
   it('returns 428 before touching researcher storage', async () => {
-    const response = await GET();
+    const response = await GET(new Request('http://localhost/api/studies'));
 
     expect(response.status).toBe(428);
     await expect(response.json()).resolves.toEqual({

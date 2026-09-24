@@ -217,6 +217,14 @@ export type ClearSampleOutcome =
 
 // ---------- Collections ----------
 
+/**
+ * How a study list carries each study: `full` is the whole stored study (the
+ * legacy GET /api/studies response); `summary` is a list item without the
+ * configuration beyond its name and description (ST-08).
+ */
+export type StudyListView = 'full' | 'summary';
+export type StudyListEntry<V extends StudyListView> = V extends 'summary' ? StudyListItem : StoredStudy;
+
 export type ListInterviewsInput =
   | { scope: 'study'; studyId: string; maximum: number }
   | { scope: 'all'; maximum: number };
@@ -227,8 +235,11 @@ export interface WorkspaceStorePort {
   readiness(): Promise<StoreReadiness>;
 
   getStudy(studyId: string): Promise<StudyLoadResult>;
-  /** Newest first, as list items (never whole configurations); more than `maximum` is too-large. */
-  listStudies(maximum: number): Promise<CollectionLoadResult<StudyListItem>>;
+  /** Newest first, in the requested view; more than `maximum` is too-large. */
+  listStudies<V extends StudyListView>(
+    maximum: number,
+    options: { view: V },
+  ): Promise<CollectionLoadResult<StudyListEntry<V>>>;
   createStudy(input: CreateStudyInput): Promise<CreateStudyOutcome>;
   replaceStudyConfig(input: {
     studyId: string;

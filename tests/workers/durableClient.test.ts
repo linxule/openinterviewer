@@ -83,7 +83,8 @@ describe('durable client against the real object (ST-01, ST-03, ST-06)', () => {
     const input = await createStudyInput();
     expect(await store.createStudy(input)).toEqual({ status: 'created', study: input.candidate, replayed: false });
     expect(await store.getStudy(input.candidate.id)).toEqual({ status: 'found', study: input.candidate });
-    expect(await store.listStudies(10)).toEqual({ status: 'ok', items: [toStudyListItem(input.candidate)] });
+    expect(await store.listStudies(10, { view: 'summary' })).toEqual({ status: 'ok', items: [toStudyListItem(input.candidate)] });
+    expect(await store.listStudies(10, { view: 'full' })).toEqual({ status: 'ok', items: [input.candidate] });
   });
 
   it('ST-03: a link code is returned once as 43 opaque characters and only its sha256 digest is stored', async () => {
@@ -443,7 +444,7 @@ describe('durable client transport contract (ST-01, JOB-04)', () => {
 
     expect(await store.readiness()).toEqual(unavailable);
     expect(await store.getStudy('s')).toEqual(unavailable);
-    expect(await store.listStudies(10)).toEqual(unavailable);
+    expect(await store.listStudies(10, { view: 'summary' })).toEqual(unavailable);
     expect(await store.getInterview('i')).toEqual(unavailable);
     expect(await store.listInterviews({ scope: 'all', maximum: 10 })).toEqual(unavailable);
     expect(await store.getAggregate('s')).toEqual(unavailable);
@@ -511,7 +512,7 @@ describe('durable client transport contract (ST-01, JOB-04)', () => {
     // Reads and unions without an ambiguous member: unavailable.
     expect(await store.readiness()).toEqual(unavailable);
     expect(await store.getStudy('s')).toEqual(unavailable);
-    expect(await store.listStudies(10)).toEqual(unavailable);
+    expect(await store.listStudies(10, { view: 'summary' })).toEqual(unavailable);
     expect(await store.resolveParticipantLinkByCode({ code: 'a'.repeat(43), now: T0, purpose: 'exchange' })).toEqual(unavailable);
     expect(await store.getParticipantLinkById({ linkId: 'a'.repeat(64), now: T0 })).toEqual(unavailable);
     expect(await store.listParticipantLinks({ studyId: 's', maximum: 10, now: T0 })).toEqual(unavailable);

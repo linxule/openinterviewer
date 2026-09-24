@@ -349,13 +349,31 @@ export function defineWorkspaceStoreContract(label: string, harness: WorkspaceSt
         const newest = await createStudy(store, base);
         const middle = await createStudy(store, base - 1_000);
 
-        const listed = expectStatus(await store.listStudies(1_000), 'ok');
-        const ours = listed.items.filter(study => [oldest.id, middle.id, newest.id].includes(study.id));
-        expect(ours.map(study => study.id)).toEqual([newest.id, middle.id, oldest.id]);
+        for (const view of ['full', 'summary'] as const) {
+          const listed = expectStatus(await store.listStudies(1_000, { view }), 'ok');
+          const ours = listed.items.filter(study => [oldest.id, middle.id, newest.id].includes(study.id));
+          expect(ours.map(study => study.id)).toEqual([newest.id, middle.id, oldest.id]);
 
-        const bounded = expectStatus(await store.listStudies(1), 'too-large');
-        expect(bounded.maximum).toBe(1);
-        expect(bounded.count).toBeGreaterThanOrEqual(3);
+          const bounded = expectStatus(await store.listStudies(1, { view }), 'too-large');
+          expect(bounded.maximum).toBe(1);
+          expect(bounded.count).toBeGreaterThanOrEqual(3);
+        }
+      });
+
+      it('ST-08: the full view lists whole studies; the summary view lists items without the configuration', async () => {
+        const store = await harness.createStore();
+        const study = await createStudy(store);
+
+        const full = expectStatus(await store.listStudies(1_000, { view: 'full' }), 'ok');
+        expect(full.items.find(item => item.id === study.id)).toEqual(study);
+
+        const summary = expectStatus(await store.listStudies(1_000, { view: 'summary' }), 'ok');
+        const { config, ...metadata } = study;
+        expect(summary.items.find(item => item.id === study.id)).toEqual({
+          ...metadata,
+          config: { name: config.name, description: config.description },
+          coreQuestionCount: config.coreQuestions.length,
+        });
       });
 
       it('ST-01: replacing the config advances the revision and a stale expected revision conflicts', async () => {
@@ -445,7 +463,7 @@ export function defineWorkspaceStoreContract(label: string, harness: WorkspaceSt
         const deleted = await store.deleteStudy({ studyId: study.id, now: Date.now() });
         expect(deleted).toMatchObject({ status: 'deleted', success: true });
         expect(await store.getStudy(study.id)).toEqual({ status: 'not-found' });
-        const listed = expectStatus(await store.listStudies(1_000), 'ok');
+        const listed = expectStatus(await store.listStudies(1_000, { view: 'summary' }), 'ok');
         expect(listed.items.some(item => item.id === study.id)).toBe(false);
 
         const again = await store.deleteStudy({ studyId: study.id, now: Date.now() });
