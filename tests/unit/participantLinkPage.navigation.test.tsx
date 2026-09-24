@@ -14,13 +14,15 @@ vi.mock('next/navigation', () => ({
 
 import ParticipantPage from '@/app/p/[token]/page';
 
-function resolvedLink(): Response {
+const ABSENT = Symbol('absent');
+
+function resolvedLink(aiTransport: unknown = 'direct'): Response {
   return new Response(JSON.stringify({
     valid: true,
     data: {
       studyConfig: makeStudyConfig({ id: 'study-link' }),
       sessionHandle: 'participant-handle-link-123456',
-      aiTransport: 'direct',
+      ...(aiTransport === ABSENT ? {} : { aiTransport }),
     },
   }), { status: 200, headers: { 'Content-Type': 'application/json' } });
 }
@@ -79,5 +81,26 @@ describe('participant link page during a delayed route change', () => {
     expect(await screen.findByText('Invalid or expired link')).toBeInTheDocument();
     expect(navigation.replace).not.toHaveBeenCalled();
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+});
+
+describe('participant link page transport disclosure (RT-11)', () => {
+  it.each(['direct', 'gateway', 'cloudflare-gateway'])('carries the exchanged transport %s to the consent page', async (transport) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(resolvedLink(transport)));
+
+    render(<ParticipantPage />);
+
+    await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith('/consent'));
+    expect(useStore.getState().aiTransport).toBe(transport);
+  });
+
+  it.each([ABSENT, 'carrier-pigeon', null])('fails closed on an unknown transport (%s): no session and no consent page', async (transport) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(resolvedLink(transport)));
+
+    render(<ParticipantPage />);
+
+    expect(await screen.findByText('This study could not confirm how your responses are sent')).toBeInTheDocument();
+    expect(navigation.replace).not.toHaveBeenCalled();
+    expect(useStore.getState().participantSessionHandle).toBeNull();
   });
 });

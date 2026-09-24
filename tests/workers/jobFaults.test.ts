@@ -12,6 +12,7 @@ import { ClaudeProvider } from '../../src/lib/providers/claude';
 import { GeminiProvider } from '../../src/lib/providers/gemini';
 import { OpenAIProvider } from '../../src/lib/providers/openai';
 import { OpenRouterProvider } from '../../src/lib/providers/openrouter';
+import { providerEndpoint } from '../../src/lib/providers/endpoint';
 import { workspaceStub } from './helpers';
 import {
   analysisRow,
@@ -166,7 +167,12 @@ describe('R2: an adapter and its SDK load only when a queued job executes', () =
     const fresh = '../../cloudflare/analysis/execute?r2';
     const execute = await import(/* @vite-ignore */ fresh) as typeof import('../../cloudflare/analysis/execute');
     const fixture = installProviderFixture({ kind: 'success' });
-    const provider = execute.createQueuedSynthesisProvider('openrouter', PROVIDER_MODELS.openrouter.requested, 'synthetic-openrouter');
+    const provider = execute.createQueuedSynthesisProvider(
+      'openrouter',
+      PROVIDER_MODELS.openrouter.requested,
+      'synthetic-openrouter',
+      providerEndpoint('openrouter', { transport: 'direct' }),
+    );
     const failure = await provider
       .synthesizeInterview(HISTORY, studyConfig('study-r2', 'openrouter'), BEHAVIOR, null, { kind: 'queued-synthesis', deadlineMs: TEST_DEADLINE_MS })
       .then(() => null, (error: unknown) => error);

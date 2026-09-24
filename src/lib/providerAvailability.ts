@@ -4,9 +4,8 @@ import { resolveProviderType } from './providers';
 import {
   isGatewayAuthConfigured,
   isGatewayProvider,
-  resolveAITransport,
 } from './aiTransport';
-import { isHostedMode } from './mode';
+import { activeAITransport } from './runtime/capabilities';
 
 /** Return the selected provider when the active transport cannot serve it. */
 export function missingProviderCredential(
@@ -17,7 +16,10 @@ export function missingProviderCredential(
   config: StudyConfig,
 ): AIProviderType | null {
   const provider = resolveProviderType(config);
-  if (!isHostedMode() && resolveAITransport() === 'gateway') {
+  // Vercel AI Gateway (Node) serves its three providers with gateway auth.
+  // Direct and Cloudflare AI Gateway both send the provider's own key, so
+  // availability is key presence.
+  if (activeAITransport() === 'gateway') {
     return isGatewayProvider(provider) && isGatewayAuthConfigured() ? null : provider;
   }
   const credential = {

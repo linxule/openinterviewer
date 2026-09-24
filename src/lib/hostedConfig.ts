@@ -16,6 +16,7 @@ import { isProductionStrict } from './runtime/target';
 import { workerBinding } from './runtime/workerInvocation';
 import { isValidRecoveryEpoch, isValidWorkspaceId } from './storage/analysisProtocol';
 import { loginBodyBytes, MAX_CLOUDFLARE_LOGIN_BODY_BYTES } from './loginBody';
+import { providerRouteErrors } from './providers/endpoint';
 import type { StoreReadiness } from './storage/types';
 
 export const MIN_HOSTED_SECRET_LENGTH = 32;
@@ -69,12 +70,19 @@ export type HostedConfigError =
   | 'invalid_workspace_bootstrap'
   | 'weak_operator_token'
   | 'placeholder_secret'
+  | 'provider_sdk_env_override'
+  | 'invalid_cf_ai_gateway_account_id'
+  | 'invalid_cf_ai_gateway_id'
+  | 'missing_cf_ai_gateway_token'
+  | 'weak_cf_ai_gateway_token'
+  | 'cf_ai_gateway_config_without_transport'
   | WorkspaceReadinessError;
 
 /** Durable workspace readiness outcomes (Cloudflare target only). */
 export type WorkspaceReadinessError =
   | 'workspace_unavailable'
   | 'workspace_uninitialized'
+  | 'workspace_unconfigured'
   | 'workspace_schema_unsupported'
   | 'workspace_identity_mismatch'
   | 'workspace_recovery_epoch_mismatch'
@@ -461,19 +469,41 @@ export function validateCloudflareConfig(
     if (rawOperatorToken.length < MIN_HOSTED_SECRET_LENGTH) errors.push('weak_operator_token');
     else operatorToken = rawOperatorToken;
   }
-  const independent = [adminPassword || null, sessionSecret, participantSecret, rateLimitSalt, operatorToken]
+  // The AI Gateway Run token (RT-11) is held to the placeholder rule and must
+  // differ from every other secret and every provider key. It may stay bound
+  // on direct transport, where it is never sent.
+  const rawGatewayToken = present(env.CF_AI_GATEWAY_TOKEN);
+  const gatewayToken = rawGatewayToken && !isPlaceholder(rawGatewayToken) ? rawGatewayToken : null;
+  const independent = [adminPassword || null, sessionSecret, participantSecret, rateLimitSalt, operatorToken, gatewayToken]
     .filter((value): value is string => !!value);
   if (independent.length >= 2 && new Set(independent).size !== independent.length) {
     errors.push('secrets_not_independent');
   }
 
+  // AI_PROVIDER names the default provider, whose key is required. Any of
+  // the four keys may be bound besides it; each bound key is held to the
+  // same placeholder rule.
   const provider = present(env.AI_PROVIDER) || 'gemini';
   if (!Object.prototype.hasOwnProperty.call(PROVIDER_KEY_NAMES, provider)) {
     errors.push('invalid_ai_provider');
-  } else {
-    const key = present(env[PROVIDER_KEY_NAMES[provider as keyof typeof PROVIDER_KEY_NAMES]]);
-    if (!key) errors.push('missing_ai_provider_key');
-    else isPlaceholder(key);
+  } else if (!present(env[PROVIDER_KEY_NAMES[provider as keyof typeof PROVIDER_KEY_NAMES]])) {
+    errors.push('missing_ai_provider_key');
+  }
+  for (const name of Object.values(PROVIDER_KEY_NAMES)) {
+    const key = present(env[name]);
+    if (key) isPlaceholder(key);
+    if (key && gatewayToken && key === gatewayToken && !errors.includes('secrets_not_independent')) {
+      errors.push('secrets_not_independent');
+    }
+  }
+  // Adapters get explicit endpoints on Cloudflare; an SDK override variable
+  // (base URL, auth token, custom headers, logging, Vertex selection) is
+  // refused rather than trusted to be ignored. The route resolver also owns
+  // the gateway identifiers and token shape, so readiness, the fetch path and
+  // the Queue consumer agree. The transport value itself is a capability
+  // error, resolved before this validator runs.
+  for (const error of providerRouteErrors(env)) {
+    if (error !== 'invalid_ai_transport') errors.push(error);
   }
 
   if (placeholder) errors.push('placeholder_secret');
@@ -507,6 +537,8 @@ export function workspaceReadinessError(readiness: StoreReadiness | null | undef
         return 'workspace_maintenance';
       case 'workspace-uninitialized':
         return 'workspace_uninitialized';
+      case 'workspace-unconfigured':
+        return 'workspace_unconfigured';
       case 'schema-unsupported':
         return 'workspace_schema_unsupported';
       case 'workspace-identity-mismatch':
@@ -544,7 +576,7 @@ export function getPublicConfig(
     const errors = validateCloudflareConfig(env, bindings ?? workerBindingPresence());
     return {
       mode: 'standalone',
-      aiTransport: 'direct',
+      aiTransport: capabilities.capabilities.transport,
       ready: errors.length === 0,
       oauth: { google: false, github: false },
       errors,

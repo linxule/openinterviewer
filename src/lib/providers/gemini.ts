@@ -7,6 +7,7 @@ import {
   type ProviderExecutionPolicy,
   type ProviderResult,
 } from '../ai';
+import type { EffectiveTransport, ProviderEndpoint } from './endpoint';
 import {
   buildAggregateSynthesisPrompt,
   buildGreetingPrompt,
@@ -99,12 +100,29 @@ export function toGeminiResponseSchema(schema: ProviderJsonSchema): ProviderJson
 export class GeminiProvider implements AIProvider {
   private readonly ai: GoogleGenAI;
   private readonly model: string;
+  private readonly transport: EffectiveTransport;
 
-  constructor(model?: string, apiKey?: string | null) {
+  /**
+   * `endpoint` (Cloudflare target): the Gemini API (never Vertex), a fixed
+   * API version and an explicit base URL and headers, so no SDK environment
+   * default is ever read. Without it, construction is unchanged.
+   */
+  constructor(model?: string, apiKey?: string | null, endpoint?: ProviderEndpoint) {
     const key = apiKey !== undefined ? (apiKey || undefined) : process.env.GEMINI_API_KEY;
     if (!key) throw new Error('GEMINI_API_KEY is required');
 
-    this.ai = new GoogleGenAI({ apiKey: key });
+    this.transport = endpoint?.transport ?? 'direct';
+    this.ai = endpoint
+      ? new GoogleGenAI({
+        apiKey: key,
+        vertexai: false,
+        apiVersion: 'v1beta',
+        httpOptions: {
+          baseUrl: endpoint.baseURL,
+          ...(Object.keys(endpoint.headers).length > 0 ? { headers: { ...endpoint.headers } } : {}),
+        },
+      })
+      : new GoogleGenAI({ apiKey: key });
     this.model = model
       || process.env.GEMINI_MODEL
       || process.env.AI_MODEL
@@ -217,7 +235,7 @@ export class GeminiProvider implements AIProvider {
       policy,
     });
     const value = this.parseStructured(response.output_text, 'synthesis', validateSynthesisResult);
-    return providerResult(value, execution('gemini', requestedModel, response.model));
+    return providerResult(value, execution('gemini', requestedModel, response.model, undefined, this.transport));
   }
 
   async synthesizeAggregate(
@@ -239,7 +257,7 @@ export class GeminiProvider implements AIProvider {
       'aggregate-synthesis',
       validateAggregateSynthesisPayload,
     );
-    return providerResult(value, execution('gemini', requestedModel, response.model));
+    return providerResult(value, execution('gemini', requestedModel, response.model, undefined, this.transport));
   }
 
   async generateFollowupStudy(
@@ -256,7 +274,7 @@ export class GeminiProvider implements AIProvider {
       operation: 'follow-up',
     });
     const value = this.parseStructured(response.output_text, 'follow-up', validateFollowupStudy);
-    return providerResult(value, execution('gemini', requestedModel, response.model));
+    return providerResult(value, execution('gemini', requestedModel, response.model, undefined, this.transport));
   }
 
   private parseStructured<T>(

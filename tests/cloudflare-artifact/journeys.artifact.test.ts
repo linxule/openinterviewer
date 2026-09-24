@@ -1,11 +1,13 @@
-// Production-artifact API journeys (VERIFY-02/03, JOB-01/02, ST-08, RT-05).
+// Production-artifact API journeys (VERIFY-02/03, JOB-01/02, ST-08, RT-05, RT-11).
 // Each journey runs the prebuilt Worker from dist/cloudflare/artifact through
 // wrangler's createTestHarness: real OpenNext handlers, the real WorkspaceStore
 // on local SQLite, its real alarm and the local Queue consumer. The test acts
 // only as the browser clients in src/services do; background analysis runs
 // with no client action. Outbound Worker requests reach this Node process,
 // where synthetic fixtures answer in each provider's wire format and every
-// other destination is refused and recorded (harness.ts).
+// other destination is refused and recorded (harness.ts). Every provider runs
+// once direct and once through the Cloudflare AI Gateway route, selected only
+// by runtime bindings: the artifact is built with AI_TRANSPORT=direct.
 import { randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -26,6 +28,7 @@ import {
 } from '../../src/types';
 
 type Provider = 'openai' | 'claude' | 'gemini' | 'openrouter';
+type Transport = 'direct' | 'cloudflare-gateway';
 type Operation = 'greeting' | 'interview' | 'synthesis' | 'unclassified';
 type ProviderCall = {
   operation: Operation;
@@ -33,12 +36,16 @@ type ProviderCall = {
   path: string;
   model: unknown;
   keyPresented: boolean;
+  /** Every cf-aig-* request header, by lower-case name. */
+  cfAig: Record<string, string>;
   body: string;
 };
 
 type ProviderSpec = {
   host: string;
   path: string;
+  /** The native path below the gateway's per-provider slug (RT-11). */
+  gatewayPath: string;
   keyName: 'OPENAI_API_KEY' | 'ANTHROPIC_API_KEY' | 'GEMINI_API_KEY' | 'OPENROUTER_API_KEY';
   key: string;
   defaultModel: string;
@@ -55,6 +62,7 @@ const PROVIDERS: Readonly<Record<Provider, ProviderSpec>> = {
   openai: {
     host: 'api.openai.com',
     path: '/v1/responses',
+    gatewayPath: '/openai/responses',
     keyName: 'OPENAI_API_KEY',
     key: SYNTHETIC_SECRETS.OPENAI_API_KEY,
     defaultModel: DEFAULT_OPENAI_MODEL,
@@ -64,6 +72,7 @@ const PROVIDERS: Readonly<Record<Provider, ProviderSpec>> = {
   claude: {
     host: 'api.anthropic.com',
     path: '/v1/messages',
+    gatewayPath: '/anthropic/v1/messages',
     keyName: 'ANTHROPIC_API_KEY',
     key: 'sk-ant-synthetic-artifact-claude-0001',
     defaultModel: DEFAULT_CLAUDE_MODEL,
@@ -73,6 +82,7 @@ const PROVIDERS: Readonly<Record<Provider, ProviderSpec>> = {
   gemini: {
     host: 'generativelanguage.googleapis.com',
     path: '/v1beta/interactions',
+    gatewayPath: '/google-ai-studio/v1beta/interactions',
     keyName: 'GEMINI_API_KEY',
     key: 'synthetic-artifact-gemini-key-0001',
     defaultModel: DEFAULT_GEMINI_MODEL,
@@ -82,6 +92,7 @@ const PROVIDERS: Readonly<Record<Provider, ProviderSpec>> = {
   openrouter: {
     host: 'openrouter.ai',
     path: '/api/v1/chat/completions',
+    gatewayPath: '/openrouter/chat/completions',
     keyName: 'OPENROUTER_API_KEY',
     key: 'sk-or-synthetic-artifact-openrouter-0001',
     defaultModel: DEFAULT_OPENROUTER_MODEL,
@@ -90,6 +101,40 @@ const PROVIDERS: Readonly<Record<Provider, ProviderSpec>> = {
     routedProvider: 'Anthropic',
   },
 };
+
+// RT-11: synthetic gateway bindings. The account ID matches the credential-like
+// name rule, so launchers strip it from their own environment; the Worker
+// receives it only as the var passed here.
+const GATEWAY_ACCOUNT_ID = '0123456789abcdef0123456789abcdef';
+const GATEWAY_ID = 'oi-artifact-journey';
+const GATEWAY_TOKEN = 'synthetic-artifact-ai-gateway-run-token-0001';
+const GATEWAY_HOST = 'gateway.ai.cloudflare.com';
+
+/** Written out here, not imported, so the test does not share the Worker's constant. */
+const EXPECTED_CF_AIG_HEADERS = {
+  'cf-aig-authorization': `Bearer ${GATEWAY_TOKEN}`,
+  'cf-aig-collect-log': 'false',
+  'cf-aig-collect-log-payload': 'false',
+  'cf-aig-skip-cache': 'true',
+  'cf-aig-max-attempts': '1',
+  'cf-aig-no-wholesale': 'true',
+};
+
+function providerRoute(provider: Provider, transport: Transport): { host: string; path: string } {
+  const spec = PROVIDERS[provider];
+  return transport === 'direct'
+    ? { host: spec.host, path: spec.path }
+    : { host: GATEWAY_HOST, path: `/v1/${GATEWAY_ACCOUNT_ID}/${GATEWAY_ID}${spec.gatewayPath}` };
+}
+
+function transportBindings(transport: Transport): { vars: Record<string, string>; secrets: Record<string, string> } {
+  return transport === 'direct'
+    ? { vars: {}, secrets: {} }
+    : {
+      vars: { AI_TRANSPORT: 'cloudflare-gateway', CF_AI_GATEWAY_ACCOUNT_ID: GATEWAY_ACCOUNT_ID, CF_AI_GATEWAY_ID: GATEWAY_ID },
+      secrets: { CF_AI_GATEWAY_TOKEN: GATEWAY_TOKEN },
+    };
+}
 
 // ---------- Synthetic research content ----------
 
@@ -186,11 +231,15 @@ function responseBody(provider: Provider, text: string): unknown {
   }
 }
 
-/** Answers greeting, interview turn and synthesis in the provider's shape; records every call. */
-function installProviderFixture(app: ArtifactHarness, provider: Provider): ProviderCall[] {
+/**
+ * Answers greeting, interview turn and synthesis in the provider's shape at the
+ * transport's route; records every call.
+ */
+function installProviderFixture(app: ArtifactHarness, provider: Provider, transport: Transport): ProviderCall[] {
   const spec = PROVIDERS[provider];
+  const route = providerRoute(provider, transport);
   const calls: ProviderCall[] = [];
-  app.setFixture(spec.host, async (request) => {
+  app.setFixture(route.host, async (request) => {
     const url = new URL(request.url);
     const raw = await request.text();
     let body: unknown = null;
@@ -202,8 +251,12 @@ function installProviderFixture(app: ArtifactHarness, provider: Provider): Provi
     const operation = classify(provider, body, raw);
     const presented = [...request.headers.values()].some((value) => value.includes(spec.key))
       || url.search.includes(spec.key);
-    calls.push({ operation, method: request.method, path: url.pathname, model: at(body, 'model'), keyPresented: presented, body: raw });
-    if (request.method !== 'POST' || url.pathname !== spec.path || operation === 'unclassified') {
+    const cfAig: Record<string, string> = {};
+    request.headers.forEach((value, name) => {
+      if (name.toLowerCase().startsWith('cf-aig-')) cfAig[name.toLowerCase()] = value;
+    });
+    calls.push({ operation, method: request.method, path: url.pathname, model: at(body, 'model'), keyPresented: presented, cfAig, body: raw });
+    if (request.method !== 'POST' || url.pathname !== route.path || operation === 'unclassified') {
       return Response.json({ error: { message: 'unexpected synthetic request', type: 'invalid_request_error' } }, { status: 400 });
     }
     const text = operation === 'greeting' ? GREETING : JSON.stringify(operation === 'interview' ? INTERVIEW_TURN : SYNTHESIS);
@@ -280,7 +333,8 @@ async function mintLink(app: ArtifactHarness, researcher: string, studyId: strin
   return body.token;
 }
 
-type ParticipantSession = { cookie: string; handle: string };
+/** `aiTransport` is what the consent page discloses and echoes back (D9). */
+type ParticipantSession = { cookie: string; handle: string; aiTransport: string };
 
 async function exchange(app: ArtifactHarness, code: string): Promise<ParticipantSession> {
   const response = await send(app, `/api/generate-link?token=${encodeURIComponent(code)}`);
@@ -289,9 +343,9 @@ async function exchange(app: ArtifactHarness, code: string): Promise<Participant
   const cookies = response.headers.getSetCookie();
   expect(cookies).toHaveLength(1);
   expect(cookies[0]).toMatch(/HttpOnly/i);
-  const body = await readJson(response) as { valid: boolean; data: { sessionHandle: string } };
+  const body = await readJson(response) as { valid: boolean; data: { sessionHandle: string; aiTransport: string } };
   expect(body.valid).toBe(true);
-  return { cookie: cookies[0].split(';')[0], handle: body.data.sessionHandle };
+  return { cookie: cookies[0].split(';')[0], handle: body.data.sessionHandle, aiTransport: body.data.aiTransport };
 }
 
 /** buildParticipantOrPreviewHeaders: the session selector accompanies the HttpOnly cookie. */
@@ -300,7 +354,7 @@ function participantPost(app: ArtifactHarness, session: ParticipantSession, path
 }
 
 async function consent(app: ArtifactHarness, session: ParticipantSession, studyId: string): Promise<void> {
-  const response = await participantPost(app, session, '/api/consent', { studyId });
+  const response = await participantPost(app, session, '/api/consent', { studyId, disclosedTransport: session.aiTransport });
   expect(response.status).toBe(200);
   expect(await readJson(response)).toMatchObject({ success: true, preview: false });
 }
@@ -367,10 +421,16 @@ function logText(app: ArtifactHarness): string {
   return app.harness.getLogs().map((log) => log.message).join('\n');
 }
 
-// ---------- 1. One full journey per provider ----------
+// ---------- 1. One full journey per provider and transport ----------
 
-describe.each(Object.keys(PROVIDERS) as Provider[])('%s journey through the production artifact (VERIFY-02/03, JOB-01/02, ST-08, RT-05)', (provider) => {
+const JOURNEYS: ReadonlyArray<[Provider, Transport]> = (['direct', 'cloudflare-gateway'] as const)
+  .flatMap((transport) => (Object.keys(PROVIDERS) as Provider[]).map((provider): [Provider, Transport] => [provider, transport]));
+
+describe.each(JOURNEYS)('%s journey, %s transport, through the production artifact (VERIFY-02/03, JOB-01/02, ST-08, RT-05, RT-11)', (provider, transport) => {
   const spec = PROVIDERS[provider];
+  const route = providerRoute(provider, transport);
+  const bindings = transportBindings(transport);
+  const viaGateway = transport === 'cloudflare-gateway';
   let app: ArtifactHarness;
   let calls: ProviderCall[];
   let researcher: string;
@@ -380,23 +440,25 @@ describe.each(Object.keys(PROVIDERS) as Provider[])('%s journey through the prod
 
   beforeAll(async () => {
     app = await startArtifact({
-      vars: { AI_PROVIDER: provider },
+      vars: { AI_PROVIDER: provider, ...bindings.vars },
       omitSecrets: ['OPENAI_API_KEY'],
-      secrets: { [spec.keyName]: spec.key },
+      secrets: { [spec.keyName]: spec.key, ...bindings.secrets },
     });
-    calls = installProviderFixture(app, provider);
+    calls = installProviderFixture(app, provider, transport);
     outboundStart = app.outbound.length;
   });
 
   afterAll(async () => {
-    app?.setFixture(spec.host, null);
+    app?.setFixture(route.host, null);
     await app?.close();
   });
 
-  it(`VERIFY-03/JOB-01 ${provider}: a participant saves and analysis completes in the background with exactly one synthesis request`, async () => {
+  it(`VERIFY-03/JOB-01 ${provider} (${transport}): a participant saves and analysis completes in the background with exactly one synthesis request`, async () => {
     expect(spec.studyModel).not.toBe(spec.defaultModel);
     const readiness = await readJson(await send(app, '/api/config/readiness'));
     expect(readiness).toMatchObject({ ready: true, analysisExecution: 'queued-v2' });
+    // RT-11: the transport comes from the runtime bindings, not the build-time AI_TRANSPORT=direct.
+    expect(await readJson(await send(app, '/api/config/mode'))).toMatchObject({ aiTransport: transport, ready: true });
 
     researcher = await signIn(app);
     // RT-05: the Worker holds only this provider's key.
@@ -404,7 +466,7 @@ describe.each(Object.keys(PROVIDERS) as Provider[])('%s journey through the prod
     expect(status.status).toBe(200);
     expect(await readJson(status)).toMatchObject({
       storage: 'workspace-do',
-      aiTransport: 'direct',
+      aiTransport: transport,
       hasOpenAiKey: provider === 'openai',
       hasAnthropicKey: provider === 'claude',
       hasGeminiKey: provider === 'gemini',
@@ -414,6 +476,8 @@ describe.each(Object.keys(PROVIDERS) as Provider[])('%s journey through the prod
     studyId = await createStudy(app, researcher, provider, spec.studyModel);
     const code = await mintLink(app, researcher, studyId);
     const session = await exchange(app, code);
+    // D9: the link exchange discloses the transport the consent page shows and echoes.
+    expect(session.aiTransport).toBe(transport);
     await consent(app, session, studyId);
 
     const greeting = await participantPost(app, session, '/api/greeting', {});
@@ -442,11 +506,14 @@ describe.each(Object.keys(PROVIDERS) as Provider[])('%s journey through the prod
 
     expect(await awaitAnalysis(app, researcher, studyId, interviewId)).toEqual({ status: 'complete', generation: 1 });
 
-    // Exactly one call per operation, each at the provider's endpoint with
-    // the study's explicit model and the Worker's key for this provider.
+    // Exactly one call per operation, each at the transport's route for this
+    // provider with the study's explicit model and the Worker's key for this
+    // provider. On the gateway every call carries exactly the six cf-aig-*
+    // headers (RT-11); direct calls carry none.
     expect(calls.map((call) => call.operation).sort()).toEqual(['greeting', 'interview', 'synthesis']);
     for (const call of calls) {
-      expect(call).toMatchObject({ method: 'POST', path: spec.path, model: spec.studyModel, keyPresented: true });
+      expect(call).toMatchObject({ method: 'POST', path: route.path, model: spec.studyModel, keyPresented: true });
+      expect(call.cfAig).toEqual(viaGateway ? EXPECTED_CF_AIG_HEADERS : {});
     }
     const synthesisCall = calls.find((call) => call.operation === 'synthesis')!;
     expect(synthesisCall.body).toContain(ANSWER);
@@ -464,7 +531,7 @@ describe.each(Object.keys(PROVIDERS) as Provider[])('%s journey through the prod
     expect(countOf(calls, 'synthesis')).toBe(1);
   });
 
-  it(`JOB-02/RT-05 the stored ${provider} interview names the provider and the served model; no key or participant answer reaches the logs`, async () => {
+  it(`JOB-02/RT-05/RT-11 the stored ${provider} (${transport}) interview names the provider, the served model and the transport; no key, token or participant answer reaches the logs`, async () => {
     const response = await send(app, `/api/interviews/${encodeURIComponent(interviewId)}?studyId=${encodeURIComponent(studyId)}`, {
       headers: { Cookie: researcher },
     });
@@ -483,15 +550,18 @@ describe.each(Object.keys(PROVIDERS) as Provider[])('%s journey through the prod
     });
     if (spec.routedProvider) expect(interview.routedProvider).toBe(spec.routedProvider);
     else expect(interview).not.toHaveProperty('routedProvider');
+    if (viaGateway) expect(interview.aiTransport).toBe('cloudflare-gateway');
+    else expect(interview).not.toHaveProperty('aiTransport');
     expect(interview.analysis).not.toHaveProperty('recoveryRequired', true);
 
     const logs = logText(app);
     expect(logs).toContain('"event":"analysis.job"');
     expect(logs).not.toContain(spec.key);
+    expect(logs).not.toContain(GATEWAY_TOKEN);
     expect(logs).not.toContain(ANSWER);
   });
 
-  it(`ST-08 the researcher export of the ${provider} workspace is a complete archive`, async () => {
+  it(`ST-08 the researcher export of the ${provider} (${transport}) workspace is a complete archive`, async () => {
     const { zip } = await exportZip(app, researcher);
     const entries = interviewEntries(zip);
     expect(entries).toHaveLength(1);
@@ -505,11 +575,11 @@ describe.each(Object.keys(PROVIDERS) as Provider[])('%s journey through the prod
     expect(summary[1].endsWith(',"complete"')).toBe(true);
   });
 
-  it(`VERIFY-01 the ${provider} journey made no outbound request beyond its provider fixture`, () => {
+  it(`VERIFY-01/RT-11 the ${provider} (${transport}) journey made no outbound request beyond its route`, () => {
     expect(app.refused).toEqual([]);
     const journeyOutbound = app.outbound.slice(outboundStart);
     expect(journeyOutbound.map((call) => `${call.method} ${call.url}`)).toEqual(
-      calls.map(() => `POST https://${spec.host}${spec.path}`),
+      calls.map(() => `POST https://${route.host}${route.path}`),
     );
     expect(calls).toHaveLength(3);
   });
@@ -595,7 +665,7 @@ describe('operator status and an abandoned export on one workspace (OPS-01, ST-0
 
   beforeAll(async () => {
     app = await startArtifact({ secrets: { OPERATOR_TOKEN } });
-    calls = installProviderFixture(app, 'openai');
+    calls = installProviderFixture(app, 'openai', 'direct');
   });
 
   afterAll(async () => {

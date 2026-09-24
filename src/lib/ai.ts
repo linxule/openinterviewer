@@ -1,5 +1,6 @@
 // AI Provider Abstraction Layer
-// Supports direct native providers and the Vercel AI Gateway transport.
+// Supports direct native providers, the Vercel AI Gateway transport (Node)
+// and native providers through Cloudflare AI Gateway (Cloudflare).
 
 import {
   StudyConfig,
@@ -75,6 +76,8 @@ export interface ProviderExecution {
   requestedModel: string;
   model: string;
   routedProvider?: string;
+  /** Set only when the request went through the Cloudflare AI Gateway (RT-11). */
+  aiTransport?: 'cloudflare-gateway';
 }
 
 export interface ProviderResult<T> {

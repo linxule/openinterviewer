@@ -31,4 +31,27 @@ describe('WorkspaceStore bootstrap (ST-09)', () => {
     const other = testEnv.WORKSPACE_STORE.getByName('ws_ffffffffffffffffffffffffffffffff');
     expect(await other.readiness()).toEqual({ status: 'held', reason: 'workspace-identity-mismatch' });
   });
+
+  // Staging finding 2026-09-24: right after the installer's secret upload the
+  // object briefly ran the version whose env had no ANALYSIS_RECOVERY_EPOCH.
+  // That is a configuration that has not arrived yet, not an identity
+  // mismatch, and it must clear by itself once the epoch is bound.
+  it('reports a fresh object whose version lacks the epoch as workspace-unconfigured, then initializes once it is bound', async () => {
+    const stub = workspaceStub();
+    await runInDurableObject(stub, async (instance, state) => {
+      state.storage.sql.exec('DELETE FROM workspace_meta');
+      const object = instance as unknown as { env: Record<string, unknown>; initState: unknown };
+      const configured = object.env;
+      object.env = { ...configured, ANALYSIS_RECOVERY_EPOCH: undefined };
+      object.initState = { status: 'unconfigured' };
+      expect(await instance.readiness()).toEqual({ status: 'held', reason: 'workspace-unconfigured' });
+      expect(state.storage.sql.exec('SELECT COUNT(*) AS n FROM workspace_meta').one().n).toBe(0);
+
+      object.env = { ...configured, WORKSPACE_ID: 'not-a-workspace-id' };
+      expect(await instance.readiness()).toEqual({ status: 'held', reason: 'workspace-unconfigured' });
+
+      object.env = configured;
+      expect(await instance.readiness()).toEqual({ status: 'ready', maintenance: 'open' });
+    });
+  });
 });

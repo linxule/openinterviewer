@@ -60,6 +60,9 @@ export const PHASES = [
   'preflight',
   'identity',
   'resources',
+  // Cloudflare AI Gateway transport only (SETUP-08); a direct installation
+  // never records it (state.phaseDone treats it as done).
+  'ai-gateway',
   'config',
   'deploy-initial',
   'secrets',
@@ -69,11 +72,45 @@ export const PHASES = [
   'verify',
 ];
 
-export const RECEIPT_FORMAT_VERSION = 1;
+/**
+ * 2 adds `providerKeys`, `aiTransport`, `secretEvents` and the generalized
+ * `pendingChange`; a format-1 receipt is migrated in memory on read
+ * (state.readReceipt) and written back as 2; the first write keeps the
+ * original bytes as receipt.format1.json for a rollback to a release from
+ * before format 2 (state.writeReceipt).
+ */
+export const RECEIPT_FORMAT_VERSION = 2;
+export const SUPPORTED_RECEIPT_FORMATS = [1, 2];
+
+/** AI_TRANSPORT values the installer writes (RT-11). The Vercel `gateway` value is Node-only. */
+export const AI_TRANSPORTS = ['direct', 'cloudflare-gateway'];
+export const GATEWAY_TRANSPORT = 'cloudflare-gateway';
+/** The AI Gateway Run token: a Worker secret, supplied on protected input (SETUP-08). */
+export const GATEWAY_TOKEN_SECRET = 'CF_AI_GATEWAY_TOKEN';
+/**
+ * The Cloudflare API token that creates and reads the installation's gateway
+ * (AI Gateway Read + Edit). Read from the installer's own environment only:
+ * never bound, forwarded to a child process, written or logged.
+ */
+export const GATEWAY_ADMIN_TOKEN_ENV = 'CF_AI_GATEWAY_ADMIN_TOKEN';
+/** Same rule as src/lib/providers/endpoint.ts (isWellFormedGatewayToken). */
+export const MIN_GATEWAY_TOKEN_LENGTH = 32;
 
 const INSTALL_NAME = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 const CLOUDFLARE_NAME = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 const ACCOUNT_ID = /^[a-f0-9]{32}$/;
+/** CF_AI_GATEWAY_ACCOUNT_ID / CF_AI_GATEWAY_ID rules of src/lib/providers/endpoint.ts. */
+export const ACCOUNT_ID_PATTERN = ACCOUNT_ID;
+export const GATEWAY_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+
+/** The gateway an installation owns: named after its Worker, never `default` (D13). */
+export function gatewayIdFor(names) {
+  const id = names.worker;
+  if (!GATEWAY_ID_PATTERN.test(id) || id === 'default') {
+    throw new InstallerError(`derived AI Gateway id "${id}" is not a valid gateway id`, { exitCode: REFUSED });
+  }
+  return id;
+}
 
 export function validateInstallName(value) {
   if (typeof value !== 'string' || value.length === 0) {
@@ -108,6 +145,42 @@ export function validateProvider(value) {
   return value;
 }
 
+/**
+ * `--provider-keys`/`--add-provider-key` value: comma-separated provider
+ * names, or `all`. Returns them in PROVIDER_KEYS order, without duplicates.
+ */
+export function parseProviderList(value, option) {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new InstallerError(`${option} needs one or more of ${Object.keys(PROVIDER_KEYS).join(', ')} (comma-separated), or all`, { exitCode: REFUSED });
+  }
+  if (value.trim() === 'all') return Object.keys(PROVIDER_KEYS);
+  const requested = value.split(',').map((entry) => entry.trim());
+  for (const entry of requested) {
+    if (!Object.hasOwn(PROVIDER_KEYS, entry)) {
+      throw new InstallerError(`${option}: unknown provider "${entry}"; use ${Object.keys(PROVIDER_KEYS).join(', ')} or all`, { exitCode: REFUSED });
+    }
+  }
+  return Object.keys(PROVIDER_KEYS).filter((provider) => requested.includes(provider));
+}
+
+/** The keys an installation binds: always including its default provider. */
+export function validateProviderKeys(providerKeys, defaultProvider) {
+  if (!providerKeys.includes(defaultProvider)) {
+    throw new InstallerError(`--provider-keys must include the default provider ${defaultProvider} (--provider)`, { exitCode: REFUSED });
+  }
+  return providerKeys;
+}
+
+export function validateAiTransport(value, option = '--ai-transport') {
+  if (!AI_TRANSPORTS.includes(value)) {
+    throw new InstallerError(`${option} must be ${AI_TRANSPORTS.join(' or ')}`, {
+      exitCode: REFUSED,
+      hints: ['The Vercel AI Gateway (`gateway`) is Node-only; on Cloudflare use cloudflare-gateway (RT-11).'],
+    });
+  }
+  return value;
+}
+
 export function validateJurisdiction(value) {
   if (!Object.hasOwn(JURISDICTIONS, value)) {
     throw new InstallerError('--jurisdiction must be eu, fedramp or none', { exitCode: REFUSED });
@@ -138,8 +211,19 @@ export function deriveNames(install, environment) {
   return names;
 }
 
-export function requiredSecretNames(provider) {
-  return [PASSWORD_SECRET, ...GENERATED_SECRETS, EPOCH_SECRET, PROVIDER_KEYS[provider]];
+/**
+ * Every secret an installation binds, for its recorded provider keys and
+ * transport. A Run token left bound after a switch back to direct is allowed
+ * but not required (it is never sent there).
+ */
+export function requiredSecretNames(providerKeys, aiTransport = 'direct') {
+  return [
+    PASSWORD_SECRET,
+    ...GENERATED_SECRETS,
+    EPOCH_SECRET,
+    ...providerKeys.map((provider) => PROVIDER_KEYS[provider]),
+    ...(aiTransport === GATEWAY_TRANSPORT ? [GATEWAY_TOKEN_SECRET] : []),
+  ];
 }
 
 function isIpLiteral(hostname) {

@@ -45,8 +45,10 @@ export default function SelfHostPage() {
           <p className="max-w-measure font-sans text-[17px] leading-[28px] text-ink-700">
             On Cloudflare it runs as one Worker with a Durable Object for storage and a Queue for background
             analysis. It needs an admin password of 16 to 1,009 ASCII characters (sign-in requests are limited to
-            1 KiB, so multi-byte characters lower the maximum), one provider key and no Redis; the installer
-            generates the other secrets and the recovery epoch.
+            1 KiB, so multi-byte characters lower the maximum), the default provider&apos;s key (other providers&apos; keys
+            can be added later) and no Redis; the installer generates the other secrets and the recovery epoch.
+            Provider requests go directly to each provider or, if you choose, through your own Cloudflare AI
+            Gateway with logging and caching turned off.
           </p>
         </section>
 

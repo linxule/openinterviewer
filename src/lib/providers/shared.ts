@@ -31,11 +31,16 @@ export function providerResult<T>(
   return { value, execution };
 }
 
+/**
+ * `transport` is the endpoint the adapter actually used; only the Cloudflare
+ * AI Gateway is recorded (`aiTransport`), so direct provenance is unchanged.
+ */
 export function execution(
   provider: AIProviderType,
   requestedModel: string,
   responseModel?: string | null,
   routedProvider?: string | null,
+  transport: 'direct' | 'cloudflare-gateway' = 'direct',
 ): ProviderExecution {
   const model = typeof responseModel === 'string' ? responseModel.trim() : '';
   if (!model) {
@@ -46,6 +51,7 @@ export function execution(
     requestedModel,
     model,
     ...(routedProvider?.trim() ? { routedProvider: routedProvider.trim() } : {}),
+    ...(transport === 'cloudflare-gateway' ? { aiTransport: 'cloudflare-gateway' as const } : {}),
   };
 }
 

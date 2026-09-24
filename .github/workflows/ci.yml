@@ -219,6 +219,28 @@ jobs:
           WORKSPACE_ID: ws_0123456789abcdef0123456789abcdef
           WORKSPACE_JURISDICTION: ''
           ANALYSIS_RECOVERY_EPOCH: ep_0123456789abcdef0123456789abcdef
+      - name: Validate Cloudflare AI Gateway deployment contract
+        run: npm run setup:check -- --target cloudflare --mode standalone --production
+        env:
+          DEPLOYMENT_TARGET: cloudflare
+          DEPLOYMENT_MODE: standalone
+          AI_TRANSPORT: cloudflare-gateway
+          AI_PROVIDER: openai
+          APP_BASE_URL: https://cloudflare-build.example.org
+          ADMIN_PASSWORD: cloudflare-build-admin-password
+          SESSION_SECRET: cloudflare-build-session-secret-1234567890
+          PARTICIPANT_TOKEN_SECRET: cloudflare-build-participant-secret-1234567890
+          RATE_LIMIT_SALT: cloudflare-build-rate-limit-salt-1234567890
+          GEMINI_API_KEY: cloudflare-build-gemini-key
+          ANTHROPIC_API_KEY: cloudflare-build-anthropic-key
+          OPENAI_API_KEY: cloudflare-build-openai-key
+          OPENROUTER_API_KEY: cloudflare-build-openrouter-key
+          CF_AI_GATEWAY_ACCOUNT_ID: '0123456789abcdef0123456789abcdef'
+          CF_AI_GATEWAY_ID: oi-cloudflare-build
+          CF_AI_GATEWAY_TOKEN: cloudflare-build-ai-gateway-run-token-1234567890
+          WORKSPACE_ID: ws_0123456789abcdef0123456789abcdef
+          WORKSPACE_JURISDICTION: ''
+          ANALYSIS_RECOVERY_EPOCH: ep_0123456789abcdef0123456789abcdef
       - name: Workers runtime (real local SQLite, alarms, Queue)
         run: npm run test:cloudflare
       - name: Worker-only import boundary

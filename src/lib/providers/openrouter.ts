@@ -1,4 +1,4 @@
-import { OpenRouter } from '@openrouter/sdk';
+import { HTTPClient, OpenRouter } from '@openrouter/sdk';
 import {
   AIProvider,
   buildInterviewSystemPrompt,
@@ -7,6 +7,7 @@ import {
   type ProviderExecutionPolicy,
   type ProviderResult,
 } from '../ai';
+import { withExactGatewayHeaders, type EffectiveTransport, type ProviderEndpoint } from './endpoint';
 import {
   buildAggregateSynthesisPrompt,
   buildGreetingPrompt,
@@ -77,12 +78,35 @@ type OpenRouterChatResponse = Awaited<ReturnType<OpenRouter['chat']['send']>> & 
 export class OpenRouterProvider implements AIProvider {
   private readonly client: OpenRouter;
   private readonly model: string;
+  private readonly transport: EffectiveTransport;
 
-  constructor(model?: string, apiKey?: string | null) {
+  /**
+   * `endpoint` (Cloudflare target): an explicit server URL, so the SDK never
+   * reads OPENROUTER_BASE_URL. The SDK has no default headers, so gateway
+   * headers are set, exactly, by a beforeRequest hook on its HTTP client.
+   * Without it, construction is unchanged.
+   */
+  constructor(model?: string, apiKey?: string | null, endpoint?: ProviderEndpoint) {
     const key = apiKey !== undefined ? (apiKey || undefined) : process.env.OPENROUTER_API_KEY;
     if (!key) throw new Error('OPENROUTER_API_KEY is required for OpenRouter provider');
 
-    this.client = new OpenRouter({ apiKey: key, appTitle: 'OpenInterviewer' });
+    this.transport = endpoint?.transport ?? 'direct';
+    if (endpoint) {
+      const gatewayHeaders = endpoint.headers;
+      const httpClient = Object.keys(gatewayHeaders).length > 0
+        ? new HTTPClient().addHook('beforeRequest', (request) => {
+          withExactGatewayHeaders(request.headers, gatewayHeaders);
+        })
+        : undefined;
+      this.client = new OpenRouter({
+        apiKey: key,
+        appTitle: 'OpenInterviewer',
+        serverURL: endpoint.baseURL,
+        ...(httpClient ? { httpClient } : {}),
+      });
+    } else {
+      this.client = new OpenRouter({ apiKey: key, appTitle: 'OpenInterviewer' });
+    }
     this.model = model
       || process.env.OPENROUTER_MODEL
       || process.env.AI_MODEL
@@ -272,7 +296,7 @@ export class OpenRouterProvider implements AIProvider {
         'OpenRouter response did not identify the upstream provider',
       );
     }
-    return execution('openrouter', requestedModel, resolvedModel, routedAttempt.provider);
+    return execution('openrouter', requestedModel, resolvedModel, routedAttempt.provider, this.transport);
   }
 
   private parseStructured<T>(

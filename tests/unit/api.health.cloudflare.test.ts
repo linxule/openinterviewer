@@ -295,6 +295,7 @@ describe('RT-08 /api/config/readiness on Cloudflare', () => {
   it.each<[StoreReadiness, string]>([
     [{ status: 'unavailable' }, 'workspace_unavailable'],
     [{ status: 'held', reason: 'workspace-uninitialized' }, 'workspace_uninitialized'],
+    [{ status: 'held', reason: 'workspace-unconfigured' }, 'workspace_unconfigured'],
     [{ status: 'held', reason: 'schema-unsupported' }, 'workspace_schema_unsupported'],
     [{ status: 'held', reason: 'workspace-identity-mismatch' }, 'workspace_identity_mismatch'],
     [{ status: 'held', reason: 'recovery-epoch-mismatch' }, 'workspace_recovery_epoch_mismatch'],

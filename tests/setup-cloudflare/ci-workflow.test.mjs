@@ -1,10 +1,13 @@
 // Static checks of .github/workflows/ci.yml for the production promotion:
 // run-level concurrency (GitHub applies the cancel-in-progress value of the
 // run that arrives to every in-progress run in the same group, and a
-// cancelled run takes its jobs with it) and the order of the promotion steps.
+// cancelled run takes its jobs with it), the order of the promotion steps, and
+// the Cloudflare contract steps (one per transport, each passing setup:check).
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { ROOT } from '../../scripts/cloudflare/lib.mjs';
@@ -113,4 +116,31 @@ test('the promotion refuses a bootstrap config before the release check, deploys
   // Only a held workspace (exit 3) is tolerated; any other failure fails the job.
   assert.match(steps[verify], /if \[ "\$status" -eq 3 \]/);
   assert.match(steps[verify], /exit "\$status"\s*$/);
+});
+
+test('RT-11 CI validates the Cloudflare deployment contract on both transports, and each fixture environment passes setup:check', () => {
+  const steps = (workflow.jobs.cloudflare.steps ?? [])
+    .filter((step) => /npm run setup:check -- .*--target cloudflare/.test(String(step.run ?? '')));
+  const transports = [];
+  const dir = mkdtempSync(path.join(tmpdir(), 'oi-ci-setup-check-'));
+  try {
+    steps.forEach((step, index) => {
+      const env = Object.fromEntries(Object.entries(step.env ?? {}).map(([name, value]) => [name, String(value ?? '')]));
+      transports.push(env.AI_TRANSPORT);
+      // --env-file makes the checker read only this file, never the caller's environment or local .env files.
+      const envFile = path.join(dir, `step-${index}.env`);
+      writeFileSync(envFile, Object.entries(env).map(([name, value]) => `${name}=${value}`).join('\n'));
+      const args = String(step.run).split(' -- ')[1].trim().split(/\s+/);
+      const result = spawnSync(process.execPath, ['scripts/check-setup.mjs', ...args, '--json', '--env-file', envFile], {
+        cwd: ROOT,
+        env: { PATH: process.env.PATH ?? '' },
+        encoding: 'utf8',
+      });
+      assert.equal(result.status, 0, `${step.name}: ${result.stdout}${result.stderr}`);
+      assert.equal(JSON.parse(result.stdout).ok, true, step.name);
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  assert.deepEqual(transports.sort(), ['cloudflare-gateway', 'direct']);
 });

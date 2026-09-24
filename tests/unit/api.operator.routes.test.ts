@@ -237,6 +237,7 @@ describe('OPS-01 GET /api/operator/status', () => {
   it.each([
     ['recovery-epoch-mismatch', 'workspace-unavailable'],
     ['workspace-uninitialized', 'workspace-unavailable'],
+    ['workspace-unconfigured', 'workspace-unavailable'],
     ['workspace-identity-mismatch', 'workspace-unavailable'],
     ['maintenance', 'maintenance'],
   ])('maps a %s hold to 503 with an allowlisted reason', async (holdReason, reason) => {

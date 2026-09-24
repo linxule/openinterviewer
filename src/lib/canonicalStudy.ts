@@ -92,6 +92,7 @@ export async function loadCanonicalStudy(opts: {
  */
 export function frozenAnalysisInput(
   study: StoredStudy,
+  disclosedTransport?: 'cloudflare-gateway',
 ): { ok: true; input: FrozenAnalysisInput } | { ok: false; response: NextResponse } {
   const provider = study.config.aiProvider;
   let model: string;
@@ -112,6 +113,7 @@ export function frozenAnalysisInput(
       studyRevision: study.revision,
       requestedProvider: provider,
       requestedModel: model,
+      ...(disclosedTransport === 'cloudflare-gateway' ? { disclosedTransport } : {}),
     },
   };
 }
@@ -131,6 +133,7 @@ const HOLD_LOG_REASON: Record<WorkspaceHoldReason, RequestLogReason> = {
   'schema-unsupported': 'schema-unsupported',
   'workspace-identity-mismatch': 'workspace-identity-mismatch',
   'workspace-uninitialized': 'not-configured',
+  'workspace-unconfigured': 'not-configured',
   'recovery-epoch-mismatch': 'epoch-mismatch',
 };
 

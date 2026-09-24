@@ -1,0 +1,122 @@
+{
+  "formatVersion": 1,
+  "install": "example-studio",
+  "env": "staging",
+  "accountId": "0123456789abcdef0123456789abcdef",
+  "names": {
+    "worker": "oi-example-studio-staging",
+    "queue": "oi-example-studio-staging-analysis",
+    "deadLetterQueue": "oi-example-studio-staging-analysis-dlq"
+  },
+  "workspaceId": "ws_ccbcdaa542733de35b39ea6dd921ed08",
+  "jurisdiction": "eu",
+  "provider": "gemini",
+  "bootstrap": "open",
+  "origin": "https://studio-staging.example.com",
+  "originSource": "explicit",
+  "workersDevUrl": "https://oi-example-studio-staging.example.workers.dev",
+  "epochFingerprint": "sha256:365514032b9879a4",
+  "resources": {
+    "oi-example-studio-staging-analysis": {
+      "kind": "queue",
+      "attempts": [
+        {
+          "at": "2026-09-24T09:00:16.567Z"
+        }
+      ],
+      "id": "9d9f6be3fb87455bcf468cbc76a22c36",
+      "createdAt": "2026-09-24T09:00:22.469Z",
+      "observedAt": "2026-09-24T09:00:22.469Z"
+    },
+    "oi-example-studio-staging-analysis-dlq": {
+      "kind": "dead-letter-queue",
+      "attempts": [
+        {
+          "at": "2026-09-24T09:00:22.469Z"
+        }
+      ],
+      "id": "e215c7b848ed0105587eca91f38bee5f",
+      "createdAt": "2026-09-24T09:00:27.671Z",
+      "observedAt": "2026-09-24T09:00:27.671Z"
+    },
+    "oi-example-studio-staging": {
+      "kind": "worker",
+      "attempts": [
+        {
+          "at": "2026-09-24T09:00:44.753Z",
+          "commit": "eaa30a2ba8dd5c358a43b4d837ed93238def364a"
+        }
+      ],
+      "observedAt": "2026-09-24T09:01:12.730Z"
+    }
+  },
+  "secrets": {
+    "attemptedAt": "2026-09-24T09:01:14.337Z",
+    "epochGeneratedAt": "2026-09-24T09:01:14.337Z"
+  },
+  "operatorToken": {
+    "destination": "file",
+    "file": "/home/operator/secure/staging-operator-token",
+    "writtenAt": "2026-09-24T09:01:14.342Z"
+  },
+  "phases": {
+    "preflight": "2026-09-24T09:00:15.101Z",
+    "identity": "2026-09-24T09:00:15.101Z",
+    "resources": "2026-09-24T09:00:27.671Z",
+    "config": "2026-09-24T09:00:27.672Z",
+    "deploy-initial": "2026-09-24T09:01:12.730Z",
+    "secrets": "2026-09-24T09:01:17.898Z",
+    "origin": "2026-09-24T09:01:17.898Z",
+    "workspace-init": "2026-09-24T09:03:47.038Z",
+    "bootstrap-clear": "2026-09-24T09:04:11.687Z",
+    "verify": "2026-09-24T09:04:13.600Z"
+  },
+  "deployments": [
+    {
+      "purpose": "initial",
+      "commit": "eaa30a2ba8dd5c358a43b4d837ed93238def364a",
+      "workerSha256": "14a03935f3c65a88610d20e897c949bfe47ccd24786efc16d9ecbb3e6757537f",
+      "appBaseUrl": "https://studio-staging.example.com",
+      "bootstrap": "open",
+      "provider": "gemini",
+      "at": "2026-09-24T09:01:10.922Z"
+    },
+    {
+      "purpose": "bootstrap-clear",
+      "commit": "eaa30a2ba8dd5c358a43b4d837ed93238def364a",
+      "workerSha256": "14a03935f3c65a88610d20e897c949bfe47ccd24786efc16d9ecbb3e6757537f",
+      "appBaseUrl": "https://studio-staging.example.com",
+      "bootstrap": "",
+      "provider": "gemini",
+      "at": "2026-09-24T09:04:11.687Z"
+    },
+    {
+      "purpose": "update",
+      "commit": "eaa30a2ba8dd5c358a43b4d837ed93238def364a",
+      "workerSha256": "14a03935f3c65a88610d20e897c949bfe47ccd24786efc16d9ecbb3e6757537f",
+      "appBaseUrl": "https://studio-staging.example.com",
+      "bootstrap": "",
+      "provider": "gemini",
+      "at": "2026-09-24T09:05:22.373Z"
+    }
+  ],
+  "lastVerification": {
+    "at": "2026-09-24T09:05:25.177Z",
+    "status": "ready",
+    "failed": [],
+    "readinessErrors": [],
+    "targets": [
+      {
+        "role": "worker",
+        "status": "ready"
+      },
+      {
+        "role": "origin",
+        "status": "ready"
+      }
+    ],
+    "configOk": true
+  },
+  "createdAt": "2026-09-24T09:00:15.101Z",
+  "updatedAt": "2026-09-24T09:05:25.177Z"
+}

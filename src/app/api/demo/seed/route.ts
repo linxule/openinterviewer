@@ -13,14 +13,12 @@ import { DEFAULT_MODEL_BY_PROVIDER } from '@/lib/providerRegistry';
 import {
   isGatewayAuthConfigured,
   isGatewayProvider,
-  resolveAITransport,
 } from '@/lib/aiTransport';
-import { isHostedMode } from '@/lib/mode';
 import { logRequestFailure } from '@/lib/requestLog';
 import { RESEARCHER_WORKSPACE_HELD_COPY, workspaceHeldResponse } from '@/lib/canonicalStudy';
 import { mapReadinessHold, RESEARCHER_MUTATION_STATES } from '@/lib/ownedStudies';
 import { deploymentNotReadyResponse } from '@/lib/runtime/readinessGate';
-import { isCloudflareTarget } from '@/lib/runtime/capabilities';
+import { activeAITransport, isCloudflareTarget } from '@/lib/runtime/capabilities';
 import { currentWorkerInvocation } from '@/lib/runtime/workerInvocation';
 import { isDurableWorkspaceStore, type WorkspaceHoldReason, type WorkspaceStorePort } from '@/lib/storage/types';
 import type { AIProviderType } from '@/types';
@@ -85,8 +83,9 @@ function isProvider(value: string): value is AIProviderType {
  * The sample studies' provider. On Cloudflare it is the installation's
  * AI_PROVIDER from the current Worker invocation (default gemini, as the
  * readiness validator treats it) and only when that provider's key is present;
- * the Cloudflare context's keys come from the same invocation env. There is no
- * Gateway on Cloudflare and no substitution of another provider.
+ * the Cloudflare context's keys come from the same invocation env. Direct and
+ * Cloudflare AI Gateway both send the provider's own key, so there is no
+ * substitution of another provider.
  */
 function sampleProvider(context: ProviderKeys): AIProviderType | null {
   if (isCloudflareTarget()) {
@@ -96,8 +95,7 @@ function sampleProvider(context: ProviderKeys): AIProviderType | null {
   }
   const configuredGatewayProvider = process.env.AI_PROVIDER?.trim() || 'gemini';
   if (
-    !isHostedMode()
-    && resolveAITransport() === 'gateway'
+    activeAITransport() === 'gateway'
     && isGatewayAuthConfigured()
     && isGatewayProvider(configuredGatewayProvider)
   ) {

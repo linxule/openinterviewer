@@ -134,6 +134,7 @@ const HOLD_REASONS: { readonly [R in WorkspaceHoldReason]: true } = {
   'schema-unsupported': true,
   'workspace-identity-mismatch': true,
   'workspace-uninitialized': true,
+  'workspace-unconfigured': true,
   'recovery-epoch-mismatch': true,
 };
 
@@ -254,6 +255,7 @@ const CLEAR_SAMPLE: StatusTable<ClearSampleOutcome> = {
 };
 const ACCEPT_RETRY: StatusTable<AcceptAnalysisRetryOutcome> = {
   accepted: true,
+  'transport-not-disclosed': true,
   existing: true,
   'already-complete': true,
   'state-changed': true,
@@ -429,6 +431,7 @@ export function createDurableWorkspaceStore(config: DurableWorkspaceConfig): Dur
       studyRevision: input.studyRevision,
       consentHash: await sha256Hex(input.consentText),
       now: input.now,
+      ...(input.disclosedTransport === 'cloudflare-gateway' ? { disclosedTransport: input.disclosedTransport } : {}),
     };
   }
 
@@ -622,6 +625,7 @@ export function createDurableWorkspaceStore(config: DurableWorkspaceConfig): Dur
           requestFingerprint: await analysisRequestFingerprint(input.expectedGeneration),
           expectedGeneration: input.expectedGeneration,
           input: input.input,
+          ...(input.transport === 'cloudflare-gateway' ? { transport: input.transport } : {}),
           now: input.now,
         };
         // An unknown allocation commit is reported as unavailable; the caller

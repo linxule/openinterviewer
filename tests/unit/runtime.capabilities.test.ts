@@ -69,6 +69,17 @@ describe('RT-01 supported capability matrix', () => {
       { DEPLOYMENT_TARGET: 'cloudflare', DEPLOYMENT_MODE: 'standalone', AI_TRANSPORT: 'direct' },
       { target: 'cloudflare', mode: 'standalone', transport: 'direct', storage: 'workspace-do', analysisExecution: 'queued-v2' },
     ],
+    [
+      'cloudflare standalone through Cloudflare AI Gateway (RT-11)',
+      { DEPLOYMENT_TARGET: 'cloudflare', DEPLOYMENT_MODE: 'standalone', AI_TRANSPORT: 'cloudflare-gateway' },
+      {
+        target: 'cloudflare',
+        mode: 'standalone',
+        transport: 'cloudflare-gateway',
+        storage: 'workspace-do',
+        analysisExecution: 'queued-v2',
+      },
+    ],
   ];
 
   it.each(supported)('RT-01 resolves %s', (_label, env, expected) => {
@@ -81,6 +92,9 @@ describe('RT-01 supported capability matrix', () => {
     ['node inexact mode', { DEPLOYMENT_MODE: 'Hosted' }, 'invalid_deployment_mode'],
     ['node invalid transport', { DEPLOYMENT_MODE: 'standalone', AI_TRANSPORT: 'grpc' }, 'invalid_ai_transport'],
     ['node hosted gateway', { DEPLOYMENT_MODE: 'hosted', AI_TRANSPORT: 'gateway' }, 'gateway_not_supported_hosted'],
+    // Cloudflare AI Gateway is the Cloudflare target's own transport (RT-11).
+    ['node cloudflare-gateway', { DEPLOYMENT_MODE: 'standalone', AI_TRANSPORT: 'cloudflare-gateway' }, 'invalid_ai_transport'],
+    ['node hosted cloudflare-gateway', { DEPLOYMENT_MODE: 'hosted', AI_TRANSPORT: 'cloudflare-gateway' }, 'invalid_ai_transport'],
     ['cloudflare missing mode without NODE_ENV', { DEPLOYMENT_TARGET: 'cloudflare' }, 'missing_deployment_mode'],
     [
       'cloudflare missing mode even in development',

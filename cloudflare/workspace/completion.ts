@@ -84,7 +84,8 @@ function isValidFrozen(frozen: unknown, studyId: string, revision: number): froz
     && PROVIDERS.has(frozen.requestedProvider)
     && typeof frozen.requestedModel === 'string'
     && frozen.requestedModel.length > 0
-    && frozen.requestedModel.length <= MAX_MODEL_LENGTH;
+    && frozen.requestedModel.length <= MAX_MODEL_LENGTH
+    && (frozen.disclosedTransport === undefined || frozen.disclosedTransport === 'cloudflare-gateway');
 }
 
 /** Input validation and every await (digests) happen before the transaction. */
@@ -100,6 +101,7 @@ async function prepare(input: Rpc.PersistInput): Promise<Prepared | null> {
     || !isSafeTime(interview.createdAt)
     || !isSafeTime(interview.completedAt)
     || (interview.studyRevision !== undefined && !isRevision(interview.studyRevision))
+    || (interview.consentTransport !== undefined && interview.consentTransport !== 'cloudflare-gateway')
   ) {
     return null;
   }
@@ -252,6 +254,10 @@ function decide(ws: WorkspaceContext, prepared: Prepared): Decision {
     || (interview.participantLinkId !== undefined && interview.participantLinkId !== linkId)
     || interview.consentHash !== stored.consentHash
     || interview.consentAcceptedAt !== stored.acceptedAt
+    // The disclosed transport travels from the stored consent to the record
+    // and to the initial generation unchanged (D9).
+    || (interview.consentTransport ?? null) !== (stored.disclosedTransport ?? null)
+    || (requested.disclosedTransport ?? null) !== (stored.disclosedTransport ?? null)
   ) {
     logInvalid();
     return refuse({ status: 'conflict' });
@@ -299,6 +305,7 @@ function decide(ws: WorkspaceContext, prepared: Prepared): Decision {
       studyRevision: study.revision,
       requestedProvider: requested.requestedProvider,
       requestedModel: requested.requestedModel,
+      ...(stored.disclosedTransport === 'cloudflare-gateway' ? { disclosedTransport: stored.disclosedTransport } : {}),
     },
   };
 }

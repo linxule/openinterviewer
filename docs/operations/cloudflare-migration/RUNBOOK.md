@@ -41,6 +41,58 @@ A lost response is resolved by reading `status`, never by repeating a transition
 
 Sign-in is limited on Cloudflare: 10 failed attempts per client per 15 minutes, and 200 across all clients per hour. Each client is its full normalized address. Each window opens with its first counted attempt and is never extended. Over a limit, `/api/auth` answers 429 with `Retry-After`, and the CLI exits 1 with "retry after N seconds". A client-level lockout clears within 15 minutes. A global lockout means many failures from many clients; it blocks every sign-in, including the correct password, for up to one hour. Sign-in works in every maintenance state and under epoch, identity and bootstrap holds. Only an unsupported schema or unavailable workspace storage refuses it (503).
 
+### Workspace readiness codes
+
+`/api/config/readiness` and `verify` report the workspace object's state with one of these codes. `setup:cloudflare` waits through the first two and stops at once on the last three.
+
+| Code | Meaning | Action |
+| --- | --- | --- |
+| `workspace_uninitialized` | A fresh object with no bootstrap state set. | During `apply`, wait. On a completed installation, see INSTALLER.md, re-bootstrapping. |
+| `workspace_unconfigured` | The version the object runs sees no valid `WORKSPACE_ID` or `ANALYSIS_RECOVERY_EPOCH`, so a fresh object cannot initialize yet. Seen on staging for a short time after `wrangler secret bulk`. | Wait; it clears once the version that has the secrets serves. If it persists, check `wrangler secret list` for `ANALYSIS_RECOVERY_EPOCH` and the `WORKSPACE_ID` var. |
+| `workspace_identity_mismatch` | The object was selected under another name, or `WORKSPACE_ID` no longer matches it. | Configuration problem: compare the installation config with the receipt. Never re-bootstrap. |
+| `workspace_recovery_epoch_mismatch` | The bound epoch differs from the activated one. | Restore procedure (OPS-03). |
+| `workspace_schema_unsupported` | The object's schema is newer or unknown. | Roll forward to a release that supports it. |
+
+### Provider route readiness codes (RT-05, RT-11)
+
+| Code | Meaning | Action |
+| --- | --- | --- |
+| `provider_sdk_env_override` | A var or secret bears an SDK override name (base URL, auth token, custom headers, logging, Vertex selection). | Remove it; `setup:check --target cloudflare` names it. |
+| `invalid_cf_ai_gateway_account_id` | `AI_TRANSPORT=cloudflare-gateway` without a 32-character lowercase hex `CF_AI_GATEWAY_ACCOUNT_ID`. | Set it to the installation's account ID (exact value, no spaces). |
+| `invalid_cf_ai_gateway_id` | `CF_AI_GATEWAY_ID` is missing, malformed or `default`. | Name the installation's own gateway. |
+| `missing_cf_ai_gateway_token` / `weak_cf_ai_gateway_token` | The AI Gateway Run token secret is missing, shorter than 32 characters or contains whitespace. | Bind `CF_AI_GATEWAY_TOKEN` as a secret. |
+| `cf_ai_gateway_config_without_transport` | Gateway identifiers are set while `AI_TRANSPORT` is direct. | Empty both identifiers, or select `cloudflare-gateway`. A bound token alone is allowed on direct: it is never sent there. |
+
+There is no fallback: with any of these codes no participant or researcher provider call runs, and queued jobs finish failed/provider (`provider-route-invalid`) without a provider request.
+
+### Transport switch and consent (D9)
+
+The transport disclosed at consent is recorded with the consent, the saved interview and each analysis generation. A provider call that carries participant content runs only when the current route is direct or equals the disclosed one:
+
+- after switching to `cloudflare-gateway`, sessions consented under direct get 409 `TRANSPORT_NOT_DISCLOSED` on greeting and interview (the participant reopens the link and sees the new notice); their save still succeeds; queued jobs of direct-consented interviews finish failed/provider (`transport-not-disclosed`) with zero requests, and researcher retry, aggregate and follow-up that include them are refused with 409. Switch back to direct to analyze them;
+- a consent page rendered for another transport (including an open tab from before the release) gets 409 `DISCLOSURE_CHANGED` and must be reopened;
+- switching to direct is always covered.
+
+Drain first (`draining`, wait for no pending/claimed/started jobs and no active sessions, up to the 4-hour consent lifetime), then change the transport, then `open`. The sample workspace's seeded interviews carry no disclosure, so its aggregate is refused on the gateway.
+
+The switch itself is an installer operation from the workstation that holds the receipt (INSTALLER.md, AI transport):
+
+1. `operator:cloudflare -- draining`, then `status` until nothing is pending, claimed or started and no session is active.
+2. To the gateway: `update --change-ai-transport --ai-transport cloudflare-gateway --secrets-stdin --yes` with `{"CF_AI_GATEWAY_TOKEN": …}` on stdin (omitted when the token is already bound by the installer; a token bound by hand is refused: delete it first) and `CF_AI_GATEWAY_ADMIN_TOKEN` in the installer's environment only. To direct: `update --change-ai-transport --ai-transport direct --yes` (no credential). The installer prints these consent consequences before it acts.
+3. On the maintained instance, regenerate `CLOUDFLARE_INSTALL_CONFIG` with `config` before the next CI promotion.
+4. `operator:cloudflare -- open`, then `verify` (with the management token, to also read the gateway settings and confirm zero stored logs).
+
+An interrupted switch stays pending in the receipt: rerun the same command to finish it, or rerun with the transport it started from to abandon it.
+
+### AI Gateway operations (RT-11)
+
+- **Before relying on the gateway:** its live behaviour has not been observed (DEVIATIONS, remote gates RT-11 S0–S5, P1–P3 and SETUP-08). Run the staging procedure first. Until gate S1 passes, do not run Gemini studies on a gateway installation: every Gemini request would fail as a provider error, never sent direct instead. If S1 fails, the owner decides how Gemini is served before it is used.
+- **Rotate the Run token:** create a new token (AI Gateway → Create authentication token), `update --rotate-ai-gateway-token --secrets-stdin --yes` with `{"CF_AI_GATEWAY_TOKEN": …}`; the installer probes it first and uploads nothing if the gateway rejects it. Delete the old token in the dashboard only after `verify` passes. The token can send through every gateway in the account; after a leak, delete it first (requests then fail as known configuration failures), then rotate.
+- **Gateway outage:** interview turns fail as provider errors and queued jobs whose request may have started become `recovery-required` (never retried automatically). Switching to direct is always covered by consent and is the operator's decision: `update --change-ai-transport --ai-transport direct --yes`.
+- **Stored gateway logs (`verify`: `gateway.logs` not 0):** treat as a participant-data incident. Every request carries `cf-aig-collect-log: false`, so a log means the gateway or a header was changed. Stop collection (`draining` or `frozen`), delete the logs in the dashboard, find the cause (the settings digest in the receipt and `verify`'s `gateway.settings`), and record it.
+- **Settings drift (`update` refuses, `verify`: `gateway-mismatch`):** the installer never corrects a gateway. Restore the refused settings in the dashboard (INSTALLER.md, AI Gateway policy) and rerun.
+- **Rollback:** switch the transport to direct first, then roll back the code (a compatible redeploy from the older commit). Direct is covered by every consent, and a release from before RT-11 only routes direct; its template has no gateway vars, so regenerate the installation config from that checkout (`update` does; for CI, `config`). The gateway and the Run token stay; the installer never deletes them. Delete a gateway only by hand, after confirming no installation's receipt records it, or while its installation is on direct: the next switch to the gateway then creates a new one and records it in place of the deleted one.
+
 ## Maintenance states (OPS-01)
 
 | State | Participants | Researchers | Analysis |
@@ -188,6 +240,7 @@ Cloudflare documents point-in-time recovery only as these [storage methods](http
 6. `maintenance recovery --expected-state <restored state> --expected-version <restored version>`. Under the epoch mismatch only `recovery` is accepted, from any state.
 7. `recovery activate --expected-epoch <activated epoch reported by status>`. Activation first reconciles every restored unfinished generation to recovery-required, because external calls and Queue deliveries were not rewound. It then activates the deployment's epoch. Old messages and late results are rejected.
 8. Verify with `status` (`configuredMatches: true`), then `maintenance open --expected-state recovery --expected-version <v>`.
+9. **Redeploy a checked release before any key operation.** Step 3's `wrangler secret put` created a deployment that `deploy.mjs` did not make and the installer did not record: it carries `workers/triggered_by` `secret` and no `workers/message` (observed on Cloudflare, 24 September 2026). Until a checked release is the newest deployment again, `update --add-provider-key`, `--rotate-provider-key` and `--rotate-ai-gateway-token` refuse with `the newest deployment of <worker> (…) is neither a deploy.mjs release nor one this installer recorded` (exit 2) and upload nothing. After activation (step 7), run `setup:cloudflare -- update` without a key operation from a checkout of the deployed commit (on the maintained instance, dispatch the CI promotion of the current `main` instead); it deploys with the new epoch, which stays bound. Then run the key operation. Not before activation: step 1 rules out every deploy until then, and during the epoch mismatch the Worker reports `workspace_recovery_epoch_mismatch`, which stops the update's verification. The same applies after any other manual `wrangler secret put` (step 5, the back-out, an older epoch after activation).
 
 Participant consequences: consents, links and receipts created after the bookmark are gone. Affected participants must re-consent (428) or receive a new link (403 on the old one). Researchers may need to re-run analyses marked recovery-required, with the paid-request disclosure.
 
@@ -216,7 +269,7 @@ Classify each release against the deployed commit before deploying it:
 
 | Class | How to recognize it | Rollback procedure |
 | --- | --- | --- |
-| Code-only | No new migration in `cloudflare/workspace/schema.ts`. No change to the Queue message, job states or RPC shapes the other version reads. No change to `durable_objects`, `migrations` or bindings in `wrangler.jsonc` | Compatible redeploy. The maintained instance reverts on `main` and dispatches the CI promotion again ([below](#maintained-instance-ci-promotion)). An installer-owned installation checks out the previous commit, runs `build:cloudflare` and `check:cloudflare` there, then `setup:cloudflare -- update`. Either way, current secrets, epoch and configuration are kept. |
+| Code-only | No new migration in `cloudflare/workspace/schema.ts`. No change to the Queue message, job states or RPC shapes the other version reads. No change to `durable_objects`, `migrations` or bindings in `wrangler.jsonc` | Compatible redeploy. The maintained instance reverts on `main` and dispatches the CI promotion again ([below](#maintained-instance-ci-promotion)). An installer-owned installation checks out the previous commit, runs `build:cloudflare` and `check:cloudflare` there, then `setup:cloudflare -- update` (to a commit before receipt format 2, restore the format-1 receipt first: [below](#rolling-back-to-a-release-before-receipt-format-2)). Either way, current secrets, epoch and configuration are kept. |
 | Compatible schema or job-protocol change | A new migration that declares `minReaderVersion` equal to the previous release's `schema.current` (from its artifact manifest). `minReaderVersion` is the optional field of `Migration` in `cloudflare/workspace/schema.ts`; it is not part of the migration checksum. Declare it only for changes the previous release can ignore (nullable or defaulted columns, tables it never reads), and only if the previous release still serves the new release's pending jobs. Or a job-protocol change the previous release still reads | Compatible redeploy, as above. Before release, rehearse N−1 → N → N−1 → N with pending and completed jobs, as `tests/workers/schema.migrations.test.ts` does with a synthetic migration. A migration that keeps the default `min_reader_version` makes the previous release refuse the database (`schema-unsupported`: not ready, reads and writes refused), so that release is forward-fix only. |
 | Durable Object resource lifecycle change | A change to `durable_objects` or `migrations` in `wrangler.jsonc` (class added, renamed or deleted), or a removed binding | Native rollback may be unavailable ([Worker rollback restrictions](https://developers.cloudflare.com/workers/versions-and-deployments/rollbacks/#bindings)). Keep required resources through the rollback window and plan a forward fix. |
 
@@ -237,6 +290,28 @@ Roll back with a compatible redeploy, not `wrangler rollback`. Neither the insta
 - never roll back across an epoch rotation (point-in-time restore, step 3).
 
 Never run mixed application versions against incompatible state, never use percentage deployments for this Worker, and remember that neither a code rollback nor a DNS change restores data. During any deploy the Worker and the Durable Object can briefly run different versions; the RPC surface is additive between adjacent versions. To avoid analyses ending recovery-required during a deploy, drain analysis first (`draining`, wait for zero claimed/started) or accept that cost. `update` exits 3 when it deployed but the workspace is held; reopen it, then run `verify`.
+
+### Rolling back to a release before receipt format 2
+
+An installer from before receipt format 2 (`eaa30a2` and earlier) refuses a format-2 receipt with `unsupported formatVersion 2`, so running `update` from such a commit fails until its receipt is restored. When the newer installer first saved a migrated receipt it kept the original as `receipt.format1.json` next to `receipt.json` (INSTALLER.md, State files). Without that file the migration is one-way: do not roll the installer back past format 2; forward-fix instead.
+
+1. With the newer installer: switch the transport to direct (AI Gateway operations, Rollback) and finish or abandon any pending change, so `plan` reports none. If the default provider changed since the migration, switch back to the one in `receipt.format1.json` first (`update --provider <p> --change-provider --yes`); otherwise the older installer's regenerated config differs on `AI_PROVIDER` and it refuses with drift.
+2. In the installation's state directory, keep the current receipt and restore the copy: `mv receipt.json receipt.format2.json && cp -p receipt.format1.json receipt.json`. Never edit `receipt.format1.json` itself.
+3. Check out the older commit and run `build:cloudflare`, `check:cloudflare` and `setup:cloudflare -- update` there, as for any code-only rollback.
+
+What the older installer knows is only what the receipt recorded before the migration: the default provider and the keys it bound, resources and queue ids, the epoch fingerprint, and deployments up to the migration. It does not know anything added since. Provider keys added with `--add-provider-key` stay bound, and a Run token (`CF_AI_GATEWAY_TOKEN`) and the gateway itself stay too; the older installer checks only that its default provider's key is bound and ignores the rest, and its Worker routes direct only. Key rotations since the migration are simply the bound values.
+
+Returning forward: run `update` from the newer commit. It migrates the format-1 receipt the older installer left, again. `receipt.format1.json` then holds that receipt, with the older installer's own deployments, so a second rollback starts from it; an earlier, different copy is moved aside as `receipt.format1.<n>.json`, never overwritten. The re-migrated receipt knows only what format 1 knew, so keys added under format 2 are reported as bound but not recorded, and a bound Run token as never set by this installer (the switch to the gateway then refuses). To restore those records, copy `providerKeys`, `secretEvents`, `aiGateway` and `aiTransportHistory` from `receipt.format2.json` into the new `receipt.json` by hand, then run `plan` to confirm the receipt is accepted.
+
+## Provider keys
+
+Any of the four native keys may be bound; `AI_PROVIDER` (the receipt's `provider`) names the default, whose key is required. Researchers can choose only providers whose key is bound.
+
+- **Add a key:** `update --add-provider-key <provider[,provider…]> --secrets-stdin --yes` with only those keys on stdin. One secret upload, no deploy; `CLOUDFLARE_INSTALL_CONFIG` stays valid.
+- **Rotate a key:** `update --rotate-provider-key <provider> --secrets-stdin --yes` with the new key. Revoke the old key at the provider only after `verify` passes. An interview turn in flight when the secret changes may still use the old key.
+- **After a leaked key:** revoke it at the provider first (requests with it then fail as a known configuration failure, and queued analysis records failed/provider), then rotate.
+- **Remove a key:** `wrangler secret delete <NAME> --name <worker>`, then remove the provider from the receipt's `providerKeys` by hand (never the default provider); until then `update` reports the missing secret as drift. Studies using that provider stop at their next provider call. There is no installer operation for this yet.
+- A key operation refuses while the Worker's newest deployment was not made from a checked artifact (a dashboard deploy, `wrangler rollback`, or a manual `wrangler secret put` such as the point-in-time restore's epoch rotation, whose deployment carries `workers/triggered_by` `secret` and no deploy message): redeploy a checked release first with `update` without a key operation, after a restore only once it is activated ([point-in-time restore](#point-in-time-restore-ops-03), step 9). On the maintained instance, run key operations from the workstation that holds the receipt while no CI promotion runs; the variable needs no regeneration afterwards.
 
 ## Maintained instance: CI promotion
 

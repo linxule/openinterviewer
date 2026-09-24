@@ -63,6 +63,8 @@ function holdReason(reason: WorkspaceHoldReason): RequestLogReason {
     case 'workspace-identity-mismatch':
     case 'workspace-uninitialized':
       return 'workspace-identity-mismatch';
+    case 'workspace-unconfigured':
+      return 'not-configured';
   }
 }
 

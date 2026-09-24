@@ -76,6 +76,8 @@ export type ConsentInput = {
   studyRevision: number;
   consentHash: string;
   now: number;
+  /** recordConsent: the disclosed transport (absent = direct). Ignored by verification. */
+  disclosedTransport?: 'cloudflare-gateway';
 };
 
 export type PersistInput = Omit<PersistCompletedInterviewInput, 'consent'> & {

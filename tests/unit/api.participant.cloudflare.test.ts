@@ -530,6 +530,7 @@ describe('server-recorded consent (ST-03, OPS-01)', () => {
 
     const response = await consentPOST(await participantRequest('/api/consent', {
       studyId: STUDY_ID,
+      disclosedTransport: 'direct',
       acceptedAt: 1,
       consentHash: 'client-controlled',
     }));
@@ -566,7 +567,7 @@ describe('server-recorded consent (ST-03, OPS-01)', () => {
   ) => {
     handlers.recordConsent = () => ({ status: 'held', reason });
 
-    const response = await consentPOST(await participantRequest('/api/consent', { studyId: STUDY_ID }));
+    const response = await consentPOST(await participantRequest('/api/consent', { studyId: STUDY_ID, disclosedTransport: 'direct' }));
 
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({ error, retryable, reason: publicReason });
@@ -924,5 +925,94 @@ describe('researcher preview under maintenance (gap F26)', () => {
     await expect(response.json()).resolves.toMatchObject({ retryable: false, reason: 'workspace-unavailable' });
     expect(providerFactory).not.toHaveBeenCalled();
     expect(rpcMethods()).not.toContain('admitParticipantRequest');
+  });
+});
+
+// RT-11 / D9 at the route boundary with a scripted object: which transport
+// the exchange discloses, what consent records, and that a transcript is
+// frozen with the disclosure it was consented under.
+describe('Cloudflare AI Gateway disclosure on participant routes (RT-11, D9)', () => {
+  const GATEWAY = {
+    AI_TRANSPORT: 'cloudflare-gateway',
+    CF_AI_GATEWAY_ACCOUNT_ID: '0123456789abcdef0123456789abcdef',
+    CF_AI_GATEWAY_ID: 'oi-unit-test',
+    CF_AI_GATEWAY_TOKEN: 'synthetic-ai-gateway-run-token-0123456789',
+  };
+  const gatewayConsent = { status: 'accepted', consent: { ...acceptedConsent.consent, disclosedTransport: 'cloudflare-gateway' } };
+
+  function useGateway(): void {
+    for (const [name, value] of Object.entries(GATEWAY)) vi.stubEnv(name, value);
+    const invocation: WorkerInvocation = {
+      env: { ...CLOUDFLARE_ENV, ...GATEWAY, WORKSPACE_STORE: workspaceNamespace, ANALYSIS_QUEUE: analysisQueue },
+      identity: { kind: 'address', address: ADDRESS },
+      source: 'fetch',
+    };
+    runtimeGlobals[WORKER_INVOCATION_ACCESSOR] = () => invocation;
+  }
+
+  it('records the gateway disclosure the page echoed, and refuses an echo of any other transport', async () => {
+    useGateway();
+    handlers.recordConsent = () => gatewayConsent;
+
+    const stale = await consentPOST(await participantRequest('/api/consent', { studyId: STUDY_ID, disclosedTransport: 'direct' }));
+    expect(stale.status).toBe(409);
+    await expect(stale.json()).resolves.toMatchObject({ code: 'DISCLOSURE_CHANGED' });
+    expect(rpcMethods()).not.toContain('recordConsent');
+
+    const accepted = await consentPOST(await participantRequest('/api/consent', { studyId: STUDY_ID, disclosedTransport: 'cloudflare-gateway' }));
+    expect(accepted.status).toBe(200);
+    expect(rpcInputs('recordConsent')).toEqual([expect.objectContaining({ disclosedTransport: 'cloudflare-gateway' })]);
+  });
+
+  it('a direct consent records no disclosure member (the direct record is unchanged)', async () => {
+    handlers.recordConsent = () => acceptedConsent;
+    expect((await consentPOST(await participantRequest('/api/consent', { studyId: STUDY_ID, disclosedTransport: 'direct' }))).status).toBe(200);
+    expect(rpcInputs('recordConsent')[0]).not.toHaveProperty('disclosedTransport');
+  });
+
+  it('greeting and interview refuse an uncovered consent before admission and before any adapter', async () => {
+    useGateway();
+    for (const [call, path, body] of [[greetingPOST, '/api/greeting', {}], [interviewPOST, '/api/interview', interviewBody]] as const) {
+      const response = await call(await participantRequest(path, body));
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toMatchObject({ code: 'TRANSPORT_NOT_DISCLOSED' });
+    }
+    expect(rpcMethods()).not.toContain('admitParticipantRequest');
+    expect(providerFactory).not.toHaveBeenCalled();
+  });
+
+  it('a covered gateway consent reaches the adapter with the gateway route', async () => {
+    useGateway();
+    handlers.verifyConsent = () => gatewayConsent;
+    const response = await greetingPOST(await participantRequest('/api/greeting', {}));
+    expect(response.status).toBe(200);
+    expect(providerFactory).toHaveBeenCalledOnce();
+    expect(providerFactory.mock.calls[0][1]).toMatchObject({ route: { transport: 'cloudflare-gateway', gatewayId: GATEWAY.CF_AI_GATEWAY_ID } });
+  });
+
+  it('save copies the verified disclosure to the record and the frozen input; only then does it enter the fingerprint', async () => {
+    handlers.persistCompletedInterview = () => ({ status: 'created' });
+    expect((await savePOST(await participantRequest('/api/interviews/save', saveBody()))).status).toBe(200);
+    const [direct] = rpcInputs('persistCompletedInterview');
+    expect(direct.interview).not.toHaveProperty('consentTransport');
+    expect(direct.initialAnalysis).not.toHaveProperty('disclosedTransport');
+
+    rpcCalls = [];
+    handlers.verifyConsent = () => gatewayConsent;
+    expect((await savePOST(await participantRequest('/api/interviews/save', saveBody()))).status).toBe(200);
+    const [gateway] = rpcInputs('persistCompletedInterview');
+    expect(gateway.interview).toMatchObject({ consentTransport: 'cloudflare-gateway' });
+    expect(gateway.initialAnalysis).toMatchObject({ disclosedTransport: 'cloudflare-gateway' });
+    // Same submission, different disclosure: a different submission identity.
+    expect(gateway.fingerprint).not.toBe(direct.fingerprint);
+    expect(providerFactory).not.toHaveBeenCalled();
+  });
+
+  it('the link exchange discloses the gateway on a gateway installation', async () => {
+    useGateway();
+    handlers.resolveParticipantLinkByCode = () => ({ status: 'found', link: linkRecord });
+    const response = await exchangeGET(new Request(`${ORIGIN}/api/generate-link?token=${LINK_CODE}`));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ valid: true, data: { aiTransport: 'cloudflare-gateway' } });
   });
 });

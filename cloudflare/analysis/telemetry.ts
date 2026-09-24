@@ -21,6 +21,7 @@ export function logJobEvent(event: {
   operation: JobOperation;
   reason?: RequestLogReason;
   provider?: string;
+  transport?: 'direct' | 'cloudflare-gateway';
   error?: unknown;
   durationMs?: number;
 }): void {
@@ -29,6 +30,7 @@ export function logJobEvent(event: {
     operation: event.operation,
     ...(event.reason ? { reason: event.reason } : {}),
     ...(event.provider ? { provider: event.provider } : {}),
+    ...(event.transport ? { transport: event.transport } : {}),
     ...(event.error !== undefined ? { errorType: errorTypeOf(event.error) } : {}),
     ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
   });

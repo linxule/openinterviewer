@@ -4,7 +4,7 @@
 // selected independently, and never inferred from credentials or headers.
 
 import { resolveAITransport, type AITransport } from '../aiTransport';
-import { resolveDeploymentMode, type DeploymentMode } from '../mode';
+import { isHostedMode, resolveDeploymentMode, type DeploymentMode } from '../mode';
 import { resolveDeploymentTarget, type DeploymentTarget } from './target';
 import { isWorkerRuntime } from './workerInvocation';
 
@@ -43,15 +43,20 @@ export function resolveCapabilities(env: CapabilityEnv = process.env): Capabilit
     if (mode === undefined || mode === '') return { ok: false, error: 'missing_deployment_mode' };
     if (mode === 'hosted') return { ok: false, error: 'unsupported_cloudflare_mode' };
     if (mode !== 'standalone') return { ok: false, error: 'invalid_deployment_mode' };
+    // Vercel AI Gateway stays Node-only; Cloudflare AI Gateway is this
+    // target's own transport (RT-11). Its identifiers and token are checked
+    // by provider route resolution (providers/endpoint.ts).
     const transport = env.AI_TRANSPORT?.trim();
     if (transport === 'gateway') return { ok: false, error: 'unsupported_cloudflare_transport' };
-    if (transport && transport !== 'direct') return { ok: false, error: 'invalid_ai_transport' };
+    if (transport && transport !== 'direct' && transport !== 'cloudflare-gateway') {
+      return { ok: false, error: 'invalid_ai_transport' };
+    }
     return {
       ok: true,
       capabilities: {
         target: 'cloudflare',
         mode: 'standalone',
-        transport: 'direct',
+        transport: transport === 'cloudflare-gateway' ? 'cloudflare-gateway' : 'direct',
         storage: 'workspace-do',
         analysisExecution: 'queued-v2',
       },
@@ -81,6 +86,19 @@ export function resolveCapabilities(env: CapabilityEnv = process.env): Capabilit
     ok: true,
     capabilities: { target: 'node', mode: 'standalone', transport, storage: 'redis', analysisExecution: 'synchronous' },
   };
+}
+
+/**
+ * The deployment's active AI transport, from capabilities (the one source of
+ * truth): `direct` in hosted mode, otherwise the resolved capability. Throws
+ * a fixed, value-free message when the configuration is unsupported.
+ */
+export function activeAITransport(): AITransport {
+  // Cloudflare: the capability, whose transport the route resolver shares.
+  if (isCloudflareTarget()) return getCapabilities().transport;
+  // Node: exactly the previous per-caller rule (hosted is always direct).
+  if (isHostedMode()) return 'direct';
+  return resolveAITransport();
 }
 
 /** Throws a fixed, value-free message when the configuration is unsupported. */

@@ -31,8 +31,13 @@ const Consent: React.FC = () => {
     return () => { mounted.current = false; };
   }, []);
 
+  // Only a known transport is disclosed; anything else fails closed.
+  const disclosedTransport = aiTransport === 'direct' || aiTransport === 'gateway' || aiTransport === 'cloudflare-gateway'
+    ? aiTransport
+    : null;
+
   const handleConsent = async () => {
-    if (!studyConfig || isSubmitting || isOpening || isReturning) return;
+    if (!studyConfig || !disclosedTransport || isSubmitting || isOpening || isReturning) return;
 
     setIsSubmitting(true);
     setConsentError(null);
@@ -43,7 +48,9 @@ const Consent: React.FC = () => {
           researcherPreview: viewMode === 'preview',
           participantSessionHandle,
         }),
-        body: JSON.stringify({ studyId: studyConfig.id }),
+        // The transport this page disclosed; the server records consent only
+        // when it is still the one the study uses (Cloudflare, D9).
+        body: JSON.stringify({ studyId: studyConfig.id, disclosedTransport }),
       });
       const data = await response.json().catch(() => ({})) as {
         acceptedAt?: number;
@@ -88,10 +95,18 @@ const Consent: React.FC = () => {
 
   const selectedProviderId = studyConfig.aiProvider;
   const selectedProviderName = PROVIDER_OPTIONS.find(provider => provider.id === selectedProviderId)?.label;
-  const providerConfigurationReady = Boolean(selectedProviderId && selectedProviderName && studyConfig.aiModel);
-  const providerDisclosure = !providerConfigurationReady
+  const providerConfigurationReady = Boolean(
+    selectedProviderId && selectedProviderName && studyConfig.aiModel && disclosedTransport,
+  );
+  const providerDisclosure = !disclosedTransport
+    ? 'This page could not confirm how your responses are sent. Reopen the study link before continuing.'
+    : !providerConfigurationReady
     ? 'The researcher must review and save this study\'s AI provider settings before interviews can begin.'
-    : aiTransport === 'gateway'
+    : disclosedTransport === 'cloudflare-gateway'
+    ? selectedProviderId === 'openrouter'
+      ? 'Your responses are sent through Cloudflare AI Gateway, a relay operated by Cloudflare (which also hosts this study), to OpenRouter and a ZDR-compatible upstream inference provider selected for that model. The relay is configured not to log or cache your responses. Cloudflare may process them outside the EU.'
+      : `Your responses are sent to ${selectedProviderName} through Cloudflare AI Gateway, a relay operated by Cloudflare, which also hosts this study. The relay is configured not to log or cache your responses and does not send them to any other provider. Cloudflare may process them outside the EU.`
+    : disclosedTransport === 'gateway'
     ? `Your responses are sent through Vercel AI Gateway to ${selectedProviderName}. Routing is pinned to that provider and model fallback is disabled.`
     : selectedProviderId === 'openrouter'
     ? 'Your responses are sent to OpenRouter and a ZDR-compatible upstream inference provider selected for that model.'
@@ -153,7 +168,9 @@ const Consent: React.FC = () => {
 
         {!providerConfigurationReady && (
           <Disclosure role="alert">
-            This interview is unavailable until the researcher reviews and saves its AI provider settings.
+            {disclosedTransport
+              ? 'This interview is unavailable until the researcher reviews and saves its AI provider settings.'
+              : 'This interview is unavailable until you reopen the study link.'}
           </Disclosure>
         )}
 

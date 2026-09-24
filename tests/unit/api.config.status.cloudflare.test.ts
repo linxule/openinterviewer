@@ -124,6 +124,7 @@ describe('RT-01 GET /api/config/status on Cloudflare', () => {
     const body = await response.json();
     expect(body).toEqual({
       mode: 'standalone',
+      target: 'cloudflare',
       aiTransport: 'direct',
       storage: 'workspace-do',
       hasAnthropicKey: false,
@@ -132,6 +133,28 @@ describe('RT-01 GET /api/config/status on Cloudflare', () => {
       hasOpenRouterKey: false,
     });
     expect(JSON.stringify(body)).not.toContain(OPENAI_KEY);
+  });
+
+  it('RT-11 reports Cloudflare AI Gateway, with availability still decided by the bound keys', async () => {
+    process.env.AI_TRANSPORT = 'cloudflare-gateway';
+    installInvocation({
+      AI_TRANSPORT: 'cloudflare-gateway',
+      CF_AI_GATEWAY_ACCOUNT_ID: '0123456789abcdef0123456789abcdef',
+      CF_AI_GATEWAY_ID: 'oi-unit-test',
+      CF_AI_GATEWAY_TOKEN: 'synthetic-ai-gateway-run-token-0123456789',
+    });
+    const body = await (await statusGET()).json();
+    expect(body).toEqual({
+      mode: 'standalone',
+      target: 'cloudflare',
+      aiTransport: 'cloudflare-gateway',
+      storage: 'workspace-do',
+      hasAnthropicKey: false,
+      hasGeminiKey: false,
+      hasOpenAiKey: true,
+      hasOpenRouterKey: false,
+    });
+    expect(JSON.stringify(body)).not.toContain('synthetic-ai-gateway-run-token');
   });
 
   it('RT-05 provider key availability comes from the Worker invocation env', async () => {

@@ -65,6 +65,14 @@ export type FrozenAnalysisInput = {
   studyRevision: number;
   requestedProvider: AIProviderType;
   requestedModel: string;
+  /**
+   * The transport disclosed at consent, copied from the verified consent
+   * (absent = direct). Execution refuses, before the start marker and without
+   * a provider request, when the current route is not covered (JOB-02). An
+   * optional member, so the input schema version is unchanged: N-1 readers
+   * ignore unknown members (gw-final NEW 4).
+   */
+  disclosedTransport?: 'cloudflare-gateway';
 };
 
 // ---------- Queue envelope (JOB-06) ----------
@@ -143,13 +151,24 @@ export type AcceptAnalysisRetryInput = {
   /** sha256 over API version and expectedGeneration. */
   requestFingerprint: string;
   expectedGeneration: number;
-  /** Acceptance-time frozen inputs; used only when a generation is allocated. */
+  /**
+   * Acceptance-time frozen inputs; used only when a generation is allocated.
+   * The object replaces `disclosedTransport` with the interview's own
+   * recorded disclosure.
+   */
   input: FrozenAnalysisInput;
+  /**
+   * The transport this installation would use for the request now (absent =
+   * direct). A new generation is allocated only when the interview's
+   * disclosure covers it (D9); otherwise `transport-not-disclosed`.
+   */
+  transport?: 'cloudflare-gateway';
   now: number;
 };
 
 export type AcceptAnalysisRetryOutcome =
   | { status: 'accepted'; body: AnalysisStatusBody }
+  | { status: 'transport-not-disclosed' }
   | { status: 'existing'; body: AnalysisStatusBody }
   | { status: 'already-complete'; body: AnalysisStatusBody }
   | { status: 'state-changed' }
@@ -214,6 +233,8 @@ export type ProviderProvenance = {
   aiModel: string;
   requestedAiModel: string;
   routedProvider?: string;
+  /** Present only for a request through Cloudflare AI Gateway (RT-11). */
+  aiTransport?: 'cloudflare-gateway';
 };
 
 export type FinishAnalysisJobInput = JobFence & {

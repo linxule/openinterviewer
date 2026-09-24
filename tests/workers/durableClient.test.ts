@@ -625,6 +625,8 @@ describe('durable client transport contract (ST-01, JOB-04)', () => {
     expect(await store.readiness()).toEqual({ status: 'held', reason: 'maintenance', maintenance: 'frozen' });
     replies.readiness = { status: 'held', reason: 'workspace-uninitialized' };
     expect(await store.readiness()).toEqual({ status: 'held', reason: 'workspace-uninitialized' });
+    replies.readiness = { status: 'held', reason: 'workspace-unconfigured' };
+    expect(await store.readiness()).toEqual({ status: 'held', reason: 'workspace-unconfigured' });
     for (const reply of [
       { status: 'ready' },
       { status: 'ready', maintenance: 'closed' },

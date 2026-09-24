@@ -13,6 +13,7 @@ import {
   type CloudflareBindingPresence,
 } from '@/lib/hostedConfig';
 import { WORKER_INVOCATION_ACCESSOR, type WorkerInvocation } from '@/lib/runtime/workerInvocation';
+import { SDK_ENV_OVERRIDE_NAMES } from '@/lib/providers/endpoint';
 
 const ADMIN = 'synthetic-admin-password-1';
 const SESSION = 'synthetic-session-secret-0123456789abcdefgh';
@@ -228,6 +229,99 @@ describe('RT-08 Cloudflare configuration validation', () => {
       .toEqual(['invalid_ai_provider']);
   });
 
+  it('RT-05 accepts any bound subset of the four keys that includes the default provider key', () => {
+    const allKeys = {
+      GEMINI_API_KEY: GEMINI,
+      ANTHROPIC_API_KEY: 'synthetic-anthropic-provider-key',
+      OPENAI_API_KEY: 'synthetic-openai-provider-key',
+      OPENROUTER_API_KEY: 'synthetic-openrouter-provider-key',
+    };
+    expect(validateCloudflareConfig(cloudflareEnv(allKeys), BINDINGS)).toEqual([]);
+    expect(validateCloudflareConfig(cloudflareEnv({ ...allKeys, AI_PROVIDER: 'openrouter' }), BINDINGS)).toEqual([]);
+    expect(validateCloudflareConfig(cloudflareEnv({ ...allKeys, AI_PROVIDER: 'claude', ANTHROPIC_API_KEY: undefined }), BINDINGS))
+      .toEqual(['missing_ai_provider_key']);
+  });
+
+  it.each(['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY'])(
+    'RT-05 holds a bound non-default key (%s) to the placeholder rule',
+    (name) => {
+      const view = getPublicConfig(cloudflareEnv({ [name]: 'your-provider-key-here' }), BINDINGS);
+      expect(view).toMatchObject({ ready: false, errors: ['placeholder_secret'] });
+      expect(JSON.stringify(view)).not.toContain('your-provider-key-here');
+    },
+  );
+
+  it.each(SDK_ENV_OVERRIDE_NAMES)('RT-05 refuses the SDK override variable %s, whatever its value', (name) => {
+    for (const value of ['https://attacker.example', '']) {
+      const view = getPublicConfig(cloudflareEnv({ [name]: value }), BINDINGS);
+      expect(view).toMatchObject({ ready: false, errors: ['provider_sdk_env_override'] });
+      expect(JSON.stringify(view)).not.toContain('attacker');
+      expect(JSON.stringify(view)).not.toContain(name);
+    }
+  });
+
+  describe('RT-11 Cloudflare AI Gateway transport', () => {
+    const GATEWAY = {
+      AI_TRANSPORT: 'cloudflare-gateway',
+      CF_AI_GATEWAY_ACCOUNT_ID: '0123456789abcdef0123456789abcdef',
+      CF_AI_GATEWAY_ID: 'oi-example',
+      CF_AI_GATEWAY_TOKEN: 'synthetic-ai-gateway-run-token-0123456789',
+    };
+
+    it('is ready with valid identifiers and an independent Run token, and reports the transport', () => {
+      const view = getPublicConfig(cloudflareEnv(GATEWAY), BINDINGS);
+      expect(view).toMatchObject({ ready: true, errors: [], aiTransport: 'cloudflare-gateway' });
+      expect(JSON.stringify(view)).not.toContain(GATEWAY.CF_AI_GATEWAY_TOKEN);
+      expect(JSON.stringify(view)).not.toContain(GATEWAY.CF_AI_GATEWAY_ACCOUNT_ID);
+    });
+
+    it.each<[string, Record<string, string | undefined>, string]>([
+      ['a malformed account ID', { CF_AI_GATEWAY_ACCOUNT_ID: 'not-an-account' }, 'invalid_cf_ai_gateway_account_id'],
+      ['the default gateway', { CF_AI_GATEWAY_ID: 'default' }, 'invalid_cf_ai_gateway_id'],
+      ['a missing Run token', { CF_AI_GATEWAY_TOKEN: undefined }, 'missing_cf_ai_gateway_token'],
+      ['a short Run token', { CF_AI_GATEWAY_TOKEN: 'short-token' }, 'weak_cf_ai_gateway_token'],
+    ])('refuses %s', (_label, override, error) => {
+      const view = getPublicConfig(cloudflareEnv({ ...GATEWAY, ...override }), BINDINGS);
+      expect(view).toMatchObject({ ready: false, errors: [error], aiTransport: 'cloudflare-gateway' });
+    });
+
+    it('refuses gateway identifiers on direct transport, but allows a bound token there', () => {
+      expect(validateCloudflareConfig(cloudflareEnv({ CF_AI_GATEWAY_ID: 'oi-example' }), BINDINGS))
+        .toEqual(['cf_ai_gateway_config_without_transport']);
+      expect(validateCloudflareConfig(cloudflareEnv({ CF_AI_GATEWAY_ACCOUNT_ID: GATEWAY.CF_AI_GATEWAY_ACCOUNT_ID }), BINDINGS))
+        .toEqual(['cf_ai_gateway_config_without_transport']);
+      expect(validateCloudflareConfig(cloudflareEnv({ CF_AI_GATEWAY_TOKEN: GATEWAY.CF_AI_GATEWAY_TOKEN }), BINDINGS)).toEqual([]);
+    });
+
+    it.each([
+      ['the session secret', SESSION],
+      ['the administrator password', ADMIN],
+      ['the operator token', OPERATOR],
+      ['the default provider key', GEMINI],
+    ])('requires a Run token independent of %s', (_label, value) => {
+      const env = cloudflareEnv({ ...GATEWAY, CF_AI_GATEWAY_TOKEN: value });
+      const errors = validateCloudflareConfig(env, BINDINGS);
+      expect(errors).toContain('secrets_not_independent');
+      expect(JSON.stringify(getPublicConfig(env, BINDINGS))).not.toContain(value);
+    });
+
+    it('requires a Run token independent of a bound non-default provider key', () => {
+      const key = 'synthetic-openrouter-provider-key-0123';
+      expect(validateCloudflareConfig(cloudflareEnv({ ...GATEWAY, OPENROUTER_API_KEY: key, CF_AI_GATEWAY_TOKEN: key }), BINDINGS))
+        .toEqual(['secrets_not_independent']);
+    });
+
+    it('holds the Run token to the placeholder rule', () => {
+      const view = getPublicConfig(cloudflareEnv({ ...GATEWAY, CF_AI_GATEWAY_TOKEN: 'your-ai-gateway-run-token-goes-here' }), BINDINGS);
+      expect(view).toMatchObject({ ready: false, errors: ['placeholder_secret'] });
+    });
+
+    it('keeps Vercel AI Gateway refused on Cloudflare', () => {
+      expect(getPublicConfig(cloudflareEnv({ AI_TRANSPORT: 'gateway' }), BINDINGS))
+        .toMatchObject({ ready: false, errors: ['unsupported_cloudflare_transport'], aiTransport: null });
+    });
+  });
+
   it.each([
     ['WORKSPACE_ID', undefined, 'invalid_workspace_id'],
     ['WORKSPACE_ID', '', 'invalid_workspace_id'],
@@ -337,6 +431,13 @@ describe('RT-01 Node target keeps its existing validation', () => {
     expect(getPublicConfig({ ...nodeEnv, ADMIN_PASSWORD: 'a'.repeat(2_000) })).toMatchObject({ ready: true, errors: [] });
   });
 
+  it('RT-11 refuses Cloudflare AI Gateway on the Node target', () => {
+    const view = getPublicConfig({ ...nodeEnv, AI_TRANSPORT: 'cloudflare-gateway' });
+    expect(view.ready).toBe(false);
+    expect(view.errors).toContain('invalid_ai_transport');
+    expect(view.aiTransport).toBeNull();
+  });
+
   it('RT-01 keeps the existing Node invalid-transport result and withholds the protocol', () => {
     const view = getPublicConfig({ ...nodeEnv, AI_TRANSPORT: 'grpc' });
     expect(view).toMatchObject({ mode: 'standalone', aiTransport: null, ready: false, analysisExecution: null });
@@ -365,6 +466,7 @@ describe('RT-08 durable workspace readiness mapping', () => {
     [{ status: 'ready', maintenance: 'recovery' }, 'workspace_maintenance'],
     [{ status: 'held', reason: 'maintenance', maintenance: 'frozen' }, 'workspace_maintenance'],
     [{ status: 'held', reason: 'workspace-uninitialized' }, 'workspace_uninitialized'],
+    [{ status: 'held', reason: 'workspace-unconfigured' }, 'workspace_unconfigured'],
     [{ status: 'held', reason: 'schema-unsupported' }, 'workspace_schema_unsupported'],
     [{ status: 'held', reason: 'workspace-identity-mismatch', maintenance: 'open' }, 'workspace_identity_mismatch'],
     [{ status: 'held', reason: 'recovery-epoch-mismatch', maintenance: 'open' }, 'workspace_recovery_epoch_mismatch'],

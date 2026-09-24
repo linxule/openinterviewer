@@ -360,6 +360,8 @@ describe('POST /api/interviews/[id]/analyze on Cloudflare — acceptance (API-01
       { status: 'failed', generation: 2, failureKind: 'timeout', recoveryRequired: true }],
     ['a mismatched terminal generation', { status: 'state-changed' }, 409, { code: 'ANALYSIS_STATE_CHANGED' }],
     ['a foreign or missing interview', { status: 'not-found' }, 404, { error: 'Interview not found' }],
+    ['a transport the interview\'s consent does not cover (D9)', { status: 'transport-not-disclosed' }, 409,
+      { code: 'TRANSPORT_NOT_DISCLOSED', uncoveredInterviewCount: 1 }],
     ['a maintenance hold', { status: 'held', reason: 'maintenance' }, 503, { retryable: true, reason: 'maintenance' }],
     ['a recovery-epoch hold', { status: 'held', reason: 'recovery-epoch-mismatch' }, 503,
       { retryable: true, reason: 'workspace-unavailable' }],
@@ -380,6 +382,30 @@ describe('POST /api/interviews/[id]/analyze on Cloudflare — acceptance (API-01
     expect(json).toMatchObject(body);
     if (status === 202 || status === 200) expect(json).toEqual(body);
     expect(JSON.stringify(json)).not.toMatch(/epoch|uninitialized|corrupt/);
+  });
+
+  it('D9: states the transport the request would use (only for the gateway), never a disclosure of its own', async () => {
+    handlers.acceptAnalysisRetry = () => ({ status: 'accepted', body: { status: 'pending', generation: 2, phase: 'queued', pollAfterMs: 2000 } });
+    expect((await post()).status).toBe(202);
+    const gateway = {
+      AI_TRANSPORT: 'cloudflare-gateway',
+      CF_AI_GATEWAY_ACCOUNT_ID: '0123456789abcdef0123456789abcdef',
+      CF_AI_GATEWAY_ID: 'oi-unit-test',
+      CF_AI_GATEWAY_TOKEN: 'synthetic-ai-gateway-run-token-0123456789',
+    };
+    for (const [name, value] of Object.entries(gateway)) process.env[name] = value;
+    try {
+      installInvocation({ ...gateway, WORKSPACE_STORE: workspaceNamespace, ANALYSIS_QUEUE: analysisQueue });
+      expect((await post({ headers: { 'Idempotency-Key': OTHER_KEY } })).status).toBe(202);
+    } finally {
+      for (const name of Object.keys(gateway)) delete process.env[name];
+      process.env.AI_TRANSPORT = 'direct';
+    }
+    const [direct, viaGateway] = acceptInputs();
+    expect(direct).not.toHaveProperty('transport');
+    expect(viaGateway).toMatchObject({ transport: 'cloudflare-gateway' });
+    for (const input of [direct, viaGateway]) expect(input.input).not.toHaveProperty('disclosedTransport');
+    expect(JSON.stringify(rpcCalls)).not.toContain(gateway.CF_AI_GATEWAY_TOKEN);
   });
 
   it('API-01: a thrown allocation RPC is 503 retryable, never success or failure', async () => {

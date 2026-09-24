@@ -177,7 +177,7 @@ switch (command) {
       source: 'wrangler',
       strategy: 'percentage',
       author_email: 'operator@example.invalid',
-      annotations: { 'workers/triggered_by': 'upload', ...(entry.message ? { 'workers/message': entry.message } : {}) },
+      annotations: { 'workers/triggered_by': entry.triggeredBy ?? 'upload', ...(entry.message ? { 'workers/message': entry.message } : {}) },
       versions: [{ version_id: `10000000-0000-4000-8000-${String(index).padStart(12, '0')}`, percentage: 100 }],
       created_on: entry.at,
     }));
@@ -207,6 +207,9 @@ switch (command) {
     state.workers[name] ??= { draft: true, secrets: {}, deployments: [], vars: {} };
     const worker = state.workers[name];
     for (const [key, value] of Object.entries(content)) worker.secrets[key] = digest(value);
+    // A secret change on a deployed Worker deploys a new version (Cloudflare
+    // secrets documentation); modelled as a deployment without a message.
+    if (!worker.draft && worker.deployments.length > 0) worker.deployments.push({ at: new Date().toISOString(), triggeredBy: 'secret' });
     state.secretBulkCalls.push({ worker: name, names: Object.keys(content).sort(), at: new Date().toISOString() });
     if (process.env.FAKE_WRANGLER_CAPTURE) appendFileSync(process.env.FAKE_WRANGLER_CAPTURE, `${JSON.stringify(content)}\n`);
     if (when === 'after') finish(1, { stderr: '🚨 Secrets failed to upload (injected lost reply)' });

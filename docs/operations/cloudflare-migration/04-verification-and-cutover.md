@@ -17,10 +17,10 @@ Failure tests must distinguish a real committed transaction with a lost reply fr
 | Lane | Mandatory evidence |
 | --- | --- |
 | Existing quality | `npm run check`, `npm run test:setup`, production dependency audit at the existing CI threshold, `git diff --check` |
-| Existing builds/setup | Standalone direct, standalone Gateway, hosted direct; reuse safe fixture environments from `.github/workflows/ci.yml` |
+| Existing builds/setup | Standalone direct, standalone Gateway, hosted direct, Cloudflare direct and Cloudflare AI Gateway; reuse safe fixture environments from `.github/workflows/ci.yml` |
 | Existing browser/storage | `npm run test:e2e`, `npm run test:redis-crash`, `npm run test:adversarial` using disposable Redis |
 | Cloudflare configuration | Supported target resolves without Redis; unsupported target/mode/transport, missing bindings, schema mismatch, placeholder/reused secrets and invalid origin fail correctly |
-| Cloudflare production artifact | Real OpenNext/custom entrypoint build and local execution of fetch/Queue/DO; auth/proxy/assets/crypto and each provider adapter's synthetic HTTP contract |
+| Cloudflare production artifact | Real OpenNext/custom entrypoint build and local execution of fetch/Queue/DO; auth/proxy/assets/crypto and each provider adapter's synthetic HTTP contract, direct and through the Cloudflare AI Gateway route (RT-11) |
 | Shared storage behavior | Same business scenarios run on Redis wrapper and local DO, with backend-specific fault cases separate |
 | Durable jobs/API | Every `JOB`/`API` acceptance case, including request-count assertions at the provider fixture |
 | Cloudflare browser/UI | Complete researcher and participant flows through real handlers/storage, plus the design slice's accessibility/mobile cases |
@@ -54,6 +54,8 @@ Prepare remote rehearsals during local implementation; execute them only with th
 The staging report must cover real canonical-origin cookies/proxy behavior, Queue dispatch/consumer registration, actual alarm wake-up after inactivity, protected logs, schema initialization, operational restore and a clean installation under customized resource names. Repeat install/update without creating duplicate resources or rotating secrets. Interrupt setup after a resource is created; resuming must recover the known installation without adopting unrelated resources. Record costs/configuration only in safe terms.
 
 Run a deliberate failing release check through the selected deployment mechanism: no promotion occurs, no production binding is used, and no privileged deploy credential is exposed to untrusted PR code. For the maintained instance, CI checks and promotion must identify the same commit/artifact. For self-host installations, verify the documented update path rather than assuming cloned branch protection or independent CI statuses gate Workers Builds.
+
+For `cloudflare-gateway` (RT-11, owner amendment, 24 September 2026), the staging report also covers gateway creation/read-back, both non-provider probes, zero stored gateway logs, per-provider pass-through with served-model provenance, one-request queued failure semantics, and the transport-switch refusal drill. The live facts these depend on are listed as remote gates in [DEVIATIONS.md](evidence/DEVIATIONS.md#pending-and-open-questions).
 
 Live provider validation remains separate from synthetic compatibility tests. Before any paid smoke, name the provider/model, planned invocation count, SDK retry policy and output/deadline bounds; use only explicitly requested credentials. Capture metadata/classification only. Test each provider that the deployment will actually use; do not mark uncalled providers live-verified. This migration does not alter actual-model provenance requirements to make a smoke pass.
 

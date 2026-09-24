@@ -7,7 +7,10 @@
 //
 // Secrets are generated here or read from stdin JSON / a hidden prompt, and
 // reach Cloudflare only through `wrangler secret bulk` on stdin. They are
-// never written to the receipt, the installation config, logs or argv.
+// never written to the receipt, the installation config, logs or argv. The AI
+// Gateway management token (CF_AI_GATEWAY_ADMIN_TOKEN) is read from this
+// process's environment only and never leaves it except as the Authorization
+// of its own Cloudflare API calls.
 // Reference: docs/operations/cloudflare-migration/INSTALLER.md
 
 import path from 'node:path';
@@ -15,7 +18,7 @@ import { parseArgs } from 'node:util';
 import { ROOT, readJsonc } from './lib.mjs';
 import { applyCommand } from './installer/apply.mjs';
 import { configCommand } from './installer/config.mjs';
-import { Reporter, createContext, parseWaitSeconds } from './installer/context.mjs';
+import { Reporter, createContext, gatewayApiFor, parseWaitSeconds } from './installer/context.mjs';
 import { InstallerError, HELD, REFUSED } from './installer/model.mjs';
 import { planCommand } from './installer/plan.mjs';
 import { printVerification } from './installer/report.mjs';
@@ -33,7 +36,9 @@ Commands
   verify    read-only readiness check of the deployed installation (--json for machine output);
             with --config and no --install/--env: the config's APP_BASE_URL, without a receipt
             (for a deploy made outside the installer, such as the CI promotion job)
-  update    deploy the current checked artifact to an existing installation (--yes)
+  update    deploy the current checked artifact to an existing installation (--yes), or run one
+            provider-key operation (--add-provider-key, --rotate-provider-key) or
+            --rotate-ai-gateway-token without deploying, or switch --change-provider / --change-ai-transport
   config    local only: (re)write cloudflare/installations/<install>-<env>/wrangler.jsonc from
             the receipt and print its path; refused until the bootstrap was cleared. This is the
             file to store as CLOUDFLARE_INSTALL_CONFIG for the CI promotion job
@@ -41,15 +46,26 @@ Commands
 Options
   --install <name>              installation name: 1-24 of [a-z0-9-] (required)
   --env <production|staging>    environment (required); staging uses separate resources
-  --provider <name>             gemini | claude | openai | openrouter
+  --provider <name>             gemini | claude | openai | openrouter: the default provider (AI_PROVIDER), whose key is required
+  --provider-keys <p[,p]|all>   apply only: the provider keys to bind (default: the --provider key); must include --provider
+  --ai-transport <t>            direct (default) | cloudflare-gateway: send provider requests through the
+                                installation's own Cloudflare AI Gateway (apply; update with --change-ai-transport).
+                                cloudflare-gateway needs CF_AI_GATEWAY_ADMIN_TOKEN (AI Gateway Read + Edit) in the
+                                environment and CF_AI_GATEWAY_TOKEN (the Run token) on protected input
   --jurisdiction <eu|fedramp|none>  Durable Object storage jurisdiction (explicit on first apply; recommended eu)
   --origin <https://host>       final origin; otherwise the workers.dev URL is discovered from the first deploy
   --account-id <id>             Cloudflare account (must be accessible to wrangler)
   --import-target               initialize the fresh workspace in 'recovery' for an operational import
-  --secrets-stdin               read {"ADMIN_PASSWORD": ..., "<PROVIDER>_API_KEY": ...} as JSON from stdin
+  --secrets-stdin               read {"ADMIN_PASSWORD": ..., "<PROVIDER>_API_KEY": ..., ...} as JSON from stdin
+                                (plus "CF_AI_GATEWAY_TOKEN" with cloudflare-gateway; update operations: only the named keys)
   --operator-token-file <path>  write the generated OPERATOR_TOKEN once (mode 0600, outside the repository)
   --reveal-operator-token       print the generated OPERATOR_TOKEN once (interactive terminal only)
   --change-provider             update only: switch AI_PROVIDER (adds that provider's key if absent)
+  --add-provider-key <p[,p]>    update only: bind the named provider keys; one secret upload, no deploy
+  --rotate-provider-key <p>     update only: replace one bound provider key; one secret upload, no deploy
+  --change-ai-transport         update only, with --ai-transport: switch AI_TRANSPORT (provisions or adopts the
+                                gateway and binds the Run token when needed), then deploy
+  --rotate-ai-gateway-token     update only: replace the bound Run token after probing it; no deploy
   --yes                         confirm the reviewed plan (apply, resume, update)
   --json                        machine-readable result on stdout (progress goes to stderr)
   --wait-seconds <n>            readiness wait budget (default 180; verify: 0)
@@ -73,6 +89,12 @@ const OPTIONS = {
   'operator-token-file': { type: 'string' },
   'reveal-operator-token': { type: 'boolean' },
   'change-provider': { type: 'boolean' },
+  'provider-keys': { type: 'string' },
+  'add-provider-key': { type: 'string' },
+  'rotate-provider-key': { type: 'string' },
+  'ai-transport': { type: 'string' },
+  'change-ai-transport': { type: 'boolean' },
+  'rotate-ai-gateway-token': { type: 'boolean' },
   yes: { type: 'boolean' },
   json: { type: 'boolean' },
   'wait-seconds': { type: 'string' },
@@ -99,7 +121,9 @@ async function verifyCommand(ctx) {
     });
   }
   const waitSeconds = ctx.options['wait-seconds'] === undefined ? 0 : ctx.waitSeconds;
-  const result = await verifyInstallation({ template: ctx.template, receipt, configPath: ctx.paths.config, waitSeconds });
+  // Gateway settings and stored logs are read only with the management token.
+  const gatewayApi = receipt.aiTransport === 'cloudflare-gateway' ? gatewayApiFor(ctx, receipt.accountId) : null;
+  const result = await verifyInstallation({ template: ctx.template, receipt, configPath: ctx.paths.config, waitSeconds, gatewayApi });
   printVerification(ctx.out, result);
   ctx.out.result(result);
   if (result.status === 'ready') return 0;

@@ -33,8 +33,13 @@
   "vars": {
     "DEPLOYMENT_TARGET": "cloudflare",
     "DEPLOYMENT_MODE": "standalone",
+    // direct | cloudflare-gateway (RT-11). With cloudflare-gateway the two
+    // identifiers below name the installation's own AI Gateway; on direct
+    // they stay empty.
     "AI_TRANSPORT": "direct",
     "AI_PROVIDER": "",
+    "CF_AI_GATEWAY_ACCOUNT_ID": "",
+    "CF_AI_GATEWAY_ID": "",
     "APP_BASE_URL": "",
     "WORKSPACE_ID": "",
     "WORKSPACE_JURISDICTION": "",
@@ -43,8 +48,9 @@
     "WORKSPACE_BOOTSTRAP": ""
   },
   // Secrets (never in this file): ADMIN_PASSWORD, SESSION_SECRET,
-  // PARTICIPANT_TOKEN_SECRET, RATE_LIMIT_SALT, OPERATOR_TOKEN, the selected
-  // provider key, and ANALYSIS_RECOVERY_EPOCH. The epoch is a secret binding
+  // PARTICIPANT_TOKEN_SECRET, RATE_LIMIT_SALT, OPERATOR_TOKEN, each bound
+  // provider key (the AI_PROVIDER key is required), CF_AI_GATEWAY_TOKEN (the
+  // AI Gateway Run token, with cloudflare-gateway), and ANALYSIS_RECOVERY_EPOCH. The epoch is a secret binding
   // (its value is not sensitive) so that `wrangler rollback` lists it as a
   // changed secret; that prompt auto-confirms without a TTY or in CI, so it is
   // a warning, not a guard (RUNBOOK OPS-03, DEVIATIONS F4).

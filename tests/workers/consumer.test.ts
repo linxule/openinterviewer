@@ -18,6 +18,8 @@ import {
   deliver,
   editStudy,
   fenceOf,
+  GATEWAY_BASE,
+  GATEWAY_ENV,
   installProviderFixture,
   jobRow,
   mutationSeq,
@@ -127,6 +129,23 @@ describe('end-to-end durable analysis (JOB-01/02/05)', () => {
     expect(provider.requests).toHaveLength(0);
     expect(await jobRow(job.jobId)).toMatchObject({ state: 'failed', failure_kind: 'provider', started_at: null });
     expect(await analysisRow(job.interviewId)).toMatchObject({ status: 'failed', failure_kind: 'provider', recovery_required: 0, attempts: 1 });
+  });
+
+  it.each([
+    ['an SDK base-URL override', { ANTHROPIC_BASE_URL: 'https://attacker.invalid' }],
+    ['an SDK custom-header override', { ANTHROPIC_CUSTOM_HEADERS: 'x-synthetic: 1' }],
+    ['an unsupported transport', { AI_TRANSPORT: 'gateway' }],
+  ])('RT-05 refuses %s before the start marker, without any provider request', async (_label, env) => {
+    const job = await seedJob({ provider: 'claude' });
+    const provider = installProviderFixture({ kind: 'success' });
+    const output = captureConsole();
+    const result = await deliver([job.message], { env });
+    expect(result.explicitAcks).toHaveLength(1);
+    expect(provider.requests).toHaveLength(0);
+    expect(provider.unexpected).toEqual([]);
+    expect(await jobRow(job.jobId)).toMatchObject({ state: 'failed', failure_kind: 'provider', started_at: null });
+    expect(output.text()).toContain('"reason":"provider-route-invalid"');
+    expect(output.text()).not.toContain('attacker');
   });
 
   it('JOB-02 records failed/provider before the start marker, without any provider request, when the frozen model is no longer supported', async () => {
@@ -446,5 +465,146 @@ describe('deletion and restore fences (JOB-10)', () => {
     await sqlRun(`UPDATE workspace_meta SET maintenance_state = 'open'`);
     // Unfreezing leaves the job pending for its next dispatch.
     expect(await jobRow(job.jobId)).toMatchObject({ state: 'pending' });
+  });
+});
+
+// RT-11 / D9 through the real consumer: the gateway route from this
+// invocation's env, the exact header set, the consent coverage check before
+// the start marker, and the one-request outcome classes.
+describe('Cloudflare AI Gateway transport in the Queue consumer (RT-11, D9)', () => {
+  const GATEWAY_URL = {
+    claude: `${GATEWAY_BASE}/anthropic/v1/messages`,
+    openai: `${GATEWAY_BASE}/openai/responses`,
+    gemini: `${GATEWAY_BASE}/google-ai-studio/v1beta/interactions`,
+    openrouter: `${GATEWAY_BASE}/openrouter/chat/completions`,
+  } as const;
+  const EXACT = {
+    'cf-aig-authorization': `Bearer ${GATEWAY_ENV.CF_AI_GATEWAY_TOKEN}`,
+    'cf-aig-collect-log': 'false',
+    'cf-aig-collect-log-payload': 'false',
+    'cf-aig-skip-cache': 'true',
+    'cf-aig-max-attempts': '1',
+    'cf-aig-no-wholesale': 'true',
+  };
+  const cfAig = (headers: Record<string, string>) =>
+    Object.fromEntries(Object.entries(headers).filter(([name]) => name.startsWith('cf-aig-')));
+
+  it.each(['claude', 'openai', 'gemini', 'openrouter'] as const)(
+    '%s: one request to the native gateway path with exactly the six cf-aig headers; provenance records the gateway',
+    async (providerName) => {
+      const job = await seedJob({ provider: providerName, disclosedTransport: 'cloudflare-gateway' });
+      const provider = installProviderFixture({ kind: 'success' });
+      const output = captureConsole();
+      const result = await deliver([job.message], { env: GATEWAY_ENV });
+      expect(result.explicitAcks).toHaveLength(1);
+      expect(provider.unexpected).toEqual([]);
+      expect(provider.requests).toHaveLength(1);
+      expect(provider.requests[0].url).toBe(GATEWAY_URL[providerName]);
+      expect(cfAig(provider.requests[0].headers)).toEqual(EXACT);
+      const row = await analysisRow(job.interviewId);
+      expect(row).toMatchObject({ status: 'complete' });
+      expect(JSON.parse(row?.provenance_json ?? 'null')).toMatchObject({
+        aiProvider: providerName,
+        aiModel: PROVIDER_MODELS[providerName].served,
+        requestedAiModel: PROVIDER_MODELS[providerName].requested,
+        aiTransport: 'cloudflare-gateway',
+      });
+      const read = await workspaceStub().getInterview({ interviewId: job.interviewId });
+      expect(read).toMatchObject({ status: 'found', interview: { aiTransport: 'cloudflare-gateway', consentTransport: 'cloudflare-gateway' } });
+      expect(output.text()).toContain('"transport":"cloudflare-gateway"');
+      expect(output.text()).not.toContain(GATEWAY_ENV.CF_AI_GATEWAY_TOKEN);
+    },
+  );
+
+  it('routes through the gateway from the invocation env even when process.env says direct', async () => {
+    const job = await seedJob({ provider: 'claude', disclosedTransport: 'cloudflare-gateway' });
+    vi.stubEnv('AI_TRANSPORT', 'direct');
+    try {
+      const provider = installProviderFixture({ kind: 'success' });
+      await deliver([job.message], { env: GATEWAY_ENV });
+      expect(provider.requests.map((request) => request.url)).toEqual([GATEWAY_URL.claude]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('D9: a direct-consented job on the gateway is refused before the start marker with zero requests', async () => {
+    const job = await seedJob({ provider: 'claude' });
+    const provider = installProviderFixture({ kind: 'success' });
+    const output = captureConsole();
+    const result = await deliver([job.message], { env: GATEWAY_ENV });
+    expect(result.explicitAcks).toHaveLength(1);
+    expect(provider.requests).toHaveLength(0);
+    expect(await jobRow(job.jobId)).toMatchObject({ state: 'failed', failure_kind: 'provider', started_at: null });
+    expect(output.text()).toContain('"reason":"transport-not-disclosed"');
+  });
+
+  it('D9: a gateway-consented job may always run direct (covered)', async () => {
+    const job = await seedJob({ provider: 'openai', disclosedTransport: 'cloudflare-gateway' });
+    const provider = installProviderFixture({ kind: 'success' });
+    await deliver([job.message]);
+    expect(provider.requests.map((request) => request.url)).toEqual(['https://api.openai.com/v1/responses']);
+    expect(Object.keys(provider.requests[0].headers).filter((name) => name.startsWith('cf-aig-'))).toEqual([]);
+    const row = await analysisRow(job.interviewId);
+    expect(row).toMatchObject({ status: 'complete' });
+    expect(JSON.parse(row?.provenance_json ?? 'null')).not.toHaveProperty('aiTransport');
+  });
+
+  it.each([
+    ['the default gateway', { CF_AI_GATEWAY_ID: 'default' }],
+    ['a malformed account ID', { CF_AI_GATEWAY_ACCOUNT_ID: 'acct' }],
+    ['a missing Run token', { CF_AI_GATEWAY_TOKEN: '' }],
+    ['gateway identifiers on direct', { AI_TRANSPORT: 'direct' }],
+  ])('refuses %s before the start marker with zero requests, never falling back to direct', async (_label, override) => {
+    const job = await seedJob({ provider: 'claude', disclosedTransport: 'cloudflare-gateway' });
+    const provider = installProviderFixture({ kind: 'success' });
+    const output = captureConsole();
+    const result = await deliver([job.message], { env: { ...GATEWAY_ENV, ...override } });
+    expect(result.explicitAcks).toHaveLength(1);
+    expect(provider.requests).toHaveLength(0);
+    expect(provider.unexpected).toEqual([]);
+    expect(await jobRow(job.jobId)).toMatchObject({ state: 'failed', failure_kind: 'provider', started_at: null });
+    expect(output.text()).toContain('"reason":"provider-route-invalid"');
+  });
+
+  it('refuses when the invocation is not a Cloudflare capability, before any request', async () => {
+    const job = await seedJob({ provider: 'claude', disclosedTransport: 'cloudflare-gateway' });
+    const provider = installProviderFixture({ kind: 'success' });
+    const result = await deliver([job.message], { env: { ...GATEWAY_ENV, DEPLOYMENT_TARGET: 'node' } });
+    expect(result.explicitAcks).toHaveLength(1);
+    expect(provider.requests).toHaveLength(0);
+    expect(await jobRow(job.jobId)).toMatchObject({ state: 'failed', failure_kind: 'provider', started_at: null });
+  });
+
+  it('D12: a gateway 401 AiGatewayError after the start marker is a known failure, one request', async () => {
+    const job = await seedJob({ provider: 'claude', disclosedTransport: 'cloudflare-gateway' });
+    const provider = installProviderFixture({
+      kind: 'status',
+      status: 401,
+      body: { success: false, name: 'AiGatewayError', httpCode: 401, internalCode: 2009, message: 'Unauthorized' },
+    });
+    const output = captureConsole();
+    const result = await deliver([job.message], { env: GATEWAY_ENV });
+    expect(result.explicitAcks).toHaveLength(1);
+    expect(provider.requests).toHaveLength(1);
+    expect(await jobRow(job.jobId)).toMatchObject({ state: 'failed', failure_kind: 'provider' });
+    expect((await jobRow(job.jobId)).started_at).not.toBeNull();
+    expect(output.text()).toContain('"origin":"gateway"');
+    expect(output.text()).not.toContain('Unauthorized');
+  });
+
+  it.each([
+    ['a gateway 502', { kind: 'status', status: 502 } as const],
+    ['a gateway 524', { kind: 'status', status: 524 } as const],
+    ['a dropped connection', { kind: 'network' } as const],
+  ])('%s after the start marker is recovery-required with exactly one request', async (_label, behavior) => {
+    const job = await seedJob({ provider: 'openai', disclosedTransport: 'cloudflare-gateway' });
+    const provider = installProviderFixture(behavior);
+    const result = await deliver([job.message], { env: GATEWAY_ENV });
+    expect(result.explicitAcks).toHaveLength(1);
+    expect(result.retryMessages).toEqual([]);
+    expect(provider.requests).toHaveLength(1);
+    expect(provider.requests[0].url).toBe(GATEWAY_URL.openai);
+    expect(await jobRow(job.jobId)).toMatchObject({ state: 'recovery-required' });
   });
 });

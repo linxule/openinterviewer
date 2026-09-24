@@ -25,6 +25,7 @@ import { getStudy } from './kv';
 import { getParticipantLinkById } from './participantLinks';
 import { StoredStudy } from '@/types';
 import type { AIProviderKeys } from './providers';
+import { resolveProviderRoute, type ProviderRoute } from './providers/endpoint';
 import { validateStudyConfig } from './studyConfigValidation';
 import { logRequestFailure } from './requestLog';
 
@@ -48,6 +49,11 @@ export interface ResearcherContext {
   openaiApiKey: string | null;
   openrouterApiKey: string | null;
 
+  // Cloudflare target only: the provider route resolved from the Worker env,
+  // or null when it is invalid (the provider factory then refuses; readiness
+  // reports the same error). Absent on Node.
+  providerRoute?: ProviderRoute | null;
+
   // Whether the researcher has completed onboarding
   onboardingComplete: boolean;
 }
@@ -58,7 +64,7 @@ export interface ResearcherContext {
 export function providerKeysFromContext(
   context: Pick<
     ResearcherContext,
-    'geminiApiKey' | 'anthropicApiKey' | 'openaiApiKey' | 'openrouterApiKey'
+    'geminiApiKey' | 'anthropicApiKey' | 'openaiApiKey' | 'openrouterApiKey' | 'providerRoute'
   >
 ): AIProviderKeys {
   return {
@@ -66,6 +72,7 @@ export function providerKeysFromContext(
     anthropicApiKey: context.anthropicApiKey,
     openaiApiKey: context.openaiApiKey,
     openrouterApiKey: context.openrouterApiKey,
+    ...(context.providerRoute ? { route: context.providerRoute } : {}),
   };
 }
 
@@ -147,6 +154,7 @@ function getCloudflareStandaloneContext(): ResearcherContext {
     const value = env[name];
     return typeof value === 'string' && value.length > 0 ? value : null;
   };
+  const route = resolveProviderRoute(env);
   return {
     researcherId: null,
     kvClient: createFencedRedisPort(),
@@ -155,6 +163,7 @@ function getCloudflareStandaloneContext(): ResearcherContext {
     anthropicApiKey: secret('ANTHROPIC_API_KEY'),
     openaiApiKey: secret('OPENAI_API_KEY'),
     openrouterApiKey: secret('OPENROUTER_API_KEY'),
+    providerRoute: route.ok ? route.route : null,
     onboardingComplete: true,
   };
 }

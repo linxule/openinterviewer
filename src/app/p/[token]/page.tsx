@@ -7,6 +7,11 @@ import { StudyConfig } from '@/types';
 import { Verbatim } from '@/components/ui';
 import type { AITransport } from '@/lib/aiTransport';
 
+/** The exchange's transport; anything but the three known values (including none) is null. */
+function participantTransport(value: unknown): AITransport | null {
+  return value === 'direct' || value === 'gateway' || value === 'cloudflare-gateway' ? value : null;
+}
+
 /**
  * Resolves a participant link and hands over to `/consent`. It never renders
  * an interview step itself: a step shown here while the route change is still
@@ -45,16 +50,23 @@ export default function ParticipantPage() {
         const resolvedLink = result.data as {
           studyConfig: StudyConfig;
           sessionHandle?: string;
-          aiTransport?: AITransport;
+          aiTransport?: unknown;
         };
         if (!resolvedLink.sessionHandle) {
           setError('The participant session could not be established');
           return;
         }
+        // The consent page discloses this transport, so an unknown value is a
+        // load error rather than a guess.
+        const aiTransport = participantTransport(resolvedLink.aiTransport);
+        if (!aiTransport) {
+          setError('This study could not confirm how your responses are sent');
+          return;
+        }
         beginParticipantSession(
           resolvedLink.studyConfig,
           resolvedLink.sessionHandle,
-          resolvedLink.aiTransport === 'gateway' ? 'gateway' : 'direct',
+          aiTransport,
         );
         // Stay on the loading view until /consent replaces this page.
         router.replace('/consent');

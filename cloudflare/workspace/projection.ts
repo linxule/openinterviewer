@@ -34,11 +34,20 @@ type Provenance = {
   aiModel: string;
   requestedAiModel: string;
   routedProvider?: string;
+  aiTransport?: 'cloudflare-gateway';
 };
 
 // Members owned by the analysis row; never taken from the immutable record
 // once an analysis row exists.
-const MUTABLE_MEMBERS = ['synthesis', 'analysis', 'aiProvider', 'aiModel', 'requestedAiModel', 'routedProvider'] as const;
+const MUTABLE_MEMBERS = [
+  'synthesis',
+  'analysis',
+  'aiProvider',
+  'aiModel',
+  'requestedAiModel',
+  'routedProvider',
+  'aiTransport',
+] as const;
 
 export class CorruptRecordError extends Error {
   constructor(readonly where: 'record' | 'analysis') {
@@ -113,6 +122,7 @@ export function projectInterview(recordJson: string, expectedId: string, row: An
       projected.aiModel = provenance.aiModel;
       projected.requestedAiModel = provenance.requestedAiModel;
       if (provenance.routedProvider !== undefined) projected.routedProvider = provenance.routedProvider;
+      if (provenance.aiTransport === 'cloudflare-gateway') projected.aiTransport = provenance.aiTransport;
     } catch {
       throw new CorruptRecordError('analysis');
     }

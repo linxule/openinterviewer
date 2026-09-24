@@ -6,6 +6,7 @@ const LABELS = {
   'not-ready': 'NOT READY',
   unreachable: 'UNREACHABLE',
   'config-mismatch': 'CONFIG MISMATCH',
+  'gateway-mismatch': 'AI GATEWAY MISMATCH (settings break the policy, or logs are stored)',
 };
 
 export function summarizeVerification(result) {

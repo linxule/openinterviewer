@@ -33,7 +33,7 @@
     "test:cloudflare": "vitest run --config vitest.workers.config.mts",
     "test:contract:redis": "vitest run --config vitest.integration.config.mts tests/integration/workspaceStore.redis.contract.test.ts",
     "test:inventory:redis": "vitest run --config vitest.integration.config.mts tests/integration/inventoryRedis.test.ts",
-    "typegen:cloudflare": "wrangler types cloudflare/worker-configuration.d.ts",
+    "typegen:cloudflare": "wrangler types --strict-vars=false cloudflare/worker-configuration.d.ts",
     "build:cloudflare": "node scripts/cloudflare/build.mjs",
     "test:cloudflare:artifact": "vitest run --config vitest.artifact.config.mts",
     "test:cloudflare:restart": "vitest run --config vitest.restart.config.mts",

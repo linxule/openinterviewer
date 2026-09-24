@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, test } from 'node:test';
+import { readJsonc } from '../../scripts/cloudflare/lib.mjs';
 import { applyArgs, assertNoSecretLeak, buildArtifact, createSandbox, mutations, stdinSecrets } from './helpers.mjs';
 
 const ORIGIN = 'https://oi-acme.fixture-sub.workers.dev';
@@ -143,7 +144,7 @@ describe('setup:cloudflare update and verify', { concurrency: 6 }, () => {
     const receipt = sandbox.receipt();
     assert.equal(receipt.provider, 'gemini');
     assert.equal(receipt.providerHistory, undefined);
-    assert.deepEqual([receipt.pendingProviderChange.from, receipt.pendingProviderChange.to], ['gemini', 'claude']);
+    assert.deepEqual([receipt.pendingChange.kind, receipt.pendingChange.from, receipt.pendingChange.to], ['provider', 'gemini', 'claude']);
     return { sandbox, run };
   }
 
@@ -168,7 +169,8 @@ describe('setup:cloudflare update and verify', { concurrency: 6 }, () => {
       assert.equal(state.deploys.at(-1).vars.AI_PROVIDER, 'claude');
       const receipt = sandbox.receipt();
       assert.equal(receipt.provider, 'claude');
-      assert.equal(receipt.pendingProviderChange, undefined);
+      assert.equal(receipt.pendingChange, undefined);
+      assert.deepEqual(receipt.providerKeys, ['gemini', 'claude']);
       assert.deepEqual(receipt.providerHistory.map(({ from, to }) => [from, to]), [['gemini', 'claude']]);
 
       const plain = await sandbox.run('update', UPDATE);
@@ -232,7 +234,7 @@ describe('setup:cloudflare update and verify', { concurrency: 6 }, () => {
     assert.equal(run.code, 2, run.output);
     assert.match(run.stderr, /installation config vars\.AI_PROVIDER: expected "gemini", found "claude"/);
     assert.equal(sandbox.state().deploys.length, deploys);
-    assert.equal(sandbox.receipt().pendingProviderChange, undefined, 'a refused update records no pending change');
+    assert.equal(sandbox.receipt().pendingChange, undefined, 'a refused update records no pending change');
   });
 
   test('a provider change whose key input is rejected records nothing and changes nothing', async (t) => {
@@ -371,6 +373,24 @@ describe('setup:cloudflare update and verify', { concurrency: 6 }, () => {
     assert.match(result.config.diffs.join('\n'), /queue consumers/);
   });
 
+  for (const [label, edit, pattern] of [
+    ['gateway identifiers on a direct installation', (vars) => ({ ...vars, CF_AI_GATEWAY_ACCOUNT_ID: 'a'.repeat(32), CF_AI_GATEWAY_ID: 'oi-acme' }), /vars\.CF_AI_GATEWAY_ACCOUNT_ID[\s\S]*vars\.CF_AI_GATEWAY_ID/],
+    ['the gateway transport on a direct installation', (vars) => ({ ...vars, AI_TRANSPORT: 'cloudflare-gateway' }), /vars\.AI_TRANSPORT/],
+  ]) {
+    test(`verify reports config-mismatch for ${label} (RT-11)`, async (t) => {
+      const sandbox = await installed(t);
+      const file = path.join(sandbox.installDir(), 'wrangler.jsonc');
+      const config = readJsonc(file);
+      config.vars = edit(config.vars);
+      writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
+      const run = await sandbox.run('verify', ['--install', 'acme', '--env', 'production', '--json']);
+      assert.equal(run.code, 1, run.output);
+      const result = JSON.parse(run.stdout);
+      assert.equal(result.status, 'config-mismatch');
+      assert.match(result.config.diffs.join('\n'), pattern);
+    });
+  }
+
   test('verify cannot pass without the Worker\'s own workers.dev URL', async (t) => {
     const sandbox = await installed(t);
     const file = path.join(sandbox.installDir(), 'receipt.json');
@@ -446,6 +466,12 @@ describe('setup:cloudflare update and verify', { concurrency: 6 }, () => {
     ['a Node deployment target', null, (config) => { config.vars.DEPLOYMENT_TARGET = 'node'; }, 1, 'config-mismatch', /vars\.DEPLOYMENT_TARGET: expected "cloudflare"/],
     ['a malformed workspace id', null, (config) => { config.vars.WORKSPACE_ID = 'ws_nope'; }, 1, 'config-mismatch', /vars\.WORKSPACE_ID is not ws_/],
     ['an unsupported jurisdiction', null, (config) => { config.vars.WORKSPACE_JURISDICTION = 'us'; }, 1, 'config-mismatch', /vars\.WORKSPACE_JURISDICTION "us" is not eu, fedramp or empty/],
+    // RT-11 both directions: the Worker would report not-ready after a CI promotion of either config.
+    ['gateway identifiers on direct', null, (config) => { config.vars.CF_AI_GATEWAY_ACCOUNT_ID = 'a'.repeat(32); config.vars.CF_AI_GATEWAY_ID = 'oi-acme'; }, 1, 'config-mismatch', /must be empty with AI_TRANSPORT "direct"/],
+    ['a gateway account id alone on direct', null, (config) => { config.vars.CF_AI_GATEWAY_ACCOUNT_ID = 'a'.repeat(32); }, 1, 'config-mismatch', /must be empty with AI_TRANSPORT "direct"/],
+    ['the gateway transport without identifiers', null, (config) => { config.vars.AI_TRANSPORT = 'cloudflare-gateway'; }, 1, 'config-mismatch', /vars\.CF_AI_GATEWAY_ACCOUNT_ID is empty[\s\S]*vars\.CF_AI_GATEWAY_ID is empty/],
+    ['the gateway transport with the default gateway', null, (config) => { Object.assign(config.vars, { AI_TRANSPORT: 'cloudflare-gateway', CF_AI_GATEWAY_ACCOUNT_ID: 'a'.repeat(32), CF_AI_GATEWAY_ID: 'default' }); }, 1, 'config-mismatch', /CF_AI_GATEWAY_ID is not a gateway id other than default/],
+    ['the gateway transport with a malformed account id', null, (config) => { Object.assign(config.vars, { AI_TRANSPORT: 'cloudflare-gateway', CF_AI_GATEWAY_ACCOUNT_ID: 'A'.repeat(32), CF_AI_GATEWAY_ID: 'oi-acme' }); }, 1, 'config-mismatch', /CF_AI_GATEWAY_ACCOUNT_ID is not a 32-character/],
     ['a not-ready deployment', (state) => { state.http.forceNotReady = true; }, null, 1, 'not-ready', null],
     ['an origin no Worker answers', null, (config) => { config.vars.APP_BASE_URL = 'https://elsewhere.example.org'; }, 1, 'not-ready', null],
     ['a held (drained) workspace', (state) => { for (const object of Object.values(state.objects)) object.maintenance = 'draining'; }, null, 3, 'held-maintenance', null],

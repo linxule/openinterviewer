@@ -36,14 +36,15 @@ const fetchMock = vi.hoisted(() => ({
   authenticated: false,
   configStatus: {
     mode: 'hosted' as 'hosted' | 'standalone',
-    aiTransport: 'direct' as 'direct' | 'gateway',
+    aiTransport: 'direct' as 'direct' | 'gateway' | 'cloudflare-gateway',
     hasAnthropicKey: true,
     hasGeminiKey: true,
     hasOpenAiKey: true,
     hasOpenRouterKey: true,
   } as {
     mode: 'hosted' | 'standalone';
-    aiTransport: 'direct' | 'gateway';
+    target?: string;
+    aiTransport: 'direct' | 'gateway' | 'cloudflare-gateway';
     hasAnthropicKey: boolean;
     hasGeminiKey: boolean;
     hasOpenAiKey?: boolean;
@@ -250,6 +251,89 @@ describe('StudySetup auth gate (JSON body, not HTTP status)', () => {
     expect(screen.queryByRole('radio', { name: /OpenRouter/ })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('AI Reasoning Mode')).not.toBeInTheDocument();
     expect(screen.getByText(/through Vercel AI Gateway/i)).toBeInTheDocument();
+  });
+
+  it('RT-05 offers only the providers a Cloudflare installation binds and names the key operation for the rest', async () => {
+    fetchMock.authenticated = true;
+    fetchMock.configStatus = {
+      mode: 'standalone',
+      target: 'cloudflare',
+      aiTransport: 'direct',
+      hasAnthropicKey: false,
+      hasGeminiKey: true,
+      hasOpenAiKey: false,
+      hasOpenRouterKey: true,
+    };
+    storeMock.seed({
+      ...storeMock.state,
+      studyConfig: makeStudyConfig({
+        id: '6f1d7c1e-3a3b-4c55-9d7a-2b8e0f4a9c10',
+        name: 'Claude study on a two-key installation',
+        aiProvider: 'claude',
+      }),
+    });
+
+    render(<StudySetup />);
+
+    expect(await screen.findByText('Anthropic Claude is not available')).toBeInTheDocument();
+    expect(screen.getByText('npm run setup:cloudflare -- update --add-provider-key claude --yes')).toBeInTheDocument();
+    expect(screen.getByText(/no redeploy is needed/)).toBeInTheDocument();
+    expect(screen.queryByText('npm run setup:check')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Saved' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit AI Provider' }));
+    expect(screen.getByRole('radio', { name: /Google Gemini/ })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /OpenRouter/ })).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: /Anthropic Claude/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: /^OpenAI/ })).not.toBeInTheDocument();
+  });
+
+  it('RT-11 names Cloudflare AI Gateway, keeps every bound provider and the reasoning control', async () => {
+    fetchMock.authenticated = true;
+    fetchMock.configStatus = {
+      mode: 'standalone',
+      target: 'cloudflare',
+      aiTransport: 'cloudflare-gateway',
+      hasAnthropicKey: true,
+      hasGeminiKey: true,
+      hasOpenAiKey: true,
+      hasOpenRouterKey: true,
+    };
+
+    render(<StudySetup />);
+
+    await waitFor(() => {
+      expect(storeMock.state.setAiTransport).toHaveBeenCalledWith('cloudflare-gateway');
+    });
+    expect(screen.getByText(/through Cloudflare AI Gateway\./)).toBeInTheDocument();
+    expect(screen.queryByText(/Vercel AI Gateway/)).not.toBeInTheDocument();
+    for (const name of [/Google Gemini/, /Anthropic Claude/, /^OpenAI/, /OpenRouter/]) {
+      expect(screen.getByRole('radio', { name })).toBeInTheDocument();
+    }
+    fireEvent.click(screen.getByRole('radio', { name: /Google Gemini/ }));
+    expect(screen.getByLabelText('AI Reasoning Mode')).toBeInTheDocument();
+  });
+
+  it('fails closed on Cloudflare AI Gateway reported without the Cloudflare target', async () => {
+    fetchMock.authenticated = true;
+    fetchMock.configStatus = { ...fetchMock.configStatus, mode: 'standalone', aiTransport: 'cloudflare-gateway' };
+
+    render(<StudySetup />);
+    fillRequiredFields();
+
+    expect(await screen.findByText('Provider availability could not be verified')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save Study' })).toBeDisabled();
+  });
+
+  it('fails closed on an unknown deployment target in the provider status', async () => {
+    fetchMock.authenticated = true;
+    fetchMock.configStatus = { ...fetchMock.configStatus, mode: 'standalone', target: 'lambda' };
+
+    render(<StudySetup />);
+    fillRequiredFields();
+
+    expect(await screen.findByText('Provider availability could not be verified')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save Study' })).toBeDisabled();
   });
 
   it('hides unconfigured provider choices for hosted accounts while retaining legacy status compatibility', async () => {

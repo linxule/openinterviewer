@@ -104,6 +104,74 @@ describe('Consent server recording', () => {
     expect(screen.getByText(/model fallback is disabled/i)).toBeInTheDocument();
   });
 
+  it.each([
+    ['gemini', 'gemini-3.7-flash', 'Google Gemini'],
+    ['claude', 'claude-sonnet-5', 'Anthropic Claude'],
+    ['openai', 'gpt-5.6-terra', 'OpenAI'],
+  ] as const)('RT-11: discloses Cloudflare AI Gateway for %s, with no logging or caching and no EU pinning', (provider, model, label) => {
+    useStore.getState().beginParticipantSession(
+      makeStudyConfig({ id: `study-cf-${provider}`, aiProvider: provider, aiModel: model }),
+      `participant-handle-cf-${provider}-123456`,
+      'cloudflare-gateway',
+    );
+
+    render(<Consent />);
+
+    const notice = screen.getByText(/through Cloudflare AI Gateway/);
+    expect(notice).toHaveTextContent(`Your responses are sent to ${label} through Cloudflare AI Gateway, a relay operated by Cloudflare, which also hosts this study.`);
+    expect(notice).toHaveTextContent('configured not to log or cache your responses and does not send them to any other provider');
+    expect(notice).toHaveTextContent('Cloudflare may process them outside the EU.');
+    expect(notice).not.toHaveTextContent(/Vercel/);
+    expect(screen.getByRole('button', { name: /I consent — begin the interview/i })).toBeEnabled();
+  });
+
+  it('RT-11: discloses Cloudflare AI Gateway before OpenRouter and its upstream routing', () => {
+    useStore.getState().beginParticipantSession(
+      makeStudyConfig({ id: 'study-cf-openrouter', aiProvider: 'openrouter', aiModel: 'openai/gpt-5.6-terra' }),
+      'participant-handle-cf-openrouter-123456',
+      'cloudflare-gateway',
+    );
+
+    render(<Consent />);
+
+    const notice = screen.getByText(/through Cloudflare AI Gateway/);
+    expect(notice).toHaveTextContent('a relay operated by Cloudflare (which also hosts this study), to OpenRouter and a ZDR-compatible upstream inference provider');
+    expect(notice).toHaveTextContent('configured not to log or cache your responses');
+    expect(notice).toHaveTextContent('Cloudflare may process them outside the EU.');
+  });
+
+  it('D9: records consent for the transport it disclosed', async () => {
+    useStore.getState().beginParticipantSession(
+      makeStudyConfig({ id: 'study-a' }),
+      'participant-handle-a-123456',
+      'cloudflare-gateway',
+    );
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ acceptedAt: 1_700_000_000_000 }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<Consent />);
+    fireEvent.click(screen.getByRole('button', { name: /I consent — begin the interview/i }));
+
+    await waitFor(() => expect(navigation.push).toHaveBeenCalledWith('/interview'));
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ studyId: 'study-a', disclosedTransport: 'cloudflare-gateway' });
+  });
+
+  it.each([null, 'carrier-pigeon'])('fails closed on an unknown transport (%s): no disclosure guess and no consent', (transport) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    useStore.setState({ aiTransport: transport as never });
+
+    render(<Consent />);
+
+    expect(screen.getByText(/could not confirm how your responses are sent/i)).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/Your responses are sent/);
+    expect(screen.getByRole('alert')).toHaveTextContent('This interview is unavailable until you reopen the study link.');
+    const button = screen.getByRole('button', { name: /I consent — begin the interview/i });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('submits the tab session selector and uses the server-issued timestamp', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       success: true,
@@ -124,7 +192,7 @@ describe('Consent server recording', () => {
         'Content-Type': 'application/json',
         'X-OpenInterviewer-Participant-Session': 'participant-handle-a-123456',
       }),
-      body: JSON.stringify({ studyId: 'study-a' }),
+      body: JSON.stringify({ studyId: 'study-a', disclosedTransport: 'direct' }),
     }));
     expect(useStore.getState()).toMatchObject({
       consentGiven: true,

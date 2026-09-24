@@ -7,6 +7,7 @@ import {
   type ProviderExecutionPolicy,
   type ProviderResult,
 } from '../ai';
+import { gatewayFetch, type EffectiveTransport, type ProviderEndpoint } from './endpoint';
 import {
   buildAggregateSynthesisPrompt,
   buildGreetingPrompt,
@@ -75,12 +76,29 @@ export function getClaudeThinkingConfig(
 export class ClaudeProvider implements AIProvider {
   private readonly client: Anthropic;
   private readonly model: string;
+  private readonly transport: EffectiveTransport;
 
-  constructor(model?: string, apiKey?: string | null) {
+  /**
+   * `endpoint` (Cloudflare target): an explicit base URL and headers, and no
+   * bearer token, so no SDK environment default is ever read. Gateway
+   * headers are made exact on every request (gatewayFetch). Without it,
+   * construction is unchanged.
+   */
+  constructor(model?: string, apiKey?: string | null, endpoint?: ProviderEndpoint) {
     const key = apiKey !== undefined ? (apiKey || undefined) : process.env.ANTHROPIC_API_KEY;
     if (!key) throw new Error('ANTHROPIC_API_KEY is required for Claude provider');
 
-    this.client = new Anthropic({ apiKey: key });
+    this.transport = endpoint?.transport ?? 'direct';
+    this.client = endpoint
+      ? new Anthropic({
+        apiKey: key,
+        authToken: null,
+        baseURL: endpoint.baseURL,
+        ...(Object.keys(endpoint.headers).length > 0
+          ? { defaultHeaders: { ...endpoint.headers }, fetch: gatewayFetch(endpoint.headers) }
+          : {}),
+      })
+      : new Anthropic({ apiKey: key });
     this.model = model
       || process.env.CLAUDE_MODEL
       || process.env.AI_MODEL
@@ -199,7 +217,7 @@ export class ClaudeProvider implements AIProvider {
       policy,
     });
     const value = this.parseStructured(response, 'synthesis', validateSynthesisResult);
-    return providerResult(value, execution('claude', requestedModel, response.model));
+    return providerResult(value, execution('claude', requestedModel, response.model, undefined, this.transport));
   }
 
   async synthesizeAggregate(
@@ -225,7 +243,7 @@ export class ClaudeProvider implements AIProvider {
       'aggregate-synthesis',
       validateAggregateSynthesisPayload,
     );
-    return providerResult(value, execution('claude', requestedModel, response.model));
+    return providerResult(value, execution('claude', requestedModel, response.model, undefined, this.transport));
   }
 
   async generateFollowupStudy(
@@ -243,7 +261,7 @@ export class ClaudeProvider implements AIProvider {
       operation: 'follow-up',
     });
     const value = this.parseStructured(response, 'follow-up', validateFollowupStudy);
-    return providerResult(value, execution('claude', requestedModel, response.model));
+    return providerResult(value, execution('claude', requestedModel, response.model, undefined, this.transport));
   }
 
   private toMessages(history: InterviewMessage[]): Anthropic.MessageParam[] {

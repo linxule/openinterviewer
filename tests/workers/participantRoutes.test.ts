@@ -117,7 +117,7 @@ async function researcherRequest(url: string, method: string, body?: unknown): P
   });
 }
 
-type Session = { cookie: string; handle: string };
+type Session = { cookie: string; handle: string; aiTransport: string };
 
 function participantRequest(path: string, session: Session, body: unknown): Request {
   return new Request(`${ORIGIN}${path}`, {
@@ -142,13 +142,21 @@ async function exchange(code: string): Promise<{ response: Response; session: Se
   const response = await exchangeGET(new Request(`${ORIGIN}/api/generate-link?token=${code}`));
   const setCookie = response.headers.get('set-cookie');
   if (response.status !== 200 || !setCookie) return { response, session: null };
-  const body = await response.clone().json() as { data: { sessionHandle: string } };
-  return { response, session: { cookie: setCookie.split(';')[0], handle: body.data.sessionHandle } };
+  const body = await response.clone().json() as { data: { sessionHandle: string; aiTransport: string } };
+  return {
+    response,
+    session: { cookie: setCookie.split(';')[0], handle: body.data.sessionHandle, aiTransport: body.data.aiTransport },
+  };
+}
+
+/** The consent page echoes the transport it disclosed (from the exchange). */
+function consentBody(session: Session, studyId: string) {
+  return { studyId, disclosedTransport: session.aiTransport };
 }
 
 async function heldParticipantResponses(session: Session, studyId: string) {
   const responses = {
-    consent: await consentPOST(participantRequest('/api/consent', session, { studyId })),
+    consent: await consentPOST(participantRequest('/api/consent', session, consentBody(session, studyId))),
     greeting: await greetingPOST(participantRequest('/api/greeting', session, {})),
     interview: await interviewPOST(participantRequest('/api/interview', session, interviewBody)),
     save: await savePOST(participantRequest('/api/interviews/save', session, saveBody(studyId))),
@@ -178,7 +186,7 @@ describe('participant routes against the real WorkspaceStore (RT-06, ST-02/03, J
     expect(exchanged.headers.get('cache-control')).toBe('no-store');
     expect(session).not.toBeNull();
 
-    const consent = await consentPOST(participantRequest('/api/consent', session!, { studyId: study.id }));
+    const consent = await consentPOST(participantRequest('/api/consent', session!, consentBody(session!, study.id)));
     expect(consent.status).toBe(200);
     await expect(consent.json()).resolves.toEqual({ success: true, preview: false, acceptedAt: T0 });
 
@@ -225,7 +233,7 @@ describe('participant routes against the real WorkspaceStore (RT-06, ST-02/03, J
     const study = await createStudy({ aiProvider: 'openai', aiModel: STUDY_MODEL });
     const { token: code } = await (await mintLink(study.id)).json() as { token: string };
     const { session } = await exchange(code);
-    expect((await consentPOST(participantRequest('/api/consent', session!, { studyId: study.id }))).status).toBe(200);
+    expect((await consentPOST(participantRequest('/api/consent', session!, consentBody(session!, study.id)))).status).toBe(200);
 
     await setMaintenance('draining');
     const { response: refusedEntry } = await exchange(code);
@@ -327,7 +335,7 @@ describe('participant routes against the real WorkspaceStore (RT-06, ST-02/03, J
     const study = await createStudy({ aiProvider: 'openai', aiModel: STUDY_MODEL });
     const { token: code } = await (await mintLink(study.id)).json() as { token: string };
     const { session } = await exchange(code);
-    await consentPOST(participantRequest('/api/consent', session!, { studyId: study.id }));
+    await consentPOST(participantRequest('/api/consent', session!, consentBody(session!, study.id)));
     expect((await savePOST(participantRequest('/api/interviews/save', session!, saveBody(study.id)))).status).toBe(200);
 
     const revoked = await linksDELETE(
@@ -341,5 +349,93 @@ describe('participant routes against the real WorkspaceStore (RT-06, ST-02/03, J
     await expect(replay.json()).resolves.toEqual({ error: 'Participant link is no longer active.' });
     expect((await exchange(code)).response.status).toBe(403);
     expect(await sql('SELECT COUNT(*) AS n FROM analysis_jobs')).toEqual([{ n: 1 }]);
+  });
+});
+
+// RT-11 / D9: the transport disclosed at consent binds every later provider
+// call that carries this participant's content. Only the Worker env changes
+// between the two routes; the object and the routes are real.
+const GATEWAY_ENV = {
+  AI_TRANSPORT: 'cloudflare-gateway',
+  CF_AI_GATEWAY_ACCOUNT_ID: '0123456789abcdef0123456789abcdef',
+  CF_AI_GATEWAY_ID: 'oi-workers-test',
+  CF_AI_GATEWAY_TOKEN: 'synthetic-ai-gateway-run-token-0123456789',
+};
+
+function useWorkerEnv(extra: Record<string, string>): void {
+  for (const [name, value] of Object.entries(extra)) vi.stubEnv(name, value);
+  const invocation: WorkerInvocation = {
+    env: { ...testEnv, ADMIN_PASSWORD, ...extra },
+    identity: { kind: 'address', address: '203.0.113.7' },
+    source: 'fetch',
+  };
+  runtime[WORKER_INVOCATION_ACCESSOR] = () => invocation;
+}
+
+describe('consent binds the provider transport (RT-11, D9)', () => {
+  it('a gateway installation discloses the gateway, records it with the consent, the interview and the initial job', async () => {
+    useWorkerEnv(GATEWAY_ENV);
+    const study = await createStudy({ aiProvider: 'openai', aiModel: STUDY_MODEL });
+    const { token: code } = await (await mintLink(study.id)).json() as { token: string };
+    const { session } = await exchange(code);
+    expect(session?.aiTransport).toBe('cloudflare-gateway');
+
+    // A page rendered for another transport, or an older page that sends none, is refused.
+    for (const body of [{ studyId: study.id }, { studyId: study.id, disclosedTransport: 'direct' }]) {
+      const stale = await consentPOST(participantRequest('/api/consent', session!, body));
+      expect(stale.status).toBe(409);
+      await expect(stale.json()).resolves.toMatchObject({ code: 'DISCLOSURE_CHANGED' });
+    }
+    expect(await sql('SELECT COUNT(*) AS n FROM consents')).toEqual([{ n: 0 }]);
+
+    expect((await consentPOST(participantRequest('/api/consent', session!, consentBody(session!, study.id)))).status).toBe(200);
+    const [consentRow] = await sql<{ record_json: string }>('SELECT record_json FROM consents');
+    expect(JSON.parse(consentRow.record_json)).toMatchObject({ disclosedTransport: 'cloudflare-gateway' });
+
+    expect((await greetingPOST(participantRequest('/api/greeting', session!, {}))).status).toBe(200);
+    expect(providerFactory).toHaveBeenCalledTimes(1);
+    expect(providerFactory.mock.calls[0][1]).toMatchObject({
+      route: { transport: 'cloudflare-gateway', accountId: GATEWAY_ENV.CF_AI_GATEWAY_ACCOUNT_ID, gatewayId: GATEWAY_ENV.CF_AI_GATEWAY_ID },
+    });
+
+    expect((await savePOST(participantRequest('/api/interviews/save', session!, saveBody(study.id)))).status).toBe(200);
+    const interviewId = `session-${session!.handle}`;
+    const [record] = await sql<{ record_json: string }>('SELECT record_json FROM interviews WHERE id = ?', interviewId);
+    expect(JSON.parse(record.record_json)).toMatchObject({ consentTransport: 'cloudflare-gateway' });
+    const [job] = await sql<{ input_json: string }>('SELECT input_json FROM analysis_jobs WHERE interview_id = ?', interviewId);
+    expect(JSON.parse(job.input_json)).toMatchObject({ disclosedTransport: 'cloudflare-gateway', requestedModel: STUDY_MODEL });
+  });
+
+  it('switch drill: a direct-consented session is refused on the gateway before admission and provider, and can still save', async () => {
+    const study = await createStudy({ aiProvider: 'openai', aiModel: STUDY_MODEL });
+    const { token: code } = await (await mintLink(study.id)).json() as { token: string };
+    const { session } = await exchange(code);
+    expect(session?.aiTransport).toBe('direct');
+    expect((await consentPOST(participantRequest('/api/consent', session!, consentBody(session!, study.id)))).status).toBe(200);
+    const [directConsent] = await sql<{ record_json: string }>('SELECT record_json FROM consents');
+    expect(JSON.parse(directConsent.record_json)).not.toHaveProperty('disclosedTransport');
+
+    useWorkerEnv(GATEWAY_ENV);
+    const budgetBefore = await sql('SELECT COUNT(*) AS n FROM budget_members');
+    for (const [call, body] of [[greetingPOST, {}], [interviewPOST, interviewBody]] as const) {
+      const refused = await call(participantRequest(call === greetingPOST ? '/api/greeting' : '/api/interview', session!, body));
+      expect(refused.status).toBe(409);
+      await expect(refused.json()).resolves.toMatchObject({ code: 'TRANSPORT_NOT_DISCLOSED' });
+    }
+    expect(providerFactory).not.toHaveBeenCalled();
+    expect(await sql('SELECT COUNT(*) AS n FROM budget_members')).toEqual(budgetBefore);
+
+    // The same session cannot re-consent under the new notice: it reopens the link.
+    const replay = await consentPOST(participantRequest('/api/consent', session!, { studyId: study.id, disclosedTransport: 'cloudflare-gateway' }));
+    expect(replay.status).toBe(409);
+
+    // Saving makes no provider call, so the transcript is kept; its job stays direct-only.
+    expect((await savePOST(participantRequest('/api/interviews/save', session!, saveBody(study.id)))).status).toBe(200);
+    const [job] = await sql<{ input_json: string }>('SELECT input_json FROM analysis_jobs');
+    expect(JSON.parse(job.input_json)).not.toHaveProperty('disclosedTransport');
+
+    // A new session on the gateway is disclosed the gateway.
+    const { session: fresh } = await exchange(code);
+    expect(fresh?.aiTransport).toBe('cloudflare-gateway');
   });
 });

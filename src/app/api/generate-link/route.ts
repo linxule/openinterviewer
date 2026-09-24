@@ -28,7 +28,9 @@ import {
 import { getAppBaseUrl } from '@/lib/appBaseUrl';
 import { missingProviderCredential } from '@/lib/providerAvailability';
 import { validateStudyConfig } from '@/lib/studyConfigValidation';
-import { resolveAITransport } from '@/lib/aiTransport';
+import type { AITransport } from '@/lib/aiTransport';
+import { activeAITransport } from '@/lib/runtime/capabilities';
+import { currentProviderTransport } from '@/lib/transportDisclosure';
 import { createRequestId, logRequestFailure } from '@/lib/requestLog';
 import { readBoundedJsonObject } from '@/lib/requestBody';
 import { getKVClient } from '@/lib/kvClient';
@@ -354,6 +356,23 @@ export async function GET(request: Request) {
       return NextResponse.json({ valid: false, error: 'Study is no longer active.' }, { status: 403, headers: NO_STORE });
     }
 
+    // The transport the consent page discloses. On Cloudflare it is the one a
+    // request for this study's provider uses on the current route (D14 seam);
+    // an invalid route starts no session rather than disclosing a guess.
+    let aiTransport: AITransport;
+    const current = currentProviderTransport(live.context ?? {}, live.study.config.aiProvider);
+    if (current.applies) {
+      if (!current.ok) {
+        return NextResponse.json(
+          { valid: false, error: 'This study is not available right now.', retryable: false },
+          { status: 503, headers: NO_STORE },
+        );
+      }
+      aiTransport = current.transport;
+    } else {
+      aiTransport = activeAITransport();
+    }
+
     // Prompts are built server-side from the canonical study; the researcher's
     // instructions to the interviewer never need to reach the participant's browser.
     const { interviewerInstructions: _interviewerInstructions, ...participantStudyConfig } = live.study.config;
@@ -362,7 +381,7 @@ export async function GET(request: Request) {
       data: {
         studyConfig: participantStudyConfig,
         sessionHandle,
-        aiTransport: isHostedMode() ? 'direct' : resolveAITransport(),
+        aiTransport,
       },
     }, { headers: NO_STORE });
     const remainingSeconds = loaded.link.expiresAt

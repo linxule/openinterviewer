@@ -34,6 +34,12 @@ import { createRequestId, logRequestEvent, logRequestFailure } from '@/lib/reque
 import { resolveEvidenceRef, withRecordBackedEvidence } from '@/lib/evidence';
 import { deploymentNotReadyResponse } from '@/lib/runtime/readinessGate';
 import { isDurableWorkspaceStore } from '@/lib/storage/types';
+import {
+  currentProviderTransport,
+  providerNotConfiguredResponse,
+  researcherTransportNotDisclosedResponse,
+  uncoveredCount,
+} from '@/lib/transportDisclosure';
 
 const ROUTE = '/api/synthesis/aggregate';
 const INTERVIEW_MESSAGES = {
@@ -140,6 +146,19 @@ export async function POST(request: Request) {
       );
     }
 
+    // D9 (Cloudflare): every included transcript's consent must cover the
+    // transport this call would use. An uncovered interview refuses the whole
+    // call; interviews are never silently dropped from an aggregate.
+    const current = currentProviderTransport(gated.context, study.config.aiProvider);
+    if (current.applies) {
+      if (!current.ok) return providerNotConfiguredResponse();
+      const uncovered = uncoveredCount(
+        currentRevisionInterviews.map(interview => interview.consentTransport),
+        current.transport,
+      );
+      if (uncovered > 0) return researcherTransportNotDisclosedResponse(uncovered);
+    }
+
     // The route holds the transcripts; the prompt builder does not. So the
     // catalogue the provider sees is already checked against the records it
     // names: every surviving ref's quote is the record's own characters, and
@@ -210,6 +229,7 @@ export async function POST(request: Request) {
       requestedAiModel: aggregateResult.execution.requestedModel,
       aiModel: aggregateResult.execution.model,
       routedProvider: aggregateResult.execution.routedProvider,
+      ...(aggregateResult.execution.aiTransport ? { aiTransport: aggregateResult.execution.aiTransport } : {}),
       generatedAt: Date.now()
     };
 

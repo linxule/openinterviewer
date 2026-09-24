@@ -19,8 +19,11 @@ import {
 import path from 'node:path';
 import {
   EPOCH_SECRET,
+  GATEWAY_TOKEN_SECRET,
+  GATEWAY_TRANSPORT,
   GENERATED_SECRETS,
   InstallerError,
+  MIN_GATEWAY_TOKEN_LENGTH,
   MAX_LOGIN_BODY_BYTES,
   MIN_PASSWORD_LENGTH,
   PASSWORD_SECRET,
@@ -48,6 +51,11 @@ export function validateSuppliedSecret(name, value) {
   if (value.length > 4096) throw refuse(`${name} is longer than 4096 characters`);
   if (/[\u0000-\u001f\u007f]/.test(value)) throw refuse(`${name} contains control characters`);
   if (SECRET_PLACEHOLDERS.test(value)) throw refuse(`${name} still contains a template placeholder`);
+  if (name === GATEWAY_TOKEN_SECRET && value.length < MIN_GATEWAY_TOKEN_LENGTH) {
+    // The Worker refuses a shorter one (weak_cf_ai_gateway_token).
+    throw refuse(`${GATEWAY_TOKEN_SECRET} must contain at least ${MIN_GATEWAY_TOKEN_LENGTH} characters`);
+  }
+  if (name === GATEWAY_TOKEN_SECRET && /\s/.test(value)) throw refuse(`${GATEWAY_TOKEN_SECRET} contains whitespace`);
   if (name === PASSWORD_SECRET && value.length < MIN_PASSWORD_LENGTH) {
     throw refuse(`${PASSWORD_SECRET} must contain at least ${MIN_PASSWORD_LENGTH} characters`);
   }
@@ -150,18 +158,24 @@ export async function readProtectedInput(names, { fromStdin }) {
   return values;
 }
 
-/** Operator-supplied credentials for a fresh install. */
-export function suppliedSecretNames(provider) {
-  return [PASSWORD_SECRET, PROVIDER_KEYS[provider]];
+/**
+ * Operator-supplied credentials for a fresh install: the password, every
+ * provider key to bind and, on the Cloudflare AI Gateway transport, the Run token.
+ */
+export function suppliedSecretNames(providerKeys, aiTransport = 'direct') {
+  return [
+    PASSWORD_SECRET,
+    ...providerKeys.map((provider) => PROVIDER_KEYS[provider]),
+    ...(aiTransport === GATEWAY_TRANSPORT ? [GATEWAY_TOKEN_SECRET] : []),
+  ];
 }
 
 /** The complete initial secret set: generated values plus supplied ones. */
-export function composeSecretSet({ supplied, provider, epoch }) {
-  const values = {
-    [PASSWORD_SECRET]: supplied[PASSWORD_SECRET],
-    [PROVIDER_KEYS[provider]]: supplied[PROVIDER_KEYS[provider]],
-    [EPOCH_SECRET]: epoch,
-  };
+export function composeSecretSet({ supplied, providerKeys, epoch, aiTransport = 'direct' }) {
+  const values = { [PASSWORD_SECRET]: supplied[PASSWORD_SECRET] };
+  for (const provider of providerKeys) values[PROVIDER_KEYS[provider]] = supplied[PROVIDER_KEYS[provider]];
+  if (aiTransport === GATEWAY_TRANSPORT) values[GATEWAY_TOKEN_SECRET] = supplied[GATEWAY_TOKEN_SECRET];
+  values[EPOCH_SECRET] = epoch;
   for (const name of GENERATED_SECRETS) values[name] = generateSecret();
   assertIndependent(values);
   return values;

@@ -42,8 +42,47 @@ export class ProviderTimeoutError extends Error {
   }
 }
 
+const MAX_GATEWAY_BODY_CHARS = 4_096;
+
+function gatewayErrorName(candidate: unknown): boolean {
+  if (typeof candidate === 'string') {
+    // A raw error body (OpenRouter keeps it as text). Parsed only to read its
+    // `name`; never logged. Bounded so a large provider body is not parsed.
+    if (candidate.length > MAX_GATEWAY_BODY_CHARS || !candidate.trimStart().startsWith('{')) return false;
+    try {
+      return gatewayErrorName(JSON.parse(candidate));
+    } catch {
+      return false;
+    }
+  }
+  return typeof candidate === 'object'
+    && candidate !== null
+    && !Array.isArray(candidate)
+    && (candidate as { name?: unknown }).name === 'AiGatewayError';
+}
+
+/**
+ * Whether an SDK error carries a Cloudflare AI Gateway error body
+ * (`{"name":"AiGatewayError","internalCode":…}`): the gateway answered
+ * itself, before or instead of the provider (D12). Reads only the body's
+ * `name`, never the message or any other member. Log-only: classification is
+ * unchanged.
+ */
+export function isAiGatewayError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const record = err as { error?: unknown; body?: unknown; cause?: unknown };
+  if (gatewayErrorName(record.error) || gatewayErrorName(record.body)) return true;
+  const cause = record.cause;
+  if (cause && typeof cause === 'object' && cause !== err) {
+    const nested = cause as { error?: unknown; body?: unknown };
+    return gatewayErrorName(nested.error) || gatewayErrorName(nested.body);
+  }
+  return false;
+}
+
 // Redacted provider failure logging: never log SDK error bodies, response
-// payloads, prompts, keys, or user content — only the error type and status.
+// payloads, prompts, keys, or user content — only the error type, status and,
+// for an error AI Gateway answered itself, `origin: 'gateway'`.
 export function logProviderFailure(provider: string, operation: string, err: unknown): void {
   const safe: {
     event: 'provider.failure';
@@ -51,6 +90,7 @@ export function logProviderFailure(provider: string, operation: string, err: unk
     operation: string;
     errorType: string;
     status?: number;
+    origin?: 'gateway';
   } = {
     event: 'provider.failure',
     provider,
@@ -62,6 +102,7 @@ export function logProviderFailure(provider: string, operation: string, err: unk
   } else if (err && typeof err === 'object' && 'statusCode' in err && typeof err.statusCode === 'number') {
     safe.status = err.statusCode;
   }
+  if (isAiGatewayError(err)) safe.origin = 'gateway';
   logRequestFailure(safe, err);
 }
 

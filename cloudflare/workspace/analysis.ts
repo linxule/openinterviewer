@@ -23,6 +23,7 @@ import type { WorkspaceHoldReason } from '../../src/lib/storage/types';
 import { isProviderType } from '../../src/lib/providers/synthesisModel';
 import { validateSynthesisResult } from '../../src/lib/providerValidation';
 import { validateProvenance } from '../../src/lib/synthesisProvenance';
+import { covers } from '../../src/lib/providers/endpoint';
 import { serializedByteLength } from '../analysis/policy';
 import { logJobEvent, type JobOperation } from '../analysis/telemetry';
 import type * as Rpc from './rpcTypes';
@@ -179,7 +180,8 @@ function isFrozenInput(value: unknown): value is Protocol.FrozenAnalysisInput {
     && !!config
     && typeof config === 'object'
     && !Array.isArray(config)
-    && typeof config.id === 'string';
+    && typeof config.id === 'string'
+    && (input.disclosedTransport === undefined || input.disclosedTransport === 'cloudflare-gateway');
 }
 
 function logCorrupt(operation: JobOperation): void {
@@ -406,7 +408,8 @@ function validRetryInput(input: Protocol.AcceptAnalysisRetryInput): boolean {
     && Number.isSafeInteger(input.expectedGeneration) && input.expectedGeneration >= 0
     && Number.isSafeInteger(input.now) && input.now > 0
     && isFrozenInput(input.input)
-    && input.input.studyConfig.id === input.studyId;
+    && input.input.studyConfig.id === input.studyId
+    && (input.transport === undefined || input.transport === 'cloudflare-gateway');
 }
 
 function legacyAttempts(record: StoredInterview): { attempts: number; lastAttemptAt: number | null } {
@@ -477,6 +480,15 @@ export async function acceptAnalysisRetry(
       if (input.expectedGeneration !== currentGeneration) return { status: 'state-changed' };
       // Acceptance-time configuration must be the study's current revision.
       if (study.revision !== input.input.studyRevision) return { status: 'state-changed' };
+      // D9: the transcript goes only by a transport its participant's
+      // consent covers; the frozen disclosure is the interview's own record.
+      const disclosed = state.record.consentTransport === 'cloudflare-gateway' ? state.record.consentTransport : undefined;
+      if (!covers(disclosed ?? 'direct', input.transport ?? 'direct')) return { status: 'transport-not-disclosed' };
+      const { disclosedTransport: _callerDisclosure, ...acceptedInput } = input.input;
+      void _callerDisclosure;
+      const frozen: Protocol.FrozenAnalysisInput = disclosed
+        ? { ...acceptedInput, disclosedTransport: disclosed }
+        : acceptedInput;
       const generation = currentGeneration + 1;
       if (!Number.isSafeInteger(generation)) return { status: 'unavailable' };
 
@@ -497,7 +509,7 @@ export async function acceptAnalysisRetry(
         generation,
         jobId,
         recoveryEpoch: meta.activatedEpoch,
-        frozen: input.input,
+        frozen,
         now: input.now,
       });
       storeRetryReceipt(sql, input, 'accepted', generation);
@@ -789,6 +801,7 @@ function prepareComplete(
   outcome: Extract<Protocol.FinishAnalysisJobInput['outcome'], { kind: 'complete' }>,
   requestedProvider: string,
   requestedModel: string,
+  disclosedTransport: Protocol.FrozenAnalysisInput['disclosedTransport'],
 ): PreparedComplete {
   let synthesis;
   try {
@@ -803,9 +816,15 @@ function prepareComplete(
         aiModel: provided.aiModel,
         requestedAiModel: provided.requestedAiModel,
         routedProvider: provided.routedProvider,
+        aiTransport: provided.aiTransport,
       })
     : null;
   if (!provenance || provenance.aiProvider !== requestedProvider || provenance.requestedAiModel !== requestedModel) {
+    return { valid: false, failureKind: 'invalid-output' };
+  }
+  // A result produced on a transport the participant's disclosure does not
+  // cover is never attached (D9), whatever the consumer decided.
+  if (!covers(disclosedTransport ?? 'direct', provenance.aiTransport ?? 'direct')) {
     return { valid: false, failureKind: 'invalid-output' };
   }
   if (serializedByteLength(synthesis) > MAX_ATTACHED_SYNTHESIS_BYTES) return { valid: false, failureKind: 'too-large' };
@@ -857,7 +876,7 @@ export async function finishAnalysisJob(
         return { status: 'written', replayed: false };
       }
       const frozen = parseFrozenInput(job.input_json);
-      const prepared = prepareComplete(outcome, job.requested_provider, job.requested_model);
+      const prepared = prepareComplete(outcome, job.requested_provider, job.requested_model, frozen.disclosedTransport);
       if (!prepared.valid) {
         settleJob(sql, job, { state: 'failed', failureKind: prepared.failureKind }, input.claimNonce, now);
         return prepared.failureKind === 'too-large' ? { status: 'too-large' } : { status: 'written', replayed: false };

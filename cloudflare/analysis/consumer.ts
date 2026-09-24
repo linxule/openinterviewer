@@ -20,6 +20,8 @@ import {
 import type { AIProvider } from '../../src/lib/ai';
 import type { WorkspaceStore } from '../workspace/WorkspaceStore';
 import { executeQueuedSynthesis, loadQueuedSynthesisProvider, providerKeyFromEnv } from './execute';
+import { covers, effectiveTransport, providerEndpoint, resolveProviderRoute } from '../../src/lib/providers/endpoint';
+import { resolveCapabilities } from '../../src/lib/runtime/capabilities';
 import { logJobEvent } from './telemetry';
 
 export type ConsumerEnv = {
@@ -177,22 +179,44 @@ async function processJob(
     env,
   );
 
-  const key = providerKeyFromEnv(env, frozen.requestedProvider);
+  // The route comes from this invocation's env: the Queue path has no
+  // readiness gate, so the deployment capability and the route (transport,
+  // gateway identifiers and token, SDK override variables) are checked here,
+  // before any key or adapter. Then the transport this provider would use
+  // must be covered by the one disclosed at consent (D9). Every refusal
+  // below is a known failure recorded without any provider request.
+  const capable = resolveCapabilities(env as Record<string, string | undefined>);
+  const route = capable.ok && capable.capabilities.target === 'cloudflare'
+    ? resolveProviderRoute(env)
+    : { ok: false as const, error: 'invalid_ai_transport' as const };
+  const transport = route.ok ? effectiveTransport(route.route, frozen.requestedProvider) : null;
+  const disclosed = frozen.disclosedTransport ?? 'direct';
+  const covered = transport !== null && covers(disclosed, transport);
+  const key = covered ? providerKeyFromEnv(env, frozen.requestedProvider) : null;
   let provider: AIProvider | null = null;
-  if (key) {
+  if (route.ok && covered && key) {
     try {
       // Validated, loaded and constructed before the start marker.
-      provider = await loadQueuedSynthesisProvider(frozen.requestedProvider, frozen.requestedModel, key);
+      provider = await loadQueuedSynthesisProvider(
+        frozen.requestedProvider,
+        frozen.requestedModel,
+        key,
+        providerEndpoint(frozen.requestedProvider, route.route),
+      );
     } catch {
       provider = null;
     }
   }
-  if (!provider) {
-    // A known configuration failure recorded without any provider request.
+  if (!provider || !route.ok || transport === null) {
     logJobEvent({
       operation: 'execute',
-      reason: key ? 'provider-failure' : 'provider-key-missing',
+      reason: !route.ok
+        ? 'provider-route-invalid'
+        : !covered
+          ? 'transport-not-disclosed'
+          : key ? 'provider-failure' : 'provider-key-missing',
       provider: frozen.requestedProvider,
+      ...(transport ? { transport } : {}),
     });
     const recorded = await finish({ kind: 'failed', failureKind: 'provider' });
     if (!recorded.ok) logJobEvent({ operation: 'finish', reason: 'unknown-outcome' });
@@ -232,11 +256,12 @@ async function processJob(
 
   progress.providerStarted = true;
   const startedAt = Date.now();
-  const classified = await executeQueuedSynthesis(provider, claimed.inputs, deadlineMs);
+  const classified = await executeQueuedSynthesis(provider, claimed.inputs, deadlineMs, transport);
   logJobEvent({
     operation: 'execute',
     ...(classified.reason ? { reason: classified.reason } : {}),
     provider: frozen.requestedProvider,
+    transport,
     durationMs: Date.now() - startedAt,
   });
 

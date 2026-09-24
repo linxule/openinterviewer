@@ -1,5 +1,5 @@
 // Queued synthesis execution (JOB-02/09). Constructs the frozen generation's
-// direct adapter with an explicit key and model, runs exactly one synthesis
+// native adapter with an explicit key, model and endpoint, runs exactly one synthesis
 // request under the queued-synthesis policy, and classifies the outcome.
 // Never consults study defaults, deployment model overrides or env fallbacks.
 //
@@ -27,11 +27,12 @@ import type {
   StudyConfig,
 } from '../../src/types';
 import { PROVIDER_KEY_NAMES, serializedByteLength } from './policy';
+import type { EffectiveTransport, ProviderEndpoint } from '../../src/lib/providers/endpoint';
 
 export type JobOutcome = FinishAnalysisJobInput['outcome'];
 export type ClassifiedOutcome = { outcome: JobOutcome; reason?: RequestLogReason };
 
-type AdapterClass = new (model: string, apiKey: string) => AIProvider;
+type AdapterClass = new (model: string, apiKey: string, endpoint: ProviderEndpoint) => AIProvider;
 
 const ADAPTERS: Readonly<Record<AIProviderType, () => Promise<AdapterClass>>> = {
   claude: async () => (await import('../../src/lib/providers/claude')).ClaudeProvider,
@@ -56,6 +57,7 @@ class DeferredAdapter implements AIProvider {
     private readonly provider: AIProviderType,
     private readonly model: string,
     private readonly key: string,
+    private readonly endpoint: ProviderEndpoint,
   ) {}
 
   /** Load and construct the adapter; rejects with AdapterLoadError. */
@@ -63,7 +65,7 @@ class DeferredAdapter implements AIProvider {
     this.loaded ??= (async () => {
       try {
         const Adapter = await ADAPTERS[this.provider]();
-        return new Adapter(this.model, this.key);
+        return new Adapter(this.model, this.key, this.endpoint);
       } catch (error) {
         throw new AdapterLoadError(this.provider, error);
       }
@@ -103,15 +105,21 @@ export function providerKeyFromEnv(env: Readonly<Record<string, unknown>>, provi
 }
 
 /**
- * Direct adapter with an explicit model and key. Throws synchronously, before
- * any start marker or provider request, for an unknown provider, a missing
- * key or an unsupported model, as the adapter constructors do.
+ * Native adapter with an explicit model, key and endpoint (the adapter never
+ * reads an SDK environment default). Throws synchronously, before any start
+ * marker or provider request, for an unknown provider, a missing key or an
+ * unsupported model, as the adapter constructors do.
  */
-export function createQueuedSynthesisProvider(provider: AIProviderType, model: string, key: string): AIProvider {
+export function createQueuedSynthesisProvider(
+  provider: AIProviderType,
+  model: string,
+  key: string,
+  endpoint: ProviderEndpoint,
+): AIProvider {
   if (!Object.hasOwn(ADAPTERS, provider)) throw new Error(`Unsupported provider: ${provider}`);
   if (!key) throw new Error(`A ${provider} key is required`);
   if (!isKnownProviderModel(provider, model)) throw new Error(`Unsupported ${provider} model: ${model}`);
-  return new DeferredAdapter(provider, model, key);
+  return new DeferredAdapter(provider, model, key, endpoint);
 }
 
 /**
@@ -119,8 +127,13 @@ export function createQueuedSynthesisProvider(provider: AIProviderType, model: s
  * so the consumer can do both before the start marker: a missing or broken
  * adapter is then a known failure with no started attempt and no request.
  */
-export async function loadQueuedSynthesisProvider(provider: AIProviderType, model: string, key: string): Promise<AIProvider> {
-  const deferred = createQueuedSynthesisProvider(provider, model, key) as DeferredAdapter;
+export async function loadQueuedSynthesisProvider(
+  provider: AIProviderType,
+  model: string,
+  key: string,
+  endpoint: ProviderEndpoint,
+): Promise<AIProvider> {
+  const deferred = createQueuedSynthesisProvider(provider, model, key, endpoint) as DeferredAdapter;
   await deferred.load();
   return deferred;
 }
@@ -156,12 +169,15 @@ export function classifyProviderException(error: unknown): ClassifiedOutcome {
 /**
  * Run one synthesis for the claimed generation. Never throws. The deadline
  * bounds the provider request; the consumer loads the adapter before the
- * start marker (loadQueuedSynthesisProvider).
+ * start marker (loadQueuedSynthesisProvider). `transport` is the endpoint the
+ * adapter was built for: a result whose execution reports another transport
+ * is invalid output, never attached.
  */
 export async function executeQueuedSynthesis(
   provider: AIProvider,
   inputs: ClaimedAnalysisInputs,
   deadlineMs: number,
+  transport: EffectiveTransport = 'direct',
 ): Promise<ClassifiedOutcome> {
   const { frozen, interview } = inputs;
   const studyConfig: StudyConfig = {
@@ -186,11 +202,13 @@ export async function executeQueuedSynthesis(
     aiModel: result.execution.model,
     requestedAiModel: result.execution.requestedModel,
     routedProvider: result.execution.routedProvider,
+    aiTransport: result.execution.aiTransport,
   });
   if (
     !provenance
     || provenance.aiProvider !== frozen.requestedProvider
     || provenance.requestedAiModel !== frozen.requestedModel
+    || (provenance.aiTransport ?? 'direct') !== transport
   ) {
     return { outcome: { kind: 'failed', failureKind: 'invalid-output' }, reason: 'invalid' };
   }

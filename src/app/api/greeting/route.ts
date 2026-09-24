@@ -23,6 +23,12 @@ import { participantAdmissionRefusal } from '@/lib/rateLimit';
 import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
 import { readBoundedJsonObject } from '@/lib/requestBody';
 import { deploymentNotReadyResponse } from '@/lib/runtime/readinessGate';
+import { covers } from '@/lib/providers/endpoint';
+import {
+  currentProviderTransport,
+  providerNotConfiguredResponse,
+  transportNotDisclosedResponse,
+} from '@/lib/transportDisclosure';
 import { StudyConfig } from '@/types';
 import { createRequestId, logRequestFailure } from '@/lib/requestLog';
 
@@ -97,6 +103,17 @@ export async function POST(request: Request) {
           { error: 'Participant consent must be accepted before the interview begins.', code: 'CONSENT_REQUIRED' },
           { status: 428 }
         );
+      }
+
+      // Cloudflare (D9): participant content goes only by a transport the
+      // consent covers. Refused before admission, so no budget is consumed
+      // and no adapter is constructed.
+      const current = currentProviderTransport(context, canonical.study.config.aiProvider);
+      if (current.applies) {
+        if (!current.ok) return providerNotConfiguredResponse();
+        if (!covers(consent.consent.disclosedTransport ?? 'direct', current.transport)) {
+          return transportNotDisclosedResponse();
+        }
       }
 
       // Check-all then charge-all through the workspace store. The durable

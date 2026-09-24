@@ -134,12 +134,14 @@ export type Participant = {
   sessionId: string;
   consentHash: string;
   consentAcceptedAt: number;
+  /** The transport disclosed at consent (absent = direct). */
+  disclosedTransport?: 'cloudflare-gateway';
 };
 
 /** Link plus recorded consent for a fresh participant session at `now`. */
 export async function enrolParticipant(
   study: StoredStudy,
-  options: { now?: number; expiresAt?: number | null } = {},
+  options: { now?: number; expiresAt?: number | null; disclosedTransport?: 'cloudflare-gateway' } = {},
 ): Promise<Participant> {
   const now = options.now ?? T0;
   const stub = workspaceStub();
@@ -160,9 +162,17 @@ export async function enrolParticipant(
     studyRevision: study.revision,
     consentHash,
     now,
+    ...(options.disclosedTransport ? { disclosedTransport: options.disclosedTransport } : {}),
   });
   if (consent.status !== 'accepted') throw new Error(`consent ${consent.status}`);
-  return { study, linkId, sessionId, consentHash, consentAcceptedAt: consent.consent.acceptedAt };
+  return {
+    study,
+    linkId,
+    sessionId,
+    consentHash,
+    consentAcceptedAt: consent.consent.acceptedAt,
+    ...(options.disclosedTransport ? { disclosedTransport: options.disclosedTransport } : {}),
+  };
 }
 
 // ---------- Interviews ----------
@@ -190,17 +200,19 @@ export function interviewRecord(participant: Participant, overrides: Partial<Sto
     conductedByModel: participant.study.config.aiModel,
     analysis: { status: 'pending', attempts: 0, lastAttemptAt: T0 },
     participantLinkId: participant.linkId,
+    ...(participant.disclosedTransport ? { consentTransport: participant.disclosedTransport } : {}),
     ...overrides,
   };
 }
 
-export function frozenInput(study: StoredStudy): FrozenAnalysisInput {
+export function frozenInput(study: StoredStudy, disclosedTransport?: 'cloudflare-gateway'): FrozenAnalysisInput {
   return {
     inputSchemaVersion: 1,
     studyConfig: study.config,
     studyRevision: study.revision,
     requestedProvider: study.config.aiProvider ?? 'openai',
     requestedModel: study.config.aiModel ?? 'gpt-5.6-terra',
+    ...(disclosedTransport ? { disclosedTransport } : {}),
   };
 }
 
@@ -247,7 +259,7 @@ export async function persistInput(
       consentHash: participant.consentHash,
       now,
     },
-    initialAnalysis: frozenInput(participant.study),
+    initialAnalysis: frozenInput(participant.study, participant.disclosedTransport),
     initialJobId: options.jobId ?? crypto.randomUUID(),
     now,
   };

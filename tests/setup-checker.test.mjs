@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { parseDotenv, validateSetup } from '../scripts/check-setup.mjs';
+import { CLOUDFLARE_SDK_OVERRIDE_NAMES, parseDotenv, validateSetup } from '../scripts/check-setup.mjs';
 
 const secret = (character) => character.repeat(48);
 const base64Key = Buffer.alloc(32, 7).toString('base64');
@@ -382,6 +382,89 @@ test('RT-01 the default node check is unchanged by the target field', () => {
   assert.equal(plain.target, 'node');
 });
 
+test('RT-05 Cloudflare accepts any bound key set with the default key and checks every bound key', () => {
+  const all = {
+    ...validCloudflareEnv(),
+    ANTHROPIC_API_KEY: 'synthetic-anthropic-key-0123456789',
+    OPENAI_API_KEY: 'synthetic-openai-key-0123456789',
+    OPENROUTER_API_KEY: 'synthetic-openrouter-key-0123456789',
+  };
+  const report = cloudflareReport({ env: all });
+  assert.deepEqual(errorCodes(report), []);
+  const summary = report.checks.find((item) => item.code === 'env.aiProviderKeys');
+  assert.equal(summary.message, 'Provider keys bound: gemini, claude, openai, openrouter; not bound: none.');
+  assert.equal(JSON.stringify(report).includes('synthetic-openai-key'), false);
+
+  const single = cloudflareReport();
+  assert.equal(single.checks.find((item) => item.code === 'env.aiProviderKeys').message, 'Provider keys bound: gemini; not bound: claude, openai, openrouter.');
+
+  const placeholder = cloudflareReport({ env: { ...validCloudflareEnv(), OPENAI_API_KEY: 'your-openai-key' } });
+  assert.deepEqual(errorCodes(placeholder), ['env.OPENAI_API_KEY.placeholder']);
+
+  const missingDefault = cloudflareReport({ env: { ...all, AI_PROVIDER: 'claude', ANTHROPIC_API_KEY: undefined } });
+  assert.deepEqual(errorCodes(missingDefault), ['env.AI_PROVIDER.claude']);
+});
+
+test('RT-05 Cloudflare refuses SDK override variables from the environment or wrangler vars', () => {
+  for (const name of CLOUDFLARE_SDK_OVERRIDE_NAMES) {
+    for (const value of ['https://attacker.example', '']) {
+      const fromEnv = cloudflareReport({ env: { ...validCloudflareEnv(), [name]: value } });
+      assert.deepEqual(errorCodes(fromEnv), ['env.cloudflare.sdkOverride'], name);
+      assert.equal(JSON.stringify(fromEnv).includes('attacker'), false);
+    }
+  }
+  const config = validWranglerConfig();
+  config.vars = { ...config.vars, OPENAI_LOG: 'debug', ANTHROPIC_CUSTOM_HEADERS: 'cf-aig-cache-key: x' };
+  const fromVars = cloudflareReport({ config });
+  assert.deepEqual(errorCodes(fromVars), ['env.cloudflare.sdkOverride']);
+  assert.match(fromVars.checks.find((item) => item.code === 'env.cloudflare.sdkOverride').message, /^Remove ANTHROPIC_CUSTOM_HEADERS, OPENAI_LOG:/);
+});
+
+test('RT-05 an SDK override set only in the checking shell is reported, not refused', () => {
+  // `env` is the files plus the shell; `configEnv` the files alone (what the CLI passes).
+  const shell = cloudflareReport({ env: { ...validCloudflareEnv(), GOOGLE_CLOUD_PROJECT: 'my-gcloud-project', OPENAI_LOG: 'debug' }, configEnv: validCloudflareEnv() });
+  assert.equal(shell.ok, true, JSON.stringify(errorCodes(shell)));
+  const warning = shell.checks.find((item) => item.code === 'env.cloudflare.sdkOverride.shell');
+  assert.equal(warning.status, 'warn');
+  assert.match(warning.message, /^OPENAI_LOG, GOOGLE_CLOUD_PROJECT are set only in the shell running this check/);
+  assert.equal(JSON.stringify(shell).includes('my-gcloud-project'), false);
+
+  const fromFile = cloudflareReport({ env: { ...validCloudflareEnv(), GOOGLE_CLOUD_PROJECT: 'p' }, configEnv: { ...validCloudflareEnv(), GOOGLE_CLOUD_PROJECT: 'p' } });
+  assert.deepEqual(errorCodes(fromFile), ['env.cloudflare.sdkOverride']);
+  assert.equal(fromFile.checks.some((item) => item.code === 'env.cloudflare.sdkOverride.shell'), false);
+
+  const config = validWranglerConfig();
+  config.vars = { ...config.vars, GOOGLE_CLOUD_PROJECT: 'p' };
+  const fromVars = cloudflareReport({ config, configEnv: validCloudflareEnv() });
+  assert.deepEqual(errorCodes(fromVars), ['env.cloudflare.sdkOverride']);
+});
+
+test('RT-05 the CLI without --env-file ignores the shell for SDK overrides and names it', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'oi-setup-shell-'));
+  try {
+    fs.writeFileSync(path.join(directory, '.env'), Object.entries(validCloudflareEnv()).map(([name, value]) => `${name}=${value}`).join('\n'));
+    fs.writeFileSync(path.join(directory, 'wrangler.jsonc'), JSON.stringify(validWranglerConfig()));
+    const run = (extraEnv) => spawnSync(process.execPath, [CHECKER, '--target', 'cloudflare', '--json'], {
+      cwd: directory,
+      encoding: 'utf8',
+      env: { PATH: process.env.PATH, ...extraEnv },
+    });
+
+    const shell = run({ GOOGLE_CLOUD_PROJECT: 'operator-gcloud-project' });
+    assert.equal(shell.status, 0, shell.stdout + shell.stderr);
+    const report = JSON.parse(shell.stdout);
+    assert.equal(report.checks.find((item) => item.code === 'env.cloudflare.sdkOverride.shell').status, 'warn');
+    assert.equal(shell.stdout.includes('operator-gcloud-project'), false);
+
+    fs.appendFileSync(path.join(directory, '.env'), '\nGOOGLE_CLOUD_PROJECT=declared-in-file\n');
+    const declared = run({});
+    assert.equal(declared.status, 1, declared.stdout + declared.stderr);
+    assert.deepEqual(JSON.parse(declared.stdout).checks.filter((item) => item.status === 'error').map((item) => item.code), ['env.cloudflare.sdkOverride']);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('RT-01 Cloudflare refuses hosted mode and Gateway transport', () => {
   const hosted = cloudflareReport({ env: { ...validCloudflareEnv(), DEPLOYMENT_MODE: 'hosted' } });
   assert.equal(hosted.ok, false);
@@ -393,9 +476,67 @@ test('RT-01 Cloudflare refuses hosted mode and Gateway transport', () => {
   const gateway = cloudflareReport({ env: { ...validCloudflareEnv(), AI_TRANSPORT: 'gateway' } });
   assert.equal(gateway.ok, false);
   assert.deepEqual(errorCodes(gateway), ['env.cloudflare.gateway']);
+  assert.match(gateway.checks.find((item) => item.code === 'env.cloudflare.gateway').message, /Vercel AI Gateway is Node-only/);
 
   const invalid = cloudflareReport({ env: { ...validCloudflareEnv(), AI_TRANSPORT: 'grpc' } });
   assert.deepEqual(errorCodes(invalid), ['env.AI_TRANSPORT.invalid']);
+});
+
+const CF_GATEWAY = {
+  AI_TRANSPORT: 'cloudflare-gateway',
+  CF_AI_GATEWAY_ACCOUNT_ID: '0123456789abcdef0123456789abcdef',
+  CF_AI_GATEWAY_ID: 'oi-example',
+  CF_AI_GATEWAY_TOKEN: secret('g'),
+};
+
+test('RT-11 Cloudflare accepts its own AI Gateway transport with valid identifiers and a Run token', () => {
+  const report = cloudflareReport({ env: { ...validCloudflareEnv(), ...CF_GATEWAY } });
+  assert.equal(report.ok, true, JSON.stringify(report.checks));
+  assert.equal(codes(report).includes('env.cloudflare.gateway.valid'), true);
+  assert.match(report.checks.find((item) => item.code === 'env.AI_TRANSPORT.valid').message, /cloudflare-gateway/);
+  assert.equal(JSON.stringify(report).includes(CF_GATEWAY.CF_AI_GATEWAY_TOKEN), false);
+});
+
+test('RT-11 Cloudflare AI Gateway refuses malformed identifiers, a missing or weak token and a shared token', () => {
+  const cases = [
+    [{ CF_AI_GATEWAY_ACCOUNT_ID: 'acct' }, 'env.CF_AI_GATEWAY_ACCOUNT_ID.invalid'],
+    [{ CF_AI_GATEWAY_ID: 'default' }, 'env.CF_AI_GATEWAY_ID.invalid'],
+    [{ CF_AI_GATEWAY_ID: 'Bad/Id' }, 'env.CF_AI_GATEWAY_ID.invalid'],
+    [{ CF_AI_GATEWAY_TOKEN: undefined }, 'env.CF_AI_GATEWAY_TOKEN.missing'],
+    [{ CF_AI_GATEWAY_TOKEN: 'short' }, 'env.CF_AI_GATEWAY_TOKEN.weak'],
+    [{ CF_AI_GATEWAY_TOKEN: 'your-ai-gateway-run-token-placeholder-value' }, 'env.CF_AI_GATEWAY_TOKEN.placeholder'],
+  ];
+  for (const [override, code] of cases) {
+    const env = { ...validCloudflareEnv(), ...CF_GATEWAY, ...override };
+    for (const [name, value] of Object.entries(override)) if (value === undefined) delete env[name];
+    assert.deepEqual(errorCodes(cloudflareReport({ env })), [code], code);
+  }
+  const shared = cloudflareReport({ env: { ...validCloudflareEnv(), ...CF_GATEWAY, CF_AI_GATEWAY_TOKEN: secret('f') } });
+  assert.deepEqual(errorCodes(shared), ['env.CF_AI_GATEWAY_TOKEN.independent']);
+});
+
+test('RT-11 gateway identifiers without the gateway transport are refused; a bound token on direct is allowed', () => {
+  const identifiers = cloudflareReport({ env: { ...validCloudflareEnv(), CF_AI_GATEWAY_ID: 'oi-example' } });
+  assert.deepEqual(errorCodes(identifiers), ['env.cloudflare.gatewayWithoutTransport']);
+  const token = cloudflareReport({ env: { ...validCloudflareEnv(), CF_AI_GATEWAY_TOKEN: secret('g') } });
+  assert.equal(token.ok, true, JSON.stringify(token.checks));
+});
+
+test('RT-11 the Run token must be a secret, never a wrangler var', () => {
+  const config = validWranglerConfig();
+  config.vars = { ...config.vars, CF_AI_GATEWAY_TOKEN: secret('g') };
+  const report = cloudflareReport({ config });
+  assert.equal(errorCodes(report).includes('wrangler.vars.CF_AI_GATEWAY_TOKEN.secret'), true);
+});
+
+test('RT-11 Node refuses Cloudflare AI Gateway', () => {
+  const report = validateSetup({
+    mode: 'standalone',
+    env: { ...validStandaloneEnv(), AI_TRANSPORT: 'cloudflare-gateway' },
+    nodeVersion: '24.19.0',
+  });
+  assert.equal(report.ok, false);
+  assert.equal(errorCodes(report).includes('env.AI_TRANSPORT.cloudflare_only'), true);
 });
 
 test('RT-01 Cloudflare requires an explicit DEPLOYMENT_MODE and cloudflare target', () => {

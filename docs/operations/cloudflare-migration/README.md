@@ -29,18 +29,18 @@ Requirements use stable prefixes: `RT`, `SETUP`, `ST`, `JOB`, `API`, `UI-CF`, `V
 | --- | --- |
 | Product scope | Standalone-first. Hosted BYOS and existing Redis installations remain supported. |
 | Runtime selector | Add `DEPLOYMENT_TARGET=node\|cloudflare`; absent means `node` for backward compatibility. Unknown values fail setup/readiness. |
-| Supported combinations | Node/Vercel standalone + Redis + current direct/Gateway options; Node/Vercel hosted + platform/BYOS Redis + direct; Cloudflare standalone + SQLite DO + direct. |
+| Supported combinations | Node/Vercel standalone + Redis + current direct/Gateway options; Node/Vercel hosted + platform/BYOS Redis + direct; Cloudflare standalone + SQLite DO + direct or the installation's Cloudflare AI Gateway (native per-provider endpoints; all four providers; RT-11). |
 | Capability resolution | Existing `DEPLOYMENT_MODE` and `AI_TRANSPORT` remain. Derive storage centrally from the validated target/mode. No independently selectable hidden Redis fallback on Cloudflare. |
 | Worker packaging | One deployable Worker: OpenNext `fetch`, independent `queue`, exported `WorkspaceStore` DO class. Split Workers only for a demonstrated constraint. |
 | Bindings | `WORKSPACE_STORE` and `ANALYSIS_QUEUE`; physical resource names vary by installation/environment. Adapter-required assets/cache bindings must be documented separately. |
 | Storage boundary | One SQLite object per standalone workspace, selected from a stable server-owned installation identity. Browser input never chooses another workspace/object. |
-| AI execution | Existing direct native adapters, same study-selected provider/model and validation/provenance. Queue-only synthesis receives an explicit no-SDK-retry execution policy. |
+| AI execution | Existing native adapters, called directly or through the installation's Cloudflare AI Gateway on each provider's native endpoint with logging, caching, retries and fallback disabled (RT-11); same study-selected provider/model and validation/provenance. Queue-only synthesis receives an explicit no-SDK-retry execution policy. |
 | Background scope | Per-interview post-save analysis and researcher retry move to durable jobs. Connected live interview, preview, aggregate and follow-up requests retain their current product behavior, subject to runtime tests. |
 | Recovery | External `ANALYSIS_RECOVERY_EPOCH` and explicit activation after restore; ordinary requests cannot change the epoch. |
 | Release isolation | Disable production Version URLs/branch previews initially. Full remote staging uses a separate Worker, storage namespace, Queue and secrets. |
 | UI | Existing components/primitives and design direction; additive analysis behavior only. |
 
-Do not build D1 plus DO, a general job platform, multi-tenant Cloudflare hosting, a new authentication system, a new AI gateway, or a framework rewrite as part of the first implementation. Keep existing hosted reconciliation and Redis-specific failure protocols inside their present backend.
+Do not build D1 plus DO, a general job platform, multi-tenant Cloudflare hosting, a new authentication system, a new AI gateway of our own (Cloudflare AI Gateway is used as a pass-through transport only, RT-11), or a framework rewrite as part of the first implementation. Keep existing hosted reconciliation and Redis-specific failure protocols inside their present backend.
 
 ## Milestones and integration sequence
 

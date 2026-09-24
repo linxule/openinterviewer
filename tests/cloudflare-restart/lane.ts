@@ -288,16 +288,17 @@ export async function mintLink(base: string, researcher: string, studyId: string
   return (await readJson(response) as { token: string }).token;
 }
 
-export type ParticipantSession = { cookie: string; handle: string };
+/** `aiTransport` is what the consent page discloses and echoes back (D9). */
+export type ParticipantSession = { cookie: string; handle: string; aiTransport: string };
 
 export async function exchange(base: string, code: string): Promise<ParticipantSession> {
   const response = await send(base, `/api/generate-link?token=${encodeURIComponent(code)}`);
   expect(response.status).toBe(200);
   const cookies = response.headers.getSetCookie();
   expect(cookies).toHaveLength(1);
-  const body = await readJson(response) as { valid: boolean; data: { sessionHandle: string } };
+  const body = await readJson(response) as { valid: boolean; data: { sessionHandle: string; aiTransport: string } };
   expect(body.valid).toBe(true);
-  return { cookie: cookies[0].split(';')[0], handle: body.data.sessionHandle };
+  return { cookie: cookies[0].split(';')[0], handle: body.data.sessionHandle, aiTransport: body.data.aiTransport };
 }
 
 export function participantPost(base: string, session: ParticipantSession, pathname: string, body: unknown): Promise<Response> {
@@ -315,7 +316,7 @@ export async function participantReadyToSave(base: string): Promise<{ researcher
   const researcher = await signIn(base);
   const studyId = await createStudy(base, researcher);
   const session = await exchange(base, await mintLink(base, researcher, studyId));
-  const consent = await participantPost(base, session, '/api/consent', { studyId });
+  const consent = await participantPost(base, session, '/api/consent', { studyId, disclosedTransport: session.aiTransport });
   expect(consent.status).toBe(200);
   expect(await readJson(consent)).toMatchObject({ success: true, preview: false });
   const greeting = await participantPost(base, session, '/api/greeting', {});

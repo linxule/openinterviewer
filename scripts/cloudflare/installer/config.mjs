@@ -6,13 +6,15 @@
 
 import { bootstrapFor } from './context.mjs';
 import { InstallerError, REFUSED } from './model.mjs';
-import { acquireLock, assertNoPendingProviderChange, buildInstallationConfig, readReceipt, writeInstallationConfig } from './state.mjs';
+import { acquireLock, assertNoPendingChange, buildInstallationConfig, readReceipt, writeInstallationConfig } from './state.mjs';
 import { checkDeployedConfig } from './verify.mjs';
 
 /** Options that request a change; config never changes an installation. */
 const CHANGE_OPTIONS = [
   'provider', 'jurisdiction', 'origin', 'account-id', 'import-target', 'secrets-stdin',
   'operator-token-file', 'reveal-operator-token', 'change-provider', 'yes',
+  'provider-keys', 'add-provider-key', 'rotate-provider-key',
+  'ai-transport', 'change-ai-transport', 'rotate-ai-gateway-token',
 ];
 
 export async function configCommand(ctx) {
@@ -30,8 +32,8 @@ export async function configCommand(ctx) {
       hints: ['config needs the installation receipt; pass --state-dir if it lives elsewhere.'],
     });
   }
-  // Its config could deploy either provider; CI must not guess.
-  assertNoPendingProviderChange(receipt);
+  // A pending provider or transport change could deploy either side; CI must not guess.
+  assertNoPendingChange(receipt);
   if (!receipt.phases?.['bootstrap-clear'] || bootstrapFor(receipt) !== '') {
     throw new InstallerError(`installation ${ctx.install} (${ctx.environment}) is not complete: WORKSPACE_BOOTSTRAP has not been cleared`, {
       exitCode: REFUSED,
@@ -62,6 +64,9 @@ export async function configCommand(ctx) {
     worker: config.name,
     appBaseUrl: config.vars.APP_BASE_URL,
     provider: config.vars.AI_PROVIDER,
+    providerKeys: receipt.providerKeys,
+    aiTransport: config.vars.AI_TRANSPORT,
+    aiGateway: config.vars.CF_AI_GATEWAY_ID || null,
   });
   return 0;
 }

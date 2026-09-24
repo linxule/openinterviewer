@@ -23,6 +23,7 @@ import {
   writeReceipt,
 } from './state.mjs';
 import { FORWARDED_ENV, Wrangler, runDeploy, unforwardedEnvironment } from './tools.mjs';
+import { GatewayApi, adminTokenRequired, readAdminToken } from './gateway.mjs';
 
 export class Reporter {
   constructor({ json }) {
@@ -82,6 +83,20 @@ export function createContext(command, options) {
 export function wranglerFor(ctx) {
   ctx._wrangler ??= new Wrangler({ executable: ctx.wranglerPath, cwd: ctx.root });
   return ctx._wrangler;
+}
+
+/**
+ * The Cloudflare API client for the installation's AI Gateway, authenticated
+ * with CF_AI_GATEWAY_ADMIN_TOKEN from this process's environment. Returns
+ * null without the token, or refuses when `requiredFor` names why it is needed.
+ */
+export function gatewayApiFor(ctx, accountId, { requiredFor = null } = {}) {
+  const adminToken = readAdminToken(ctx.registry);
+  if (!adminToken) {
+    if (requiredFor) throw adminTokenRequired(requiredFor);
+    return null;
+  }
+  return new GatewayApi({ accountId, adminToken });
 }
 
 /**
@@ -160,8 +175,8 @@ export function bootstrapFor(receipt) {
   return receipt.phases['workspace-init'] ? '' : receipt.bootstrap;
 }
 
-export function writeConfig(ctx, receipt, { provider = receipt.provider } = {}) {
-  const config = buildInstallationConfig(ctx.template, receipt, { bootstrap: bootstrapFor(receipt), provider });
+export function writeConfig(ctx, receipt, { provider = receipt.provider, aiTransport = receipt.aiTransport } = {}) {
+  const config = buildInstallationConfig(ctx.template, receipt, { bootstrap: bootstrapFor(receipt), provider, aiTransport });
   writeInstallationConfig(ctx.paths.config, config, receipt, ctx.registry);
   return config;
 }
@@ -192,7 +207,7 @@ export const BOOTSTRAP_PURPOSES = ['initial', 'origin', 'workspace-init'];
  * A failure carries `nothingUploaded` when deploy.mjs refused locally,
  * before wrangler ran.
  */
-export async function deployInstallation(ctx, receipt, { purpose, artifact, provider = receipt.provider }) {
+export async function deployInstallation(ctx, receipt, { purpose, artifact, provider = receipt.provider, aiTransport = receipt.aiTransport }) {
   // Checked before the config is rewritten, so a refusal leaves it untouched.
   if (bootstrapFor(receipt) !== '' && !BOOTSTRAP_PURPOSES.includes(purpose)) {
     throw new InstallerError(`refusing to deploy (${purpose}) with WORKSPACE_BOOTSTRAP '${bootstrapFor(receipt)}': the receipt records no workspace-init phase`, {
@@ -200,7 +215,7 @@ export async function deployInstallation(ctx, receipt, { purpose, artifact, prov
       hints: ['Only the initial, origin and workspace-init deploys may bootstrap a workspace. Check the receipt phases (INSTALLER.md, re-bootstrap).'],
     });
   }
-  const config = writeConfig(ctx, receipt, { provider });
+  const config = writeConfig(ctx, receipt, { provider, aiTransport });
   const bootstrap = config.vars.WORKSPACE_BOOTSTRAP !== '';
   ctx.out.step(`Deploying ${config.name} (${purpose}; APP_BASE_URL ${config.vars.APP_BASE_URL || 'not set yet'}, WORKSPACE_BOOTSTRAP '${config.vars.WORKSPACE_BOOTSTRAP}')`);
   const result = await runDeploy({
@@ -242,6 +257,8 @@ export async function deployInstallation(ctx, receipt, { purpose, artifact, prov
     appBaseUrl: config.vars.APP_BASE_URL,
     bootstrap: config.vars.WORKSPACE_BOOTSTRAP,
     provider,
+    providerKeys: [...receipt.providerKeys],
+    aiTransport,
     at: new Date().toISOString(),
   });
   saveReceipt(ctx, receipt);

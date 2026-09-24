@@ -10,6 +10,10 @@
 //    check (npm run check:cloudflare) for this exact artifact;
 //  - the installation config differs from wrangler.jsonc only in
 //    installation-owned fields (names, vars values, routes);
+//  - the AI transport vars pass the Worker's own route validation (RT-11):
+//    direct with both gateway identifiers empty, or cloudflare-gateway with a
+//    32-hex account ID and a gateway ID other than `default`; otherwise the
+//    uploaded Worker would report not-ready;
 //  - WORKSPACE_BOOTSTRAP is empty unless --bootstrap is given, which only the
 //    installer passes, for the deploys that initialize a fresh workspace
 //    (gap review F2): any other deploy of a bootstrap config could make an
@@ -20,7 +24,8 @@
 //   node scripts/cloudflare/deploy.mjs --install <installation wrangler.jsonc> [--dry-run | --confirm] [--artifact <dir>]
 //   node scripts/cloudflare/deploy.mjs --install <installation wrangler.jsonc> --check-config
 // --check-config validates only the installation config (template drift,
-// required vars, bootstrap) and needs no artifact; nothing is uploaded.
+// required vars, AI transport, bootstrap) and needs no artifact; nothing is
+// uploaded.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -37,6 +42,7 @@ import {
   sha256Tree,
   isMain,
 } from './lib.mjs';
+import { ACCOUNT_ID_PATTERN, GATEWAY_ID_PATTERN } from './installer/model.mjs';
 
 // Fields an installation may set; everything else must equal the template.
 const INSTALLATION_OWNED = new Set(['name', 'vars', 'routes', 'workers_dev', 'account_id', 'queues']);
@@ -93,11 +99,56 @@ export function configDrift(template, install) {
  * bootstrap configuration (WORKSPACE_BOOTSTRAP open|recovery): the installer's
  * first deploy discovers the workers.dev origin, and until an origin is set
  * the Worker reports not-ready and refuses participant and researcher writes.
+ * With AI_TRANSPORT=cloudflare-gateway both gateway identifiers are required
+ * too (RT-11).
  */
 export function missingInstallationVars(vars = {}) {
   const bootstrapping = BOOTSTRAP_VALUES.includes(vars.WORKSPACE_BOOTSTRAP);
   const required = bootstrapping ? ['WORKSPACE_ID', 'AI_PROVIDER'] : ['APP_BASE_URL', 'WORKSPACE_ID', 'AI_PROVIDER'];
+  if (routeTransport(vars) === 'cloudflare-gateway') required.push('CF_AI_GATEWAY_ACCOUNT_ID', 'CF_AI_GATEWAY_ID');
   return required.filter((name) => !vars[name]);
+}
+
+// Mirrors src/lib/providers/endpoint.ts (providerRouteErrors), which the
+// Worker's readiness applies; tests/unit/installerGatewayContract.test.ts
+// keeps the two equal.
+const varText = (value) => (typeof value === 'string' ? value : '');
+
+/** The transport the Worker resolves: trimmed; unset or empty is direct. */
+function routeTransport(vars) {
+  const raw = vars.AI_TRANSPORT;
+  const transport = typeof raw === 'string' ? raw.trim() : raw;
+  return transport === undefined || transport === '' ? 'direct' : transport;
+}
+
+/**
+ * The AI transport vars the Worker would refuse (RT-11): an unknown
+ * AI_TRANSPORT, gateway identifiers on direct
+ * (`cf_ai_gateway_config_without_transport`), or malformed identifiers on
+ * cloudflare-gateway. Empty identifiers on the gateway are reported by
+ * missingInstallationVars. The Run token is a secret and is not checked here.
+ */
+export function transportVarProblems(vars = {}) {
+  const transport = routeTransport(vars);
+  const account = varText(vars.CF_AI_GATEWAY_ACCOUNT_ID);
+  const gateway = varText(vars.CF_AI_GATEWAY_ID);
+  if (transport === 'direct') {
+    return account !== '' || gateway !== ''
+      ? ['installation vars CF_AI_GATEWAY_ACCOUNT_ID and CF_AI_GATEWAY_ID must be empty with AI_TRANSPORT direct (the Worker would report cf_ai_gateway_config_without_transport)']
+      : [];
+  }
+  if (transport !== 'cloudflare-gateway') {
+    return [`installation var AI_TRANSPORT is ${JSON.stringify(vars.AI_TRANSPORT)}; it must be direct or cloudflare-gateway`];
+  }
+  const problems = [];
+  // The Worker reads a non-string var as '' and then refuses it on the gateway,
+  // so a number or boolean here must not pass as present.
+  for (const name of ['CF_AI_GATEWAY_ACCOUNT_ID', 'CF_AI_GATEWAY_ID']) {
+    if (vars[name] !== undefined && typeof vars[name] !== 'string') problems.push(`installation var ${name} must be a string with AI_TRANSPORT cloudflare-gateway`);
+  }
+  if (account !== '' && !ACCOUNT_ID_PATTERN.test(account)) problems.push('installation var CF_AI_GATEWAY_ACCOUNT_ID is not a 32-character lowercase hexadecimal account ID');
+  if (gateway !== '' && (!GATEWAY_ID_PATTERN.test(gateway) || gateway === 'default')) problems.push('installation var CF_AI_GATEWAY_ID is not a gateway id other than default');
+  return problems;
 }
 
 /** WORKSPACE_BOOTSTRAP must be empty unless this is an installer bootstrap deploy (--bootstrap). */
@@ -122,6 +173,7 @@ export function installationConfigProblems(template, install, { bootstrap = fals
   const drift = configDrift(template, install);
   if (drift.length > 0) problems.push(`installation config drifts from wrangler.jsonc in: ${drift.join(', ')}`);
   for (const name of missingInstallationVars(install.vars)) problems.push(`installation var ${name} is empty`);
+  problems.push(...transportVarProblems(install.vars));
   problems.push(...bootstrapProblems(install.vars, { bootstrap }));
   return problems;
 }

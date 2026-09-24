@@ -158,7 +158,10 @@ const StudySetup: React.FC = () => {
         if (
           !res.ok ||
           (data.mode !== 'hosted' && data.mode !== 'standalone') ||
-          (data.aiTransport !== 'direct' && data.aiTransport !== 'gateway') ||
+          (data.aiTransport !== 'direct' && data.aiTransport !== 'gateway' && data.aiTransport !== 'cloudflare-gateway') ||
+          // Cloudflare AI Gateway exists only on the Cloudflare target.
+          (data.aiTransport === 'cloudflare-gateway' && data.target !== 'cloudflare') ||
+          (data.target !== undefined && data.target !== 'cloudflare') ||
           typeof data.hasAnthropicKey !== 'boolean' ||
           typeof data.hasGeminiKey !== 'boolean' ||
           (data.hasOpenAiKey !== undefined && typeof data.hasOpenAiKey !== 'boolean') ||
@@ -169,6 +172,7 @@ const StudySetup: React.FC = () => {
         if (!cancelled) {
           setConfigStatus({
             mode: data.mode,
+            ...(data.target === 'cloudflare' ? { target: 'cloudflare' as const } : {}),
             aiTransport: data.aiTransport,
             hasAnthropicKey: data.hasAnthropicKey,
             hasGeminiKey: data.hasGeminiKey,
@@ -623,7 +627,7 @@ const StudySetup: React.FC = () => {
   const isValid = hasRequiredFields && selectedModelValid;
 
   const providerOptions = configStatus
-    && (configStatus.mode === 'hosted' || configStatus.aiTransport === 'gateway')
+    && (configStatus.mode === 'hosted' || configStatus.aiTransport === 'gateway' || configStatus.target === 'cloudflare')
     ? PROVIDER_OPTIONS.filter(provider => isProviderConfigured(provider.id, configStatus))
     : PROVIDER_OPTIONS;
 

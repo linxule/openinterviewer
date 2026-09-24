@@ -37,6 +37,11 @@ import { readBoundedJsonObject } from '@/lib/requestBody';
 import { UUID_V4 } from '@/lib/uuid';
 import { isCloudflareTarget } from '@/lib/runtime/capabilities';
 import { deploymentNotReadyResponse } from '@/lib/runtime/readinessGate';
+import type { ProviderRoute } from '@/lib/providers/endpoint';
+import {
+  currentProviderTransport,
+  researcherTransportNotDisclosedResponse,
+} from '@/lib/transportDisclosure';
 import {
   ANALYSIS_POLL_AFTER_MS,
   type AcceptAnalysisRetryOutcome,
@@ -208,7 +213,12 @@ function unavailable(method: Method): NextResponse {
   return noStoreJson({ error: method === 'POST' ? START_UNAVAILABLE : STATUS_UNAVAILABLE, retryable: true }, 503);
 }
 
-type DurableTarget = { interviewId: string; studyId: string; store: DurableWorkspaceStorePort };
+type DurableTarget = {
+  interviewId: string;
+  studyId: string;
+  store: DurableWorkspaceStorePort;
+  providerRoute: ProviderRoute | null | undefined;
+};
 
 /**
  * Path/query shape, then the researcher session (a participant cookie or
@@ -260,7 +270,7 @@ async function resolveDurableTarget(
       ),
     };
   }
-  return { ok: true, target: { interviewId: id, studyId, store } };
+  return { ok: true, target: { interviewId: id, studyId, store, providerRoute: gated.context.providerRoute } };
 }
 
 function isJsonContentType(value: string | null): boolean {
@@ -355,6 +365,8 @@ function acceptOutcomeResponse(outcome: AcceptAnalysisRetryOutcome): NextRespons
       );
     case 'not-found':
       return noStoreJson({ error: 'Interview not found' }, 404);
+    case 'transport-not-disclosed':
+      return researcherTransportNotDisclosedResponse(1, { 'Cache-Control': 'no-store' });
     case 'held':
       return heldResponse(outcome.reason);
     default:
@@ -370,7 +382,7 @@ async function durableAnalysisPost(request: Request, params: RouteParams['params
   try {
     const resolved = await resolveDurableTarget(request, params, 'POST');
     if (!resolved.ok) return resolved.response;
-    const { interviewId, studyId, store } = resolved.target;
+    const { interviewId, studyId, store, providerRoute } = resolved.target;
 
     // API-01: an older cached client must not start work it cannot follow.
     // Checked after authentication (F18) and before any parsing or mutation.
@@ -400,8 +412,18 @@ async function durableAnalysisPost(request: Request, params: RouteParams['params
     // explicit provider and model resolved before persistence.
     const canonical = await loadCanonicalStudy({ store, tokenStudyId: studyId, isAdmin: true });
     if (!canonical.ok) return withNoStore(canonical.response);
+
     const frozen = frozenAnalysisInput(canonical.study);
     if (!frozen.ok) return withNoStore(frozen.response);
+
+    // D9: the store allocates the paid generation only when the interview's
+    // recorded disclosure covers the transport this request would use now,
+    // and freezes that disclosure with it. An invalid route accepts nothing.
+    const current = currentProviderTransport({ providerRoute }, canonical.study.config.aiProvider);
+    if (!current.applies || !current.ok) {
+      logRequestEvent({ event: 'route.failure', route: ROUTE, method: 'POST', status: 503, reason: 'provider-route-invalid' });
+      return noStoreJson({ error: 'AI provider is not configured on the server.', retryable: false }, 503);
+    }
 
     const outcome = await store.acceptAnalysisRetry({
       studyId,
@@ -410,6 +432,7 @@ async function durableAnalysisPost(request: Request, params: RouteParams['params
       apiVersion: 2,
       expectedGeneration,
       input: frozen.input,
+      ...(current.transport === 'cloudflare-gateway' ? { transport: current.transport } : {}),
       now: Date.now(),
     });
     return acceptOutcomeResponse(outcome);

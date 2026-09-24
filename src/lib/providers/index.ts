@@ -16,6 +16,8 @@ import {
   resolveSynthesisModel,
 } from './synthesisModel';
 import { isGatewayProvider, resolveAITransport } from '../aiTransport';
+import { isCloudflareTarget } from '../runtime/capabilities';
+import { providerEndpoint, type ProviderRoute } from './endpoint';
 
 export type { ProviderType } from './synthesisModel';
 export { PROVIDER_TYPES, isProviderType, resolveSynthesisModel } from './synthesisModel';
@@ -26,6 +28,11 @@ export interface AIProviderKeys {
   anthropicApiKey?: string | null;
   openaiApiKey?: string | null;
   openrouterApiKey?: string | null;
+  /**
+   * Cloudflare target only: the provider route resolved from the Worker env
+   * (resolveProviderRoute). Required there; the factory refuses without it.
+   */
+  route?: ProviderRoute;
 }
 
 /**
@@ -64,6 +71,8 @@ export function getInterviewProvider(studyConfig?: StudyConfig, keys?: AIProvide
   // Pass a special sentinel ('') to prevent providers from falling back to env vars
   const hosted = isHostedMode();
 
+  if (isCloudflareTarget()) return cloudflareProvider(providerType, model, keys);
+
   if (!hosted && resolveAITransport() === 'gateway') {
     if (!isGatewayProvider(providerType)) {
       throw new Error('OpenRouter is available only with the direct AI transport');
@@ -91,6 +100,27 @@ export function getInterviewProvider(studyConfig?: StudyConfig, keys?: AIProvide
       const key = hosted ? (keys?.geminiApiKey || '') : (keys?.geminiApiKey ?? undefined);
       return new GeminiProvider(model, key);
     }
+  }
+}
+
+/**
+ * Cloudflare target (RT-05): the Worker env is the only key source. A missing
+ * key is passed as '' so the adapter refuses instead of reading process.env,
+ * and every adapter gets an explicit endpoint from the resolved route.
+ */
+function cloudflareProvider(providerType: ProviderType, model: string | undefined, keys?: AIProviderKeys): AIProvider {
+  const route = keys?.route;
+  if (!route) throw new Error('The provider route is not configured for this deployment');
+  const endpoint = providerEndpoint(providerType, route);
+  switch (providerType) {
+    case 'claude':
+      return new ClaudeProvider(model, keys?.anthropicApiKey || '', endpoint);
+    case 'openai':
+      return new OpenAIProvider(model, keys?.openaiApiKey || '', endpoint);
+    case 'openrouter':
+      return new OpenRouterProvider(model, keys?.openrouterApiKey || '', endpoint);
+    case 'gemini':
+      return new GeminiProvider(model, keys?.geminiApiKey || '', endpoint);
   }
 }
 

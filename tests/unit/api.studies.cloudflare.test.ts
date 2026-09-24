@@ -48,6 +48,7 @@ import { POST as generateFollowup } from '@/app/api/studies/[id]/generate-follow
 import { POST as synthesizeAggregateRoute } from '@/app/api/synthesis/aggregate/route';
 import { DELETE as clearSample, POST as seedSample } from '@/app/api/demo/seed/route';
 import { createFencedRedisPort } from '@/lib/kvClient';
+import type { ProviderRoute } from '@/lib/providers/endpoint';
 import { createFingerprint, hashCreateIdempotencyKey } from '@/lib/createIdempotency';
 import {
   AGGREGATE_INPUT_PAGE_BYTES,
@@ -121,7 +122,9 @@ function setCloudflareEnv(overrides: Record<string, string> = {}, bindings: Reco
   installInvocation({ ...env, ...bindings });
 }
 
-function cloudflareContext(keys: Partial<Record<'geminiApiKey' | 'anthropicApiKey' | 'openaiApiKey' | 'openrouterApiKey', string | null>> = {}) {
+function cloudflareContext(keys: Partial<Record<'geminiApiKey' | 'anthropicApiKey' | 'openaiApiKey' | 'openrouterApiKey', string | null>> & {
+  providerRoute?: ProviderRoute | null;
+} = {}) {
   return {
     researcherId: null,
     kvClient: createFencedRedisPort(),
@@ -130,6 +133,7 @@ function cloudflareContext(keys: Partial<Record<'geminiApiKey' | 'anthropicApiKe
     anthropicApiKey: null,
     openaiApiKey: CLOUDFLARE_ENV.OPENAI_API_KEY,
     openrouterApiKey: null,
+    providerRoute: { transport: 'direct' } as ProviderRoute | null,
     onboardingComplete: true,
     ...keys,
   };
@@ -868,6 +872,147 @@ describe('/api/demo/seed on Cloudflare (ST-07)', () => {
     await expect((await clearSample()).json()).resolves.toEqual({
       error: 'Workspace storage is temporarily unavailable. Try again before clearing sample workspace data.',
       retryable: true,
+    });
+  });
+});
+
+// RT-11 / D9 on researcher paid calls: every included transcript's consent
+// must cover the transport of the call; an uncovered one refuses the whole
+// call before the provider, and interviews are never silently dropped.
+describe('aggregate and follow-up consent coverage on Cloudflare AI Gateway (D9, D11)', () => {
+  const GATEWAY_ROUTE: ProviderRoute = {
+    transport: 'cloudflare-gateway',
+    accountId: '0123456789abcdef0123456789abcdef',
+    gatewayId: 'oi-unit-test',
+    token: 'synthetic-ai-gateway-run-token-0123456789',
+  };
+  const aggregateRequest = (studyId: string) =>
+    jsonRequest('http://localhost/api/synthesis/aggregate', 'POST', { studyId });
+  const gatewayConsented = (study: StoredStudy, id: string) => analyzed(study, id, { consentTransport: 'cloudflare-gateway' });
+
+  it('aggregate: refuses on the gateway when any included interview was consented direct, before the provider', async () => {
+    authorize(cloudflareContext({ providerRoute: GATEWAY_ROUTE }));
+    const study = studyAt(2);
+    store.readiness.mockResolvedValue(ready());
+    store.getStudy.mockResolvedValue({ status: 'found', study });
+    store.readAggregateInputs.mockResolvedValue({
+      status: 'ok',
+      interviews: [gatewayConsented(study, 'a'), analyzed(study, 'b'), analyzed(study, 'c')],
+      nextCursor: null,
+      totalEligible: 3,
+    });
+
+    const response = await synthesizeAggregateRoute(aggregateRequest(study.id));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: 'TRANSPORT_NOT_DISCLOSED', uncoveredInterviewCount: 2 });
+    expect(getInterviewProvider).not.toHaveBeenCalled();
+    expect(synthesizeAggregate).not.toHaveBeenCalled();
+    expect(store.saveAggregate).not.toHaveBeenCalled();
+  });
+
+  it('aggregate: runs on the gateway when every interview was consented to it, and records aiTransport', async () => {
+    authorize(cloudflareContext({ providerRoute: GATEWAY_ROUTE }));
+    const study = studyAt(2);
+    store.readiness.mockResolvedValue(ready());
+    store.getStudy.mockResolvedValue({ status: 'found', study });
+    store.readAggregateInputs.mockResolvedValue({
+      status: 'ok',
+      interviews: [gatewayConsented(study, 'a'), gatewayConsented(study, 'b')],
+      nextCursor: null,
+      totalEligible: 2,
+    });
+    store.saveAggregate.mockResolvedValue('saved');
+    synthesizeAggregate.mockResolvedValueOnce({
+      value: aggregateOutput,
+      execution: { provider: 'openai', requestedModel: 'gpt-5.6-terra', model: 'gpt-5.6-terra-served', aiTransport: 'cloudflare-gateway' },
+    });
+
+    const response = await synthesizeAggregateRoute(aggregateRequest(study.id));
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.synthesis).toMatchObject({ aiTransport: 'cloudflare-gateway', aiModel: 'gpt-5.6-terra-served' });
+    expect(store.saveAggregate).toHaveBeenCalledWith(expect.objectContaining({ aiTransport: 'cloudflare-gateway' }));
+  });
+
+  it('aggregate: direct transport is always covered, whatever the interviews were consented to', async () => {
+    const study = studyAt(2);
+    store.readiness.mockResolvedValue(ready());
+    store.getStudy.mockResolvedValue({ status: 'found', study });
+    store.readAggregateInputs.mockResolvedValue({
+      status: 'ok',
+      interviews: [gatewayConsented(study, 'a'), analyzed(study, 'b')],
+      nextCursor: null,
+      totalEligible: 2,
+    });
+    store.saveAggregate.mockResolvedValue('saved');
+
+    const response = await synthesizeAggregateRoute(aggregateRequest(study.id));
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).synthesis).not.toHaveProperty('aiTransport');
+  });
+
+  it('aggregate: an invalid route refuses before the provider, never assuming direct', async () => {
+    authorize(cloudflareContext({ providerRoute: null }));
+    const study = studyAt(2);
+    store.readiness.mockResolvedValue(ready());
+    store.getStudy.mockResolvedValue({ status: 'found', study });
+    store.readAggregateInputs.mockResolvedValue({
+      status: 'ok', interviews: [analyzed(study, 'a'), analyzed(study, 'b')], nextCursor: null, totalEligible: 2,
+    });
+
+    const response = await synthesizeAggregateRoute(aggregateRequest(study.id));
+
+    expect(response.status).toBe(502);
+    expect(synthesizeAggregate).not.toHaveBeenCalled();
+  });
+
+  describe('follow-up', () => {
+    const study = studyAt(3);
+    const params = { params: Promise.resolve({ id: study.id }) };
+    const followupRequest = () => new Request('http://localhost', { method: 'POST' });
+    const storedAggregate = {
+      studyId: study.id, studyRevision: 3, interviewIds: ['a', 'b'], interviewCount: 2,
+      aiProvider: 'openai', aiModel: 'gpt-5.6-terra-served', requestedAiModel: 'gpt-5.6-terra',
+      commonThemes: [{ theme: 'Trust', frequency: 2, representativeQuotes: ['A'] }], divergentViews: [],
+      keyFindings: ['Trust matters'], researchImplications: ['Study ownership'], bottomLine: 'Ownership shapes trust.',
+      generatedAt: 1, savedAt: 2,
+    } as unknown as StoredAggregateSynthesis;
+
+    beforeEach(() => {
+      store.readiness.mockResolvedValue(ready());
+      store.getStudy.mockResolvedValue({ status: 'found', study });
+      store.getAggregate.mockResolvedValue({ status: 'found', aggregate: storedAggregate });
+    });
+
+    it('refuses on the gateway when a source interview was consented direct, before the provider', async () => {
+      authorize(cloudflareContext({ providerRoute: GATEWAY_ROUTE }));
+      store.readAggregateInputs.mockResolvedValue({
+        status: 'ok', interviews: [gatewayConsented(study, 'a'), analyzed(study, 'b')], nextCursor: null, totalEligible: 2,
+      });
+
+      const response = await generateFollowup(followupRequest(), params);
+
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toMatchObject({ code: 'TRANSPORT_NOT_DISCLOSED', uncoveredInterviewCount: 1 });
+      expect(generateFollowupStudy).not.toHaveBeenCalled();
+    });
+
+    it('ignores eligible interviews outside the aggregate\'s sources', async () => {
+      authorize(cloudflareContext({ providerRoute: GATEWAY_ROUTE }));
+      store.readAggregateInputs.mockResolvedValue({
+        status: 'ok',
+        interviews: [gatewayConsented(study, 'a'), analyzed(study, 'unrelated'), gatewayConsented(study, 'b')],
+        nextCursor: null,
+        totalEligible: 3,
+      });
+
+      const response = await generateFollowup(followupRequest(), params);
+
+      expect(response.status).toBe(200);
+      expect(generateFollowupStudy).toHaveBeenCalledTimes(1);
     });
   });
 });

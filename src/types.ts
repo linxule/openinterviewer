@@ -323,6 +323,16 @@ export interface StoredInterview {
   aiModel?: string;
   requestedAiModel?: string;
   routedProvider?: string;
+  /** The synthesis request went through Cloudflare AI Gateway (RT-11); absent otherwise. */
+  aiTransport?: 'cloudflare-gateway';
+
+  /**
+   * The provider transport disclosed to the participant at consent, copied
+   * from the verified consent record at save time (Cloudflare only). Absent
+   * means direct. A provider call carrying this transcript runs only on a
+   * transport the disclosure covers (gw-final D9).
+   */
+  consentTransport?: 'cloudflare-gateway';
 
   /**
    * The provider and model that conducted the CONVERSATION — the researcher's
@@ -492,6 +502,8 @@ export interface AggregateSynthesisResult {
   aiModel: string;
   requestedAiModel?: string;
   routedProvider?: string;
+  /** The aggregate request went through Cloudflare AI Gateway (RT-11); absent otherwise. */
+  aiTransport?: 'cloudflare-gateway';
   commonThemes: AggregateTheme[];
   divergentViews: { topic: string; viewA: string; viewB: string }[];
   keyFindings: string[];
@@ -518,6 +530,6 @@ export type StoredAggregateSynthesis =
 export type AggregateSynthesisProviderPayload = Omit<
   AggregateSynthesisResult,
   | 'studyId' | 'studyRevision' | 'interviewIds' | 'interviewCount'
-  | 'aiProvider' | 'aiModel' | 'requestedAiModel' | 'routedProvider'
+  | 'aiProvider' | 'aiModel' | 'requestedAiModel' | 'routedProvider' | 'aiTransport'
   | 'generatedAt' | 'commonThemes'
 > & { commonThemes: AggregateThemeClaim[] };

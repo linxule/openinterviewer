@@ -64,6 +64,7 @@ const HOLD_REASONS: ReadonlyArray<WorkspaceHoldReason> = [
   'schema-unsupported',
   'workspace-identity-mismatch',
   'workspace-uninitialized',
+  'workspace-unconfigured',
   'recovery-epoch-mismatch',
 ];
 
@@ -72,6 +73,7 @@ const HOLD_LOG_REASON: Record<WorkspaceHoldReason, RequestLogReason> = {
   'schema-unsupported': 'schema-unsupported',
   'workspace-identity-mismatch': 'workspace-identity-mismatch',
   'workspace-uninitialized': 'not-configured',
+  'workspace-unconfigured': 'not-configured',
   'recovery-epoch-mismatch': 'epoch-mismatch',
 };
 

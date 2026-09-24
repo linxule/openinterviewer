@@ -9,8 +9,21 @@
 
 import { setTimeout as sleep } from 'node:timers/promises';
 import { bootstrapProblems, missingInstallationVars } from '../deploy.mjs';
-import { InstallerError, JURISDICTIONS, PROVIDER_KEYS, REFUSED, isOwnWorkersDevHost, validateOrigin } from './model.mjs';
+import {
+  ACCOUNT_ID_PATTERN,
+  AI_TRANSPORTS,
+  GATEWAY_ADMIN_TOKEN_ENV,
+  GATEWAY_ID_PATTERN,
+  GATEWAY_TRANSPORT,
+  InstallerError,
+  JURISDICTIONS,
+  PROVIDER_KEYS,
+  REFUSED,
+  isOwnWorkersDevHost,
+  validateOrigin,
+} from './model.mjs';
 import { buildInstallationConfig, configDrift, identityDiff, installationIdentity, readInstallationConfig } from './state.mjs';
+import { gatewayChecks } from './gateway.mjs';
 
 /** Remote gates this command cannot establish (04-verification-and-cutover.md, VERIFY-04). */
 const REMOTE_GATES = [
@@ -36,13 +49,27 @@ export const CONFIG_LIMITATIONS = [
 
 export const CUSTOM_ORIGIN_LIMITATION = 'Routing of the custom origin to this Worker is not proven: the Worker is checked through its own workers.dev URL and the origin separately, and another Worker answering the origin would look the same.';
 
-export function limitationsFor(receipt) {
-  return receipt.workersDevUrl && receipt.origin && receipt.origin !== receipt.workersDevUrl
+/** Cloudflare AI Gateway transport (RT-11): what verify cannot establish. */
+export const GATEWAY_LIMITATION = 'AI Gateway pass-through per provider is not exercised: no request reaches a provider through the gateway, and the bound Run token is not probed (its value is not readable).';
+export const GATEWAY_UNCHECKED_LIMITATION = `AI Gateway settings and stored logs were not read: ${GATEWAY_ADMIN_TOKEN_ENV} (AI Gateway Read) was not set for this run.`;
+
+export function limitationsFor(receipt, { gatewayChecked = false } = {}) {
+  const limitations = receipt.workersDevUrl && receipt.origin && receipt.origin !== receipt.workersDevUrl
     ? [...LIMITATIONS, CUSTOM_ORIGIN_LIMITATION]
     : [...LIMITATIONS];
+  if (receipt.aiTransport === GATEWAY_TRANSPORT) {
+    limitations.push(GATEWAY_LIMITATION);
+    if (!gatewayChecked) limitations.push(GATEWAY_UNCHECKED_LIMITATION);
+  }
+  return limitations;
 }
 
-const TERMINAL_WORKSPACE_ERRORS = [
+// Readiness codes that end a wait at once: configuration or restore problems
+// that no amount of waiting clears. Every other code keeps a wait going until
+// its budget runs out, notably workspace_uninitialized and
+// workspace_unconfigured: right after `wrangler secret bulk` the object can
+// briefly run the version whose env lacks the epoch (staging, 2026-09-24).
+export const TERMINAL_WORKSPACE_ERRORS = [
   'workspace_identity_mismatch',
   'workspace_schema_unsupported',
   'workspace_recovery_epoch_mismatch',
@@ -87,8 +114,11 @@ function responseDetail(response) {
   return `HTTP ${response.status}`;
 }
 
-/** Classify one probe: ready | held-maintenance | not-ready | unreachable. */
-export function evaluateProbe(probe) {
+/**
+ * Classify one probe: ready | held-maintenance | not-ready | unreachable.
+ * `aiTransport` is the transport the installation is configured for.
+ */
+export function evaluateProbe(probe, { aiTransport = 'direct' } = {}) {
   const { health, readiness, mode } = probe;
   const h = health.body && typeof health.body === 'object' ? health.body : {};
   const r = readiness.body && typeof readiness.body === 'object' ? readiness.body : {};
@@ -113,7 +143,7 @@ export function evaluateProbe(probe) {
   add('mode.response', mode.status === 200 && mode.body, responseDetail(mode));
   add(
     'mode.matches',
-    m.mode === 'standalone' && m.aiTransport === 'direct' && m.analysisExecution === 'queued-v2' && m.ready === r.ready,
+    m.mode === 'standalone' && m.aiTransport === aiTransport && m.analysisExecution === 'queued-v2' && m.ready === r.ready,
     `mode=${m.mode}, aiTransport=${m.aiTransport}, analysisExecution=${m.analysisExecution}, ready=${m.ready}`,
   );
 
@@ -134,13 +164,13 @@ export function evaluateProbe(probe) {
  * Poll until `accept(evaluation)` or the deadline. The first attempt is
  * immediate; the backoff doubles from 0.5 s to 10 s.
  */
-export async function pollDeployment(origin, { waitSeconds, accept }) {
+export async function pollDeployment(origin, { waitSeconds, accept, aiTransport = 'direct' }) {
   const deadline = Date.now() + waitSeconds * 1000;
   let delay = 500;
   let attempts = 0;
   for (;;) {
     attempts += 1;
-    const evaluation = evaluateProbe(await probeDeployment(origin));
+    const evaluation = evaluateProbe(await probeDeployment(origin), { aiTransport });
     if (accept(evaluation) || evaluation.terminal) return { ...evaluation, attempts };
     const remaining = deadline - Date.now();
     if (remaining <= 0) return { ...evaluation, attempts };
@@ -155,7 +185,7 @@ export function checkInstallationConfig({ template, receipt, configPath }) {
   if (!actual) return { ok: false, diffs: [`installation config ${configPath} is missing`], templateDrift: [] };
   const bootstrap = receipt.phases?.['workspace-init'] ? '' : receipt.bootstrap;
   const expected = buildInstallationConfig(template, receipt, { bootstrap });
-  const owned = ['DEPLOYMENT_TARGET', 'DEPLOYMENT_MODE', 'AI_TRANSPORT', 'AI_PROVIDER', 'APP_BASE_URL', 'WORKSPACE_ID', 'WORKSPACE_JURISDICTION', 'WORKSPACE_BOOTSTRAP'];
+  const owned = ['DEPLOYMENT_TARGET', 'DEPLOYMENT_MODE', 'AI_TRANSPORT', 'AI_PROVIDER', 'CF_AI_GATEWAY_ACCOUNT_ID', 'CF_AI_GATEWAY_ID', 'APP_BASE_URL', 'WORKSPACE_ID', 'WORKSPACE_JURISDICTION', 'WORKSPACE_BOOTSTRAP'];
   const pick = (identity) => ({ ...identity, vars: Object.fromEntries(owned.map((name) => [name, identity.vars[name]])) });
   const diffs = identityDiff(pick(installationIdentity(expected)), pick(installationIdentity(actual)));
   return { ok: diffs.length === 0, diffs, templateDrift: configDrift(template, actual) };
@@ -174,11 +204,14 @@ export function ownWorkerUrl(receipt) {
 
 /**
  * Probe the Worker (workers.dev) and, when it differs, the origin. Status:
- * config-mismatch, then a missing Worker URL (not-ready), then the shared
- * status of both probes; probes that disagree are not-ready.
+ * config-mismatch, then a missing Worker URL (not-ready), then gateway-mismatch
+ * (a Cloudflare AI Gateway transport whose gateway breaks the policy or stores
+ * logs, checked only with `gatewayApi`), then the shared status of both
+ * probes; probes that disagree are not-ready.
  */
-export async function verifyInstallation({ template, receipt, configPath, waitSeconds = 0, acceptHeld = false }) {
+export async function verifyInstallation({ template, receipt, configPath, waitSeconds = 0, acceptHeld = false, gatewayApi = null }) {
   const config = checkInstallationConfig({ template, receipt, configPath });
+  const { aiTransport } = receipt;
   const accept = (evaluation) => evaluation.status === 'ready' || (acceptHeld && evaluation.status === 'held-maintenance');
   const workerUrl = ownWorkerUrl(receipt);
   const deadline = Date.now() + waitSeconds * 1000;
@@ -191,14 +224,14 @@ export async function verifyInstallation({ template, receipt, configPath, waitSe
   if (!workerUrl) {
     checks.push({ id: 'worker.url', ok: false, detail: `no workers.dev URL of ${receipt.names.worker} is recorded; the origin cannot be tied to this Worker` });
   } else {
-    const worker = await pollDeployment(workerUrl, { waitSeconds: remaining(), accept });
+    const worker = await pollDeployment(workerUrl, { waitSeconds: remaining(), accept, aiTransport });
     targets.push({ role: 'worker', url: workerUrl, status: worker.status });
     checks.push(...worker.checks);
     readinessErrors.push(...worker.errors);
     terminal = worker.terminal;
   }
   if (receipt.origin && receipt.origin !== workerUrl) {
-    const origin = await pollDeployment(receipt.origin, { waitSeconds: remaining(), accept });
+    const origin = await pollDeployment(receipt.origin, { waitSeconds: remaining(), accept, aiTransport });
     targets.push({ role: 'origin', url: receipt.origin, status: origin.status });
     checks.push(...origin.checks.map((check) => ({ ...check, id: `origin.${check.id}` })));
     for (const code of origin.errors) if (!readinessErrors.includes(code)) readinessErrors.push(code);
@@ -213,9 +246,14 @@ export async function verifyInstallation({ template, receipt, configPath, waitSe
     }
   }
 
+  const gatewayChecked = aiTransport === GATEWAY_TRANSPORT && Boolean(gatewayApi);
+  const gateway = gatewayChecked ? await gatewayChecks({ receipt, api: gatewayApi }) : [];
+  checks.push(...gateway);
+
   let status;
   if (!config.ok) status = 'config-mismatch';
   else if (!workerUrl) status = 'not-ready';
+  else if (gateway.some((check) => !check.ok)) status = 'gateway-mismatch';
   else status = targets.every((target) => target.status === targets[0].status) ? targets[0].status : 'not-ready';
   return {
     command: 'verify',
@@ -231,12 +269,34 @@ export async function verifyInstallation({ template, receipt, configPath, waitSe
     readinessErrors,
     terminal,
     config,
-    limitations: limitationsFor(receipt),
+    aiTransport,
+    limitations: limitationsFor(receipt, { gatewayChecked }),
     verifiedAt: new Date().toISOString(),
   };
 }
 
 const WORKSPACE_ID = /^ws_[a-f0-9]{32}$/;
+
+/**
+ * RT-11 as the Worker enforces it (src/lib/providers/endpoint.ts): direct with
+ * both gateway identifiers empty, or cloudflare-gateway with a 32-hex account
+ * ID and a gateway ID other than `default`.
+ */
+export function transportProblems(vars = {}) {
+  const transport = vars.AI_TRANSPORT;
+  if (!AI_TRANSPORTS.includes(transport)) {
+    return [`vars.AI_TRANSPORT: expected ${AI_TRANSPORTS.map((value) => `"${value}"`).join(' or ')}, found ${JSON.stringify(transport)}`];
+  }
+  const account = vars.CF_AI_GATEWAY_ACCOUNT_ID ?? '';
+  const gateway = vars.CF_AI_GATEWAY_ID ?? '';
+  if (transport !== GATEWAY_TRANSPORT) {
+    return (account !== '' || gateway !== '') ? ['vars.CF_AI_GATEWAY_ACCOUNT_ID and CF_AI_GATEWAY_ID must be empty with AI_TRANSPORT "direct"'] : [];
+  }
+  const problems = [];
+  if (!ACCOUNT_ID_PATTERN.test(account)) problems.push('vars.CF_AI_GATEWAY_ACCOUNT_ID is not a 32-character lowercase hexadecimal account ID');
+  if (!GATEWAY_ID_PATTERN.test(gateway) || gateway === 'default') problems.push('vars.CF_AI_GATEWAY_ID is not a gateway id other than default');
+  return problems;
+}
 
 /**
  * Receipt-less local check of an installation config about to be (or just)
@@ -250,9 +310,10 @@ export function checkDeployedConfig({ template, config }) {
   const diffs = [];
   for (const name of missingInstallationVars(vars)) diffs.push(`vars.${name} is empty`);
   diffs.push(...bootstrapProblems(vars));
-  for (const [name, expected] of [['DEPLOYMENT_TARGET', 'cloudflare'], ['DEPLOYMENT_MODE', 'standalone'], ['AI_TRANSPORT', 'direct']]) {
+  for (const [name, expected] of [['DEPLOYMENT_TARGET', 'cloudflare'], ['DEPLOYMENT_MODE', 'standalone']]) {
     if (vars[name] !== expected) diffs.push(`vars.${name}: expected "${expected}", found ${JSON.stringify(vars[name])}`);
   }
+  diffs.push(...transportProblems(vars));
   if (vars.AI_PROVIDER && !Object.hasOwn(PROVIDER_KEYS, vars.AI_PROVIDER)) diffs.push(`vars.AI_PROVIDER ${JSON.stringify(vars.AI_PROVIDER)} is not a supported provider`);
   if (vars.WORKSPACE_ID && !WORKSPACE_ID.test(vars.WORKSPACE_ID)) diffs.push('vars.WORKSPACE_ID is not ws_ followed by 32 hex characters');
   if (!Object.values(JURISDICTIONS).includes(vars.WORKSPACE_JURISDICTION ?? '')) diffs.push(`vars.WORKSPACE_JURISDICTION ${JSON.stringify(vars.WORKSPACE_JURISDICTION)} is not eu, fedramp or empty`);
@@ -291,7 +352,8 @@ export async function verifyConfiguredOrigin({ template, configPath, waitSeconds
   let terminal = null;
   let probed = null;
   if (local.origin) {
-    probed = await pollDeployment(local.origin, { waitSeconds, accept });
+    const aiTransport = AI_TRANSPORTS.includes(config.vars?.AI_TRANSPORT) ? config.vars.AI_TRANSPORT : 'direct';
+    probed = await pollDeployment(local.origin, { waitSeconds, accept, aiTransport });
     targets.push({ role: 'origin', url: local.origin, status: probed.status });
     checks.push(...probed.checks);
     readinessErrors = probed.errors;

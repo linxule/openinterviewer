@@ -10,21 +10,27 @@ import {
   checkToolEnvironment,
   deployInstallation,
   ensureConfigFile,
+  gatewayApiFor,
   resolveAccount,
   saveReceipt,
   wranglerFor,
   writeConfig,
 } from './context.mjs';
 import {
+  GATEWAY_TOKEN_SECRET,
+  GATEWAY_TRANSPORT,
   InstallerError,
   REFUSED,
   deriveNames,
   isOwnWorkersDevHost,
   isWorkersDevOrigin,
+  parseProviderList,
   requiredSecretNames,
+  validateAiTransport,
   validateJurisdiction,
   validateOrigin,
   validateProvider,
+  validateProviderKeys,
 } from './model.mjs';
 import {
   assertIndependent,
@@ -38,17 +44,34 @@ import {
   writeOperatorTokenFile,
 } from './secrets.mjs';
 import { dropAttempt, queueOwnership, recordAttempt, workerOwnership } from './ownership.mjs';
-import { acquireLock, assertNoPendingProviderChange, firstIncompletePhase, markPhase, newReceipt, readReceipt } from './state.mjs';
+import { acquireLock, assertNoPendingChange, firstIncompletePhase, markPhase, newReceipt, phaseDone, readReceipt } from './state.mjs';
+import { ensureGateway, runGatewayProbe } from './gateway.mjs';
 import { ownWorkerUrl, pollDeployment, verifyInstallation } from './verify.mjs';
 import { printVerification, summarizeVerification } from './report.mjs';
 
 const refuse = (message, hints = []) => new InstallerError(message, { exitCode: REFUSED, hints });
 const now = () => new Date().toISOString();
 
+const UPDATE_ONLY_OPTIONS = ['change-provider', 'add-provider-key', 'rotate-provider-key', 'change-ai-transport', 'rotate-ai-gateway-token'];
+
+/**
+ * The provider keys to bind: the receipt's on resume, otherwise
+ * --provider-keys (default: the --provider key alone). Validated before any
+ * remote write.
+ */
+function requestedProviderKeys(options, receipt) {
+  if (receipt) return receipt.providerKeys;
+  if (options['provider-keys'] === undefined) return [options.provider];
+  return validateProviderKeys(parseProviderList(options['provider-keys'], '--provider-keys'), options.provider);
+}
+
 function checkArguments(ctx, receipt) {
   const { options } = ctx;
-  if (options['change-provider']) throw refuse('--change-provider is an update option; apply and resume never change the provider');
+  for (const name of UPDATE_ONLY_OPTIONS) {
+    if (options[name] !== undefined) throw refuse(`--${name} is an update option; apply and resume never change provider keys, the provider or the AI transport`);
+  }
   if (options.provider !== undefined) validateProvider(options.provider);
+  if (options['ai-transport'] !== undefined) validateAiTransport(options['ai-transport']);
   if (options.jurisdiction !== undefined) validateJurisdiction(options.jurisdiction);
   const origin = options.origin !== undefined ? validateOrigin(options.origin) : null;
   if (!receipt) {
@@ -56,6 +79,7 @@ function checkArguments(ctx, receipt) {
       throw refuse(`no receipt at ${ctx.paths.receipt}: there is nothing to resume`, ['Start a fresh installation with apply.']);
     }
     if (!options.provider) throw refuse('a fresh installation needs --provider <gemini|claude|openai|openrouter>');
+    requestedProviderKeys(options, null);
     if (!options.jurisdiction) {
       throw refuse('a fresh installation needs an explicit --jurisdiction <eu|fedramp|none> (recommended: eu)', [
         'The jurisdiction fixes where the Durable Object stores data and cannot be changed by update.',
@@ -63,7 +87,20 @@ function checkArguments(ctx, receipt) {
     }
     return origin;
   }
-  assertNoPendingProviderChange(receipt);
+  assertNoPendingChange(receipt);
+  if (options['provider-keys'] !== undefined) {
+    const given = parseProviderList(options['provider-keys'], '--provider-keys');
+    if (given.join(',') !== receipt.providerKeys.join(',')) {
+      throw refuse(`--provider-keys ${given.join(',')} differs from the installation's provider keys ${receipt.providerKeys.join(',')}`, [
+        'Add a key to a completed installation with update --add-provider-key <provider>.',
+      ]);
+    }
+  }
+  if (options['ai-transport'] && options['ai-transport'] !== receipt.aiTransport) {
+    throw refuse(`--ai-transport ${options['ai-transport']} differs from the installation's AI transport ${receipt.aiTransport}`, [
+      'Change the transport of a completed installation with update --change-ai-transport --ai-transport <direct|cloudflare-gateway>.',
+    ]);
+  }
   if (options.provider && options.provider !== receipt.provider) {
     throw refuse(`--provider ${options.provider} differs from the installed provider ${receipt.provider}`, [
       'Switch providers on a completed installation with update --change-provider.',
@@ -81,7 +118,7 @@ function checkArguments(ctx, receipt) {
   return origin;
 }
 
-async function collectSecretInput(ctx, receipt, provider) {
+async function collectSecretInput(ctx, receipt, providerKeys, aiTransport) {
   const { options } = ctx;
   const tokenFile = options['operator-token-file']
     ? resolveOperatorTokenFile(options['operator-token-file'], {
@@ -102,7 +139,7 @@ async function collectSecretInput(ctx, receipt, provider) {
       'or --reveal-operator-token prints it once to an interactive terminal.',
     ]);
   }
-  const supplied = await readProtectedInput(suppliedSecretNames(provider), { fromStdin: Boolean(options['secrets-stdin']) });
+  const supplied = await readProtectedInput(suppliedSecretNames(providerKeys, aiTransport), { fromStdin: Boolean(options['secrets-stdin']) });
   for (const value of Object.values(supplied)) ctx.registry.add(value);
   assertIndependent(supplied);
   return { supplied, tokenFile };
@@ -134,7 +171,7 @@ async function runPhases(ctx, { receipt: initialReceipt, fresh, explicitOrigin }
   const { options, out, registry } = ctx;
   let receipt = initialReceipt;
   const wrangler = wranglerFor(ctx);
-  const pending = (phase) => !receipt?.phases?.[phase];
+  const pending = (phase) => !phaseDone(receipt, phase);
 
   // ---------- preflight ----------
   out.step(`Preflight for ${ctx.install} (${ctx.environment})`);
@@ -147,8 +184,17 @@ async function runPhases(ctx, { receipt: initialReceipt, fresh, explicitOrigin }
   wrangler.useAccount(account.id);
   const names = receipt?.names ?? deriveNames(ctx.install, ctx.environment);
   const provider = receipt?.provider ?? options.provider;
+  const providerKeys = requestedProviderKeys(options, receipt);
+  const aiTransport = receipt?.aiTransport ?? options['ai-transport'] ?? 'direct';
+  const gatewayTransport = aiTransport === GATEWAY_TRANSPORT;
   assertOwnWorkersDevOrigin(explicitOrigin, names.worker);
   assertOriginUnique(ctx, explicitOrigin ?? receipt?.origin);
+  // The management token is needed while the gateway phase is pending, and
+  // is used for the final gateway checks when present.
+  const gatewayPending = gatewayTransport && (!receipt || pending('ai-gateway'));
+  const gatewayApi = gatewayTransport
+    ? gatewayApiFor(ctx, account.id, { requiredFor: gatewayPending ? 'the Cloudflare AI Gateway transport (--ai-transport cloudflare-gateway)' : null })
+    : null;
 
   let artifact = null;
   if (['deploy-initial', 'origin', 'workspace-init', 'bootstrap-clear'].some(pending)) {
@@ -165,6 +211,7 @@ async function runPhases(ctx, { receipt: initialReceipt, fresh, explicitOrigin }
     const queues = await wrangler.listQueues();
     const taken = [names.queue, names.deadLetterQueue].filter((name) => queues.has(name));
     if ((await wrangler.deployments(names.worker)) !== null) taken.unshift(names.worker);
+    if (gatewayTransport && (await gatewayApi.getGateway(names.worker)) !== null) taken.push(`AI Gateway ${names.worker}`);
     if (taken.length > 0) {
       throw refuse(`collision: ${taken.join(', ')} already exist in account ${account.id} and no receipt claims them`, [
         'The installer never adopts unrelated resources.',
@@ -182,9 +229,9 @@ async function runPhases(ctx, { receipt: initialReceipt, fresh, explicitOrigin }
     if (receipt?.secrets?.attemptedAt && receipt.phases['deploy-initial']) {
       ensureConfigFile(ctx, receipt);
       const bound = await wrangler.secretNames(names.worker, ctx.paths.config);
-      alreadyBound = Boolean(bound) && requiredSecretNames(provider).every((name) => bound.has(name));
+      alreadyBound = Boolean(bound) && requiredSecretNames(providerKeys, aiTransport).every((name) => bound.has(name));
     }
-    if (!alreadyBound) secretInput = await collectSecretInput(ctx, receipt, provider);
+    if (!alreadyBound) secretInput = await collectSecretInput(ctx, receipt, providerKeys, aiTransport);
   }
 
   // ---------- identity ----------
@@ -200,6 +247,8 @@ async function runPhases(ctx, { receipt: initialReceipt, fresh, explicitOrigin }
       workspaceId: generateWorkspaceId(),
       jurisdiction: options.jurisdiction,
       provider,
+      providerKeys,
+      aiTransport,
       origin: explicitOrigin ?? '',
       bootstrap: options['import-target'] ? 'recovery' : 'open',
     });
@@ -278,6 +327,26 @@ async function runPhases(ctx, { receipt: initialReceipt, fresh, explicitOrigin }
     saveReceipt(ctx, receipt);
   }
 
+  // ---------- ai-gateway (cloudflare-gateway only) ----------
+  // A Run token is probed before it can be uploaded (gw-final §5): by the
+  // gateway phase, or, when that phase finished in an earlier run, here, so a
+  // resume never binds a token this run did not see accepted.
+  const runToken = secretInput?.supplied?.[GATEWAY_TOKEN_SECRET] ?? null;
+  if (pending('ai-gateway')) {
+    if (!runToken) throw new InstallerError('internal error: the gateway phase needs the Run token from this run\'s protected input');
+    await ensureGateway({ receipt, api: gatewayApi, runToken, save: () => saveReceipt(ctx, receipt), out });
+    markPhase(receipt, 'ai-gateway');
+    saveReceipt(ctx, receipt);
+  } else if (runToken) {
+    const probe = await runGatewayProbe({ receipt, runToken, out });
+    if (!probe.ok) {
+      throw refuse(`the supplied Run token was not accepted by AI Gateway ${receipt.aiGateway.id} as the probe expects; nothing further was changed and no secret was uploaded`, [
+        'Supply a token with AI Gateway Run on this account (dashboard: AI Gateway → the gateway → Create authentication token), then run resume again.',
+      ]);
+    }
+    saveReceipt(ctx, receipt);
+  }
+
   // ---------- config ----------
   if (pending('config')) {
     writeConfig(ctx, receipt);
@@ -319,7 +388,7 @@ async function runPhases(ctx, { receipt: initialReceipt, fresh, explicitOrigin }
   // ---------- secrets ----------
   if (pending('secrets')) {
     ensureConfigFile(ctx, receipt);
-    const required = requiredSecretNames(provider);
+    const required = requiredSecretNames(providerKeys, aiTransport);
     const present = await wrangler.secretNames(names.worker, ctx.paths.config);
     if (present === null) throw new InstallerError(`Worker ${names.worker} was not found while setting secrets; run resume`);
     const have = required.filter((name) => present.has(name));
@@ -346,7 +415,7 @@ async function runPhases(ctx, { receipt: initialReceipt, fresh, explicitOrigin }
         receipt.epochFingerprint = epochFingerprint(epoch);
         receipt.secrets.epochGeneratedAt = now();
       }
-      const values = composeSecretSet({ supplied: secretInput.supplied, provider, epoch });
+      const values = composeSecretSet({ supplied: secretInput.supplied, providerKeys, epoch, aiTransport });
       for (const value of Object.values(values)) registry.add(value);
       receipt.secrets.attemptedAt = now();
       receipt.operatorToken = secretInput.tokenFile
@@ -427,6 +496,7 @@ async function runPhases(ctx, { receipt: initialReceipt, fresh, explicitOrigin }
     out.step(`Waiting for the workspace to initialize under WORKSPACE_BOOTSTRAP=${receipt.bootstrap} at ${workerUrl} (up to ${ctx.waitSeconds}s)`);
     const result = await pollDeployment(workerUrl, {
       waitSeconds: ctx.waitSeconds,
+      aiTransport: receipt.aiTransport,
       accept: (evaluation) => evaluation.status === 'ready' || (held && evaluation.status === 'held-maintenance'),
     });
     if (result.terminal) {
@@ -438,6 +508,9 @@ async function runPhases(ctx, { receipt: initialReceipt, fresh, explicitOrigin }
       throw new InstallerError(`the workspace did not report initialized at ${workerUrl} within ${ctx.waitSeconds}s (${result.status})`, {
         hints: [
           ...(result.errors.length ? [`readiness errors: ${result.errors.join(', ')}`] : []),
+          ...(result.errors.includes('workspace_unconfigured')
+            ? ['workspace_unconfigured: the running version does not see WORKSPACE_ID or the recovery epoch yet (a version from before the secret upload); it clears once the new version serves.']
+            : []),
           'Run resume to continue waiting.',
         ],
       });
@@ -464,6 +537,7 @@ async function runPhases(ctx, { receipt: initialReceipt, fresh, explicitOrigin }
     configPath: ctx.paths.config,
     waitSeconds: ctx.waitSeconds,
     acceptHeld,
+    gatewayApi,
   });
   receipt.lastVerification = summarizeVerification(verification);
   saveReceipt(ctx, receipt);
@@ -486,6 +560,7 @@ async function runPhases(ctx, { receipt: initialReceipt, fresh, explicitOrigin }
     : `Installation ${ctx.install} (${ctx.environment}) is ready.`);
   out.line(`  URL        ${receipt.origin}`);
   out.line(`  Worker     ${names.worker}   Queue ${names.queue}   DLQ ${names.deadLetterQueue}`);
+  out.line(`  AI         ${receipt.aiTransport === GATEWAY_TRANSPORT ? `through Cloudflare AI Gateway ${receipt.aiGateway.id}` : 'direct to each provider'} (default provider ${receipt.provider}; keys ${receipt.providerKeys.join(', ')})`);
   out.line(`  Version    ${receipt.deployments.at(-1)?.commit ?? 'unknown'} (last deploy recorded by this installer)`);
   out.line(`  Receipt    ${ctx.paths.receipt}`);
   if (acceptHeld) out.line('  Next       import the operational backup and activate the recovery epoch (OPS-02/OPS-03).');
@@ -495,6 +570,8 @@ async function runPhases(ctx, { receipt: initialReceipt, fresh, explicitOrigin }
     changed: true,
     origin: receipt.origin,
     names,
+    aiTransport: receipt.aiTransport,
+    aiGateway: receipt.aiGateway?.id ?? null,
     version: receipt.deployments.at(-1)?.commit ?? null,
     receipt: ctx.paths.receipt,
     limitations: verification.limitations,

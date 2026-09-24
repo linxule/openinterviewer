@@ -232,7 +232,7 @@ test('generated identities and secrets have the required shapes', () => {
   const secrets = Array.from({ length: 50 }, generateSecret);
   assert.equal(new Set(secrets).size, 50);
   for (const secret of secrets) assert.match(secret, /^[A-Za-z0-9_-]{43}$/);
-  assert.deepEqual(requiredSecretNames('claude').sort(), [
+  assert.deepEqual(requiredSecretNames(['claude']).sort(), [
     'ADMIN_PASSWORD',
     'ANALYSIS_RECOVERY_EPOCH',
     'ANTHROPIC_API_KEY',
@@ -241,6 +241,7 @@ test('generated identities and secrets have the required shapes', () => {
     'RATE_LIMIT_SALT',
     'SESSION_SECRET',
   ]);
+  assert.deepEqual(requiredSecretNames(['gemini', 'openai', 'openrouter']).slice(-3), ['GEMINI_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY']);
 });
 
 test('the operator token file must live outside the repository and state directory', (t) => {
@@ -339,6 +340,11 @@ test('readiness evaluation distinguishes ready, held, not-ready and Redis leakag
   assert.equal(evaluateProbe({ health: down, readiness: down, mode: down }).status, 'unreachable');
   const terminal = view({ ready: false, errors: ['workspace_identity_mismatch'] });
   assert.equal(evaluateProbe({ health: health({ workspaceStore: false }, 503), readiness: ok(terminal), mode: ok(terminal) }).terminal, 'workspace_identity_mismatch');
+  // A version without its configuration yet settles by itself: not terminal.
+  const unconfigured = view({ ready: false, errors: ['workspace_unconfigured'] });
+  const settling = evaluateProbe({ health: health({ workspaceStore: false }, 503), readiness: ok(unconfigured), mode: ok(unconfigured) });
+  assert.equal(settling.status, 'not-ready');
+  assert.equal(settling.terminal, null);
 
   // Each identity claim is checked on its own: a ready Node, hosted or
   // synchronous deployment is not this installation.

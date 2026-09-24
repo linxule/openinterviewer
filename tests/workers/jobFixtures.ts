@@ -82,15 +82,30 @@ export function studyConfig(studyId: string, provider: AIProviderType, overrides
   };
 }
 
-export function frozenInput(config: StudyConfig, studyRevision: number): FrozenAnalysisInput {
+export function frozenInput(
+  config: StudyConfig,
+  studyRevision: number,
+  disclosedTransport?: 'cloudflare-gateway',
+): FrozenAnalysisInput {
   return {
     inputSchemaVersion: ANALYSIS_INPUT_SCHEMA_VERSION,
     studyConfig: config,
     studyRevision,
     requestedProvider: config.aiProvider as AIProviderType,
     requestedModel: config.aiModel as string,
+    ...(disclosedTransport ? { disclosedTransport } : {}),
   };
 }
+
+/** The Worker env of an installation routed through Cloudflare AI Gateway (RT-11). */
+export const GATEWAY_ENV = {
+  AI_TRANSPORT: 'cloudflare-gateway',
+  CF_AI_GATEWAY_ACCOUNT_ID: '0123456789abcdef0123456789abcdef',
+  CF_AI_GATEWAY_ID: 'oi-workers-test',
+  CF_AI_GATEWAY_TOKEN: 'synthetic-ai-gateway-run-token-0123456789',
+} as const;
+
+export const GATEWAY_BASE = `https://gateway.ai.cloudflare.com/v1/${GATEWAY_ENV.CF_AI_GATEWAY_ACCOUNT_ID}/${GATEWAY_ENV.CF_AI_GATEWAY_ID}`;
 
 /** Delete every row these tests touch, the alarm and recorded consumer contact; restore an open, activated workspace. */
 export async function resetWorkspace(): Promise<void> {
@@ -124,6 +139,8 @@ export type SeededJob = SeededInterview & { jobId: string; generation: number; m
 
 export type SeedOptions = {
   provider?: AIProviderType;
+  /** The transport the participant was shown at consent (absent = direct). */
+  disclosedTransport?: 'cloudflare-gateway';
   /** Interview record overrides (for example a legacy `synthesis` or `analysis`). */
   record?: Record<string, unknown>;
   studyRevision?: number;
@@ -152,6 +169,7 @@ export async function seedInterview(options: SeedOptions = {}): Promise<SeededIn
     completedAt: now,
     status: 'completed',
     studyRevision: revision,
+    ...(options.disclosedTransport ? { consentTransport: options.disclosedTransport } : {}),
     ...options.record,
   };
   await runInDurableObject(workspaceStub(), (_instance, state) => {
@@ -204,7 +222,7 @@ export async function seedJob(options: SeedOptions & { alarmAt?: number } = {}):
         generation: 1,
         jobId,
         recoveryEpoch: testEnv.ANALYSIS_RECOVERY_EPOCH,
-        frozen: frozenInput(seeded.config, revision),
+        frozen: frozenInput(seeded.config, revision, options.disclosedTransport),
         now,
       });
       await armAlarmNoLaterThan(state.storage, options.alarmAt ?? now + HOUR_MS);
@@ -395,12 +413,19 @@ export async function deliver(
 export type ProviderBehavior =
   | { kind: 'success'; synthesis?: unknown; servedModel?: string; routedProvider?: string | null }
   /** `failures` bounds the error responses; later requests succeed. Unbounded when absent. */
-  | { kind: 'status'; status: number; failures?: number }
+  | { kind: 'status'; status: number; failures?: number; body?: unknown }
   | { kind: 'network' }
   | { kind: 'hang' }
   | { kind: 'abort' };
 
-export type ProviderRequest = { provider: AIProviderType; url: string; body: unknown; at: number };
+export type ProviderRequest = {
+  provider: AIProviderType;
+  url: string;
+  body: unknown;
+  at: number;
+  /** Lower-case request header names and values. */
+  headers: Record<string, string>;
+};
 
 /**
  * Sent with every error status. Every locked SDK honours `retry-after-ms`
@@ -419,9 +444,23 @@ export type ProviderFixture = {
   release: () => void;
 };
 
+const GATEWAY_SLUGS: Readonly<Record<string, AIProviderType>> = {
+  'google-ai-studio': 'gemini',
+  anthropic: 'claude',
+  openai: 'openai',
+  openrouter: 'openrouter',
+};
+
+/** A direct provider host, or the fixture installation's own gateway path (RT-11). */
 function providerFor(url: URL): AIProviderType | null {
   for (const [provider, host] of Object.entries(PROVIDER_HOSTS) as Array<[AIProviderType, string]>) {
     if (url.host === host) return provider;
+  }
+  if (url.origin === 'https://gateway.ai.cloudflare.com') {
+    const [, version, account, gateway, slug] = url.pathname.split('/');
+    if (version === 'v1' && account === GATEWAY_ENV.CF_AI_GATEWAY_ACCOUNT_ID && gateway === GATEWAY_ENV.CF_AI_GATEWAY_ID) {
+      return GATEWAY_SLUGS[slug] ?? null;
+    }
   }
   return null;
 }
@@ -494,7 +533,13 @@ export function installProviderFixture(behavior: ProviderBehavior): ProviderFixt
     } catch {
       body = null;
     }
-    fixture.requests.push({ provider, url: `${url.origin}${url.pathname}`, body, at: Date.now() });
+    fixture.requests.push({
+      provider,
+      url: `${url.origin}${url.pathname}`,
+      body,
+      at: Date.now(),
+      headers: Object.fromEntries(request.headers.entries()),
+    });
     const recovered = behavior.kind === 'status' && fixture.requests.length > (behavior.failures ?? Infinity);
     const answer: ProviderBehavior = recovered ? { kind: 'success' } : behavior;
     switch (answer.kind) {
@@ -505,7 +550,7 @@ export function installProviderFixture(behavior: ProviderBehavior): ProviderFixt
       }
       case 'status':
         return Response.json(
-          { error: { message: 'synthetic provider error', type: 'synthetic', code: answer.status } },
+          answer.body ?? { error: { message: 'synthetic provider error', type: 'synthetic', code: answer.status } },
           { status: answer.status, headers: { 'retry-after': '0', 'retry-after-ms': RETRY_AFTER_MS } },
         );
       case 'network':

@@ -1,6 +1,15 @@
 import type { AIProviderType } from '@/types';
 
-export type AITransport = 'direct' | 'gateway';
+/** Node transports: direct native adapters, or Vercel AI Gateway (`gateway`). */
+export type NodeAITransport = 'direct' | 'gateway';
+
+/**
+ * Every transport a deployment can report. `cloudflare-gateway` (native
+ * adapters through Cloudflare AI Gateway) exists on the Cloudflare target
+ * only; the Node resolver below never returns it. The active transport of a
+ * deployment comes from capabilities (`activeAITransport`).
+ */
+export type AITransport = NodeAITransport | 'cloudflare-gateway';
 
 export const GATEWAY_SUPPORTED_PROVIDERS = [
   'gemini',
@@ -10,9 +19,10 @@ export const GATEWAY_SUPPORTED_PROVIDERS = [
 
 export type GatewayProviderType = (typeof GATEWAY_SUPPORTED_PROVIDERS)[number];
 
+/** Node only (capabilities uses it for the Node target); refuses `cloudflare-gateway`. */
 export function resolveAITransport(
   env: NodeJS.ProcessEnv = process.env,
-): AITransport {
+): NodeAITransport {
   const configured = env.AI_TRANSPORT?.trim();
   if (!configured) return 'direct';
   if (configured === 'direct' || configured === 'gateway') return configured;

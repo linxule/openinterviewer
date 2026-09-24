@@ -12,6 +12,11 @@ import {
 import { readBoundedJsonObject } from '@/lib/requestBody';
 import { createRequestId, logRequestFailure } from '@/lib/requestLog';
 import { deploymentNotReadyResponse } from '@/lib/runtime/readinessGate';
+import {
+  currentProviderTransport,
+  disclosedMember,
+  providerNotConfiguredResponse,
+} from '@/lib/transportDisclosure';
 
 const ROUTE = '/api/consent';
 
@@ -70,6 +75,26 @@ export async function POST(request: Request) {
       );
     }
 
+    // Cloudflare (D9): the page states where responses are sent, and the
+    // browser echoes the transport it rendered. Consent is recorded only for
+    // the transport this study uses now; a page rendered for another route
+    // (including an older page that sends none) must be reopened.
+    const current = currentProviderTransport(context, study.config.aiProvider);
+    let disclosure: { disclosedTransport?: 'cloudflare-gateway' } = {};
+    if (current.applies) {
+      if (!current.ok) return providerNotConfiguredResponse();
+      if (parsedBody.value.disclosedTransport !== current.transport) {
+        return NextResponse.json(
+          {
+            code: 'DISCLOSURE_CHANGED',
+            error: 'How this study sends your responses has changed since this page loaded. Reopen the study link to review the updated notice.',
+          },
+          { status: 409 }
+        );
+      }
+      disclosure = disclosedMember(current.transport);
+    }
+
     const recorded = await context.store.recordConsent({
       participantSessionId,
       // Bind the record to the canonical object loaded while authenticating
@@ -78,6 +103,7 @@ export async function POST(request: Request) {
       studyId: study.id,
       studyRevision: study.revision ?? 1,
       consentText: study.config.consentText || '',
+      ...disclosure,
       now: Date.now(),
     });
     if (recorded.status === 'held') {

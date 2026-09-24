@@ -15,6 +15,7 @@ import {
   installationConfigProblems,
   missingInstallationVars,
   parseDeployArgs,
+  transportVarProblems,
   verifyArtifact,
   waivedForDryRun,
 } from '../../scripts/cloudflare/deploy.mjs';
@@ -166,6 +167,51 @@ test('installationConfigProblems combines template drift, required vars and the 
   const drifted = { ...installationConfig(''), compatibility_date: '2000-01-01' };
   assert.deepEqual(installationConfigProblems(template, drifted), ['installation config drifts from wrangler.jsonc in: compatibility_date']);
   assert.deepEqual(installationConfigProblems(template, installationConfig('', { APP_BASE_URL: '' })), ['installation var APP_BASE_URL is empty']);
+});
+
+const GATEWAY_VARS = { AI_TRANSPORT: 'cloudflare-gateway', CF_AI_GATEWAY_ACCOUNT_ID: 'a'.repeat(32), CF_AI_GATEWAY_ID: 'oi-acme' };
+
+// RT-11: the rules of src/lib/providers/endpoint.ts providerRouteErrors, both directions.
+const TRANSPORT_REFUSALS = [
+  ['gateway identifiers on direct', { CF_AI_GATEWAY_ACCOUNT_ID: 'a'.repeat(32), CF_AI_GATEWAY_ID: 'oi-acme' }, /CF_AI_GATEWAY_ACCOUNT_ID and CF_AI_GATEWAY_ID must be empty with AI_TRANSPORT direct/],
+  ['a gateway id alone on direct', { CF_AI_GATEWAY_ID: 'oi-acme' }, /must be empty with AI_TRANSPORT direct/],
+  ['gateway identifiers with an empty AI_TRANSPORT (direct)', { AI_TRANSPORT: '', CF_AI_GATEWAY_ACCOUNT_ID: 'a'.repeat(32) }, /must be empty with AI_TRANSPORT direct/],
+  ['the gateway without identifiers', { AI_TRANSPORT: 'cloudflare-gateway' }, /installation var CF_AI_GATEWAY_ACCOUNT_ID is empty[\s\S]*installation var CF_AI_GATEWAY_ID is empty/],
+  ['the gateway without a gateway id', { ...GATEWAY_VARS, CF_AI_GATEWAY_ID: '' }, /installation var CF_AI_GATEWAY_ID is empty/],
+  ['the gateway with a padded transport and no identifiers', { AI_TRANSPORT: ' cloudflare-gateway ' }, /installation var CF_AI_GATEWAY_ID is empty/],
+  ['the default gateway', { ...GATEWAY_VARS, CF_AI_GATEWAY_ID: 'default' }, /CF_AI_GATEWAY_ID is not a gateway id other than default/],
+  ['a malformed gateway id', { ...GATEWAY_VARS, CF_AI_GATEWAY_ID: 'Oi_Acme' }, /CF_AI_GATEWAY_ID is not a gateway id other than default/],
+  ['an uppercase account id', { ...GATEWAY_VARS, CF_AI_GATEWAY_ACCOUNT_ID: 'A'.repeat(32) }, /CF_AI_GATEWAY_ACCOUNT_ID is not a 32-character lowercase hexadecimal account ID/],
+  ['a padded account id (used unmodified)', { ...GATEWAY_VARS, CF_AI_GATEWAY_ACCOUNT_ID: ` ${'a'.repeat(32)}` }, /CF_AI_GATEWAY_ACCOUNT_ID is not a 32-character/],
+  ['the Vercel gateway transport', { AI_TRANSPORT: 'gateway' }, /installation var AI_TRANSPORT is "gateway"; it must be direct or cloudflare-gateway/],
+];
+
+test('installationConfigProblems refuses AI transport vars the Worker would refuse, and accepts both valid transports', () => {
+  assert.deepEqual(installationConfigProblems(template, installationConfig('')), []);
+  assert.deepEqual(installationConfigProblems(template, installationConfig('', GATEWAY_VARS)), []);
+  assert.deepEqual(transportVarProblems({ AI_TRANSPORT: 'direct', CF_AI_GATEWAY_ACCOUNT_ID: '', CF_AI_GATEWAY_ID: '' }), []);
+  assert.deepEqual(transportVarProblems({}), [], 'unset is direct, as in the Worker');
+  for (const [label, overrides, pattern] of TRANSPORT_REFUSALS) {
+    assert.match(installationConfigProblems(template, installationConfig('', overrides)).join('\n'), pattern, label);
+  }
+});
+
+test('deploy.mjs --check-config and a full deploy refuse a transport mismatch before upload', async (t) => {
+  const fixture = artifactFixture(t);
+  const gateway = await runDeploy(['--install', writeConfig(fixture.root, 'gateway.jsonc', installationConfig('', GATEWAY_VARS)), '--check-config']);
+  assert.equal(gateway.code, 0, gateway.stderr);
+  for (const [label, overrides, pattern] of TRANSPORT_REFUSALS) {
+    const file = writeConfig(fixture.root, 'mismatch.jsonc', installationConfig('', overrides));
+    const checked = await runDeploy(['--install', file, '--check-config']);
+    assert.equal(checked.code, 1, label);
+    assert.match(checked.stderr, pattern, label);
+    assert.match(checked.stderr, /deploy preconditions failed; nothing was uploaded/, label);
+  }
+  const [, overrides, pattern] = TRANSPORT_REFUSALS[0];
+  const full = await runDeploy(['--install', writeConfig(fixture.root, 'mismatch.jsonc', installationConfig('', overrides)), '--artifact', fixture.artifactDir, '--confirm']);
+  assert.equal(full.code, 1);
+  assert.match(full.stderr, pattern);
+  assert.doesNotMatch(full.stdout, /Deploying|Validating/);
 });
 
 test('deploy arguments are strict; --dry-run is the default without --confirm', () => {

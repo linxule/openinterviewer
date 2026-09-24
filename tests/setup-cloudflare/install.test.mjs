@@ -572,6 +572,33 @@ describe('setup:cloudflare origin binding and tool environment', { concurrency: 
     assert.equal(sandbox.state().deploys.length, deploys, 'routing needed no further deploy');
   });
 
+  // Staging 2026-09-24: right after the secret upload the workspace object
+  // briefly ran the version whose env lacked the epoch. The Worker now says
+  // workspace_unconfigured for that, and the installer waits it out.
+  test('workspace-init keeps waiting through workspace_unconfigured and completes once the workspace is ready', async (t) => {
+    const sandbox = await createSandbox(t, { state: { http: { forceNotReady: false, requests: [], workspaceErrors: ['workspace_unconfigured'] } } });
+    const run = await sandbox.run('apply', applyArgs(sandbox), { input: stdinSecrets() });
+    assert.equal(run.code, 0, run.output);
+    assert.doesNotMatch(run.output, /refused initialization/);
+    const receipt = sandbox.receipt();
+    assert.ok(receipt.phases['workspace-init']);
+    assert.ok(receipt.phases.verify);
+    const workerProbes = sandbox.state().http.requests.filter((request) => request.origin === ORIGIN && request.path === '/api/health/ready');
+    assert.ok(workerProbes.length >= 2, 'the unconfigured answer was followed by another probe');
+  });
+
+  test('workspace-init still stops at once on a real identity mismatch', async (t) => {
+    const sandbox = await createSandbox(t, {
+      state: { http: { forceNotReady: false, requests: [], workspaceErrors: ['workspace_identity_mismatch', 'workspace_identity_mismatch'] } },
+    });
+    const run = await sandbox.run('apply', applyArgs(sandbox), { input: stdinSecrets() });
+    assert.equal(run.code, 1, run.output);
+    assert.match(run.stderr, /the workspace refused initialization: workspace_identity_mismatch/);
+    assert.equal(sandbox.receipt().phases['workspace-init'], undefined);
+    const workerProbes = sandbox.state().http.requests.filter((request) => request.origin === ORIGIN && request.path === '/api/health/ready');
+    assert.equal(workerProbes.length, 1, 'no second probe after a terminal code');
+  });
+
   test('verify reports not-ready when the origin and the Worker disagree', async (t) => {
     const origin = 'https://interviews.example.org';
     const sandbox = await createSandbox(t);

@@ -1,7 +1,8 @@
 // Test sandbox for scripts/cloudflare/setup.mjs: a temporary directory with
 // a simulated Cloudflare account (fake wrangler/deploy/git sharing one JSON
-// state file), a fixture release artifact and a local fake origin server.
-// No credentials, no network beyond 127.0.0.1.
+// state file), a fixture release artifact and a local fake origin server that
+// also answers the Cloudflare API's AI Gateway routes and the gateway
+// endpoint. No credentials, no network beyond 127.0.0.1.
 
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -11,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ROOT, parseJsonc, sha256File, sha256Tree } from '../../scripts/cloudflare/lib.mjs';
-import { initialState, readState, writeState } from './fixtures/fake-state.mjs';
+import { digest, initialState, readState, writeState } from './fixtures/fake-state.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 /** Child environment values recorded by the fakes (exempt from file scans). */
@@ -21,6 +22,9 @@ export const SETUP = path.join(ROOT, 'scripts', 'cloudflare', 'setup.mjs');
 
 export const PASSWORD = 'correct-horse-battery-staple-17';
 export const PROVIDER_KEY = 'AIzaFixtureProviderKey-0123456789';
+/** Synthetic AI Gateway credentials: the management token (process env only) and a Run token. */
+export const ADMIN_TOKEN = 'fixture-cf-admin-token-0123456789abcdefghij';
+export const RUN_TOKEN = 'fixture-aig-run-token-0123456789abcdefghijkl';
 
 export function stdinSecrets(overrides = {}) {
   return JSON.stringify({ ADMIN_PASSWORD: PASSWORD, GEMINI_API_KEY: PROVIDER_KEY, ...overrides });
@@ -75,12 +79,26 @@ function simulate(state, origin, pathname) {
   ]) if (!worker.secrets[secret]) errors.push(code);
   const key = PROVIDER_KEYS[vars.AI_PROVIDER];
   if (!key || !worker.secrets[key]) errors.push('missing_ai_provider_key');
+  // RT-11 route rules (src/lib/providers/endpoint.ts providerRouteErrors).
+  const transport = vars.AI_TRANSPORT || 'direct';
+  if (transport === 'cloudflare-gateway') {
+    if (!/^[a-f0-9]{32}$/.test(vars.CF_AI_GATEWAY_ACCOUNT_ID ?? '')) errors.push('invalid_cf_ai_gateway_account_id');
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(vars.CF_AI_GATEWAY_ID ?? '') || vars.CF_AI_GATEWAY_ID === 'default') errors.push('invalid_cf_ai_gateway_id');
+    if (!worker.secrets.CF_AI_GATEWAY_TOKEN) errors.push('missing_cf_ai_gateway_token');
+  } else if (transport !== 'direct') errors.push('invalid_ai_transport');
+  else if (vars.CF_AI_GATEWAY_ACCOUNT_ID || vars.CF_AI_GATEWAY_ID) errors.push('cf_ai_gateway_config_without_transport');
   if (!/^ws_[a-f0-9]{32}$/.test(vars.WORKSPACE_ID ?? '')) errors.push('invalid_workspace_id');
   if (!worker.secrets.ANALYSIS_RECOVERY_EPOCH) errors.push('invalid_analysis_recovery_epoch');
   errors.push(...(state.http.extraErrors ?? []));
   const configuration = errors.length === 0;
+  // `workspaceErrors`: codes the workspace object reports on successive
+  // probes (one per /api/health/ready, which each probe requests first) before
+  // it answers normally, e.g. the version from before the secret upload.
+  if (pathname === '/api/health/ready') state.http.currentWorkspaceError = (state.http.workspaceErrors ?? []).shift() ?? null;
+  const injected = state.http.currentWorkspaceError ?? null;
   let workspaceError = null;
-  if (configuration) {
+  if (configuration && injected) workspaceError = injected;
+  else if (configuration) {
     const objectKey = `${name}|${vars.WORKSPACE_ID}|${vars.WORKSPACE_JURISDICTION}`;
     let object = state.objects[objectKey];
     if (!object && ['open', 'recovery'].includes(vars.WORKSPACE_BOOTSTRAP)) {
@@ -93,7 +111,7 @@ function simulate(state, origin, pathname) {
   }
   const ready = configuration && !workspaceError;
   const publicErrors = configuration ? (workspaceError ? [workspaceError] : []) : errors;
-  const view = { mode: 'standalone', aiTransport: 'direct', oauth: { google: false, github: false }, ready, errors: publicErrors, analysisExecution: 'queued-v2' };
+  const view = { mode: 'standalone', aiTransport: transport, oauth: { google: false, github: false }, ready, errors: publicErrors, analysisExecution: 'queued-v2' };
   if (pathname === '/api/health/ready') {
     return {
       status: ready ? 200 : 503,
@@ -105,10 +123,123 @@ function simulate(state, origin, pathname) {
   return { status: 404, body: { error: 'not found' } };
 }
 
+const API_ORIGIN = 'https://api.cloudflare.com';
+const GATEWAY_ORIGIN = 'https://gateway.ai.cloudflare.com';
+
+/**
+ * One-shot failure of the fake Cloudflare API for `at` ('get', 'create',
+ * 'logs'); `skip: n` lets n matching calls pass first.
+ */
+function takeApiFailure(state, at) {
+  const index = state.gatewayApi.failures.findIndex((entry) => entry.at === at);
+  if (index < 0) return null;
+  const entry = state.gatewayApi.failures[index];
+  if (entry.skip > 0) {
+    entry.skip -= 1;
+    return null;
+  }
+  return state.gatewayApi.failures.splice(index, 1)[0];
+}
+
+const apiError = (status, code) => ({ status, body: { success: false, errors: [{ code, message: `fixture error ${code}` }], messages: [], result: null } });
+
+/**
+ * The Cloudflare API's AI Gateway routes (GET/POST gateways, GET logs), as
+ * documented in the API reference. Records every call (method, path, whether
+ * the management token matched, and a POST body, which holds no secret).
+ * PUT, PATCH and DELETE are recorded and refused: the installer must never send them.
+ */
+function simulateApi(state, request, body) {
+  const url = new URL(request.url, API_ORIGIN);
+  const match = /^\/client\/v4\/accounts\/([^/]+)\/ai-gateway\/gateways(?:\/([^/]+)(\/logs)?)?$/.exec(url.pathname);
+  const presented = /^Bearer (.+)$/.exec(request.headers.authorization ?? '')?.[1] ?? '';
+  const tokenOk = state.gatewayApi.adminTokenDigest !== null && digest(presented) === state.gatewayApi.adminTokenDigest;
+  const call = { method: request.method, path: url.pathname, query: url.search, authorized: tokenOk };
+  if (request.method === 'POST') call.body = JSON.parse(body || 'null');
+  state.gatewayApi.calls.push(call);
+  if (!match) return apiError(404, 7000);
+  if (!tokenOk) return apiError(403, 10000);
+  const [, account, id, logs] = match;
+  if (!state.accounts.some((entry) => entry.id === account)) return apiError(403, 10000);
+  const key = `${account}/${id}`;
+  if (request.method === 'GET') {
+    const failure = takeApiFailure(state, logs ? 'logs' : 'get');
+    if (failure) return apiError(failure.status ?? 503, 99999);
+    const gateway = state.gateways[`${account}/${id}`];
+    if (!gateway) return apiError(404, 7002);
+    if (logs) {
+      const total = state.gatewayApi.logCounts[key] ?? 0;
+      return { status: 200, body: { success: true, result: [], result_info: { page: 1, per_page: 1, count: Math.min(total, 1), total_count: total } } };
+    }
+    return { status: 200, body: { success: true, errors: [], messages: [], result: gateway } };
+  }
+  if (request.method === 'POST' && !id) {
+    const input = call.body ?? {};
+    const failure = takeApiFailure(state, 'create');
+    if (failure?.when === 'before') return apiError(503, 99999);
+    const gatewayKey = `${account}/${input.id}`;
+    if (state.gateways[gatewayKey]) return apiError(409, 7001);
+    const at = new Date().toISOString();
+    // Response fields of the API reference that a new gateway reports unset.
+    state.gateways[gatewayKey] = {
+      ...input,
+      created_at: at,
+      modified_at: at,
+      is_default: false,
+      logpush: false,
+      rate_limiting_technique: 'fixed',
+      store_id: null,
+      workers_ai_billing_mode: 'postpaid',
+      ...state.gatewayApi.createOverrides,
+    };
+    if (failure?.when === 'after') return { status: 0 };
+    return { status: 200, body: { success: true, errors: [], messages: [], result: state.gateways[gatewayKey] } };
+  }
+  return apiError(405, 7003);
+}
+
+/**
+ * The gateway endpoint, as the design expects it to answer a request with no
+ * provider credential (gw-final §5; the exact bodies are a remote gate):
+ * without a valid Run token 401 AiGatewayError 2009; with one, 400
+ * AiGatewayError because a provider key is required. A request carrying a
+ * provider credential would be a provider call: it is recorded as such.
+ */
+function simulateGateway(state, request) {
+  const url = new URL(request.url, GATEWAY_ORIGIN);
+  const [, version, account, id] = url.pathname.split('/');
+  const headers = request.headers;
+  const cfAig = Object.fromEntries(Object.entries(headers).filter(([name]) => name.startsWith('cf-aig-')).map(([name, value]) => [name, name === 'cf-aig-authorization' ? 'redacted' : value]));
+  const presented = /^Bearer (.+)$/.exec(headers['cf-aig-authorization'] ?? '')?.[1] ?? null;
+  const providerCredential = Boolean(headers.authorization || headers['x-api-key'] || headers['x-goog-api-key']);
+  state.gatewayApi.probes.push({ path: url.pathname, method: request.method, cfAig, tokenPresented: presented !== null, providerCredential });
+  const gatewayError = (status, internalCode, message) => ({ status, body: { success: false, result: [], messages: [], name: 'AiGatewayError', httpCode: status, internalCode, message } });
+  if (state.gatewayApi.probeOverride) return state.gatewayApi.probeOverride;
+  const gateway = version === 'v1' ? state.gateways[`${account}/${id}`] : null;
+  if (!gateway) return gatewayError(404, 2001, 'Gateway not found');
+  if (gateway.authentication && (presented === null || !state.gatewayApi.runTokenDigests.includes(digest(presented)))) return gatewayError(401, 2009, 'Unauthorized');
+  if (providerCredential) return { status: 599, body: { error: 'fixture: this request carried a provider credential' } };
+  return gatewayError(400, 2021, 'Provider credentials required');
+}
+
 async function startOrigin(stateFile) {
-  const server = http.createServer((request, response) => {
+  const server = http.createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const body = Buffer.concat(chunks).toString('utf8');
     const state = readState(stateFile);
     const origin = request.headers['x-fake-origin'];
+    if (origin === API_ORIGIN || origin === GATEWAY_ORIGIN) {
+      const result = origin === API_ORIGIN ? simulateApi(state, request, body) : simulateGateway(state, request);
+      writeState(state, stateFile);
+      if (result.status === 0) {
+        request.socket.destroy();
+        return;
+      }
+      response.writeHead(result.status, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(result.body));
+      return;
+    }
     state.http.requests.push({ origin, path: request.url });
     // `down`: nothing answers; `unroutedHosts`: a custom domain not yet attached.
     if (state.http.down || (state.http.unroutedHosts ?? []).includes(new URL(origin).hostname)) {
@@ -273,7 +404,7 @@ export const ALL_SECRET_NAMES = [
  * Secret names may not appear as child environment variable names either.
  */
 export function assertNoSecretLeak(sandbox, runs, extraValues = []) {
-  const values = new Set([PASSWORD, PROVIDER_KEY, ...extraValues]);
+  const values = new Set([PASSWORD, PROVIDER_KEY, ADMIN_TOKEN, RUN_TOKEN, ...extraValues]);
   for (const upload of sandbox.capturedSecrets()) for (const value of Object.values(upload)) values.add(value);
   const exempt = new Set([path.join(sandbox.dir, 'captured-secret-values.ndjson'), path.join(sandbox.dir, ENV_CAPTURE), sandbox.tokenFile]);
   const texts = filesUnder(sandbox.dir)
@@ -284,7 +415,7 @@ export function assertNoSecretLeak(sandbox, runs, extraValues = []) {
   for (const value of values) {
     for (const [where, text] of texts) assert.ok(!text.includes(value), `a secret value leaked into ${where}`);
   }
-  const secretNames = new Set([...ALL_SECRET_NAMES, ...Object.values(PROVIDER_KEYS)]);
+  const secretNames = new Set([...ALL_SECRET_NAMES, ...Object.values(PROVIDER_KEYS), 'CF_AI_GATEWAY_TOKEN', 'CF_AI_GATEWAY_ADMIN_TOKEN']);
   for (const entry of sandbox.state().invocations) {
     for (const name of entry.env) assert.ok(!secretNames.has(name), `${entry.tool} received ${name} in its environment`);
   }
@@ -302,8 +433,11 @@ export function resumeArgs(sandbox, extra = []) {
   return ['--install', 'acme', '--env', 'production', '--operator-token-file', sandbox.tokenFile, '--secrets-stdin', '--yes', ...extra];
 }
 
-/** Mutating fake-account invocations (anything that changes remote state). */
+/** Mutating fake-account invocations and Cloudflare API calls (anything that changes remote state). */
 export function mutations(state) {
-  return state.invocations.filter((entry) => entry.tool === 'deploy'
-    || (entry.tool === 'wrangler' && ((entry.argv[0] === 'queues' && entry.argv[1] === 'create') || (entry.argv[0] === 'secret' && entry.argv[1] === 'bulk'))));
+  return [
+    ...state.invocations.filter((entry) => entry.tool === 'deploy'
+      || (entry.tool === 'wrangler' && ((entry.argv[0] === 'queues' && entry.argv[1] === 'create') || (entry.argv[0] === 'secret' && entry.argv[1] === 'bulk')))),
+    ...(state.gatewayApi?.calls ?? []).filter((call) => call.method !== 'GET'),
+  ];
 }

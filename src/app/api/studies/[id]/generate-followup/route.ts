@@ -23,6 +23,12 @@ import { validateResolvedAggregateSynthesis } from '@/lib/providerValidation';
 import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
 import { providerErrorResponse } from '@/lib/providerErrorResponse';
 import { aggregateProvenance } from '@/lib/synthesisProvenance';
+import {
+  currentProviderTransport,
+  providerNotConfiguredResponse,
+  researcherTransportNotDisclosedResponse,
+  uncoveredCount,
+} from '@/lib/transportDisclosure';
 import { createRequestId, logRequestFailure } from '@/lib/requestLog';
 import { deploymentNotReadyResponse } from '@/lib/runtime/readinessGate';
 import { isDurableWorkspaceStore } from '@/lib/storage/types';
@@ -114,13 +120,21 @@ export async function POST(
     const interviewIds = stored.interviewIds;
 
     const eligibleIds = new Set<string>();
+    // D9 (Cloudflare): the aggregate carries participant quotes, so every
+    // source interview's consent must cover the transport of this call.
+    const current = currentProviderTransport(gated.context, parentStudy.config.aiProvider);
+    if (current.applies && !current.ok) return providerNotConfiguredResponse();
+    const sourceDisclosures: Array<'cloudflare-gateway' | undefined> = [];
     if (isDurableWorkspaceStore(store)) {
       // Only eligibility is needed: page current-revision analyzed interviews,
       // keep ids and stop once every aggregate source has been seen.
       const wanted = new Set(interviewIds);
       const pass = await forEachEligibleAggregateInput(store, parentStudy, page => {
         for (const interview of page) {
-          if (wanted.has(interview.id)) eligibleIds.add(interview.id);
+          if (wanted.has(interview.id) && !eligibleIds.has(interview.id)) {
+            eligibleIds.add(interview.id);
+            sourceDisclosures.push(interview.consentTransport);
+          }
         }
         return eligibleIds.size < wanted.size;
       }, 'follow-up');
@@ -147,6 +161,10 @@ export async function POST(
     if (new Set(interviewIds).size !== interviewIds.length || interviewIds.some(id => !eligibleIds.has(id))) {
       return NextResponse.json({ error: 'Synthesis interview provenance is invalid.' }, { status: 409 });
     }
+    if (current.applies && current.ok) {
+      const uncovered = uncoveredCount(sourceDisclosures, current.transport);
+      if (uncovered > 0) return researcherTransportNotDisclosedResponse(uncovered);
+    }
     const synthesis: AggregateSynthesisResult = {
       studyId: parentStudy.id,
       studyRevision: parentStudy.revision,
@@ -156,6 +174,7 @@ export async function POST(
       requestedAiModel: signedProvenance.requestedAiModel,
       aiModel: signedProvenance.aiModel,
       routedProvider: signedProvenance.routedProvider,
+      ...(signedProvenance.aiTransport ? { aiTransport: signedProvenance.aiTransport } : {}),
       generatedAt: typeof stored.generatedAt === 'number' && Number.isSafeInteger(stored.generatedAt)
         ? stored.generatedAt
         : Date.now(),

@@ -27,6 +27,7 @@ type InitState =
   | { status: 'ready' }
   | { status: 'schema-unsupported' }
   | { status: 'unconfigured' }
+  | { status: 'identity-mismatch' }
   | { status: 'uninitialized' };
 
 export class WorkspaceStore extends DurableObject<WorkspaceEnv> {
@@ -63,8 +64,13 @@ export class WorkspaceStore extends DurableObject<WorkspaceEnv> {
       // jurisdiction or Worker-name drift stays uninitialized and refuses all
       // writes instead of silently becoming an empty writable workspace. An
       // object selected under another name never initializes as this one.
+      //
+      // A missing or malformed WORKSPACE_ID or epoch is reported apart from a
+      // name mismatch: it is what a version running before the installer's
+      // secret upload looks like, and it clears once the configuration
+      // arrives, where a mismatch needs operator repair.
       if (!isValidWorkspaceId(workspaceId) || !isValidRecoveryEpoch(epoch)) return { status: 'unconfigured' };
-      if (this.ctx.id.name !== undefined && this.ctx.id.name !== workspaceId) return { status: 'unconfigured' };
+      if (this.ctx.id.name !== undefined && this.ctx.id.name !== workspaceId) return { status: 'identity-mismatch' };
       if (bootstrap !== 'open' && bootstrap !== 'recovery') return { status: 'uninitialized' };
       const now = Date.now();
       sql.exec(
@@ -89,6 +95,7 @@ export class WorkspaceStore extends DurableObject<WorkspaceEnv> {
     if (this.initState.status === 'ready') return null;
     if (this.initState.status === 'schema-unsupported') return 'schema-unsupported';
     if (this.initState.status === 'uninitialized') return 'workspace-uninitialized';
+    if (this.initState.status === 'unconfigured') return 'workspace-unconfigured';
     return 'workspace-identity-mismatch';
   }
 

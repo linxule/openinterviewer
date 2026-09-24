@@ -15,6 +15,8 @@ export const CLOCK_SKEW_MS = 5 * 60_000;
 export const WRANGLER_CALL_MS = 120_000;
 /** Upper bound of one deploy.mjs run (tools.mjs runDeploy). */
 export const DEPLOY_CALL_MS = 15 * 60_000;
+/** Upper bound of one Cloudflare API call (gateway.mjs GATEWAY_API_TIMEOUT_MS). */
+export const GATEWAY_CALL_MS = 30_000;
 
 const DEPLOY_MESSAGE = /^openinterviewer ([0-9a-f]{12})$/;
 
@@ -100,4 +102,33 @@ export function workerOwnership(deployments, record) {
     }
   }
   return { owned: true, reason: 'every deployment falls inside a recorded deploy attempt' };
+}
+
+/**
+ * The installation's AI Gateway (D13). Adopted only on evidence: this
+ * installation observed it before (same `created_at` as recorded), or its
+ * `created_at` falls inside a recorded create attempt (a lost reply). The
+ * `default` gateway is never this installation's.
+ *
+ * @param {{ id?: string, created_at?: string, is_default?: boolean }} gateway from the Cloudflare API
+ * @param {object | undefined | null} record receipt.aiGateway
+ * @returns {{ owned: boolean, reason: string }}
+ */
+export function gatewayOwnership(gateway, record) {
+  if (gateway?.id === 'default' || gateway?.is_default === true) return { owned: false, reason: 'it is the account\'s default gateway' };
+  if (!record) return { owned: false, reason: 'no receipt record: this installation never tried to create it' };
+  if (record.observedAt) {
+    return record.createdAt && gateway?.created_at === record.createdAt
+      ? { owned: true, reason: 'observed after this installation created it' }
+      : { owned: false, reason: `created ${gateway?.created_at || 'at an unknown time'}, not ${record.createdAt} as recorded (deleted and recreated?)` };
+  }
+  const attempts = record.attempts ?? [];
+  if (attempts.length === 0) return { owned: false, reason: 'no recorded create attempt' };
+  if (withinAttempt(gateway?.created_at, attempts, GATEWAY_CALL_MS)) {
+    return { owned: true, reason: `created ${gateway.created_at}, during a recorded create attempt` };
+  }
+  return {
+    owned: false,
+    reason: `created ${gateway?.created_at || 'at an unknown time'}, outside every recorded create attempt (${attempts.map((entry) => entry.at).join(', ')})`,
+  };
 }

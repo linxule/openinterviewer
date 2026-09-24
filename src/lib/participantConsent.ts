@@ -11,6 +11,11 @@ export interface ParticipantConsentRecord {
   studyRevision: number;
   consentHash: string;
   acceptedAt: number;
+  /**
+   * The provider transport shown to the participant (Cloudflare only; absent
+   * means direct). Only the Durable Object store records it; Node never does.
+   */
+  disclosedTransport?: 'cloudflare-gateway';
 }
 
 export type RecordParticipantConsentResult =

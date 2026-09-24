@@ -13,9 +13,9 @@ import { NextResponse } from 'next/server';
 import { getHostedResearcherIdentity, getRequestContext } from '@/lib/researcherContext';
 import { isHostedMode } from '@/lib/mode';
 import { getResearcherByIdChecked, toResearcherProfile } from '@/lib/platformDb';
-import { isGatewayAuthConfigured, resolveAITransport } from '@/lib/aiTransport';
+import { isGatewayAuthConfigured } from '@/lib/aiTransport';
 import { logRequestFailure } from '@/lib/requestLog';
-import { isCloudflareTarget, resolveCapabilities } from '@/lib/runtime/capabilities';
+import { activeAITransport, isCloudflareTarget, resolveCapabilities } from '@/lib/runtime/capabilities';
 
 function notConfigured(error?: string) {
   return NextResponse.json(
@@ -36,8 +36,11 @@ async function cloudflareStatus() {
       ? NextResponse.json({ error: error || 'Service unavailable' }, { status: statusCode, headers: { 'Cache-Control': 'no-store' } })
       : notConfigured(error);
   }
+  // `target` tells the researcher UI to offer only the providers whose keys
+  // this installation binds (any subset of the four; RT-05).
   return NextResponse.json({
     mode: 'standalone',
+    target: 'cloudflare',
     aiTransport: resolved.capabilities.transport,
     storage: resolved.capabilities.storage,
     hasAnthropicKey: !!context.anthropicApiKey,
@@ -92,7 +95,7 @@ export async function GET() {
     // Return researcher-specific key status from context
     // In standalone mode, these come from env vars
     // In hosted mode, these come from the researcher's decrypted credentials
-    const aiTransport = resolveAITransport();
+    const aiTransport = activeAITransport();
     const gatewayReady = aiTransport === 'gateway' && isGatewayAuthConfigured();
     const status = {
       mode: 'standalone',

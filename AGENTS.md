@@ -48,7 +48,7 @@ The sample-workspace seed is not the public demo. `/demo` is component-memory-on
 - Runtime target, capabilities, Worker invocation context, admission identity and the not-ready gate: `src/lib/runtime/`
 - Operator credential and routes (Cloudflare only): `src/lib/operatorAuth.ts`, `src/app/api/operator/`
 
-`standalone` uses one administrator session plus deployment-owned Upstash credentials and either direct provider keys or Vercel AI Gateway/OIDC. Cloudflare standalone (`DEPLOYMENT_TARGET=cloudflare`) uses one administrator session, one SQLite-backed Durable Object per installation for every research record, a Queue for analysis, and direct provider keys only; it has no Redis, Gateway or hosted mode, and its validation is production-strict whatever `NODE_ENV` reports. `hosted` uses OAuth accounts, a platform control-plane Redis database, encrypted researcher BYOS credentials, direct native provider adapters, and a distinct researcher-owned Redis database for research records.
+`standalone` uses one administrator session plus deployment-owned Upstash credentials and either direct provider keys or Vercel AI Gateway/OIDC. Cloudflare standalone (`DEPLOYMENT_TARGET=cloudflare`) uses one administrator session, one SQLite-backed Durable Object per installation for every research record, a Queue for analysis, and the installation's own provider keys, sent directly or through the installation's Cloudflare AI Gateway (`AI_TRANSPORT=cloudflare-gateway`, RT-11); it has no Redis, Vercel AI Gateway or hosted mode, and its validation is production-strict whatever `NODE_ENV` reports. `hosted` uses OAuth accounts, a platform control-plane Redis database, encrypted researcher BYOS credentials, direct native provider adapters, and a distinct researcher-owned Redis database for research records.
 
 ### Storage and tenancy
 
@@ -81,12 +81,14 @@ Hosted study create/delete is a durable cross-database operation. Preserve the o
 
 - Opaque participant links: `src/lib/participantLinks.ts`
 - Server-recorded consent: `src/lib/participantConsent.ts`
+- Consent coverage of the provider transport (Cloudflare; disclosed transport vs the current route): `src/lib/transportDisclosure.ts`
 - Canonical study loading: `src/lib/canonicalStudy.ts`
 - Save validation and deferred analysis: `src/lib/interviewSubmission.ts`, `src/lib/interviewAnalysis.ts`, `src/lib/analysisState.ts`
 - Server-generated synthesis provenance: `src/lib/synthesisProvenance.ts`
 - Bounded request parsing: `src/lib/requestBody.ts`
 - Providers and prompts: `src/lib/providers/`, `src/lib/prompts/`, `src/lib/ai.ts`, `src/lib/interviewerManner.ts`
 - Transport selection and Gateway model mapping: `src/lib/aiTransport.ts`, `src/lib/providers/gateway.ts`
+- Cloudflare provider endpoints (explicit per-adapter endpoints, direct or Cloudflare AI Gateway routes with the exact `cf-aig-*` header set, route resolution shared by readiness, the fetch path and the Queue consumer, refused SDK environment overrides, `covers()`): `src/lib/providers/endpoint.ts`
 - Provider result validation/errors: `src/lib/providerValidation.ts`, `src/lib/providerErrors.ts`
 - Evidence citation matching (render-time classification; verdicts never stored): `src/lib/evidence.ts`
 - Participant and hosted platform limits: `src/lib/rateLimit.ts`, `src/lib/platformAiRateLimit.ts`
@@ -106,6 +108,7 @@ On Cloudflare the participant sequence is the same, with analysis queued by the 
 - Study revision, link status, ownership, consent, rate limits, and storage uncertainty fail closed.
 - Hosted provider resolution must never fall back to platform-owner API keys.
 - Hosted researcher BYOS remains on `AI_TRANSPORT=direct`. Standalone Gateway requests pin one creator endpoint, configure no model fallback, and keep actual execution provenance.
+- Cloudflare AI Gateway requests go only to the installation's gateway on each provider's native path, carry exactly the six `cf-aig-*` headers, never fall back to direct on a malformed configuration, and record `aiTransport`. A provider call carrying participant content runs only when the transport disclosed at consent covers the current one (direct always does).
 - User-provided Redis URLs remain restricted to HTTPS Upstash hosts; preserve bounded validation deadlines.
 - AI/provider failure is an error. Never substitute a plausible research response, synthesis, or greeting.
 - Completion persistence and study mutation remain atomic and idempotent under retries and concurrency.

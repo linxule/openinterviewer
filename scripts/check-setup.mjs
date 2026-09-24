@@ -33,6 +33,34 @@ const AI_PROVIDERS = {
   openrouter: { key: 'OPENROUTER_API_KEY', label: 'OpenRouter' },
 };
 const SECRET_PLACEHOLDERS = /^(?:change[-_ ]?me|replace[-_ ]?me|your[-_ ]|example|todo|secret$)/i;
+// SDK environment defaults the Cloudflare Worker refuses whatever their value
+// (SDK_ENV_OVERRIDE_NAMES in src/lib/providers/endpoint.ts; a unit test keeps
+// the two lists equal).
+export const CLOUDFLARE_SDK_OVERRIDE_NAMES = [
+  'ANTHROPIC_BASE_URL',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_CUSTOM_HEADERS',
+  'ANTHROPIC_LOG',
+  'OPENAI_BASE_URL',
+  'OPENAI_CUSTOM_HEADERS',
+  'OPENAI_LOG',
+  'OPENAI_ORG_ID',
+  'OPENAI_PROJECT_ID',
+  'GOOGLE_GEMINI_BASE_URL',
+  'GOOGLE_VERTEX_BASE_URL',
+  'GOOGLE_GENAI_USE_VERTEXAI',
+  'GOOGLE_GENAI_USE_ENTERPRISE',
+  'GOOGLE_GENAI_API_VERSION',
+  'GOOGLE_GENAI_USER_PROJECT',
+  'GOOGLE_GENAI_DEBUG',
+  'GOOGLE_CLOUD_PROJECT',
+  'GOOGLE_CLOUD_LOCATION',
+  'OPENROUTER_BASE_URL',
+  'OPENROUTER_DEBUG',
+  'OPENROUTER_HTTP_REFERER',
+  'OPENROUTER_APP_TITLE',
+  'OPENROUTER_APP_CATEGORIES',
+];
 
 function check(status, code, message) {
   return { status, code, message };
@@ -293,8 +321,13 @@ const CLOUDFLARE_SECRET_NAMES = [
   'RATE_LIMIT_SALT',
   'OPERATOR_TOKEN',
   'ANALYSIS_RECOVERY_EPOCH',
+  'CF_AI_GATEWAY_TOKEN',
   ...Object.values(AI_PROVIDERS).map((provider) => provider.key),
 ];
+// RT-11 (same rules as providerRouteErrors in src/lib/providers/endpoint.ts).
+const CF_AI_GATEWAY_ACCOUNT_ID_PATTERN = /^[a-f0-9]{32}$/;
+const CF_AI_GATEWAY_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+const MIN_CF_AI_GATEWAY_TOKEN_LENGTH = 32;
 
 function isRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -468,7 +501,52 @@ function validateWranglerConfig(checks, wrangler) {
   }
 }
 
-function validateCloudflareSetup(checks, env, selectedMode, wrangler) {
+// RT-11: with cloudflare-gateway, the installation's AI Gateway identifiers
+// (exact values) and an independent Run token; on direct, no identifiers. A
+// bound token is allowed on direct, where it is never sent.
+function validateCloudflareGateway(checks, env, aiTransport) {
+  const accountId = typeof env.CF_AI_GATEWAY_ACCOUNT_ID === 'string' ? env.CF_AI_GATEWAY_ACCOUNT_ID : '';
+  const gatewayId = typeof env.CF_AI_GATEWAY_ID === 'string' ? env.CF_AI_GATEWAY_ID : '';
+  const token = typeof env.CF_AI_GATEWAY_TOKEN === 'string' ? env.CF_AI_GATEWAY_TOKEN : '';
+  if (token) {
+    if (looksLikePlaceholder(token)) {
+      checks.push(check('error', 'env.CF_AI_GATEWAY_TOKEN.placeholder', 'CF_AI_GATEWAY_TOKEN still contains a placeholder.'));
+    }
+    const others = ['ADMIN_PASSWORD', 'SESSION_SECRET', 'PARTICIPANT_TOKEN_SECRET', 'RATE_LIMIT_SALT', 'OPERATOR_TOKEN',
+      ...Object.values(AI_PROVIDERS).map((provider) => provider.key)];
+    if (others.some((name) => env[name] === token)) {
+      checks.push(check('error', 'env.CF_AI_GATEWAY_TOKEN.independent', 'CF_AI_GATEWAY_TOKEN must differ from every other secret and provider key.'));
+    }
+  }
+  if (aiTransport !== 'cloudflare-gateway') {
+    if (accountId || gatewayId) {
+      checks.push(check(
+        'error',
+        'env.cloudflare.gatewayWithoutTransport',
+        'CF_AI_GATEWAY_ACCOUNT_ID and CF_AI_GATEWAY_ID must be empty unless AI_TRANSPORT is cloudflare-gateway.',
+      ));
+    }
+    return;
+  }
+  if (!CF_AI_GATEWAY_ACCOUNT_ID_PATTERN.test(accountId)) {
+    checks.push(check('error', 'env.CF_AI_GATEWAY_ACCOUNT_ID.invalid', 'CF_AI_GATEWAY_ACCOUNT_ID must be the 32-character lowercase hex Cloudflare account ID.'));
+  }
+  if (!CF_AI_GATEWAY_ID_PATTERN.test(gatewayId) || gatewayId === 'default') {
+    checks.push(check('error', 'env.CF_AI_GATEWAY_ID.invalid', 'CF_AI_GATEWAY_ID must name this installation\'s own gateway (lowercase letters, digits and hyphens; not default).'));
+  }
+  if (!token) {
+    checks.push(check('error', 'env.CF_AI_GATEWAY_TOKEN.missing', 'CF_AI_GATEWAY_TOKEN (the AI Gateway Run token) is required with cloudflare-gateway.'));
+  } else if (token.length < MIN_CF_AI_GATEWAY_TOKEN_LENGTH || /\s/.test(token)) {
+    checks.push(check('error', 'env.CF_AI_GATEWAY_TOKEN.weak', `CF_AI_GATEWAY_TOKEN must be at least ${MIN_CF_AI_GATEWAY_TOKEN_LENGTH} characters with no whitespace.`));
+  }
+  if (!checks.some((item) => item.status === 'error' && item.code.startsWith('env.CF_AI_GATEWAY'))) {
+    checks.push(check('pass', 'env.cloudflare.gateway.valid', 'Provider requests go through this installation\'s Cloudflare AI Gateway.'));
+  }
+}
+
+// `deploymentEnv` is what the Worker can receive: wrangler vars plus the env
+// file(s), never the shell running this check.
+function validateCloudflareSetup(checks, env, selectedMode, wrangler, deploymentEnv = env) {
   if (selectedMode === 'hosted' || env.DEPLOYMENT_MODE === 'hosted') {
     checks.push(check(
       'error',
@@ -500,12 +578,13 @@ function validateCloudflareSetup(checks, env, selectedMode, wrangler) {
 
   const aiTransport = isPresent(env, 'AI_TRANSPORT') ? env.AI_TRANSPORT.trim() : 'direct';
   if (aiTransport === 'gateway') {
-    checks.push(check('error', 'env.cloudflare.gateway', 'Cloudflare uses direct provider transport; Vercel AI Gateway is not supported.'));
-  } else if (aiTransport !== 'direct') {
-    checks.push(check('error', 'env.AI_TRANSPORT.invalid', 'AI_TRANSPORT must be direct on Cloudflare.'));
+    checks.push(check('error', 'env.cloudflare.gateway', 'Vercel AI Gateway is Node-only; use AI_TRANSPORT=cloudflare-gateway for Cloudflare AI Gateway.'));
+  } else if (aiTransport !== 'direct' && aiTransport !== 'cloudflare-gateway') {
+    checks.push(check('error', 'env.AI_TRANSPORT.invalid', 'AI_TRANSPORT must be direct or cloudflare-gateway on Cloudflare.'));
   } else {
-    checks.push(check('pass', 'env.AI_TRANSPORT.valid', 'AI transport is direct.'));
+    checks.push(check('pass', 'env.AI_TRANSPORT.valid', `AI transport is ${aiTransport}.`));
   }
+  validateCloudflareGateway(checks, env, aiTransport);
 
   const selectedProvider = isPresent(env, 'AI_PROVIDER') ? env.AI_PROVIDER.trim() : 'gemini';
   const providerConfig = Object.prototype.hasOwnProperty.call(AI_PROVIDERS, selectedProvider)
@@ -519,10 +598,43 @@ function validateCloudflareSetup(checks, env, selectedMode, wrangler) {
       `env.AI_PROVIDER.${selectedProvider}`,
       `AI_PROVIDER selects ${providerConfig.label} but ${providerConfig.key} is missing.`,
     ));
-  } else if (looksLikePlaceholder(env[providerConfig.key])) {
-    checks.push(check('error', `env.${providerConfig.key}.placeholder`, `${providerConfig.key} still contains a placeholder.`));
-  } else {
+  } else if (!looksLikePlaceholder(env[providerConfig.key])) {
     checks.push(check('pass', 'env.aiProvider.present', `The ${providerConfig.label} provider key is configured.`));
+  }
+  // AI_PROVIDER is the default provider; any of the four keys may be bound
+  // besides it, and every bound key is held to the placeholder rule.
+  const boundProviders = [];
+  const unboundProviders = [];
+  for (const [id, provider] of Object.entries(AI_PROVIDERS)) {
+    if (!isPresent(env, provider.key)) {
+      unboundProviders.push(id);
+      continue;
+    }
+    boundProviders.push(id);
+    if (looksLikePlaceholder(env[provider.key])) {
+      checks.push(check('error', `env.${provider.key}.placeholder`, `${provider.key} still contains a placeholder.`));
+    }
+  }
+  checks.push(check(
+    'pass',
+    'env.aiProviderKeys',
+    `Provider keys bound: ${boundProviders.join(', ') || 'none'}; not bound: ${unboundProviders.join(', ') || 'none'}.`,
+  ));
+  const overrides = CLOUDFLARE_SDK_OVERRIDE_NAMES.filter((name) => typeof deploymentEnv[name] === 'string');
+  if (overrides.length > 0) {
+    checks.push(check(
+      'error',
+      'env.cloudflare.sdkOverride',
+      `Remove ${overrides.join(', ')}: on Cloudflare every provider SDK gets an explicit endpoint, and SDK environment overrides (base URLs, auth tokens, custom headers, logging, Vertex selection) are refused.`,
+    ));
+  }
+  const shellOnly = CLOUDFLARE_SDK_OVERRIDE_NAMES.filter((name) => typeof env[name] === 'string' && typeof deploymentEnv[name] !== 'string');
+  if (shellOnly.length > 0) {
+    checks.push(check(
+      'warn',
+      'env.cloudflare.sdkOverride.shell',
+      `${shellOnly.join(', ')} ${shellOnly.length === 1 ? 'is' : 'are'} set only in the shell running this check, not in wrangler vars or an env file; the Worker never receives this shell's environment, so ${shellOnly.length === 1 ? 'it is' : 'they are'} not refused. Declare an override as a var or secret and it is.`,
+    ));
   }
 
   validateFormat(checks, env, 'WORKSPACE_ID', WORKSPACE_ID_PATTERN, 'ws_ followed by 32 lowercase hex characters');
@@ -584,6 +696,7 @@ export function validateSetup({
   mode,
   production = false,
   env = {},
+  configEnv,
   nodeVersion = process.versions.node,
   target,
   wrangler,
@@ -635,7 +748,9 @@ export function validateSetup({
     // Wrangler vars are the deployed non-secret configuration; a local
     // .dev.vars (or other env file) overrides them, as `wrangler dev` does.
     const effectiveEnv = { ...stringVars(wrangler?.config), ...env };
-    validateCloudflareSetup(checks, effectiveEnv, selectedMode, wrangler);
+    // Without configEnv (the env files alone), `env` is the configuration.
+    const deploymentEnv = { ...stringVars(wrangler?.config), ...(configEnv ?? env) };
+    validateCloudflareSetup(checks, effectiveEnv, selectedMode, wrangler, deploymentEnv);
     // The Cloudflare target is always production-strict.
     return {
       mode: selectedMode,
@@ -683,7 +798,13 @@ export function validateSetup({
     const aiTransport = isPresent(env, 'AI_TRANSPORT') ? env.AI_TRANSPORT.trim() : 'direct';
     const selectedProvider = isPresent(env, 'AI_PROVIDER') ? env.AI_PROVIDER.trim() : 'gemini';
     const providerConfig = AI_PROVIDERS[selectedProvider];
-    if (aiTransport !== 'direct' && aiTransport !== 'gateway') {
+    if (aiTransport === 'cloudflare-gateway') {
+      checks.push(check(
+        'error',
+        'env.AI_TRANSPORT.cloudflare_only',
+        'AI_TRANSPORT=cloudflare-gateway is available only with DEPLOYMENT_TARGET=cloudflare; on Node use direct or gateway.',
+      ));
+    } else if (aiTransport !== 'direct' && aiTransport !== 'gateway') {
       checks.push(check('error', 'env.AI_TRANSPORT.invalid', 'AI_TRANSPORT must be direct or gateway.'));
     } else {
       checks.push(check('pass', 'env.AI_TRANSPORT.valid', `AI transport is ${aiTransport}.`));
@@ -907,7 +1028,9 @@ function loadLocalEnvironment(cwd, envFile) {
   // An explicitly requested file is an isolated, deterministic audit target.
   // Without --env-file, process env has the same highest precedence it has in
   // the running Next.js process.
-  return { env: envFile ? loaded : { ...loaded, ...process.env }, sources };
+  // configEnv is the files alone: the Cloudflare SDK-override check reads
+  // only what can reach the Worker.
+  return { env: envFile ? loaded : { ...loaded, ...process.env }, configEnv: loaded, sources };
 }
 
 function loadWranglerConfig(cwd, configPath) {
@@ -942,7 +1065,10 @@ Options:
                                  of Next.js local files
   --wrangler-config PATH         Wrangler configuration to check (default for the
                                  cloudflare target: wrangler.jsonc); its vars are merged
-                                 beneath the environment, as wrangler dev does
+                                 beneath the environment, as wrangler dev does.
+                                 Cloudflare SDK overrides are refused only from
+                                 wrangler vars and env files; one set only in
+                                 this shell is reported as a warning
   --json                         Emit redacted machine-readable JSON
   --help                         Show this help
 
@@ -961,7 +1087,7 @@ if (isMain(import.meta)) {
       printHelp();
       process.exit(0);
     }
-    const { env, sources } = loadLocalEnvironment(process.cwd(), args.envFile);
+    const { env, configEnv, sources } = loadLocalEnvironment(process.cwd(), args.envFile);
     let target = args.target || env.DEPLOYMENT_TARGET || undefined;
     let wrangler;
     if (args.wranglerConfig || target === 'cloudflare') {
@@ -975,6 +1101,7 @@ if (isMain(import.meta)) {
       target,
       production: args.production || env.NODE_ENV === 'production',
       env,
+      configEnv,
       wrangler,
     });
     if (args.json) {

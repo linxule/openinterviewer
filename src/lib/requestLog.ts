@@ -18,6 +18,8 @@ export const REQUEST_LOG_ALLOWLIST = [
   'durationMs',
   'refsOffered',
   'refsLocated',
+  'transport',
+  'origin',
 ] as const;
 
 export const REQUEST_LOG_EVENT_ALLOWLIST = [
@@ -66,6 +68,8 @@ export const REQUEST_LOG_REASON_ALLOWLIST = [
   'workspace-identity-mismatch',
   'message-invalid',
   'provider-key-missing',
+  'provider-route-invalid',
+  'transport-not-disclosed',
 ] as const;
 
 export type RequestLogField = (typeof REQUEST_LOG_ALLOWLIST)[number];
@@ -125,6 +129,13 @@ function sanitizeField(field: string, value: unknown): string | number | boolean
   }
   if (field === 'status' || field === 'durationMs' || field === 'ts') {
     return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+  }
+  if (field === 'transport') {
+    return value === 'direct' || value === 'cloudflare-gateway' ? value : undefined;
+  }
+  if (field === 'origin') {
+    // Only the gateway tag (D12): a provider failure answered by AI Gateway itself.
+    return value === 'gateway' ? value : undefined;
   }
   if (field === 'refsOffered' || field === 'refsLocated') {
     // Counts only, ever (ADR-003): a string here could carry participant speech.

@@ -61,6 +61,13 @@ export type WorkspaceHoldReason =
   | 'schema-unsupported'
   | 'workspace-identity-mismatch'
   | 'workspace-uninitialized'
+  /**
+   * The running version lacks a valid WORKSPACE_ID or recovery epoch, so a
+   * fresh object cannot initialize yet (for example the version before the
+   * installer's secret upload). Distinct from an identity mismatch: supplying
+   * the configuration resolves it without operator repair.
+   */
+  | 'workspace-unconfigured'
   | 'recovery-epoch-mismatch';
 
 export type StoreReadiness =
@@ -140,6 +147,12 @@ export type ConsentBinding = {
   studyId: string;
   studyRevision: number;
   consentText: string;
+  /**
+   * recordConsent only, durable store only: the transport the participant was
+   * shown (absent = direct). Part of the record's identity: a replay with
+   * another value is a conflict. The Redis store never receives it.
+   */
+  disclosedTransport?: 'cloudflare-gateway';
 };
 
 export type RecordConsentOutcome = RecordParticipantConsentResult | { status: 'held'; reason: WorkspaceHoldReason };

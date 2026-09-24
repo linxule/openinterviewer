@@ -105,6 +105,7 @@ const HOLD_REASONS: ReadonlyArray<WorkspaceHoldReason> = [
   'schema-unsupported',
   'workspace-identity-mismatch',
   'workspace-uninitialized',
+  'workspace-unconfigured',
   'recovery-epoch-mismatch',
 ];
 
@@ -114,6 +115,7 @@ const LOGGED: Record<WorkspaceHoldReason, string> = {
   'schema-unsupported': 'schema-unsupported',
   'workspace-identity-mismatch': 'workspace-identity-mismatch',
   'workspace-uninitialized': 'not-configured',
+  'workspace-unconfigured': 'not-configured',
   'recovery-epoch-mismatch': 'epoch-mismatch',
 };
 
@@ -386,7 +388,7 @@ const CASES: HeldCase[] = [
     name: 'consent (record)',
     route: '/api/consent',
     hold: writeHold('recordConsent'),
-    call: async () => consentPOST(await participantRequest('/api/consent', { studyId: STUDY_ID })),
+    call: async () => consentPOST(await participantRequest('/api/consent', { studyId: STUDY_ID, disclosedTransport: 'direct' })),
     heldRpc: 'recordConsent',
     copy: CONSENT_COPY,
   },
@@ -508,7 +510,7 @@ const CASES: HeldCase[] = [
     heldRpc: 'readiness',
     copy: RESEARCHER_COPY,
     // Reads continue in every maintenance state and under an epoch hold.
-    reasons: ['schema-unsupported', 'workspace-identity-mismatch', 'workspace-uninitialized'],
+    reasons: ['schema-unsupported', 'workspace-identity-mismatch', 'workspace-uninitialized', 'workspace-unconfigured'],
   },
   {
     name: 'create study',

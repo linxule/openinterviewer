@@ -26,6 +26,19 @@ export function initialState(overrides = {}) {
     git: { commit: '1'.repeat(40), dirty: false },
     http: { forceNotReady: false, requests: [] },
     objects: {},
+    // Cloudflare API (AI Gateway) and gateway endpoint, answered by the fake
+    // origin server in helpers.mjs. Token values are held as digests only.
+    gateways: {},
+    gatewayApi: {
+      adminTokenDigest: null,
+      runTokenDigests: [],
+      calls: [],
+      probes: [],
+      failures: [],
+      createOverrides: {},
+      logCounts: {},
+      probeOverride: null,
+    },
     ...overrides,
   };
 }

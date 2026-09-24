@@ -74,6 +74,9 @@ describe('setup:cloudflare config', { concurrency: 4 }, () => {
       worker: deployed.name,
       appBaseUrl: deployed.vars.APP_BASE_URL,
       provider: 'gemini',
+      providerKeys: ['gemini'],
+      aiTransport: 'direct',
+      aiGateway: null,
     });
     assert.deepEqual(sandbox.config(), deployed);
     assert.deepEqual(remote(sandbox), before);

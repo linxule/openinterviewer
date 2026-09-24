@@ -11,6 +11,10 @@ src/lib/runtime/            portable (no Workers imports), used by Node and Work
   workerInvocation.ts       per-invocation Worker env + admission identity accessor (RT-05, RT-07)
   clientAddress.ts          IP normalization and Cloudflare/Node identity adapters (RT-07)
   readinessGate.ts          not-ready gate for mutating and provider routes on Cloudflare (F10)
+src/lib/providers/endpoint.ts   Cloudflare provider routes: explicit per-adapter endpoints, direct or Cloudflare AI
+                            Gateway (RT-11), the exact cf-aig-* header set, refused SDK environment overrides,
+                            covers(); shared by readiness, the fetch path and the Queue consumer
+src/lib/transportDisclosure.ts  consent coverage of the current provider transport on participant and researcher routes
 src/lib/storage/            backend-neutral domain boundary
   types.ts                  WorkspaceStorePort and per-operation result unions
   redis.ts                  Redis implementation wrapping kv.ts / participantLinks.ts / … (Node only)
@@ -58,7 +62,7 @@ Rules:
 | --- | --- | --- | --- | --- |
 | node | standalone | direct \| gateway | `redis` | `synchronous` |
 | node | hosted | direct | `redis-byos` | `synchronous` |
-| cloudflare | standalone | direct | `workspace-do` | `queued-v2` |
+| cloudflare | standalone | direct \| cloudflare-gateway | `workspace-do` | `queued-v2` |
 
 `cloudflare` is production-strict: its validation never consults `NODE_ENV`. Evidence: in the Worker, `process.env.NODE_ENV` is undefined at runtime for aliased reads (OpenNext only replaces the literal expression), so `mode.ts`, `appBaseUrl.ts` and `hostedConfig.ts` would otherwise treat a Worker as development and fail open. On Cloudflare a missing `DEPLOYMENT_MODE`, `APP_BASE_URL` or HTTPS origin is an error.
 
@@ -66,16 +70,38 @@ Cloudflare configuration (non-secret `vars` unless noted):
 
 | Name | Purpose |
 | --- | --- |
-| `DEPLOYMENT_TARGET=cloudflare`, `DEPLOYMENT_MODE=standalone`, `AI_TRANSPORT=direct` | capability selection |
+| `DEPLOYMENT_TARGET=cloudflare`, `DEPLOYMENT_MODE=standalone`, `AI_TRANSPORT=direct\|cloudflare-gateway` | capability selection (RT-11: `cloudflare-gateway` sends each provider request through the installation's own Cloudflare AI Gateway) |
+| `CF_AI_GATEWAY_ACCOUNT_ID`, `CF_AI_GATEWAY_ID` | with `cloudflare-gateway`: the account (32 hex) and the installation's gateway (the Worker name, never `default`); empty on direct. The installer provisions the gateway (SETUP-08, INSTALLER.md) |
 | `APP_BASE_URL` | stable HTTPS origin (workers.dev allowed) |
 | `AI_PROVIDER` | the installation's default provider (sample seed, legacy studies) |
 | `WORKSPACE_ID` | stable installation workspace identity, `ws_` + 32 hex; selects the DO by name |
 | `WORKSPACE_JURISDICTION` | `eu`, `fedramp` or empty; applied in every stub lookup |
 | `WORKSPACE_BOOTSTRAP` | `open` or `recovery` only while the installer initializes a fresh object; empty otherwise. `deploy.mjs` accepts a set value only with `--bootstrap`, which the installer passes for its initial, origin and workspace-init deploys; the CI promotion never does |
-| secrets | `ADMIN_PASSWORD` (16 characters minimum; at most a 1 KiB sign-in body, §6), `SESSION_SECRET`, `PARTICIPANT_TOKEN_SECRET`, `RATE_LIMIT_SALT`, `OPERATOR_TOKEN`, the selected provider key, and `ANALYSIS_RECOVERY_EPOCH` (`ep_` + 32 hex). The epoch's value is not sensitive. It is a secret binding so that `wrangler rollback` to a version from before a rotation lists it as a changed secret and asks for confirmation. That prompt is a warning, not a guard: it defaults to yes and is answered yes automatically without a TTY or in CI (RUNBOOK OPS-03) |
+| secrets | `ADMIN_PASSWORD` (16 characters minimum; at most a 1 KiB sign-in body, §6), `SESSION_SECRET`, `PARTICIPANT_TOKEN_SECRET`, `RATE_LIMIT_SALT`, `OPERATOR_TOKEN`, each bound provider key (any of the four; the `AI_PROVIDER` key is required), `CF_AI_GATEWAY_TOKEN` (the AI Gateway Run token, required with `cloudflare-gateway`, allowed but never sent on direct), and `ANALYSIS_RECOVERY_EPOCH` (`ep_` + 32 hex). The epoch's value is not sensitive. It is a secret binding so that `wrangler rollback` to a version from before a rotation lists it as a changed secret and asks for confirmation. That prompt is a warning, not a guard: it defaults to yes and is answered yes automatically without a TTY or in CI (RUNBOOK OPS-03) |
 | bindings | `WORKSPACE_STORE` (DO), `ANALYSIS_QUEUE` (producer) |
 
 Readiness: `/api/config/readiness` keeps its 200 contract and gains `analysisExecution`; `/api/health/ready` returns 503 when configuration, bindings or the bounded (2 s) DO readiness RPC fail. Cloudflare health adds `checks.workspaceStore` and `checks.analysisQueue` (binding presence only) and never reports Redis. Readiness never dispatches, writes or calls a provider.
+
+### Cloudflare AI Gateway transport (RT-11)
+
+Owner amendment, 24 September 2026 (design record gw-final, decisions D1–D14). Every departure and every live fact still unconfirmed is in [DEVIATIONS.md](evidence/DEVIATIONS.md).
+
+| Decision | Implementation |
+| --- | --- |
+| D1 Transport value | `AI_TRANSPORT=cloudflare-gateway` on the Cloudflare target only. Vercel `gateway` stays Node-only (`unsupported_cloudflare_transport`); Node refuses `cloudflare-gateway` (`invalid_ai_transport`, check-setup `env.AI_TRANSPORT.cloudflare_only`). |
+| D2 One source of truth | `activeAITransport()` in `src/lib/runtime/capabilities.ts`; Node callers keep their previous rule. |
+| D3, D4 Route | The four native adapters, each on its provider-native path under `https://gateway.ai.cloudflare.com/v1/{CF_AI_GATEWAY_ACCOUNT_ID}/{CF_AI_GATEWAY_ID}/{google-ai-studio,anthropic,openai,openrouter}`. Code builds the URL from validated identifiers; there is no configurable URL and no unified, universal or dynamic route. |
+| D5 Explicit endpoints | On Cloudflare every adapter, direct too, gets an explicit endpoint and credential options; 23 SDK environment names are refused (`provider_sdk_env_override`). |
+| D6 Headers | Exactly `cf-aig-authorization`, `cf-aig-collect-log: false`, `cf-aig-collect-log-payload: false`, `cf-aig-skip-cache: true`, `cf-aig-max-attempts: 1`, `cf-aig-no-wholesale: true`; none on direct. Anthropic and OpenAI get a `fetch` wrapper and OpenRouter a `beforeRequest` hook that replace any other `cf-aig-*` header. |
+| D7, D13 Gateway | One per installation (id = the Worker name, never `default`), created by the installer's `ai-gateway` phase with authentication on, logs, caching and retries off and `byok_only`, adopted only on recorded evidence, never updated or deleted (SETUP-08, [INSTALLER.md](INSTALLER.md#ai-gateway-policy)). |
+| D8 Keys | Provider keys stay Worker secrets sent on each request; no stored gateway keys and no Unified Billing. The Run token `CF_AI_GATEWAY_TOKEN` is a separate secret, independent of every other one. |
+| D9 Consent | The link exchange discloses `effectiveTransport(route, provider)`; consent, the saved interview (`consentTransport`) and each frozen analysis input (`disclosedTransport`) record it. A provider call carrying participant content runs only when `covers(disclosed, current)`: the current route is direct or equals the disclosed one (`src/lib/transportDisclosure.ts`, the Queue consumer and the object). |
+| D10 Key set | Any subset of the four keys; `AI_PROVIDER` is the default provider and its key is required. |
+| D11 Provenance | `aiTransport: 'cloudflare-gateway'` on interview, aggregate and follow-up provenance, from the endpoint the adapter used. The served model still comes from the response body. |
+| D12 Errors | Classification unchanged; `provider.failure` logs add `origin: 'gateway'` for an `AiGatewayError` body. |
+| D14 Gemini seam | `effectiveTransport(route, provider)` returns the route's transport for every provider today; it is the place to keep Gemini direct if the S1 gate fails. |
+
+The Queue consumer checks the capability, the route and consent coverage before the start marker; a failed check finishes the generation failed/provider with zero provider requests (`provider-route-invalid`, `transport-not-disclosed`). There is no fallback from the gateway to direct.
 
 ## 3. Worker entry, invocation context and identity (RT-02, RT-05, RT-07, RT-10)
 

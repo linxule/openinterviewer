@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { useStore } from '@/store';
+import { migratedTransport, useStore } from '@/store';
 import { makeStudyConfig } from '../fixtures/models';
 
 /**
@@ -102,9 +102,29 @@ describe('participant session isolation', () => {
     expect(useStore.getState()).not.toHaveProperty('participantToken');
     expect(useStore.getState().participantSessionHandle).toBe('participant-handle-a-123456');
     const migrated = JSON.parse(sessionStorage.getItem('research-tool-storage') || '{}');
-    expect(migrated.version).toBe(5);
+    expect(migrated.version).toBe(6);
     expect(migrated.state).not.toHaveProperty('participantToken');
+    // Before v6 only direct and Vercel gateway existed: a missing value was direct.
     expect(migrated.state.aiTransport).toBe('direct');
+  });
+
+  it.each(['direct', 'gateway', 'cloudflare-gateway'] as const)('v6 migration keeps the known transport %s', async (transport) => {
+    sessionStorage.setItem('research-tool-storage', JSON.stringify({
+      version: 5,
+      state: { viewMode: 'participant', aiTransport: transport, participantSessionHandle: 'participant-handle-a-123456' },
+    }));
+
+    await useStore.persist.rehydrate();
+
+    expect(useStore.getState().aiTransport).toBe(transport);
+  });
+
+  it('the transport migration never turns an unknown value from v6 on into a transport', () => {
+    expect(migratedTransport('carrier-pigeon', 6)).toBeNull();
+    expect(migratedTransport(undefined, 6)).toBeNull();
+    expect(migratedTransport('cloudflare-gateway', 6)).toBe('cloudflare-gateway');
+    // A v5 client never wrote cloudflare-gateway; its unknown values meant direct.
+    expect(migratedTransport('carrier-pigeon', 5)).toBe('direct');
   });
 
   it('keeps real participant and researcher preview modes distinct', () => {

@@ -194,8 +194,14 @@ export async function POST(request: Request) {
     // persistence. Redis keeps its synchronous `after()` analysis.
     const durable = isDurableWorkspaceStore(context.store);
     let initialAnalysis: PersistCompletedInterviewInput['initialAnalysis'];
+    // The transport disclosed at consent (Cloudflare; absent = direct) travels
+    // with the record and the initial generation (D9). Saving makes no
+    // provider call, so it is never refused for coverage.
+    const consentTransport = consentRecord!.disclosedTransport === 'cloudflare-gateway'
+      ? 'cloudflare-gateway' as const
+      : undefined;
     if (durable) {
-      const frozen = frozenAnalysisInput(canonical.study);
+      const frozen = frozenAnalysisInput(canonical.study, consentTransport);
       if (!frozen.ok) return frozen.response;
       initialAnalysis = frozen.input;
     }
@@ -232,6 +238,7 @@ export async function POST(request: Request) {
       studyRevision: canonical.study.revision ?? 1,
       consentHash: consentRecord!.consentHash,
       consentAcceptedAt: consentRecord!.acceptedAt,
+      ...(consentTransport ? { consentTransport } : {}),
       // The researcher's own choice, at the revision this session is pinned
       // to. Never from the body: see interviewSubmission.ts's explicit field
       // copy, which drops any client-asserted conducting model.
@@ -258,6 +265,8 @@ export async function POST(request: Request) {
       createdAt: clientData.createdAt ?? null,
       consentHash: consentRecord!.consentHash,
       consentAcceptedAt: consentRecord!.acceptedAt,
+      // Only when present, so a direct fingerprint is unchanged.
+      ...(consentTransport ? { consentTransport } : {}),
       conductedByProvider: canonical.study.config.aiProvider,
       conductedByModel: canonical.study.config.aiModel,
       ...(canonical.study.config.interviewerInstructions !== undefined

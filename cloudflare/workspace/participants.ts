@@ -279,7 +279,8 @@ function isValidConsentInput(input: Rpc.ConsentInput | undefined): input is Rpc.
     && isRevision(input.studyRevision)
     && isHex64(input.consentHash)
     && isSafeTime(input.now)
-    && input.now > 0;
+    && input.now > 0
+    && (input.disclosedTransport === undefined || input.disclosedTransport === 'cloudflare-gateway');
 }
 
 function parseConsentRecord(json: string): ParticipantConsentRecord | null {
@@ -300,6 +301,8 @@ function parseConsentRecord(json: string): ParticipantConsentRecord | null {
     || !isHex64(parsed.consentHash)
     || !isSafeTime(parsed.acceptedAt)
     || parsed.acceptedAt <= 0
+    // Absent (direct, every older record) or the exact literal.
+    || (parsed.disclosedTransport !== undefined && parsed.disclosedTransport !== 'cloudflare-gateway')
   ) {
     return null;
   }
@@ -345,9 +348,14 @@ export async function recordConsent(ws: WorkspaceContext, input: Rpc.ConsentInpu
         return { status: 'conflict' };
       }
       // First writer wins: a replay returns the stored record unchanged and
-      // never renews its acceptance time or its absolute expiry.
+      // never renews its acceptance time or its absolute expiry. The
+      // disclosed transport is part of what was agreed to, so a replay under
+      // another disclosure is a conflict (the participant reopens the link).
       if (existing !== 'absent') {
-        return consentMatches(existing, input) ? { status: 'accepted', consent: existing } : { status: 'conflict' };
+        return consentMatches(existing, input)
+          && (existing.disclosedTransport ?? null) === (input.disclosedTransport ?? null)
+          ? { status: 'accepted', consent: existing }
+          : { status: 'conflict' };
       }
       // The store also refuses consent to a study revision that no longer exists.
       const row = readStudyRow(ws, input.studyId);
@@ -360,6 +368,7 @@ export async function recordConsent(ws: WorkspaceContext, input: Rpc.ConsentInpu
         studyRevision: input.studyRevision,
         consentHash: input.consentHash,
         acceptedAt: input.now,
+        ...(input.disclosedTransport === 'cloudflare-gateway' ? { disclosedTransport: input.disclosedTransport } : {}),
       };
       ws.sql.exec(
         `INSERT INTO consents (session_digest, study_id, record_json, expires_at) VALUES (?, ?, ?, ?)

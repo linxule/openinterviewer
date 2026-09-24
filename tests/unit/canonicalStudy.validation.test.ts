@@ -146,6 +146,7 @@ describe('held durable workspace responses (OPS-01)', () => {
     ['recovery-epoch-mismatch', 'epoch-mismatch'],
     ['workspace-identity-mismatch', 'workspace-identity-mismatch'],
     ['workspace-uninitialized', 'not-configured'],
+    ['workspace-unconfigured', 'not-configured'],
     ['schema-unsupported', 'schema-unsupported'],
   ] as const)('OPS-01: %s is reported publicly only as workspace-unavailable', async (reason, logged) => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);

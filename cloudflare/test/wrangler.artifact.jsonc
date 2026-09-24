@@ -16,6 +16,8 @@
     "DEPLOYMENT_MODE": "standalone",
     "AI_TRANSPORT": "direct",
     "AI_PROVIDER": "openai",
+    "CF_AI_GATEWAY_ACCOUNT_ID": "",
+    "CF_AI_GATEWAY_ID": "",
     "APP_BASE_URL": "https://workflow.example.test",
     "WORKSPACE_ID": "ws_0000000000000000000000000000a001",
     "WORKSPACE_JURISDICTION": "",
