@@ -78,12 +78,15 @@ export async function POST(request: Request) {
     // Cloudflare (D9): the page states where responses are sent, and the
     // browser echoes the transport it rendered. Consent is recorded only for
     // the transport this study uses now; a page rendered for another route
-    // (including an older page that sends none) must be reopened.
+    // must be reopened. A page from before this echo existed sends none: on
+    // Cloudflare those releases were direct-only, so it disclosed direct
+    // (accepted on a direct installation, refused on a gateway one), which
+    // keeps a deploy from turning away participants mid-consent.
     const current = currentProviderTransport(context, study.config.aiProvider);
     let disclosure: { disclosedTransport?: 'cloudflare-gateway' } = {};
     if (current.applies) {
       if (!current.ok) return providerNotConfiguredResponse();
-      if (parsedBody.value.disclosedTransport !== current.transport) {
+      if ((parsedBody.value.disclosedTransport ?? 'direct') !== current.transport) {
         return NextResponse.json(
           {
             code: 'DISCLOSURE_CHANGED',

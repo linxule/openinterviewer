@@ -970,6 +970,21 @@ describe('Cloudflare AI Gateway disclosure on participant routes (RT-11, D9)', (
     expect(rpcInputs('recordConsent')[0]).not.toHaveProperty('disclosedTransport');
   });
 
+  it('a direct installation accepts a page from before the transport echo (it could only have disclosed direct)', async () => {
+    handlers.recordConsent = () => acceptedConsent;
+    expect((await consentPOST(await participantRequest('/api/consent', { studyId: STUDY_ID }))).status).toBe(200);
+    expect(rpcInputs('recordConsent')[0]).not.toHaveProperty('disclosedTransport');
+  });
+
+  it('a gateway installation refuses a page from before the transport echo', async () => {
+    useGateway();
+    handlers.recordConsent = () => gatewayConsent;
+    const stale = await consentPOST(await participantRequest('/api/consent', { studyId: STUDY_ID }));
+    expect(stale.status).toBe(409);
+    await expect(stale.json()).resolves.toMatchObject({ code: 'DISCLOSURE_CHANGED' });
+    expect(rpcMethods()).not.toContain('recordConsent');
+  });
+
   it('greeting and interview refuse an uncovered consent before admission and before any adapter', async () => {
     useGateway();
     for (const [call, path, body] of [[greetingPOST, '/api/greeting', {}], [interviewPOST, '/api/interview', interviewBody]] as const) {

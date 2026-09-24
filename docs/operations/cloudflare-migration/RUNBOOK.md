@@ -70,7 +70,7 @@ There is no fallback: with any of these codes no participant or researcher provi
 The transport disclosed at consent is recorded with the consent, the saved interview and each analysis generation. A provider call that carries participant content runs only when the current route is direct or equals the disclosed one:
 
 - after switching to `cloudflare-gateway`, sessions consented under direct get 409 `TRANSPORT_NOT_DISCLOSED` on greeting and interview (the participant reopens the link and sees the new notice); their save still succeeds; queued jobs of direct-consented interviews finish failed/provider (`transport-not-disclosed`) with zero requests, and researcher retry, aggregate and follow-up that include them are refused with 409. Switch back to direct to analyze them;
-- a consent page rendered for another transport (including an open tab from before the release) gets 409 `DISCLOSURE_CHANGED` and must be reopened;
+- a consent page rendered for another transport gets 409 `DISCLOSURE_CHANGED` and must be reopened. A page from before this release sends no transport; it could only have disclosed direct, so a direct installation accepts it and a gateway installation refuses it (verified on staging 2026-09-24: before this rule, a tab left open during an update to this release got a spurious 409);
 - switching to direct is always covered.
 
 Drain first (`draining`, wait for no pending/claimed/started jobs and no active sessions, up to the 4-hour consent lifetime), then change the transport, then `open`. The sample workspace's seeded interviews carry no disclosure, so its aggregate is refused on the gateway.
