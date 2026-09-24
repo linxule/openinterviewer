@@ -264,6 +264,8 @@ function pendingProblem(receipt, pending) {
       return pending.from !== receipt.aiTransport || pending.to === pending.from || !AI_TRANSPORTS.includes(pending.to ?? '');
     case 'rotate-ai-gateway-token':
       return !receipt.aiGateway?.observedAt;
+    case 'rotate-admin-password':
+      return false;
     default:
       return true;
   }
@@ -300,6 +302,14 @@ function pendingRefusal(pending) {
           'The bound value may already be the new token or still the old one; supplying the new token again settles it.',
         ],
       });
+    case 'rotate-admin-password':
+      return new InstallerError(`rotating the administrator password (ADMIN_PASSWORD), started at ${pending.startedAt}, has not finished`, {
+        exitCode: REFUSED,
+        hints: [
+          'Finish it first: update --rotate-admin-password --yes with the new password.',
+          'The bound value may already be the new password or still the old one; supplying the new password again settles it.',
+        ],
+      });
     default:
       return new InstallerError(`rotating the ${pending.provider} key, started at ${pending.startedAt}, has not finished`, {
         exitCode: REFUSED,
@@ -314,7 +324,7 @@ function pendingRefusal(pending) {
 /**
  * A change that writes remote state outside apply (update --change-provider,
  * --add-provider-key, --rotate-provider-key, --change-ai-transport,
- * --rotate-ai-gateway-token) is recorded here before its
+ * --rotate-ai-gateway-token, --rotate-admin-password) is recorded here before its
  * first remote write and cleared once it is observed. While it is set, only
  * the update that finishes it (`finishes(pending)` true) may run; returns
  * the pending record.

@@ -52,7 +52,7 @@ import { printVerification, summarizeVerification } from './report.mjs';
 const refuse = (message, hints = []) => new InstallerError(message, { exitCode: REFUSED, hints });
 const now = () => new Date().toISOString();
 
-const UPDATE_ONLY_OPTIONS = ['change-provider', 'add-provider-key', 'rotate-provider-key', 'change-ai-transport', 'rotate-ai-gateway-token'];
+const UPDATE_ONLY_OPTIONS = ['change-provider', 'add-provider-key', 'rotate-provider-key', 'change-ai-transport', 'rotate-ai-gateway-token', 'rotate-admin-password'];
 
 /**
  * The provider keys to bind: the receipt's on resume, otherwise
@@ -68,7 +68,7 @@ function requestedProviderKeys(options, receipt) {
 function checkArguments(ctx, receipt) {
   const { options } = ctx;
   for (const name of UPDATE_ONLY_OPTIONS) {
-    if (options[name] !== undefined) throw refuse(`--${name} is an update option; apply and resume never change provider keys, the provider or the AI transport`);
+    if (options[name] !== undefined) throw refuse(`--${name} is an update option; apply and resume never change provider keys, the provider, the AI transport or the administrator password`);
   }
   if (options.provider !== undefined) validateProvider(options.provider);
   if (options['ai-transport'] !== undefined) validateAiTransport(options['ai-transport']);
