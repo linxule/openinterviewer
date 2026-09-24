@@ -3,14 +3,18 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import { useStore } from '@/store';
 import { makeStudyConfig } from '../fixtures/models';
 
-// The router never completes a navigation: every route change stays in flight,
-// as it does on a slow network between router.replace() and the new page.
+// The hand-over never completes: the document navigation stays in flight, as
+// it does on a slow network between location.replace() and the new page. The
+// client router must not be used at all (it would send the link code in its
+// Next-Url header), so its mock records any call.
 const navigation = vi.hoisted(() => ({ replace: vi.fn(), push: vi.fn() }));
+const handover = vi.hoisted(() => ({ leaveLinkPage: vi.fn() }));
 
 vi.mock('next/navigation', () => ({
   useParams: () => ({ token: 'link-code-under-test' }),
   useRouter: () => navigation,
 }));
+vi.mock('@/lib/participantLinkHandover', () => handover);
 
 import ParticipantPage from '@/app/p/[token]/page';
 
@@ -32,6 +36,7 @@ beforeEach(() => {
   useStore.setState(useStore.getInitialState(), true);
   navigation.replace.mockReset();
   navigation.push.mockReset();
+  handover.leaveLinkPage.mockReset();
 });
 
 afterEach(() => {
@@ -46,7 +51,7 @@ describe('participant link page during a delayed route change', () => {
     page.unmount();
     useStore.getState().beginParticipantSession(makeStudyConfig({ id: 'new-session' }), 'new-session-handle');
     await act(async () => { answer(resolvedLink()); });
-    expect(navigation.replace).not.toHaveBeenCalled();
+    expect(handover.leaveLinkPage).not.toHaveBeenCalled();
     expect(useStore.getState().participantSessionHandle).toBe('new-session-handle');
   });
 
@@ -56,7 +61,9 @@ describe('participant link page during a delayed route change', () => {
 
     render(<ParticipantPage />);
 
-    await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith('/consent'));
+    await waitFor(() => expect(handover.leaveLinkPage).toHaveBeenCalledTimes(1));
+    expect(navigation.replace).not.toHaveBeenCalled();
+    expect(navigation.push).not.toHaveBeenCalled();
     expect(useStore.getState()).toMatchObject({ currentStep: 'consent', viewMode: 'participant' });
     expect(screen.getByRole('status')).toHaveTextContent('Loading interview...');
     expect(screen.queryByRole('button', { name: /I consent/i })).not.toBeInTheDocument();
@@ -67,7 +74,7 @@ describe('participant link page during a delayed route change', () => {
     expect(screen.queryByLabelText('Your response')).not.toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent('Loading interview...');
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith('/api/generate-link?token=link-code-under-test');
+    expect(fetchMock).toHaveBeenCalledWith('/api/generate-link?token=link-code-under-test', { referrerPolicy: 'no-referrer' });
   });
 
   it('shows the link error and never navigates when the link does not resolve', async () => {
@@ -79,7 +86,7 @@ describe('participant link page during a delayed route change', () => {
     render(<ParticipantPage />);
 
     expect(await screen.findByText('Invalid or expired link')).toBeInTheDocument();
-    expect(navigation.replace).not.toHaveBeenCalled();
+    expect(handover.leaveLinkPage).not.toHaveBeenCalled();
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 });
@@ -90,7 +97,9 @@ describe('participant link page transport disclosure (RT-11)', () => {
 
     render(<ParticipantPage />);
 
-    await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith('/consent'));
+    await waitFor(() => expect(handover.leaveLinkPage).toHaveBeenCalledTimes(1));
+    expect(navigation.replace).not.toHaveBeenCalled();
+    expect(navigation.push).not.toHaveBeenCalled();
     expect(useStore.getState().aiTransport).toBe(transport);
   });
 
@@ -100,7 +109,16 @@ describe('participant link page transport disclosure (RT-11)', () => {
     render(<ParticipantPage />);
 
     expect(await screen.findByText('This study could not confirm how your responses are sent')).toBeInTheDocument();
-    expect(navigation.replace).not.toHaveBeenCalled();
+    expect(handover.leaveLinkPage).not.toHaveBeenCalled();
     expect(useStore.getState().participantSessionHandle).toBeNull();
+  });
+});
+
+describe('participant link hand-over', () => {
+  it('is a document navigation to /consent', async () => {
+    const actual = await vi.importActual<typeof import('@/lib/participantLinkHandover')>('@/lib/participantLinkHandover');
+    const location = { replace: vi.fn() };
+    actual.leaveLinkPage(location);
+    expect(location.replace).toHaveBeenCalledWith('/consent');
   });
 });

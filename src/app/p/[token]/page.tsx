@@ -1,11 +1,12 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
 import { useStore } from '@/store';
 import { StudyConfig } from '@/types';
 import { Verbatim } from '@/components/ui';
 import type { AITransport } from '@/lib/aiTransport';
+import { leaveLinkPage } from '@/lib/participantLinkHandover';
 
 /** The exchange's transport; anything but the three known values (including none) is null. */
 function participantTransport(value: unknown): AITransport | null {
@@ -17,10 +18,16 @@ function participantTransport(value: unknown): AITransport | null {
  * an interview step itself: a step shown here while the route change is still
  * in flight would be replaced by the destination page's own copy, discarding
  * whatever the participant had typed and repeating its mount-time requests.
+ *
+ * The link code must not leave this page in a request header (RT-10: request
+ * headers reach live Worker logs, where only the URL is redacted). The
+ * document is served with `Referrer-Policy: no-referrer` (next.config.js,
+ * ./layout.tsx), the exchange fetch sets it again, and the hand-over is a
+ * document navigation: the client router would send the current path in its
+ * `Next-Url` header. The session survives it in sessionStorage (src/store.ts).
  */
 export default function ParticipantPage() {
   const params = useParams();
-  const router = useRouter();
   const linkCode = params.token as string;
 
   const beginParticipantSession = useStore((state) => state.beginParticipantSession);
@@ -38,7 +45,9 @@ export default function ParticipantPage() {
       }
 
       try {
-        const response = await fetch(`/api/generate-link?token=${encodeURIComponent(linkCode)}`);
+        const response = await fetch(`/api/generate-link?token=${encodeURIComponent(linkCode)}`, {
+          referrerPolicy: 'no-referrer',
+        });
         const result = await response.json();
         if (cancelled) return;
 
@@ -68,8 +77,8 @@ export default function ParticipantPage() {
           resolvedLink.sessionHandle,
           aiTransport,
         );
-        // Stay on the loading view until /consent replaces this page.
-        router.replace('/consent');
+        // Stay on the loading view until /consent replaces this document.
+        leaveLinkPage();
       } catch (err) {
         if (cancelled) return;
         console.error('Error loading study from participant link:', err);
@@ -79,7 +88,7 @@ export default function ParticipantPage() {
 
     loadStudyFromLink();
     return () => { cancelled = true; };
-  }, [linkCode, beginParticipantSession, router]);
+  }, [linkCode, beginParticipantSession]);
 
   if (error) {
     return (
