@@ -129,7 +129,11 @@ export class AnalysisStatusPoller {
     this.status = adoptAnalysisStatus(this.status, incoming);
     if (suggestedMs !== undefined) this.suggestion = suggestedMs;
     if (!isActiveAnalysis(this.status) && this.phase !== 'idle') {
+      // Nothing is left to check: an outstanding read, and any earlier read
+      // failure, no longer describe this interview.
       this.clearTimer();
+      this.abortInFlight();
+      this.error = null;
       this.phase = 'settled';
     }
     this.emit();
@@ -222,7 +226,7 @@ export class AnalysisStatusPoller {
     } catch {
       result = unexpectedReadFailure;
     }
-    // Superseded by dispose() or a new session: drop the answer.
+    // Superseded by dispose(), a new session or a settling seed(): drop the answer.
     if (this.disposed || this.inFlight !== controller) return;
     this.inFlight = null;
     this.clearReadTimer();
@@ -248,8 +252,6 @@ export class AnalysisStatusPoller {
     this.readTimer = null;
     if (this.disposed || this.inFlight !== controller) return;
     this.abortInFlight();
-    // seed() already settled the poller on a confirmed outcome: the read no longer matters.
-    if (this.phase !== 'reading') return;
     if (this.deadline !== null && environmentSuspended()) {
       // As for a read lost to going hidden/offline: the return reads once.
       this.phase = 'paused';

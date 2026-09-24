@@ -400,6 +400,97 @@ describe('AnalysisStatusPoller (API-03)', () => {
     expect(last()).toMatchObject({ phase: 'settled', error: null });
   });
 
+  function controlledReads() {
+    const pending: {
+      signal: AbortSignal;
+      resolve: (result: AnalysisStatusResult) => void;
+      reject: (reason: unknown) => void;
+    }[] = [];
+    const read = vi.fn((signal: AbortSignal) => new Promise<AnalysisStatusResult>((resolve, reject) => {
+      pending.push({ signal, resolve, reject });
+    }));
+    return { read, pending };
+  }
+
+  const complete3: ConfirmedAnalysis = { status: 'complete', generation: 3 };
+  const superseded: [string, (read: ReturnType<typeof controlledReads>['pending'][number]) => void][] = [
+    ['rejects', (read) => read.reject(new Error('socket closed'))],
+    ['answers with a failure', (read) => read.resolve(unavailable)],
+    ['answers with a network failure', (read) => read.resolve({ ...unavailable, kind: 'network' })],
+    ['answers with older pending work', (read) => read.resolve(pending3)],
+    ['answers with a newer generation', (read) => read.resolve(ok({ status: 'pending', generation: 4, phase: 'queued' }))],
+  ];
+
+  it.each(superseded)(
+    'API-03: a read outstanding when a stored outcome settles the poller is aborted, and a late one that %s changes nothing',
+    async (_label, answer) => {
+      const { read, pending } = controlledReads();
+      const { poller, snapshots, last } = makePoller(read);
+      poller.start();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(last().phase).toBe('reading');
+
+      poller.seed(complete3);
+      expect(last()).toMatchObject({ phase: 'settled', error: null, status: complete3 });
+      const emitted = snapshots.length;
+
+      answer(pending[0]);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(poller.snapshot()).toMatchObject({ phase: 'settled', error: null, status: complete3 });
+      expect(snapshots).toHaveLength(emitted);
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(pending[0].signal.aborted).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it('API-03: a refresh right after a settling seed reads at once, and the superseded read cannot touch it', async () => {
+    const { read, pending } = controlledReads();
+    const { poller, last } = makePoller(read);
+    poller.start();
+    await vi.advanceTimersByTimeAsync(2_000);
+    poller.seed(complete3);
+
+    poller.refresh();
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(pending[1].signal.aborted).toBe(false);
+    expect(last().phase).toBe('reading');
+
+    pending[0].reject(new Error('socket closed'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(last()).toMatchObject({ phase: 'reading', error: null });
+
+    pending[1].resolve(ok({ status: 'complete', generation: 3 }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(last()).toMatchObject({ phase: 'settled', error: null, status: complete3 });
+  });
+
+  it('API-03: a stored outcome clears an earlier read failure', async () => {
+    const read = vi.fn<(signal: AbortSignal) => Promise<AnalysisStatusResult>>().mockResolvedValueOnce(unavailable);
+    const { poller, last } = makePoller(read);
+    poller.start();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(last()).toMatchObject({ phase: 'halted', error: unavailable });
+
+    poller.seed(complete3);
+    expect(last()).toMatchObject({ phase: 'settled', error: null, status: complete3 });
+  });
+
+  it('API-03: a seed confirming work still pending leaves the outstanding read to answer', async () => {
+    const { read, pending } = controlledReads();
+    const { poller, last } = makePoller(read);
+    poller.start();
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    poller.seed({ status: 'pending', generation: 3, phase: 'running' });
+    expect(pending[0].signal.aborted).toBe(false);
+    expect(last().phase).toBe('reading');
+
+    pending[0].resolve(ok({ status: 'complete', generation: 3 }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(last()).toMatchObject({ phase: 'settled', error: null, status: complete3 });
+  });
+
   it('API-03: a check after a failed read near the deadline adopts its answer, and a stalled one reports its own failure', async () => {
     const read = vi.fn<(signal: AbortSignal) => Promise<AnalysisStatusResult>>().mockResolvedValueOnce(unavailable);
     const { poller, last } = makePoller(read);
