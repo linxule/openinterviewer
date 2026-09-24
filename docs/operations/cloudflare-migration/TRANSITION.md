@@ -20,7 +20,7 @@ Record the following outside the repository, before any other step:
 - **Origin.** A stable origin: `workers.dev` or a custom domain. On a custom-domain zone, turn Pseudo IPv4 off.
 - **Jurisdiction.** The Durable Object jurisdiction (`eu` recommended). It is fixed at installation.
 - **Backups.** The protected destination and retention for operational backups (OPS-02).
-- **Deployment owner.** The CI promotion job for the project's maintained instance ([INSTALLER.md](INSTALLER.md#maintained-instance-ci-promotion)); the installer for any other installation.
+- **Deployment owner.** The installer, for the project's maintained instance too ([INSTALLER.md](INSTALLER.md#maintained-instance)); the CI promotion job only for an installation that chooses it ([INSTALLER.md](INSTALLER.md#optional-ci-owned-deployment)).
 - **Acceptance smoke.** The provider, model and number of calls for the end-to-end acceptance. It is a paid call.
 - **Old links and hostname.**
   - Whether old entry links must keep working. They cannot move to a Cloudflare-owned domain; only a redirect-only origin backed by preserved link records could keep them, which requires the preserve-data path.
@@ -162,7 +162,7 @@ Preconditions:
    3. Hold the workspace: `maintenance draining --expected-state open --expected-version <v>`, then `maintenance frozen --expected-state draining --expected-version <v>`.
    4. `status` must show zero studies and interviews.
 
-   Installing before the fence is safe, because the workspace is held and nothing directs participants to it. For the maintained instance, set up the CI promotion now; later deploys go through it.
+   Installing before the fence is safe, because the workspace is held and nothing directs participants to it. Later deploys use `setup:cloudflare update` from the workstation that holds the receipt. An installation that chooses the optional CI deployment sets it up now; later deploys then go through it.
 2. **Drain the old deployment** (§5).
 3. **Fence it** (§6), with every verification passing. Keep the reference inventory with the decision record. The old database is not modified or deleted.
 4. **Switch.**
@@ -170,7 +170,7 @@ Preconditions:
    2. Run the controlled end-to-end acceptance on the production origin: sign in, create a clearly named acceptance study, generate a link, consent, interview and save, wait for the background analysis to complete, then export. This makes the paid calls named in §1. A study that holds interviews cannot be deleted, so keep the acceptance study clearly labelled.
    3. Give researchers the new origin. Sessions do not migrate: researchers sign in again and create new studies and links.
 5. **Observe.**
-   - Readiness: `setup:cloudflare verify`, or `verify --config` for the CI-owned instance.
+   - Readiness: `setup:cloudflare verify`, or `verify --config` for a CI-owned installation.
    - `status`: job counts and the oldest active age.
    - Failure classes in the Worker's structured logs.
    - No Upstash traffic after the reset other than the operator's inventory runs.

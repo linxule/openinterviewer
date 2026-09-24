@@ -1,6 +1,6 @@
 # Cloudflare installer (`setup:cloudflare`)
 
-The installer creates and updates an OpenInterviewer standalone installation on Cloudflare: one Worker (OpenNext fetch, analysis Queue consumer and the `WorkspaceStore` Durable Object), one analysis Queue and its dead-letter queue, and, on the Cloudflare AI Gateway transport, the installation's own AI Gateway. It implements `SETUP-01`, `SETUP-02`, `SETUP-03`, `SETUP-08` and the local parts of `SETUP-07` in [01 — runtime and installation](01-runtime-and-installation.md). `SETUP-05` (one deployment owner) is split between two owners. The installer owns a self-hosted installation. The CI promotion job owns the project's maintained instance after the installer has created it ([Maintained instance: CI promotion](#maintained-instance-ci-promotion)). Maintenance, backup, restore and rollback procedures are in [RUNBOOK.md](RUNBOOK.md).
+The installer creates and updates an OpenInterviewer standalone installation on Cloudflare: one Worker (OpenNext fetch, analysis Queue consumer and the `WorkspaceStore` Durable Object), one analysis Queue and its dead-letter queue, and, on the Cloudflare AI Gateway transport, the installation's own AI Gateway. It implements `SETUP-01`, `SETUP-02`, `SETUP-03`, `SETUP-08` and the local parts of `SETUP-07` in [01 — runtime and installation](01-runtime-and-installation.md). `SETUP-05` (one deployment owner): the installer owns every installation, including the project's maintained instance ([Maintained instance](#maintained-instance)). An installation may instead hand deployment to the `promote-cloudflare` CI job after the installer has created it ([Optional: CI-owned deployment](#optional-ci-owned-deployment)). Maintenance, backup, restore and rollback procedures are in [RUNBOOK.md](RUNBOOK.md).
 
 Status: exercised only against a simulated account (a fake `wrangler`, a fake deploy script, a local fake origin and a local fake of the Cloudflare API's AI Gateway routes and the gateway endpoint; `npm run test:setup:cloudflare`). It has not run against a real Cloudflare account. See [What is and is not verified](#what-is-and-is-not-verified).
 
@@ -184,7 +184,7 @@ After the deploy:
 - A workspace the operator left `draining`, `frozen` or in `recovery` gives exit 3 with the deployed version. The RUNBOOK drains before a deploy. Run `verify` after reopening.
 - Any other verification failure gives exit 1 with the rollback pointer.
 
-Roll back a code-only release by running `update` from the older commit (RUNBOOK, OPS-03). The maintained instance rolls back through CI instead ([below](#maintained-instance-ci-promotion)).
+Roll back a code-only release by running `update` from the older commit (RUNBOOK, OPS-03). An installation deployed by CI rolls back through CI instead ([below](#optional-ci-owned-deployment)).
 
 ### Provider keys
 
@@ -198,7 +198,7 @@ op inject -i ~/secure/gemini.tpl.json | npm run setup:cloudflare -- update --ins
 ```
 
 - `--add-provider-key` refuses a provider already recorded (use `--rotate-provider-key`) and a key already bound on the Worker without a record: the receipt cannot vouch for its value, so delete it deliberately (`wrangler secret delete`) and add it again. `--rotate-provider-key` refuses a provider that is not recorded.
-- Both run the drift checks above, need no release artifact and never deploy: Cloudflare applies a secret by deploying a new version of the Worker. Because that version is built from the Worker's latest version, both first require the newest deployment to be a checked release: it carries `deploy.mjs`'s `openinterviewer <commit>` message (an installer deploy or the CI promotion), or it is the deployment recorded after the previous key operation. A dashboard deploy, `wrangler rollback`, gradual deployment or manual `wrangler secret put` (for example the point-in-time restore's epoch rotation: its deployment carries `workers/triggered_by` `secret` and no message, observed 24 September 2026) is refused (exit 2); redeploy a checked release first (a plain `update`, or the CI promotion on the maintained instance; after a restore, only once it is activated: RUNBOOK, point-in-time restore step 9).
+- Both run the drift checks above, need no release artifact and never deploy: Cloudflare applies a secret by deploying a new version of the Worker. Because that version is built from the Worker's latest version, both first require the newest deployment to be a checked release: it carries `deploy.mjs`'s `openinterviewer <commit>` message (an installer deploy or the CI promotion), or it is the deployment recorded after the previous key operation. A dashboard deploy, `wrangler rollback`, gradual deployment or manual `wrangler secret put` (for example the point-in-time restore's epoch rotation: its deployment carries `workers/triggered_by` `secret` and no message, observed 24 September 2026) is refused (exit 2); redeploy a checked release first (a plain `update`, or the CI promotion on an installation deployed by CI; after a restore, only once it is activated: RUNBOOK, point-in-time restore step 9).
 - Each validates the new values (not blank, no whitespace, no placeholder, independent of each other), records a `pendingChange` before the upload, reads the names back, then records the event and the new `providerKeys` and runs `verify`. A lost reply or failed upload leaves the change pending: rerun the same command. A pending add does not ask again for a key whose upload landed; a pending rotation asks for the new key again. While it is pending, every other `update`, `resume`, `apply` and `config` refuses with the command that finishes it.
 - The Worker reads keys per request, so a new or rotated key serves without a redeploy. `CLOUDFLARE_INSTALL_CONFIG` does not change: it holds vars, not secrets. Studies can use a newly bound provider at once; the study editor offers only providers whose key is bound.
 - Removing a key is manual: `wrangler secret delete <NAME> --name <worker>` makes `update` report drift until the receipt is restored to match. A `--forget-provider-key` operation is not implemented yet.
@@ -237,7 +237,7 @@ npm run setup:cloudflare -- update --install acme --env production --change-ai-t
   - to direct: covered for every consent, so gateway-consented sessions and interviews continue, sent straight to each provider; a consent page opened under the gateway notice gets 409 `DISCLOSURE_CHANGED` and is reopened.
   - Drain first (`draining`, then wait for no pending, claimed or started jobs and no active sessions, up to the 4-hour consent lifetime), switch, then reopen. The installer prints this rule but does not enforce it; the Worker enforces coverage either way.
 - **Interruption.** A failed create, probe, upload or deploy leaves the change pending. Rerun the same command to finish it: an observed gateway is adopted, not created again, and a bound token is not asked for again. Rerunning with the transport it started from abandons it instead (deploys that transport again, no history entry). While it is pending, every other `update`, `resume`, `apply` and `config` refuses with those two commands.
-- **CI.** Regenerate `CLOUDFLARE_INSTALL_CONFIG` with `config` after a transport change ([below](#maintained-instance-ci-promotion)); key, token and password operations need no regeneration.
+- **CI.** On an installation deployed by CI, regenerate `CLOUDFLARE_INSTALL_CONFIG` with `config` after a transport change ([below](#optional-ci-owned-deployment)); key, token and password operations need no regeneration.
 
 ### AI Gateway policy
 
@@ -263,7 +263,7 @@ It refuses (exit 2) and writes nothing:
 - when the generated config fails the local check that `verify --config` applies.
 - while an update operation is pending (`pendingChange` in the receipt): finish it first with the command the refusal names.
 
-Use it to produce `CLOUDFLARE_INSTALL_CONFIG` for the CI promotion ([below](#maintained-instance-ci-promotion)), and to replace a lost or hand-edited config without deploying.
+Use it to produce `CLOUDFLARE_INSTALL_CONFIG` for an installation deployed by CI ([below](#optional-ci-owned-deployment)), and to replace a lost or hand-edited config without deploying.
 
 ## Verify
 
@@ -309,9 +309,29 @@ It does not verify (remote gates in [04 — verification and cutover](04-verific
 - For a custom origin: that the origin is routed to this Worker. Another Worker answering the origin looks the same. The public endpoints expose no installation fingerprint to compare.
 - On the gateway transport: pass-through per provider (no request reaches a provider), and the bound Run token (its value is not readable, so it is not probed).
 
-## Maintained instance: CI promotion
+## Maintained instance
 
-The project's own production installation has one deployment owner once it is installed: the `promote-cloudflare` job in `.github/workflows/ci.yml`. The installation is created once with `setup:cloudflare apply`, like any other. From then on CI deploys it and a workstation does not, with two exceptions: a provider change (`update --change-provider`) and a transport change (`update --change-ai-transport`) are made from the workstation that holds the receipt, which binds the new key or Run token when needed and deploys. Hold CI promotions while it runs, then update the variable below. Operating it (dispatch, outcomes, cancelled deploys, rollback) is described in [RUNBOOK.md](RUNBOOK.md#maintained-instance-ci-promotion). The job has only been checked statically; it has never run on GitHub Actions.
+The project's own production installation is installer-owned, like any other (owner decision, 24 September 2026; DEVIATIONS, SETUP-05). The owner deploys each release from their workstation, which keeps the receipt in a state directory outside the checkout:
+
+```bash
+# On a clean checkout of the release commit:
+npm ci
+npm run check:cloudflare
+npm run setup:cloudflare -- update --install <install> --env production --state-dir <dir> --yes
+```
+
+Key, token, password, provider and transport operations run the same way, with the same `--state-dir`. A rollback is `update` from the older commit (RUNBOOK, OPS-03). The `promote-cloudflare` job is not used for this instance and stays unconfigured:
+
+- one operator deploys it, so CI would add no second person;
+- no long-lived Cloudflare deploy token is kept in GitHub;
+- the repository is public, and the job reads the installation config (account id, workspace id, `workers.dev` name) from plain Actions variables, which would appear in public run logs;
+- installer deploys keep the receipt's `deployments`, and the `Version` that `verify` reports, current; CI deploys do not.
+
+The installer remains the one deployment owner, deploys only the checked artifact, and Workers Builds stays disconnected, so `SETUP-05` still holds.
+
+## Optional: CI-owned deployment
+
+An installation can make the `promote-cloudflare` job in `.github/workflows/ci.yml` its one deployment owner instead of the installer. The project's own instance does not ([above](#maintained-instance)); the job stays in the workflow, unconfigured and never run, for installations that choose it. Its variables are not masked, so in a public repository the installation config can appear in run logs. The installation is created once with `setup:cloudflare apply`, like any other. From then on CI deploys it and a workstation does not, with two exceptions: a provider change (`update --change-provider`) and a transport change (`update --change-ai-transport`) are made from the workstation that holds the receipt, which binds the new key or Run token when needed and deploys. Hold CI promotions while it runs, then update the variable below. Operating it (dispatch, outcomes, cancelled deploys, rollback) is described in [RUNBOOK.md](RUNBOOK.md#optional-ci-owned-deployment). The job has only been checked statically; it has never run on GitHub Actions.
 
 ### One-time setup
 
@@ -356,7 +376,7 @@ The job does not:
 - For a custom domain on your zone, check Pseudo IPv4 (zone Network settings) first: `RT-07` forbids only `overwrite_header`, which is a zone-wide change to make deliberately.
 - For the Cloudflare AI Gateway transport: create the management token (AI Gateway Read + Edit on the account) and the Run token (dashboard, AI Gateway → Create authentication token). The installer never creates tokens.
 - Do not connect Workers Builds to this Worker: `SETUP-05` requires one deployment owner, either the installer or the CI promotion job.
-- For the maintained instance, the one-time CI promotion setup ([below](#maintained-instance-ci-promotion)).
+- For an installation that chooses CI ownership, the one-time setup of the CI job ([above](#optional-ci-owned-deployment)).
 
 ## Origin discovery
 
@@ -442,6 +462,6 @@ Not verified:
 - Durable Object initialization under a real bootstrap.
 - Custom-domain routing and token permissions.
 - Every Cloudflare AI Gateway API and endpoint shape (remote gates in DEVIATIONS, SETUP-08): the 404 of a missing gateway, the 409 of a taken id, the response fields a new gateway reports, the logs listing's `result_info.total_count`, and the probe answers (401 `AiGatewayError` 2009 without a token; 400 `AiGatewayError` with a Run token and no provider key).
-- The CI promotion on GitHub Actions: the environment's protection rules, the token's permissions, and a real dispatch, deploy and readiness check.
+- The optional CI promotion on GitHub Actions (not used by the maintained instance): the environment's protection rules, the token's permissions, and a real dispatch, deploy and readiness check.
 
 These belong to the staging rehearsal (`VERIFY-04`: clean install under custom names, repeated install/update without duplicates or rotation, and interrupted setup recovery).
