@@ -638,6 +638,9 @@ export async function claimAnalysisJob(
           return { status: 'busy' };
         case 'claimed':
           // Only the invocation that owns the claim may recover its lost reply.
+          // The replay does not check lease expiry: an expired lease cannot
+          // start, because markAnalysisStarted refuses it (lease-insufficient)
+          // and the consumer acks that without a provider call.
           if (job.claim_nonce !== input.claimNonce || job.claim_expires_at === null) return { status: 'busy' };
           return { status: 'claimed', replayed: true, inputs: claimedInputs(job, interview, job.claim_expires_at) };
         case 'pending':
