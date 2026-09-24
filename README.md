@@ -414,7 +414,7 @@ src/
 ├── app/                 Next.js pages and API routes
 │   ├── api/             Auth, onboarding, studies, links, interviews, and synthesis
 │   ├── demo/            Keyless scripted demo
-│   └── p/[token]/       Opaque participant-link entry
+│   └── p/               Opaque participant-link entry (/p/<code>, rewritten in next.config.js)
 ├── components/          Researcher and participant UI
 ├── lib/                 Auth, storage, provider, validation, and tenancy logic
 ├── services/            Browser-side API clients

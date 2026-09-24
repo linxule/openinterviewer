@@ -11,6 +11,7 @@ import type { SynthesisResult } from '@/types';
 import { formatConsentTimestamp, formatElapsed, participantTurnCount, transcriptElapsedMs } from '@/lib/receiptFacts';
 import { defaultThankYouText } from '@/lib/thankYouText';
 import NavigationStatus from '@/components/NavigationStatus';
+import NoSessionNotice from '@/components/NoSessionNotice';
 
 type CompletionInputs = Pick<ReturnType<typeof useStore.getState>,
   'studyConfig' | 'participantProfile' | 'interviewHistory' | 'behaviorData' | 'viewMode' | 'participantSessionHandle'
@@ -222,13 +223,7 @@ const Synthesis: React.FC = () => {
 
   if (destination) return <NavigationStatus>{destination}</NavigationStatus>;
 
-  if (!studyConfig) {
-    return (
-      <div className="flex min-h-dvh items-center justify-center bg-paper-0">
-        <p className="font-sans text-[15px] text-ink-500">No study configured.</p>
-      </div>
-    );
-  }
+  if (!studyConfig) return <NoSessionNotice />;
 
   if (viewMode === 'participant') {
     const participantState = saveStatus === 'failed' || saveStatus === 'preview'

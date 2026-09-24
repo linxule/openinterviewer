@@ -5,20 +5,22 @@ import { makeStudyConfig } from '../fixtures/models';
 
 // The hand-over never completes: the document navigation stays in flight, as
 // it does on a slow network between location.replace() and the new page. The
-// client router must not be used at all (it would send the link code in its
-// Next-Url header), so its mock records any call.
+// page itself never uses the client router: the hand-over chooses between a
+// document navigation and the router, so the router mock records any call.
 const navigation = vi.hoisted(() => ({ replace: vi.fn(), push: vi.fn() }));
 const handover = vi.hoisted(() => ({ leaveLinkPage: vi.fn() }));
 
 vi.mock('next/navigation', () => ({
-  useParams: () => ({ token: 'link-code-under-test' }),
   useRouter: () => navigation,
 }));
 vi.mock('@/lib/participantLinkHandover', () => handover);
 
-import ParticipantPage from '@/app/p/[token]/page';
+import ParticipantPage from '@/app/p/page';
 
 const ABSENT = Symbol('absent');
+
+// jsdom's Storage, not the Node global of the same name.
+const jsdomStorage = () => Object.getPrototypeOf(window.sessionStorage) as Storage;
 
 function resolvedLink(aiTransport: unknown = 'direct'): Response {
   return new Response(JSON.stringify({
@@ -32,6 +34,9 @@ function resolvedLink(aiTransport: unknown = 'direct'): Response {
 }
 
 beforeEach(() => {
+  // The page reads the link code from the address bar: /p/<code> is rewritten
+  // to the static /p route, which has no route parameters (next.config.js).
+  window.history.replaceState(null, '', '/p/link-code-under-test');
   sessionStorage.clear();
   useStore.setState(useStore.getInitialState(), true);
   navigation.replace.mockReset();
@@ -41,6 +46,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('participant link page during a delayed route change', () => {
@@ -82,6 +88,34 @@ describe('participant link page during a delayed route change', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/generate-link?token=link-code-under-test', { referrerPolicy: 'no-referrer' });
   });
 
+  it('reports a missing link code without calling the exchange', async () => {
+    window.history.replaceState(null, '', '/p');
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<ParticipantPage />);
+
+    expect(await screen.findByText('No participant link code provided')).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('still hands over when the session cannot be written to sessionStorage (quota)', async () => {
+    vi.spyOn(jsdomStorage(), 'setItem').mockImplementation(() => {
+      throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(resolvedLink()));
+
+    render(<ParticipantPage />);
+
+    await waitFor(() => expect(handover.leaveLinkPage).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText('Failed to load study configuration')).not.toBeInTheDocument();
+    expect(useStore.getState()).toMatchObject({
+      participantSessionHandle: 'participant-handle-link-123456',
+      currentStep: 'consent',
+      viewMode: 'participant',
+    });
+  });
+
   it('shows the link error and never navigates when the link does not resolve', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ valid: false }), {
       status: 200,
@@ -121,11 +155,15 @@ describe('participant link page transport disclosure (RT-11)', () => {
 
 describe('participant link hand-over', () => {
   const actual = () => vi.importActual<typeof import('@/lib/participantLinkHandover')>('@/lib/participantLinkHandover');
-  const persisted = (handle: string) => () => ({
-    getItem: (key: string) => (key === 'research-tool-storage'
-      ? JSON.stringify({ state: { participantSessionHandle: handle }, version: 6 })
-      : null),
+  const persistedState = (handle: string) => ({
+    participantSessionHandle: handle,
+    studyConfig: makeStudyConfig({ id: 'persisted-study' }),
+    aiTransport: 'direct',
   });
+  const stored = (entry: unknown) => () => ({
+    getItem: (key: string) => (key === 'research-tool-storage' ? JSON.stringify(entry) : null),
+  });
+  const persisted = (handle: string) => stored({ state: persistedState(handle), version: 6 });
 
   it('is a document navigation to /consent when the session is persisted', async () => {
     const { leaveLinkPage } = await actual();
@@ -141,6 +179,16 @@ describe('participant link hand-over', () => {
     ['nothing persisted', () => ({ getItem: () => null })],
     ['another session persisted', persisted('handle-other')],
     ['a corrupt entry', () => ({ getItem: () => '{not json' })],
+    ['an entry without state', stored({ version: 6 })],
+    ['no study persisted', stored({ state: { ...persistedState('handle-1'), studyConfig: null }, version: 6 })],
+    ['a study without an id', stored({ state: { ...persistedState('handle-1'), studyConfig: {} }, version: 6 })],
+    ['a study with only an id', stored({ state: { ...persistedState('handle-1'), studyConfig: { id: 'study-1' } }, version: 6 })],
+    ['a study without profile fields', stored({ state: { ...persistedState('handle-1'), studyConfig: { id: 'study-1', coreQuestions: [] } }, version: 6 })],
+    ['no transport persisted', stored({ state: { ...persistedState('handle-1'), aiTransport: null }, version: 6 })],
+    ['an unknown transport persisted', stored({ state: { ...persistedState('handle-1'), aiTransport: 'carrier-pigeon' }, version: 6 })],
+    ['an older store version', stored({ state: persistedState('handle-1'), version: 5 })],
+    ['a newer store version', stored({ state: persistedState('handle-1'), version: 7 })],
+    ['no store version', stored({ state: persistedState('handle-1') })],
   ])('keeps the in-memory session with the client router when %s', async (_label, storage) => {
     const { leaveLinkPage } = await actual();
     const location = { replace: vi.fn() };
@@ -152,8 +200,28 @@ describe('participant link hand-over', () => {
 
   it('reads back what the store actually persists for a new participant session', async () => {
     const { sessionSurvivesDocumentLoad } = await actual();
-    useStore.getState().beginParticipantSession(makeStudyConfig({ id: 'persisted-study' }), 'persisted-handle', 'direct');
+    useStore.getState().beginParticipantSession(makeStudyConfig({ id: 'persisted-study' }), 'persisted-handle', 'cloudflare-gateway');
     expect(sessionSurvivesDocumentLoad('persisted-handle')).toBe(true);
     expect(sessionSurvivesDocumentLoad('another-handle')).toBe(false);
+  });
+
+  it('keeps the session in memory with the client router when the store cannot write it (quota)', async () => {
+    const { leaveLinkPage } = await actual();
+    // An earlier session in this tab was persisted; the new one does not fit.
+    useStore.getState().beginParticipantSession(makeStudyConfig({ id: 'earlier-study' }), 'earlier-handle', 'direct');
+    vi.spyOn(jsdomStorage(), 'setItem').mockImplementation(() => {
+      throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+    });
+
+    expect(() => useStore.getState().beginParticipantSession(makeStudyConfig({ id: 'new-study' }), 'new-handle', 'direct'))
+      .not.toThrow();
+    // The stale entry is gone, so no document load could restore the earlier session.
+    expect(sessionStorage.getItem('research-tool-storage')).toBeNull();
+    const location = { replace: vi.fn() };
+    const clientNavigate = vi.fn();
+    leaveLinkPage('new-handle', clientNavigate, location);
+    expect(location.replace).not.toHaveBeenCalled();
+    expect(clientNavigate).toHaveBeenCalledWith('/consent');
+    expect(useStore.getState().studyConfig?.id).toBe('new-study');
   });
 });

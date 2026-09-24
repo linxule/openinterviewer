@@ -10,6 +10,7 @@ import {
 import { InterviewMessage, InterviewPhase } from '@/types';
 import ReactMarkdown from 'react-markdown';
 import { Button, Turn } from '@/components/ui';
+import NoSessionNotice from '@/components/NoSessionNotice';
 
 // Phase display labels
 const phaseLabels: Record<InterviewPhase, string> = {
@@ -301,13 +302,7 @@ const InterviewChat: React.FC = () => {
     router.push('/synthesis');
   };
 
-  if (!studyConfig) {
-    return (
-      <div className="flex min-h-dvh items-center justify-center bg-paper-0">
-        <p className="text-ink-500">No study configured.</p>
-      </div>
-    );
-  }
+  if (!studyConfig) return <NoSessionNotice />;
 
   // Calculate progress
   const totalQuestions = studyConfig.coreQuestions.length;

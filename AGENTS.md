@@ -30,7 +30,7 @@ Production is external state. Verify it through the deployment provider and publ
 - Keyless synthetic demo: `src/app/demo/page.tsx` -> `src/components/DemoSimulation.tsx`
 - Self-host guide: `src/app/self-host/page.tsx`
 - Researcher workspace: `src/app/{login,onboarding,studies,setup,dashboard,settings}`
-- Participant link entry: `src/app/p/[token]/page.tsx`
+- Participant link entry: `src/app/p/page.tsx`, serving every `/p/<code>` through a rewrite in `next.config.js` so the client router's state and request headers never hold the code; hand-over to consent in `src/lib/participantLinkHandover.ts`
 - Participant phases: `src/app/{consent,interview,synthesis,export}`
 - Authenticated sample-workspace seed: `src/app/api/demo/seed/route.ts` and `src/lib/demoData.ts`
 
@@ -93,7 +93,7 @@ Hosted study create/delete is a durable cross-database operation. Preserve the o
 - Evidence citation matching (render-time classification; verdicts never stored): `src/lib/evidence.ts`
 - Participant and hosted platform limits: `src/lib/rateLimit.ts`, `src/lib/platformAiRateLimit.ts`
 - Browser API clients: `src/services/`
-- Session-scoped workflow state: `src/store.ts`
+- Session-scoped workflow state: `src/store.ts`, persisted through `src/lib/tolerantSessionStorage.ts` (a failed write leaves the session in memory only)
 
 On Cloudflare the participant sequence is the same, with analysis queued by the completion transaction and executed in the background by the Queue consumer. The participant sequence is link exchange -> HttpOnly participant session -> consent -> greeting/interview -> transcript save -> deferred analysis. The saved transcript is immutable; analysis attaches under an atomic claim and can be retried by the researcher. Every participant route must re-resolve authority and the server-owned current study revision before provider use or persistence.
 
