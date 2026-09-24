@@ -59,6 +59,59 @@ import {
 import { isKnownProviderModel } from '../providerRegistry';
 import { resolveSynthesisModel } from './synthesisModel';
 
+// Keywords Claude structured outputs refuses with 400 invalid_request_error
+// (observed 24 September 2026, claude-sonnet-5: "For 'integer' type, property
+// 'minimum' is not supported", and the same for 'maxItems' on arrays).
+// The final validators enforce every bound removed here.
+const CLAUDE_UNSUPPORTED_KEYWORDS = new Set([
+  'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf', 'maxItems',
+]);
+const claudeSchemas = new WeakMap<object, ProviderJsonSchema>();
+
+/**
+ * The provider-neutral schema in the subset Claude accepts: unsupported
+ * bounds removed, and a nullable enum (`type: [T, 'null']` with `enum`, which
+ * Claude refuses: "Enum value … does not match declared type") rewritten as
+ * `anyOf` of the enum and `null`.
+ */
+export function claudeOutputSchema(schema: ProviderJsonSchema): ProviderJsonSchema {
+  const cached = claudeSchemas.get(schema);
+  if (cached) return cached;
+  const converted = convertForClaude(schema) as ProviderJsonSchema;
+  claudeSchemas.set(schema, converted);
+  return converted;
+}
+
+function convertForClaude(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(convertForClaude);
+  if (!node || typeof node !== 'object') return node;
+  const source = node as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (CLAUDE_UNSUPPORTED_KEYWORDS.has(key)) continue;
+    if (key === 'properties' && value && typeof value === 'object') {
+      out.properties = Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(([name, child]) => [name, convertForClaude(child)]),
+      );
+    } else {
+      out[key] = convertForClaude(value);
+    }
+  }
+  const type = out.type;
+  if (Array.isArray(out.enum) && Array.isArray(type) && type.includes('null')) {
+    const nonNull = type.filter((entry) => entry !== 'null');
+    const { type: _type, enum: values, ...rest } = out;
+    return {
+      ...rest,
+      anyOf: [
+        { type: nonNull.length === 1 ? nonNull[0] : nonNull, enum: (values as unknown[]).filter((value) => value !== null) },
+        { type: 'null' },
+      ],
+    };
+  }
+  return out;
+}
+
 function supportsAdaptiveThinking(model: string): boolean {
   return /^claude-(?:sonnet|opus|fable|mythos)-5(?:$|-)/.test(model)
     || /^claude-(?:sonnet|opus)-4-[678](?:$|-)/.test(model);
@@ -131,7 +184,7 @@ export class ClaudeProvider implements AIProvider {
           output_config: {
             format: {
               type: 'json_schema',
-              schema: options.schema,
+              schema: claudeOutputSchema(options.schema),
             },
           },
         }, {

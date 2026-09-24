@@ -72,8 +72,28 @@ type OpenRouterChatResponse = Awaited<ReturnType<OpenRouter['chat']['send']>> & 
   model: string;
   openrouterMetadata?: {
     attempts?: Array<{ provider: string; status: number }>;
+    endpoints?: { available?: Array<{ provider?: string; selected?: boolean }> };
   };
 };
+
+/**
+ * The upstream provider that served the response. The last successful entry
+ * of `attempts` when OpenRouter reports attempts (and nothing if none
+ * succeeded); otherwise the one endpoint marked `selected`. OpenRouter omits `attempts` on a single-endpoint route
+ * (observed 24 September 2026: `attempt: 1`, `strategy: "direct"`, no
+ * `attempts`, `endpoints.available[{ provider: "Azure", selected: true }]`;
+ * @openrouter/sdk 1.2.117 types `attempts` as optional). None, or more than
+ * one selected endpoint, identifies nothing.
+ */
+export function upstreamProvider(metadata: OpenRouterChatResponse['openrouterMetadata']): string | null {
+  if (metadata?.attempts?.length) {
+    const attempt = metadata.attempts.findLast((entry) => entry.status >= 200 && entry.status < 300);
+    return attempt?.provider?.trim() || null;
+  }
+  const selected = metadata?.endpoints?.available?.filter((endpoint) => endpoint.selected === true) ?? [];
+  if (selected.length !== 1) return null;
+  return selected[0].provider?.trim() || null;
+}
 
 export class OpenRouterProvider implements AIProvider {
   private readonly client: OpenRouter;
@@ -287,16 +307,15 @@ export class OpenRouterProvider implements AIProvider {
   }
 
   private executionFor(response: OpenRouterChatResponse, requestedModel: string) {
-    const routedAttempt = response.openrouterMetadata?.attempts
-      ?.findLast((attempt) => attempt.status >= 200 && attempt.status < 300);
     const resolvedModel = response.choices[0]?.message.model || response.model;
-    if (!routedAttempt?.provider?.trim()) {
+    const upstream = upstreamProvider(response.openrouterMetadata);
+    if (!upstream) {
       throw new ProviderFailure(
         'invalid-response',
         'OpenRouter response did not identify the upstream provider',
       );
     }
-    return execution('openrouter', requestedModel, resolvedModel, routedAttempt.provider, this.transport);
+    return execution('openrouter', requestedModel, resolvedModel, upstream, this.transport);
   }
 
   private parseStructured<T>(
