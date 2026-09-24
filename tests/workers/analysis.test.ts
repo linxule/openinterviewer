@@ -216,16 +216,20 @@ describe('acceptAnalysisRetry (JOB-04, API-01)', () => {
     // The due alarm may run in the background (getAlarm() is null while a
     // handler runs). At every quiescent point a wake-up exists no later than
     // the earliest due job; a lost wake-up would stay null and time out.
+    // A job already overdue is re-armed "now" (the scheduler's rearm after a
+    // batch cut short), which can be a millisecond after its due time: the
+    // wake-up is due no later than the due time or the moment it was seen.
     const observed = await vi.waitFor(async () => {
       const snapshot = await runInDurableObject(workspaceStub(), async (_instance, state) => ({
         alarm: await state.storage.getAlarm(),
         due: state.storage.sql.exec<{ due: number | null }>(`SELECT MIN(next_due_at) AS due FROM analysis_jobs`).one().due,
+        seenAt: Date.now(),
       }));
       if (snapshot.alarm === null) throw new Error('no alarm observed yet');
       return snapshot;
     }, { timeout: 3_000, interval: 20 });
     expect(observed.due).not.toBeNull();
-    expect(observed.alarm as number).toBeLessThanOrEqual(observed.due as number);
+    expect(observed.alarm as number).toBeLessThanOrEqual(Math.max(observed.due as number, observed.seenAt));
   });
 
   it('JOB-05 rolls back the whole retry allocation when its alarm cannot be committed', async () => {
