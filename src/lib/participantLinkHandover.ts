@@ -42,10 +42,14 @@ export function sessionSurvivesDocumentLoad(
       state?: { participantSessionHandle?: unknown; studyConfig?: unknown; aiTransport?: unknown };
     } | null : null;
     const state = persisted?.state;
-    const studyConfig = state?.studyConfig as { id?: unknown } | null | undefined;
+    const studyConfig = state?.studyConfig as
+      { id?: unknown; coreQuestions?: unknown; profileSchema?: unknown } | null | undefined;
+    // Same-version hydration skips migration, so the study must be complete
+    // enough for the consent page to render (coreQuestions, profileSchema).
     return persisted?.version === RESEARCH_STORE_VERSION
       && state?.participantSessionHandle === sessionHandle
       && typeof studyConfig === 'object' && studyConfig !== null && typeof studyConfig.id === 'string'
+      && Array.isArray(studyConfig.coreQuestions) && Array.isArray(studyConfig.profileSchema)
       && KNOWN_TRANSPORTS.has(state.aiTransport);
   } catch {
     return false;

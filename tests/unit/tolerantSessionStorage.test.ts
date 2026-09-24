@@ -56,6 +56,21 @@ describe('tolerant session storage', () => {
     backing.removeItem.mockImplementation(() => { throw denied(); });
     expect(() => tolerantStorage(() => backing).setItem('key', 'value')).not.toThrow();
   });
+
+  it('never reads back an older snapshot that a failed write could not remove', () => {
+    const backing = memoryStorage();
+    const storage = tolerantStorage(() => backing);
+    storage.setItem('key', 'older');
+    backing.setItem.mockImplementationOnce(() => { throw quotaExceeded(); });
+    backing.removeItem.mockImplementationOnce(() => { throw denied(); });
+    storage.setItem('key', 'newer');
+    expect(backing.items.get('key')).toBe('older');
+    expect(storage.getItem('key')).toBeNull();
+
+    // A later write that fits is read back again.
+    storage.setItem('key', 'latest');
+    expect(storage.getItem('key')).toBe('latest');
+  });
 });
 
 describe('persisted store when sessionStorage writes fail (issue #52)', () => {

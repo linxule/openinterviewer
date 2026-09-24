@@ -182,6 +182,8 @@ describe('participant link hand-over', () => {
     ['an entry without state', stored({ version: 6 })],
     ['no study persisted', stored({ state: { ...persistedState('handle-1'), studyConfig: null }, version: 6 })],
     ['a study without an id', stored({ state: { ...persistedState('handle-1'), studyConfig: {} }, version: 6 })],
+    ['a study with only an id', stored({ state: { ...persistedState('handle-1'), studyConfig: { id: 'study-1' } }, version: 6 })],
+    ['a study without profile fields', stored({ state: { ...persistedState('handle-1'), studyConfig: { id: 'study-1', coreQuestions: [] } }, version: 6 })],
     ['no transport persisted', stored({ state: { ...persistedState('handle-1'), aiTransport: null }, version: 6 })],
     ['an unknown transport persisted', stored({ state: { ...persistedState('handle-1'), aiTransport: 'carrier-pigeon' }, version: 6 })],
     ['an older store version', stored({ state: persistedState('handle-1'), version: 5 })],

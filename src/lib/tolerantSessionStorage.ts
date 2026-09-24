@@ -22,15 +22,22 @@ export interface TolerantStorage {
 export function tolerantStorage(
   resolve: () => SessionStorageLike = () => window.sessionStorage,
 ): TolerantStorage {
+  // Entries whose failed write could not be cleaned up either: the stored copy
+  // is older than memory, so it is never read back until a write succeeds.
+  const stale = new Set<string>();
   const removeQuietly = (name: string) => {
     try {
       resolve().removeItem(name);
+      stale.delete(name);
     } catch {
-      // Storage is unavailable: there is nothing to remove.
+      // Storage is unavailable, or refuses removal: whatever it still holds is
+      // older than memory.
+      stale.add(name);
     }
   };
   return {
     getItem(name) {
+      if (stale.has(name)) return null;
       try {
         return resolve().getItem(name);
       } catch {
@@ -40,6 +47,7 @@ export function tolerantStorage(
     setItem(name, value) {
       try {
         resolve().setItem(name, value);
+        stale.delete(name);
       } catch {
         removeQuietly(name);
       }
