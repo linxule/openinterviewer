@@ -53,8 +53,8 @@ export const GATEWAY_SLUG: Readonly<Record<AIProviderType, string>> = {
 /**
  * Appended to the OpenRouter gateway base. The Cloudflare page shows both
  * `…/openrouter/chat/completions` (prose) and `…/openrouter/v1/chat/completions`
- * (curl); the prose form is used until the live spike S2 decides (remote gate
- * in evidence/DEVIATIONS.md).
+ * (curl); the prose form is used, and was confirmed live on 24 September 2026
+ * (spike S2: requests and `openrouterMetadata` pass through).
  */
 export const OPENROUTER_GATEWAY_SUFFIX = '';
 

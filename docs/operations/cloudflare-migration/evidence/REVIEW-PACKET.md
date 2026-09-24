@@ -290,6 +290,35 @@ No milestone made a network call to a provider, the Cloudflare API or AI Gateway
 - The staging procedure: key additions, the transport-switch drill, the gateway lane per provider with served-model provenance, failure semantics, the log audit, installer drills and the rollback drill.
 - Owner decisions: approval of the gateway consent copy (and any ethics amendment), the D14 option if S1 fails, and whether to freeze the provider at consent (NEW 5).
 
+## 17. Live verification: staging and production (2026-09-24)
+
+Remote gates run with the owner's authorization, on the owner's Cloudflare account, with synthetic study content only. Credentials came from a password manager on stdin; none was written to a file or log. Paid provider calls: roughly 5 per provider per run.
+
+**Provider keys on staging (SETUP-08).** `update --add-provider-key claude,openai,openrouter` and `--rotate-provider-key gemini` each made one secret upload and no deploy; both new versions were built from the latest checked release (`workers/triggered_by: secret`), which answers gw-final §11 item 12.
+
+**Paid runs, direct transport (staging, 3455d54 then 96cf5cd).** Each run: a study through the UI, a participant link, consent, a greeting and three turns, the save, and the queued analysis to `complete`, with the served model recorded.
+
+| Provider | Model | First run | Cause | After 96cf5cd |
+| --- | --- | --- | --- | --- |
+| Gemini | gemini-3.7-flash | complete | — | — |
+| OpenAI | gpt-5.6-terra | complete | — | — |
+| Claude | claude-sonnet-5 | first turn 502 (provider 400) | `output_config` schemas may not carry `minimum`/`maxItems`, and a nullable `enum` is refused; every structured Claude call failed | complete; interview, synthesis, aggregate and follow-up also verified directly against the API |
+| OpenRouter | openai/gpt-5.6-terra | analysis `failed` (`invalid`) | OpenRouter omits `openrouterMetadata.attempts` on a single-endpoint route; the upstream is the endpoint marked `selected` | complete, `routedProvider` recorded |
+
+Both defects are present in v3.0.0 (the same adapter code); the mocked suites could not see them. Regression: `tests/unit/providers.liveShapes.test.ts` (17 of 18 fail on the earlier code).
+
+**Phase-0 gateway checks (RT-11, throwaway gateways, since deleted).** S0: the account had no gateways and no `default`. P1: the pinned create body is accepted (including rate limiting 0) and reads back unchanged; the policy check refuses nothing (it warns about the unknown fields `internal` and `wholesale`). P2/P3: 401 `AiGatewayError` 2009 with no or a wrong token; 400 `AiGatewayError` 2044 with the Run token and no provider key. S1: Gemini Interactions pass through `google-ai-studio` (greeting and structured synthesis). S2: the OpenRouter prose path (no `/v1`) works and the metadata passes through. S3: the response `model` is unchanged and no `cf-aig-model` header is added (only IDs such as `cf-aig-log-id` and `cf-aig-step: 0`). S4: on a gateway with logging on, a request with the Worker's headers left no log entry. S5: an invalid-model request with `cf-aig-max-attempts: 1` shows exactly one attempt (`step 0`).
+
+**Staging on the gateway (337e70e).** `update --change-ai-transport --ai-transport cloudflare-gateway` created the installation's gateway, probed it and deployed. All four providers completed end to end through it; every consent page showed the gateway notice, including processing outside the EU; the four analysis jobs report `transport: cloudflare-gateway`; `verify` reports 0 stored gateway logs. Not drilled live: switching while a direct-consented session is open (Workers tests only).
+
+**Logs (RT-10).** `wrangler tail` during every run carried no transcript text, study name, research question, provider key, admin password, cookie or participant link code; the only application events were `analysis.job` and `provider.failure`. Before 337e70e the link code appeared in request headers (the `Referer` of every request from `/p/<code>` and the client router's `Next-Url`), where Cloudflare redacts only the URL; nothing was stored (invocation logs, traces and Logpush are off). 337e70e removes both (`Referrer-Policy: no-referrer`; a document navigation to `/consent`), and 98dcc0e keeps a session that cannot be persisted by falling back to the client router. The browser lane checks every request header after opening a link (the earlier page leaked the code in 21).
+
+**Independent review of 0472a3b..cd90038 (Codex).** One confirmed major, fixed in 98dcc0e: with `sessionStorage` unavailable, the new document navigation lost the participant session. One claim retracted after the live evidence (Claude does accept `maxLength`). Pre-existing weaknesses in storage-write failures and incomplete persisted state are deferred to issue #52. The Kimi lane did not run: its plugin first refused Kimi Code 2.1.0 as uncertified, and after the plugin update Kimi Code had no credential configured.
+
+**Production (open-interview, 98dcc0e).** Installed with all four keys, the gateway transport and the EU jurisdiction, held `frozen` with zero records, and attached to `open-interview.linxule.com`. The old deployment was fenced first (TRANSITION.md §6, clean start): Git deployments disconnected, the Upstash resource disconnected from the Vercel project (the database is kept), then the database password reset by the owner. After the reset both old tokens were refused (401, exit 2) and the old production URL answered readiness 503 with `platformDatabase: false`. Only the Production environment held database credentials, so preview deployments were never writers. Not run: the late researcher write (check 4; the old admin password is not readable back from Vercel) and the post-fence inventories (checks 2 and 5), which the owner declined as unnecessary for a clean start. The workspace was then opened, and the paid acceptance run passed on the production origin: `gemini-3.8-flash` through the gateway, consent notice shown, three turns, save, analysis `complete`, ZIP export 200. `verify`: READY, 0 stored gateway logs; `status`: no pending or recovery-required jobs; the production logs held no content or credential.
+
+**Follow-ups.** The installer has no admin-password rotation (a first production password was exposed in a chat transcript before launch and was rotated by `wrangler secret put` followed by a checked `update`); the CI promotion for the maintained instance is not configured (production is installer-owned for now); issue #52.
+
 ## Appendix A. Requirement-to-evidence map
 
 Status: `met-local` implemented and proven by local tests; `remote-gate` implemented, acceptance needs a live account, provider or production data; `deviation` implemented differently or not delivered, recorded in DEVIATIONS.md; `partial` acceptance evidence still incomplete locally.
