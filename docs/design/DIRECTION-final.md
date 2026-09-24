@@ -13,7 +13,7 @@
 | Scope | Full experience: identity + UX flows, all journeys | Owner |
 | Genre | Annotated-document / citation apparatus (not chat, not dashboard-SaaS) | Synthesis + challenge survival |
 | Participant interview theme | **Light only.** One warm-paper palette. No toggle, no `prefers-color-scheme` auto-switch. Dark exists solely as a researcher-workspace toggle. (A6) | Owner |
-| Typefaces | **Source Serif 4** (verbatim human speech + interpretation prose) · **Public Sans** (all UI chrome) · **IBM Plex Mono** (machine-verifiable facts). Three families, no display face — display is SS4 at weight 400, size does the work. Loaded via `next/font/google`, latin subset, swap. | Owner |
+| Typefaces | **Source Serif 4** (verbatim human speech + interpretation prose) · **Public Sans** (all UI chrome) · **IBM Plex Mono** (machine-verifiable facts). Three families, no display face — display is SS4 at weight 400, size does the work. Self-hosted from `src/fonts/` (Google Fonts' files, every subset it serves, latin preloaded), swap. | Owner |
 | Accents | **Kimi's three-hue architecture**: wine `#7A3548` = evidence-trace only · ochre `#96631C` = disclosure/synthetic/preview only · teal `#1E5851` = links, primary buttons, focus rings, active nav. Status: moss `#3F6B3B` success, terracotta `#B4432A` error (hue-distinct from wine so "cited" and "failed" never confuse). | Owner (overriding synthesis ★ of ink-buttons) |
 | Amendments A1–A9 | Adopted as a package | Owner |
 
