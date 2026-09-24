@@ -4,8 +4,8 @@ For Codex's independent review and deployment strategy (VERIFY-05). This packet 
 
 ## 1. Status
 
-- Branch `feat/cloudflare-standalone`, base `35f90c7` (main, specification package), head `b0a90a8` (last code commit, after the Codex review rounds in sections 12 and 13; this packet revision is committed on top of it). Worktree: `/Users/xulelin/code/openinterviewer-cloudflare`. Not pushed.
-- Local release candidate: complete through M6 on this branch. The full local release matrix (`npm run check:cloudflare`, 18 lanes) passed on `b0a90a8`, a clean checkout (and earlier on `d8bb26e` and `2e72fe3`; Codex reran it independently on `7235c80` and `4056f81`); its receipt binds that commit and artifact. The packet itself is added in the following docs-only commit, which changes nothing else; rerunning the check on the branch head re-binds the receipt.
+- Branch `feat/cloudflare-standalone`, base `35f90c7` (main, specification package), head `7a354b7` (last code commit, after the Codex review rounds in sections 12 to 14; this packet revision is committed on top of it). Worktree: `/Users/xulelin/code/openinterviewer-cloudflare`. Not pushed.
+- Local release candidate: complete through M6 on this branch. The full local release matrix (`npm run check:cloudflare`, 18 lanes) passed on `7a354b7`, a clean checkout (and earlier on `d8bb26e`, `2e72fe3` and `b0a90a8`; Codex reran it independently on `7235c80`, `4056f81` and `b181e92`, where the Cloudflare browser lane failed intermittently: section 14); its receipt binds that commit and artifact. The packet itself is added in the following docs-only commit, which changes nothing else; rerunning the check on the branch head re-binds the receipt.
 - Requirement map (appendix A): of 55 requirement IDs, met locally 40, implemented with acceptance at a remote gate 11, recorded deviations 4, partial 0.
 - Remote-only gates (section 9) and operational decisions (section 10) remain, as VERIFY-05 allows. Production migration and the deploy button remain incomplete by design.
 
@@ -24,26 +24,26 @@ Individual lanes: `npm run check` (lint, typecheck, unit), `npm run test:setup`,
 
 | Lane | Command | Result | Duration |
 | --- | --- | --- | --- |
-| sync-artifacts+lint+typecheck+unit | `npm run check` | 2757 passed (2757) | 17.6 s |
-| setup-checker | `npm run test:setup` | 44 passed, 0 failed | 0.9 s |
-| installer | `npm run test:setup:cloudflare` | 202 passed, 0 failed | 27.8 s |
-| audit-production | `npm audit --omit=dev --audit-level=high` | 0 vulnerabilities (production dependencies, high and above) | 0.7 s |
+| sync-artifacts+lint+typecheck+unit | `npm run check` | 2760 passed (2760) | 20.1 s |
+| setup-checker | `npm run test:setup` | 44 passed, 0 failed | 1.0 s |
+| installer | `npm run test:setup:cloudflare` | 202 passed, 0 failed | 28.8 s |
+| audit-production | `npm audit --omit=dev --audit-level=high` | 0 vulnerabilities (production dependencies, high and above) | 0.5 s |
 | diff-check | `git diff --check` | exit 0 | 0.0 s |
-| workers-runtime | `npm run test:cloudflare` | 397 passed (397) | 9.0 s |
+| workers-runtime | `npm run test:cloudflare` | 397 passed (397) | 9.4 s |
 | worker-import-boundary | `node scripts/cloudflare/check-import-boundary.mjs` | Worker-only graph reaches no Next, Redis or hosted modules | 0.2 s |
 | redis-contract | `npm run test:contract:redis` | 27 passed, 2 skipped (29) | 1.5 s |
-| redis-crash | `npm run test:redis-crash` | 34 passed (34) | 0.9 s |
-| adversarial | `npm run test:adversarial` | 24 passed (24) | 0.9 s |
-| redis-inventory | `npm run test:inventory:redis` | 14 passed (14) | 3.0 s |
-| build:node-standalone | `npm run build` | build succeeded | 5.2 s |
-| build:node-gateway | `npm run build` | build succeeded | 4.3 s |
-| build:node-hosted | `npm run build` | build succeeded | 4.3 s |
-| node-browser | `npm run test:e2e` | 5 passed (10.1s) | 10.5 s |
-| cloudflare-artifact | `npm run test:cloudflare:artifact` | 35 passed (35) | 17.9 s |
-| cloudflare-restart | `npm run test:cloudflare:restart` | 4 passed (4) | 188.1 s |
-| cloudflare-browser | `npm run test:e2e:cloudflare` | 9 passed (49.2s) | 49.7 s |
+| redis-crash | `npm run test:redis-crash` | 34 passed (34) | 1.1 s |
+| adversarial | `npm run test:adversarial` | 24 passed (24) | 1.0 s |
+| redis-inventory | `npm run test:inventory:redis` | 14 passed (14) | 3.2 s |
+| build:node-standalone | `npm run build` | build succeeded | 5.0 s |
+| build:node-gateway | `npm run build` | build succeeded | 4.8 s |
+| build:node-hosted | `npm run build` | build succeeded | 4.7 s |
+| node-browser | `npm run test:e2e` | 5 passed (9.8s) | 10.3 s |
+| cloudflare-artifact | `npm run test:cloudflare:artifact` | 35 passed (35) | 19.8 s |
+| cloudflare-restart | `npm run test:cloudflare:restart` | 4 passed (4) | 188.5 s |
+| cloudflare-browser | `npm run test:e2e:cloudflare` | 10 passed (58.3s) | 58.8 s |
 
-Receipt: `status: passed`, commit `b0a90a8be2e26db8f0bcce004b2cf88b3112f1fd`, worker bundle SHA-256 `0bd1bdfad7b1090d1b9d961cf73f9a3a0291a4daeae929bf69add6fe9485ad2e`, checked at 2026-09-24T00:07:57.753Z. Artifact upload 27537.77 KiB, gzip 5465.91 KiB. The other lanes are unchanged from `d8bb26e`, except for small timing differences. The previous run, on `d8bb26e`, had unit 2724, installer 181, workers 371 and upload 27413.90 KiB. Credential-like variables removed from the lanes (names only): CLAUDE_CODE_MESSAGING_TOKEN, MINERU_API_KEY.
+Receipt: `status: passed`, commit `7a354b7f1814657a518237a3240b9a9502c0183a`, worker bundle SHA-256 `f50ed9da825cd91ade969411c135eb6f97ef5e619a861f48ddfbe34d03c76cbe`, checked at 2026-09-24T07:59:50.108Z. Artifact upload 27518.27 KiB, gzip 5459.06 KiB. Compared with the run on `b0a90a8` (unit 2757, Cloudflare browser 9, upload 27537.77 KiB), the new tests are 3 unit tests and 1 browser spec (section 14); the other lanes are unchanged except for small timing differences. The Cloudflare browser lane then passed 3 more full runs on the same artifact (10/10 each). Credential-like variables removed from the lanes (names only): CLAUDE_CODE_MESSAGING_TOKEN, MINERU_API_KEY.
 
 ## 4. Branch and scoped diff
 
@@ -232,6 +232,25 @@ Codex reran all 18 lanes on `4056f81` (all passed). It confirmed that the four o
 | Specification: describe the polling maximum | `b0a90a8` | API-03 in `03-analysis-jobs.md` now states the per-read bound: a GET is aborted at the end of the budget or 30 s after it began, whichever is later. Polling after one 202 therefore ends within 210 s while the page stays visible and online | — |
 
 This supersedes the "Study list shape" item in section 12: whole configurations are again the default response, so existing tabs and scripts keep working, and only the current UI asks for the compact list. On Cloudflare, the legacy full view fits about 130 maximum-size studies before it answers 413. Before these changes, a list past 32 MiB failed with 503.
+
+## 14. Codex browser-lane finding (2026-09-24)
+
+Codex accepted both follow-ups in section 13. Its rerun on `b181e92` passed 17 of 18 lanes; the Cloudflare browser lane failed intermittently before the batch assertions (`journey.ts:86`). Its trace showed a participant consenting, seeing the greeting and typing the answer while still on `/p/<code>`; the route then changed to `/interview`, and the composer there was empty. The participant link page rendered interview steps from the store while `router.replace('/consent')` was still in flight. The race predates this branch (the file is unchanged from `35f90c7`); the slower local workerd artifact made it visible.
+
+| Finding | Commit | Fix | Regression evidence |
+| --- | --- | --- | --- |
+| [P2] A slow route change loses the participant's typed answer | `dbddd32`, `7a354b7` | `src/app/p/[token]/page.tsx` only resolves the link and shows its loading status (or the link error) until `/consent` replaces it; it never renders an interview step. `Consent` keeps its button unavailable ("Opening the interview…") from the moment consent is recorded until `/interview` replaces it, so a slow route change cannot record consent twice. This also removes the transient chat's mount-time greeting request | Unit: a router that never completes a navigation; the link page shows no consent button or composer even after the step changes, and makes no request beyond the link lookup. Consent stays disabled and makes one request. Browser (`tests/e2e-cloudflare/participant-navigation.spec.ts`): every client navigation to `/consent` and `/interview` is held for 2.5 s; the consent button must first appear on `/consent`, the answer must survive on `/interview`, and exactly one greeting call and one `POST /api/consent` are made. Against the previous code (rebuilt artifact), the browser spec fails at the race itself: a visible consent button on `/p/<code>`. The 2 new unit tests fail on the previous code too (both rerun by me). Waiting longer in the test was not used |
+
+Two read-only reviewers checked the change. They found no regression: no flow depended on the link page rendering a step, because `beginParticipantSession` always resets to `consent`. They also found no other route that renders a step from store state. Their one test concern was valid: the default 5 s expect timeout left too little room across a held 2.5 s navigation. `7a354b7` gives those two waits the delay plus 10 s and releases held requests quietly after the page closes.
+
+They also listed older transitions that stay clickable during a slow navigation. None loses participant data or makes an unintended participant-side write, so none is fixed here:
+
+- The researcher's Preview button re-enables while `/consent` loads.
+- The preview banner's exit leaves an empty chat briefly.
+- "Retry analysis" and "Retry save" stay clickable after "Back to interview" on the synthesis error screens. Retry analysis can start a paid synthesis call, researcher or preview only, and takes two deliberate clicks.
+- Export redraws with zero counts before leaving.
+
+`docs/design/slice-F-spec.md` and `slice-G-spec.md` are historical design records and still describe the old step switch.
 
 ## Appendix A. Requirement-to-evidence map
 
