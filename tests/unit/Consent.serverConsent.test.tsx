@@ -26,6 +26,20 @@ afterEach(() => {
 });
 
 describe('Consent server recording', () => {
+  it('removes consent controls after a researcher chooses Back while setup is still loading', () => {
+    useStore.getState().setViewMode('preview');
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<Consent />);
+    const consent = screen.getByRole('button', { name: /I consent/i });
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    fireEvent.click(consent);
+    expect(screen.getByRole('status')).toHaveTextContent('Returning to study setup');
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(navigation.push).toHaveBeenCalledExactlyOnceWith('/setup');
+  });
+
   it('does not reopen an abandoned interview when consent returns after unmount', async () => {
     let answer!: (response: Response) => void;
     vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => { answer = resolve; })));

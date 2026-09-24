@@ -261,6 +261,8 @@ The four older transitions listed in section 14 are now addressed:
 - Leaving synthesis replaces its controls with a navigation status and invalidates its current attempt immediately. Retry buttons and a late analysis result cannot start another analysis or save while the route changes.
 - Leaving export replaces both downloads and session counts before resetting the session, preventing empty exports and misleading zero counts during navigation.
 
+The researcher consent screen also retires its consent controls as soon as Back is chosen, so that navigation cannot be followed by another consent submission.
+
 The adjacent audit also found abandoned async requests: link resolution could replace a newer participant session, and consent or preview lookups could reopen a page the user had left. Their late results now have no client-side effects. This does not undo a request already accepted by the server or cancel an already-started provider call.
 
 Focused regression evidence: `PreviewBanner.test.tsx` covers exit during an outstanding greeting and arrival at setup; `Synthesis.lifecycle.test.tsx` covers both participant save retry and preview analysis retry during a held navigation; `Export.mode.test.tsx` covers all four reset actions; `StudySetup.document.test.tsx`, `Consent.serverConsent.test.tsx`, and `participantLinkPage.navigation.test.tsx` cover abandoned responses. The artifact browser navigation spec also holds setup navigation after preview exit and checks that the old composer is absent and the greeting count stays at one. Claude's delayed participant-navigation regression remains in place.

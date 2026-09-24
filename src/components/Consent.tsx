@@ -6,6 +6,7 @@ import { useStore } from '@/store';
 import { PROVIDER_OPTIONS } from '@/lib/providerRegistry';
 import { buildParticipantOrPreviewHeaders } from '@/services/participantHeaders';
 import { Button, Disclosure, Label, Verbatim } from '@/components/ui';
+import NavigationStatus from '@/components/NavigationStatus';
 
 const Consent: React.FC = () => {
   const router = useRouter();
@@ -22,6 +23,7 @@ const Consent: React.FC = () => {
   // Set once consent is recorded: the button stays unavailable until /interview
   // replaces this page, so a slow route change cannot record consent twice.
   const [isOpening, setIsOpening] = useState(false);
+  const [isReturning, setIsReturning] = useState(false);
   const [consentError, setConsentError] = useState<string | null>(null);
   const mounted = useRef(false);
   useEffect(() => {
@@ -30,7 +32,7 @@ const Consent: React.FC = () => {
   }, []);
 
   const handleConsent = async () => {
-    if (!studyConfig || isSubmitting || isOpening) return;
+    if (!studyConfig || isSubmitting || isOpening || isReturning) return;
 
     setIsSubmitting(true);
     setConsentError(null);
@@ -68,9 +70,13 @@ const Consent: React.FC = () => {
   };
 
   const handleBack = () => {
+    if (isSubmitting || isOpening || isReturning) return;
+    setIsReturning(true);
     setStep('setup');
     router.push('/setup');
   };
+
+  if (isReturning) return <NavigationStatus>Returning to study setup…</NavigationStatus>;
 
   if (!studyConfig) {
     return (
