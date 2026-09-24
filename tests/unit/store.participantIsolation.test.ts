@@ -29,7 +29,7 @@ describe('participant session isolation', () => {
   it('clears prior participant history when a different session handle is installed', () => {
     const store = useStore.getState();
 
-    // Participant A loads link A (sequence performed by /p/[token] page)
+    // Participant A loads link A (sequence performed by the /p link page)
     store.beginParticipantSession(
       makeStudyConfig({ id: 'study-a', name: 'Study A' }),
       'participant-handle-a-123456'

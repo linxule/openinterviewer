@@ -99,24 +99,81 @@ test('the link code never leaves the link page in a request header', async ({ br
   await context.close();
 });
 
-test('a browser without sessionStorage still reaches the interview from a link', async ({ browser, page }) => {
-  await createStudy(page);
-  const linkPath = await generateLink(page);
-
-  const context = await browser.newContext();
-  // Storage access throws (as with DOM storage disabled): the store runs in
-  // memory only, so the hand-over must keep it rather than reload the page.
-  await context.addInitScript(() => {
+// The store runs in memory only where sessionStorage access throws (DOM
+// storage disabled) or every write exceeds the quota (issue #52). The hand-over
+// must then keep the session with the client router, whose request headers
+// carry its route state: the link page's state must hold no link code.
+const STORAGE_FAULTS = {
+  unavailable: () => {
     Object.defineProperty(window, 'sessionStorage', {
       configurable: true,
       get() { throw new DOMException('The operation is insecure.', 'SecurityError'); },
     });
+  },
+  full: () => {
+    Storage.prototype.setItem = function setItem() {
+      throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+    };
+  },
+};
+
+for (const [mode, fault] of Object.entries(STORAGE_FAULTS)) {
+  test(`a browser with sessionStorage ${mode} still reaches the interview from a link, without the code in a header`, async ({ browser, page }) => {
+    await createStudy(page);
+    const linkPath = await generateLink(page);
+    const linkCode = linkPath.split('/').pop()!;
+
+    const context = await browser.newContext();
+    await context.addInitScript(fault);
+    const participant = await context.newPage();
+    const requests: Array<Promise<{ url: string; flight: boolean; headers: Record<string, string> }>> = [];
+    participant.on('request', (request) => {
+      requests.push(request.allHeaders().then((headers) => ({
+        url: new URL(request.url()).pathname,
+        flight: headers.rsc === '1',
+        headers,
+      })));
+    });
+    await participant.goto(linkPath);
+    await participant.getByRole('button', { name: 'I consent — begin the interview' }).click();
+    await expect(participant.getByText(GREETING, { exact: true })).toBeVisible();
+    expect(new URL(participant.url()).pathname).toBe('/interview');
+
+    const seen = await Promise.all(requests);
+    // The session was kept by the client router, not a document load.
+    expect(seen.some((entry) => entry.url === '/consent' && entry.flight)).toBe(true);
+    const leaks = seen.flatMap((entry) => Object.entries(entry.headers)
+      .filter(([, value]) => value.includes(linkCode))
+      .map(([name]) => `${entry.url} ${name}`));
+    expect(leaks).toEqual([]);
+    await context.close();
   });
+}
+
+test('a memory-only session lost to a failed Flight navigation says how to recover, and reopening the link does', async ({ browser, page }) => {
+  await createStudy(page);
+  const linkPath = await generateLink(page);
+
+  const context = await browser.newContext();
+  await context.addInitScript(STORAGE_FAULTS.unavailable);
   const participant = await context.newPage();
+  // Next.js turns a failed Flight response into a document navigation, which
+  // discards a session held only in memory.
+  const consentRoute = (url: URL) => url.pathname === '/consent';
+  await participant.route(consentRoute, async (route) => {
+    if (route.request().headers().rsc === '1') await route.fulfill({ status: 500, body: 'synthetic failure' });
+    else await route.continue();
+  });
+
+  await participant.goto(linkPath);
+  await expect(participant.getByRole('heading', { name: 'This interview is not open in this tab' })).toBeVisible();
+  expect(new URL(participant.url()).pathname).toBe('/consent');
+  await expect(participant.getByRole('button', { name: 'I consent — begin the interview' })).toHaveCount(0);
+
+  await participant.unroute(consentRoute);
   await participant.goto(linkPath);
   await participant.getByRole('button', { name: 'I consent — begin the interview' }).click();
   await expect(participant.getByText(GREETING, { exact: true })).toBeVisible();
-  expect(new URL(participant.url()).pathname).toBe('/interview');
   await context.close();
 });
 

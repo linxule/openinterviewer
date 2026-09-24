@@ -1,12 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { useStore } from '@/store';
 import { StudyConfig } from '@/types';
 import { Verbatim } from '@/components/ui';
 import type { AITransport } from '@/lib/aiTransport';
 import { leaveLinkPage } from '@/lib/participantLinkHandover';
+import { participantLinkCode } from '@/lib/participantLinkPath';
 
 /** The exchange's transport; anything but the three known values (including none) is null. */
 function participantTransport(value: unknown): AITransport | null {
@@ -22,16 +23,16 @@ function participantTransport(value: unknown): AITransport | null {
  * The link code must not leave this page in a request header (RT-10: request
  * headers reach live Worker logs, where only the URL is redacted). The
  * document is served with `Referrer-Policy: no-referrer` (next.config.js,
- * ./layout.tsx), the exchange fetch sets it again, and the hand-over is a
- * document navigation: the client router would send the current path in its
- * `Next-Url` header. The session survives it in sessionStorage (src/store.ts);
- * where it cannot, the hand-over falls back to the client router
+ * ./layout.tsx), the exchange fetch sets it again, and this route is reached
+ * by a rewrite of /p/<code> (next.config.js), so the client router's state (sent
+ * in its `Next-Url` and `Next-Router-State-Tree` headers) holds no code. The
+ * code is read from the address bar instead of route parameters. The
+ * hand-over is a document navigation where the session survives one in
+ * sessionStorage (src/store.ts), and the client router otherwise
  * (src/lib/participantLinkHandover.ts).
  */
 export default function ParticipantPage() {
-  const params = useParams();
   const router = useRouter();
-  const linkCode = params.token as string;
 
   const beginParticipantSession = useStore((state) => state.beginParticipantSession);
 
@@ -41,6 +42,7 @@ export default function ParticipantPage() {
   useEffect(() => {
     let cancelled = false;
     setError(null);
+    const linkCode = participantLinkCode(window.location.pathname);
     const loadStudyFromLink = async () => {
       if (!linkCode) {
         setError('No participant link code provided');
@@ -91,7 +93,7 @@ export default function ParticipantPage() {
 
     loadStudyFromLink();
     return () => { cancelled = true; };
-  }, [linkCode, beginParticipantSession, router]);
+  }, [beginParticipantSession, router]);
 
   if (error) {
     return (

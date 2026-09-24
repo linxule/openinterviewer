@@ -17,6 +17,7 @@ import {
   ProfileField
 } from './types';
 import type { AITransport } from './lib/aiTransport';
+import { tolerantStorage } from './lib/tolerantSessionStorage';
 
 // Example Study: "The Adaptive Self"
 const EXAMPLE_STUDY: Omit<StudyConfig, 'id' | 'createdAt'> = {
@@ -174,6 +175,8 @@ export function migratedTransport(value: unknown, version: number): AITransport 
 
 /** The sessionStorage key of the persisted store (src/lib/participantLinkHandover.ts reads it back). */
 export const RESEARCH_STORE_KEY = 'research-tool-storage';
+/** The persisted store's version; an entry with another one is migrated on load, not read as-is. */
+export const RESEARCH_STORE_VERSION = 6;
 
 export const useStore = create<ResearchState>()(
   persist(
@@ -376,8 +379,10 @@ export const useStore = create<ResearchState>()(
     }),
     {
       name: RESEARCH_STORE_KEY,
-      storage: createJSONStorage(() => sessionStorage),
-      version: 6,
+      // A write that fails (quota, storage disabled) leaves the store in
+      // memory only instead of throwing out of the update.
+      storage: createJSONStorage(() => tolerantStorage()),
+      version: RESEARCH_STORE_VERSION,
       migrate: (persistedState, version) => {
         if (!persistedState || typeof persistedState !== 'object') {
           return persistedState as ResearchState;
