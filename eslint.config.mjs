@@ -21,8 +21,8 @@ const designLawPatterns = [
   },
   {
     // Negative lookbehind excludes the `--font-serif` CSS custom-property name
-    // (src/app/layout.tsx's next/font/google `variable` option, untouched by
-    // G2) while still catching the raw Tailwind utility class.
+    // (defined in src/fonts/fonts.css) while still catching the raw Tailwind
+    // utility class.
     regex: '(?<!-)font-serif',
     primitivesOnly: true,
     message:
