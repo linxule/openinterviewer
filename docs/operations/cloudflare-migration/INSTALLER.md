@@ -244,7 +244,8 @@ npm run setup:cloudflare -- update --install acme --env production --change-ai-t
 The installer uses a gateway only when it meets this policy (gw-final D7); it refuses (exit 2) otherwise and never changes (`PUT`) or deletes a gateway. Correct a refused setting deliberately in the dashboard (AI → AI Gateway → the gateway → Settings) and rerun.
 
 - Refused: another id or the account's default gateway; `authentication` not `true`; `collect_logs` not `false`; `byok_only` not `true`; `cache_ttl` other than 0 or unset; `retry_max_attempts` other than unset or 1; `logpush` on; DLP configured (unless disabled); Guardrails with any category; any OTel exporter; a `store_id`.
-- Warned: non-zero rate limiting (the gateway may answer 429 before the installation's own limits), spend limits, Stripe usage events, `log_classification`, and any field the installer does not know (listed by name).
+- Warned: non-zero rate limiting (the gateway may answer 429 before the installation's own limits), spend limits, Stripe usage events, `log_classification`, `internal` other than absent or `false`, and any field the installer does not know (listed by name).
+- Undocumented: the API also returns `internal` and `wholesale`, which its reference does not describe (seen as `false` and `true`, September 2026). `wholesale` is not checked: `byok_only` must be `true` and every request carries `cf-aig-no-wholesale: true`, so Unified Billing is never used whatever it says.
 - The Worker sends `cf-aig-collect-log: false`, `cf-aig-skip-cache: true`, `cf-aig-max-attempts: 1` and `cf-aig-no-wholesale: true` on every request regardless (RT-11), so the gateway settings are a second line of defence.
 
 ## Config only (`config`)

@@ -224,6 +224,15 @@ export const KNOWN_GATEWAY_FIELDS = [
   'zdr',
 ];
 
+/**
+ * Fields the API returns but its reference does not document (seen September
+ * 2026 as `internal: false`, `wholesale: true`). They are known so they raise
+ * no warning; the policy reads `internal` only. `wholesale` needs no check:
+ * `byok_only` is refused unless true and the Worker sends
+ * `cf-aig-no-wholesale: true` on every request, so Unified Billing is never used.
+ */
+export const UNDOCUMENTED_GATEWAY_FIELDS = ['internal', 'wholesale'];
+
 /** The fields the policy reads; their values make up the recorded settings digest. */
 const POLICY_FIELDS = [
   'authentication', 'byok_only', 'cache_ttl', 'collect_logs', 'dlp', 'guardrails', 'is_default', 'logpush', 'otel',
@@ -250,7 +259,8 @@ function hasContent(value) {
  * `retry_max_attempts` other than absent, null or 1); Logpush on; DLP,
  * Guardrails or OTel configured; a Secrets Store attached.
  * Warned: non-zero rate limiting, spend limits, Stripe usage events, log
- * classification, and fields this installer does not know.
+ * classification, the undocumented `internal` other than absent or false, and
+ * fields this installer does not know.
  */
 export function gatewaySettingsPolicy(gateway, { id }) {
   const refusals = [];
@@ -279,7 +289,11 @@ export function gatewaySettingsPolicy(gateway, { id }) {
   if (hasContent(gateway.spend_limits) && gateway.spend_limits?.enabled !== false) warnings.push('spend limits are configured: the gateway may refuse requests (429)');
   if (hasContent(gateway.stripe)) warnings.push('Stripe usage events are configured');
   if (hasContent(gateway.log_classification)) warnings.push(`log_classification is ${show(gateway.log_classification)}`);
-  const unknown = Object.keys(gateway).filter((field) => !KNOWN_GATEWAY_FIELDS.includes(field)).sort();
+  if (!(unset(gateway.internal) || gateway.internal === false)) {
+    warnings.push(`internal is ${show(gateway.internal)}: an undocumented field, review the gateway in the dashboard`);
+  }
+  const known = [...KNOWN_GATEWAY_FIELDS, ...UNDOCUMENTED_GATEWAY_FIELDS];
+  const unknown = Object.keys(gateway).filter((field) => !known.includes(field)).sort();
   if (unknown.length > 0) warnings.push(`fields this installer does not know: ${unknown.join(', ')} (review them in the dashboard)`);
   return { refusals, warnings };
 }

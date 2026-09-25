@@ -152,6 +152,17 @@ describe('AI Gateway policy, client and probes (pure)', () => {
     assert.equal(settingsDigest(createdGateway()), settingsDigest(createdGateway({ modified_at: '2027-01-01T00:00:00.000Z' })), 'timestamps are not settings');
   });
 
+  test('the undocumented internal and wholesale fields: the values the API returns pass silently, internal true warns', () => {
+    const observed = createdGateway({ internal: false, wholesale: true });
+    assert.deepEqual(gatewaySettingsPolicy(observed, { id: GATEWAY }), { refusals: [], warnings: [] });
+    assert.equal(settingsDigest(observed), settingsDigest(createdGateway()), 'receipts recorded before these fields keep their digest');
+    const { refusals, warnings } = gatewaySettingsPolicy(createdGateway({ internal: true, wholesale: true }), { id: GATEWAY });
+    assert.deepEqual(refusals, []);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /internal is true: an undocumented field/);
+    assert.match(gatewaySettingsPolicy(createdGateway({ wholesale: true, byok_only: false }), { id: GATEWAY }).refusals.join(), /byok_only is false/);
+  });
+
   test('ownership: observed, inside a recorded attempt, and never the default gateway', () => {
     const at = '2026-09-24T10:00:00.000Z';
     const gateway = createdGateway({ created_at: '2026-09-24T10:00:02.000Z' });
