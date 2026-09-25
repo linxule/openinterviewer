@@ -196,6 +196,24 @@ describe('StudySetup create idempotency', () => {
     expect(retryConfig).not.toHaveProperty('thankYouText');
   });
 
+  it('a new study records the provider commitment the researcher chose, fixed by default', async () => {
+    render(<StudySetup />);
+    await readyToSave();
+    expect(screen.getByRole('radio', { name: /Only this provider and model/ })).toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: 'Save Study' }));
+    await waitFor(() => expect(fetchMock.posts).toHaveLength(1));
+    expect((fetchMock.posts[0].body as { config: Record<string, unknown> }).config.aiProviderCommitment).toBe('fixed');
+  });
+
+  it('a new study can say the provider or model may change', async () => {
+    render(<StudySetup />);
+    await readyToSave();
+    fireEvent.click(screen.getByRole('radio', { name: /The provider or model may change/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save Study' }));
+    await waitFor(() => expect(fetchMock.posts).toHaveLength(1));
+    expect((fetchMock.posts[0].body as { config: Record<string, unknown> }).config.aiProviderCommitment).toBe('may-change');
+  });
+
   it('restores the same key across remounts of the same create intent', async () => {
     const first = render(<StudySetup />);
     await readyToSave();

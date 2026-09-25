@@ -53,6 +53,8 @@ import {
   type WorkspaceHoldReason,
 } from '@/lib/storage/types';
 import type { InterviewAnalysisFailureKind } from '@/types';
+import { commitmentCovers } from '@/lib/providerCommitment';
+import { researcherProviderNotDisclosedResponse } from '@/lib/providerCommitmentResponse';
 
 const ROUTE = '/api/interviews/[id]/analyze';
 const STUDY_ID_PATTERN = /^[A-Za-z0-9-]{1,128}$/;
@@ -132,6 +134,12 @@ async function synchronousAnalysisPost(request: Request, params: RouteParams['pa
       isAdmin: true,
     });
     if (!canonical.ok) return canonical.response;
+
+    // A fixed provider commitment: the transcript goes only to the provider
+    // and model its participant's consent named, whatever the study uses now.
+    if (!commitmentCovers(mapped.interview, canonical.study.config.aiProvider, canonical.study.config.aiModel)) {
+      return researcherProviderNotDisclosedResponse();
+    }
 
     const platformLimited = await hostedAiRateLimitResponse(
       request,
@@ -367,6 +375,8 @@ function acceptOutcomeResponse(outcome: AcceptAnalysisRetryOutcome): NextRespons
       return noStoreJson({ error: 'Interview not found' }, 404);
     case 'transport-not-disclosed':
       return researcherTransportNotDisclosedResponse(1, { 'Cache-Control': 'no-store' });
+    case 'provider-not-disclosed':
+      return researcherProviderNotDisclosedResponse({ 'Cache-Control': 'no-store' });
     case 'held':
       return heldResponse(outcome.reason);
     default:

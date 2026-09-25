@@ -110,6 +110,8 @@ export const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-5.6-terra';
 // Link expiration options
 export type LinkExpirationOption = 'never' | '7days' | '30days' | '90days';
 
+export type ProviderCommitment = 'fixed' | 'may-change';
+
 export interface StudyConfig {
   id: string;
   name: string;
@@ -125,6 +127,15 @@ export interface StudyConfig {
   // reviewed and resaved with an explicit provider and model.
   aiProvider?: AIProviderType;
   aiModel?: string;
+  /**
+   * What the consent notice promises about the AI provider (see
+   * lib/providerCommitment.ts). 'fixed': it names the provider and model and
+   * no later call may send a transcript to another. 'may-change': it says the
+   * researcher may later use a different provider or model. Absent (studies
+   * saved before this field): the notice names the provider only and nothing
+   * is enforced, as before.
+   */
+  aiProviderCommitment?: ProviderCommitment;
   consentText: string;
   /**
    * Optional. Shown to participants on their submission receipt so they can
@@ -350,6 +361,13 @@ export interface StoredInterview {
    */
   conductedByProvider?: AIProviderType;
   conductedByModel?: string;
+  /**
+   * The study's `aiProviderCommitment` at the revision the participant
+   * consented under, copied at save and never back-filled. With 'fixed', a
+   * later call may send this transcript only to `conductedByProvider` /
+   * `conductedByModel` (lib/providerCommitment.ts).
+   */
+  providerCommitment?: ProviderCommitment;
   /** Researcher instructions in force at save time; never back-filled. */
   conductedWithInstructions?: string;
 

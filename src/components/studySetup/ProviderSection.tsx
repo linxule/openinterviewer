@@ -1,6 +1,6 @@
 import { Coordinate, Field, Notice } from '@/components/ui';
 import { cn } from '@/lib/cn';
-import { AIModelOption, AIProviderType } from '@/types';
+import { AIModelOption, AIProviderType, ProviderCommitment } from '@/types';
 import { Section } from './Section';
 import type { ConfigStatus } from './providerStatus';
 import type { StudyDraft } from './useStudyDraft';
@@ -22,6 +22,25 @@ export interface ProviderSectionProps {
   onOpenSettings: () => void;
   onOpenSelfHost: () => void;
 }
+
+/**
+ * The consent notice's promise about the provider (lib/providerCommitment.ts).
+ * Participants read the matching sentence in Consent.tsx.
+ */
+export const COMMITMENT_OPTIONS: ReadonlyArray<{ id: ProviderCommitment; label: string; desc: string; summary: string }> = [
+  {
+    id: 'fixed',
+    label: 'Only this provider and model',
+    desc: 'The consent notice names this provider and model. Interviews can be re-analyzed only with them; after a switch, set the study back to analyze earlier interviews.',
+    summary: 'only this provider and model',
+  },
+  {
+    id: 'may-change',
+    label: 'The provider or model may change',
+    desc: 'The consent notice names this provider and says you may later analyze responses with a different provider or model.',
+    summary: 'the provider or model may change',
+  },
+];
 
 function NoProviderConfiguredNotice({ providerOptions }: { providerOptions: ReadonlyArray<unknown> }) {
   if (providerOptions.length !== 0) return null;
@@ -191,6 +210,9 @@ export function ProviderSection({
       read={
         <div className="space-y-2">
           <Coordinate className="block">{selectedProviderName} · {draft.aiModel}</Coordinate>
+          <Coordinate className="block">
+            participants told: {COMMITMENT_OPTIONS.find(option => option.id === draft.aiProviderCommitment)?.summary}
+          </Coordinate>
           {showReasoningControl ? (
             <Coordinate className="block">
               reasoning: {draft.enableReasoning === undefined ? 'automatic' : draft.enableReasoning ? 'more thinking' : 'minimize thinking'}
@@ -288,6 +310,36 @@ export function ProviderSection({
           </p>
         </div>
       ) : null}
+
+      <fieldset className="space-y-2">
+        <legend className="font-sans text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-500">
+          What participants are told
+        </legend>
+        {COMMITMENT_OPTIONS.map((option) => {
+          const selected = draft.aiProviderCommitment === option.id;
+          return (
+            <label
+              key={option.id}
+              className={cn(
+                'flex cursor-pointer items-start gap-3 border-l-2 py-3 pl-4',
+                selected ? 'border-l-action bg-paper-2' : 'border-l-transparent hover:bg-paper-2/50'
+              )}
+            >
+              <input
+                type="radio"
+                name="aiProviderCommitment"
+                checked={selected}
+                onChange={() => draft.setAiProviderCommitment(option.id)}
+                className="mt-1 accent-action"
+              />
+              <div>
+                <div className="font-sans text-[15px] font-medium text-ink-900">{option.label}</div>
+                <div className="font-sans text-[13px] text-ink-500">{option.desc}</div>
+              </div>
+            </label>
+          );
+        })}
+      </fieldset>
 
       {/* Keep the legacy reasoning control Gemini-only until the stored
           study contract supports provider-specific reasoning options. */}

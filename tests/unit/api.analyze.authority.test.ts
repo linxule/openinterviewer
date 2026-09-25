@@ -212,3 +212,47 @@ describe('Node target keeps the synchronous analyze contract (API-01 compatibili
     expect(response.headers.get('allow')).toBe('OPTIONS, POST');
   });
 });
+
+// A fixed provider commitment (lib/providerCommitment.ts): a retry sends the
+// transcript only to the provider and model its participant's consent named.
+describe('provider commitment on the Node retry', () => {
+  const run = async (interview: Partial<import('@/types').StoredInterview>, config: Record<string, unknown>) => {
+    contextMock.getAuthorizedResearcherStudyContext.mockResolvedValue({
+      authorized: true,
+      context: hostedTestContext({} as RedisPort, 'researcher-a'),
+      researcherId: 'researcher-a',
+    });
+    kvMock.getInterviewChecked.mockResolvedValue({
+      status: 'found',
+      interview: makeStoredInterview({ id: 'interview-in-a', studyId: 'study-a', ...interview }),
+    });
+    canonicalMock.loadCanonicalStudy.mockResolvedValue({ ok: true, study: { id: 'study-a', revision: 2, config } });
+    analysisMock.runInterviewAnalysis.mockResolvedValue({ status: 'complete' });
+    const { request, params } = makeRequest('interview-in-a', 'study-a');
+    return POST(request, { params });
+  };
+  const fixedOnGemini = { providerCommitment: 'fixed' as const, conductedByProvider: 'gemini' as const, conductedByModel: 'gemini-3.7-flash' };
+
+  it.each([
+    ['another provider', { aiProvider: 'claude', aiModel: 'claude-sonnet-5' }],
+    ['another model of the same provider', { aiProvider: 'gemini', aiModel: 'gemini-2.5-pro' }],
+  ])('refuses a fixed interview when the study now uses %s, before any provider call or rate charge', async (_label, config) => {
+    const response = await run(fixedOnGemini, config);
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: 'PROVIDER_NOT_DISCLOSED' });
+    expect(analysisMock.runInterviewAnalysis).not.toHaveBeenCalled();
+    expect(rateLimitMock.hostedAiRateLimitResponse).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a fixed interview on its own provider and model', fixedOnGemini, { aiProvider: 'gemini', aiModel: 'gemini-3.7-flash' }],
+    ['a may-change interview after a switch', { ...fixedOnGemini, providerCommitment: 'may-change' as const }, { aiProvider: 'claude', aiModel: 'claude-sonnet-5' }],
+    ['an interview saved before commitments existed', { conductedByProvider: 'gemini' as const, conductedByModel: 'gemini-3.7-flash' }, { aiProvider: 'claude', aiModel: 'claude-sonnet-5' }],
+  ])('runs %s', async (_label, interview, config) => {
+    const response = await run(interview, config);
+
+    expect(response.status).toBe(200);
+    expect(analysisMock.runInterviewAnalysis).toHaveBeenCalledTimes(1);
+  });
+});

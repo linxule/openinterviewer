@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useStore } from '@/store';
-import { PROVIDER_OPTIONS } from '@/lib/providerRegistry';
+import { PROVIDER_MODELS, PROVIDER_OPTIONS } from '@/lib/providerRegistry';
 import { buildParticipantOrPreviewHeaders } from '@/services/participantHeaders';
 import { Button, Disclosure, Label, Verbatim } from '@/components/ui';
 import NavigationStatus from '@/components/NavigationStatus';
@@ -93,6 +93,18 @@ const Consent: React.FC = () => {
   const providerConfigurationReady = Boolean(
     selectedProviderId && selectedProviderName && studyConfig.aiModel && disclosedTransport,
   );
+  // The study's promise about the provider (lib/providerCommitment.ts). Shown
+  // only with a ready configuration; absent on studies saved before it existed.
+  const selectedModelName = selectedProviderId && studyConfig.aiModel
+    ? PROVIDER_MODELS[selectedProviderId].find(model => model.id === studyConfig.aiModel)?.label ?? studyConfig.aiModel
+    : undefined;
+  const providerCommitmentNotice = !providerConfigurationReady
+    ? null
+    : studyConfig.aiProviderCommitment === 'fixed'
+    ? `The interview and any later analysis of your responses use ${selectedModelName} (${selectedProviderName}); the study does not switch them to another AI provider or model.`
+    : studyConfig.aiProviderCommitment === 'may-change'
+    ? 'The researcher may later analyze your responses with a different AI provider or model.'
+    : null;
   const providerDisclosure = !disclosedTransport
     ? 'This page could not confirm how your responses are sent. Reopen the study link before continuing.'
     : !providerConfigurationReady
@@ -152,7 +164,10 @@ const Consent: React.FC = () => {
 
         <div className="bg-paper-2 p-4 font-sans text-[13px] leading-[20px] text-ink-700">
           <strong className="text-ink-900">Data notice:</strong>{' '}
-          <span className="font-mono">{providerDisclosure}</span>{' '}
+          <span className="font-mono">
+            {providerDisclosure}
+            {providerCommitmentNotice ? <>{' '}{providerCommitmentNotice}</> : null}
+          </span>{' '}
           The researcher is the study&apos;s data controller and controls its storage and retention settings. Do
           not include information you do not want to share. Contact the researcher for retention, access, and
           deletion details.

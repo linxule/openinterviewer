@@ -245,6 +245,34 @@ describe('POST /api/interviews/save idempotency', () => {
     expect(JSON.stringify(persisted)).not.toContain('"openai"');
   });
 
+  it.each(['fixed', 'may-change'] as const)('records the study\'s %s provider commitment on the record', async (commitment) => {
+    canonicalMock.loadCanonicalStudy.mockResolvedValue({
+      ok: true,
+      study: {
+        id: 'study-a',
+        revision: 3,
+        config: { name: 'Canonical Study', aiProvider: 'claude', aiModel: CLAUDE_MODEL, aiProviderCommitment: commitment },
+      },
+    });
+    const interview = makeStoredInterview({ id: 'interview-claude', studyId: 'study-a' });
+
+    const response = await POST(makeRequest({ ...interview, providerCommitment: commitment === 'fixed' ? 'may-change' : 'fixed' }));
+
+    expect(response.status).toBe(200);
+    const persisted = kvMock.persistCompletedInterview.mock.calls[0][0] as Record<string, unknown>;
+    expect(persisted).toMatchObject({ providerCommitment: commitment, conductedByProvider: 'claude', conductedByModel: CLAUDE_MODEL });
+  });
+
+  it('writes no provider commitment for a study saved before commitments existed', async () => {
+    const interview = makeStoredInterview({ id: 'interview-legacy', studyId: 'study-a' });
+
+    const response = await POST(makeRequest({ ...interview, providerCommitment: 'may-change' }));
+
+    expect(response.status).toBe(200);
+    const persisted = kvMock.persistCompletedInterview.mock.calls[0][0] as Record<string, unknown>;
+    expect(persisted).not.toHaveProperty('providerCommitment');
+  });
+
   it('delegates concurrent duplicate detection to the atomic storage primitive', async () => {
     const interview = makeStoredInterview({ id: 'interview-x', studyId: 'study-a' });
     const body = {

@@ -5,6 +5,7 @@ import {
 import { readBoundedJsonObject } from './requestBody';
 import { isKnownProviderModel } from './providerRegistry';
 import { CONSENT_TEXT_PLACEHOLDER, CONSENT_TEXT_PLACEHOLDER_ERROR } from './consentText';
+import { isProviderCommitment } from './providerCommitment';
 import { BRACKETED_PLACEHOLDER, THANK_YOU_TEXT_PLACEHOLDER_ERROR } from './thankYouText';
 
 import { MAX_INTERVIEWER_INSTRUCTIONS_LENGTH } from './interviewerManner';
@@ -41,6 +42,7 @@ const STUDY_CONFIG_FIELDS = new Set([
   'aiBehavior',
   'aiProvider',
   'aiModel',
+  'aiProviderCommitment',
   'consentText',
   'researcherContact',
   'thankYouText',
@@ -184,6 +186,9 @@ export function validateStudyConfig(value: unknown): ValidationResult {
   }
   if (!isBoundedString(value.consentText, MAX_CONSENT_TEXT_LENGTH, true)) {
     return { ok: false, error: 'Consent text is required and must be 20000 characters or fewer' };
+  }
+  if (value.aiProviderCommitment !== undefined && !isProviderCommitment(value.aiProviderCommitment)) {
+    return { ok: false, error: 'Invalid AI provider commitment' };
   }
 
   if (value.parentStudyId !== undefined

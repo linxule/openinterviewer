@@ -169,6 +169,7 @@ export type AcceptAnalysisRetryInput = {
 export type AcceptAnalysisRetryOutcome =
   | { status: 'accepted'; body: AnalysisStatusBody }
   | { status: 'transport-not-disclosed' }
+  | { status: 'provider-not-disclosed' }
   | { status: 'existing'; body: AnalysisStatusBody }
   | { status: 'already-complete'; body: AnalysisStatusBody }
   | { status: 'state-changed' }

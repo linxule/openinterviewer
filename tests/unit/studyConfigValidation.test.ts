@@ -90,6 +90,14 @@ describe('validateStudyConfig', () => {
     })).toMatchObject({ ok: false, error: 'Invalid AI behavior' });
   });
 
+  it('accepts the two provider commitments or none, and nothing else', () => {
+    expect(validateStudyConfig(makeStudyConfig({ aiProviderCommitment: 'fixed' }))).toMatchObject({ ok: true });
+    expect(validateStudyConfig(makeStudyConfig({ aiProviderCommitment: 'may-change' }))).toMatchObject({ ok: true });
+    expect(validateStudyConfig(makeStudyConfig())).toMatchObject({ ok: true });
+    expect(validateStudyConfig({ ...makeStudyConfig(), aiProviderCommitment: 'sometimes' }))
+      .toMatchObject({ ok: false, error: 'Invalid AI provider commitment' });
+  });
+
   it('accepts bounded custom OpenRouter slugs but never automatic routing', () => {
     const custom = makeStudyConfig({
       aiProvider: 'openrouter',

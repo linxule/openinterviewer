@@ -256,6 +256,7 @@ const CLEAR_SAMPLE: StatusTable<ClearSampleOutcome> = {
 const ACCEPT_RETRY: StatusTable<AcceptAnalysisRetryOutcome> = {
   accepted: true,
   'transport-not-disclosed': true,
+  'provider-not-disclosed': true,
   existing: true,
   'already-complete': true,
   'state-changed': true,

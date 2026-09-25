@@ -206,6 +206,9 @@ export async function POST(request: Request) {
       initialAnalysis = frozen.input;
     }
 
+    const commitment = canonical.study.config.aiProviderCommitment;
+    const providerCommitmentMember = commitment ? { providerCommitment: commitment } : {};
+
     // Build the interview with server-controlled identity and timestamps.
     const now = Date.now();
     const interviewId = `session-${participantSessionId}`;
@@ -244,6 +247,8 @@ export async function POST(request: Request) {
       // copy, which drops any client-asserted conducting model.
       conductedByProvider: canonical.study.config.aiProvider,
       conductedByModel: canonical.study.config.aiModel,
+      // What the consent notice promised about the provider, at this revision.
+      ...providerCommitmentMember,
       ...(canonical.study.config.interviewerInstructions !== undefined
         ? { conductedWithInstructions: canonical.study.config.interviewerInstructions }
         : {}),
@@ -269,6 +274,8 @@ export async function POST(request: Request) {
       ...(consentTransport ? { consentTransport } : {}),
       conductedByProvider: canonical.study.config.aiProvider,
       conductedByModel: canonical.study.config.aiModel,
+      // Only when present, so a fingerprint without a commitment is unchanged.
+      ...providerCommitmentMember,
       ...(canonical.study.config.interviewerInstructions !== undefined
         ? { conductedWithInstructions: canonical.study.config.interviewerInstructions }
         : {}),

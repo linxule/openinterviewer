@@ -190,3 +190,40 @@ describe('N-1 rollback readers accept this build\'s analysis rows (gw-final NEW 
     expect((read as { interview: Record<string, unknown> }).interview).not.toHaveProperty('aiTransport');
   });
 });
+
+// A fixed provider commitment (lib/providerCommitment.ts): the object
+// allocates a retry only for the provider and model the consent named.
+describe('researcher retry keeps a fixed provider commitment', () => {
+  const committed = (commitment: 'fixed' | 'may-change') => ({
+    providerCommitment: commitment,
+    conductedByProvider: 'openai',
+    conductedByModel: PROVIDER_MODELS.openai.requested,
+  });
+
+  it('refuses a retry with another provider or model, allocating nothing', async () => {
+    const seeded = await seedInterview({ provider: 'openai', record: committed('fixed') });
+    const switched = [
+      { ...frozenInput(seeded.config, 1), requestedProvider: 'claude' as const, requestedModel: 'claude-sonnet-5' },
+      { ...frozenInput(seeded.config, 1), requestedModel: 'gpt-5.6-other' },
+    ];
+    for (const input of switched) {
+      expect(await workspaceStub().acceptAnalysisRetry(retryInput(seeded, { input })))
+        .toEqual({ status: 'provider-not-disclosed' });
+    }
+    expect(await sqlRows('SELECT job_id FROM analysis_jobs WHERE interview_id = ?', seeded.interviewId)).toEqual([]);
+  });
+
+  it('accepts a retry on the committed provider and model', async () => {
+    const seeded = await seedInterview({ provider: 'openai', record: committed('fixed') });
+    expect(await workspaceStub().acceptAnalysisRetry(retryInput(seeded))).toMatchObject({ status: 'accepted' });
+  });
+
+  it('a may-change or legacy interview accepts any provider', async () => {
+    const switched = (seeded: SeededInterview) =>
+      retryInput(seeded, { input: { ...frozenInput(seeded.config, 1), requestedProvider: 'claude', requestedModel: 'claude-sonnet-5' } });
+    const mayChange = await seedInterview({ provider: 'openai', record: committed('may-change') });
+    expect(await workspaceStub().acceptAnalysisRetry(switched(mayChange))).toMatchObject({ status: 'accepted' });
+    const legacy = await seedInterview({ provider: 'openai' });
+    expect(await workspaceStub().acceptAnalysisRetry(switched(legacy))).toMatchObject({ status: 'accepted' });
+  });
+});
