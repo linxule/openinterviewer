@@ -12,6 +12,13 @@ updates:
       # Types must match the pinned runtime (engines.node, .nvmrc); bump with the Node pin.
       - dependency-name: '@types/node'
         update-types: [version-update:semver-major]
+      # tailwind-merge 3 targets Tailwind 4; move it together with tailwindcss.
+      - dependency-name: tailwind-merge
+        update-types: [version-update:semver-major]
+      # ESLint 10 breaks eslint-plugin-react/-import/-jsx-a11y (peer ranges end at 9);
+      # lift once they support it.
+      - dependency-name: eslint
+        update-types: [version-update:semver-major]
     groups:
       # Provider upgrades also need the explicitly authorized live smoke tier.
       providers:
