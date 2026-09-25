@@ -9,6 +9,9 @@ updates:
       # Tailwind 4 needs a deliberate migration; keep security updates eligible.
       - dependency-name: tailwindcss
         update-types: [version-update:semver-major]
+      # Types must match the pinned runtime (engines.node, .nvmrc); bump with the Node pin.
+      - dependency-name: '@types/node'
+        update-types: [version-update:semver-major]
     groups:
       # Provider upgrades also need the explicitly authorized live smoke tier.
       providers:
