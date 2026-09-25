@@ -10,6 +10,10 @@ export default defineConfig({
     include: ['tests/smoke/**/*.smoke.test.ts'],
     testTimeout: 150_000,
     hookTimeout: 30_000,
+    // The smoke's only output is its metadata line. Vitest picks a minimal
+    // reporter that hides passing tests' console output when it runs under a
+    // coding agent, so pin the default one.
+    reporters: ['default'],
   },
   resolve: {
     alias: {
