@@ -55,6 +55,7 @@ import {
   MAX_AGGREGATE_INPUT_BYTES,
 } from '@/lib/ownedStudies';
 import { DEMO_INTERVIEWS, DEMO_STUDIES } from '@/lib/demoData';
+import { SAMPLE_STUDY_ID } from '@/lib/sampleFixtures';
 import {
   WORKER_INVOCATION_ACCESSOR,
   type WorkerInvocation,
@@ -967,6 +968,92 @@ describe('aggregate and follow-up consent coverage on Cloudflare AI Gateway (D9,
 
     expect(response.status).toBe(502);
     expect(synthesizeAggregate).not.toHaveBeenCalled();
+  });
+
+  // RT-11 (sample workspace): the seeded fixtures are synthetic and carry no
+  // disclosure, so they need none; a real interview beside them still does.
+  describe('sample workspace', () => {
+    const sample = studyAt(2, { id: SAMPLE_STUDY_ID });
+    const fixture = (id: string) => analyzed(sample, id);
+
+    beforeEach(() => {
+      authorize(cloudflareContext({ providerRoute: GATEWAY_ROUTE }));
+      store.readiness.mockResolvedValue(ready());
+      store.getStudy.mockResolvedValue({ status: 'found', study: sample });
+      store.saveAggregate.mockResolvedValue('saved');
+    });
+
+    it('aggregate: the seeded fixtures run on the gateway', async () => {
+      store.readAggregateInputs.mockResolvedValue({
+        status: 'ok',
+        interviews: [fixture('interview-demo-sarah'), fixture('interview-demo-marcus'), fixture('interview-demo-priya')],
+        nextCursor: null,
+        totalEligible: 3,
+      });
+
+      const response = await synthesizeAggregateRoute(aggregateRequest(sample.id));
+
+      expect(response.status).toBe(200);
+      expect(synthesizeAggregate).toHaveBeenCalledTimes(1);
+    });
+
+    it('aggregate: a direct-consented participant interview in the sample study is still refused', async () => {
+      store.readAggregateInputs.mockResolvedValue({
+        status: 'ok',
+        interviews: [fixture('interview-demo-sarah'), fixture('interview-demo-marcus'), analyzed(sample, 'session-real')],
+        nextCursor: null,
+        totalEligible: 3,
+      });
+
+      const response = await synthesizeAggregateRoute(aggregateRequest(sample.id));
+
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toMatchObject({ code: 'TRANSPORT_NOT_DISCLOSED', uncoveredInterviewCount: 1 });
+      expect(synthesizeAggregate).not.toHaveBeenCalled();
+    });
+
+    it('aggregate: fixture ids outside the sample study get no exemption', async () => {
+      const other = studyAt(2);
+      store.getStudy.mockResolvedValue({ status: 'found', study: other });
+      store.readAggregateInputs.mockResolvedValue({
+        status: 'ok',
+        interviews: [analyzed(other, 'interview-demo-sarah'), analyzed(other, 'interview-demo-marcus')],
+        nextCursor: null,
+        totalEligible: 2,
+      });
+
+      const response = await synthesizeAggregateRoute(aggregateRequest(other.id));
+
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toMatchObject({ uncoveredInterviewCount: 2 });
+    });
+
+    it('follow-up: an aggregate of the seeded fixtures runs on the gateway', async () => {
+      store.getAggregate.mockResolvedValue({
+        status: 'found',
+        aggregate: {
+          studyId: sample.id, studyRevision: 2, interviewIds: ['interview-demo-sarah', 'interview-demo-marcus'], interviewCount: 2,
+          aiProvider: 'openai', aiModel: 'gpt-5.6-terra-served', requestedAiModel: 'gpt-5.6-terra',
+          commonThemes: [{ theme: 'Trust', frequency: 2, representativeQuotes: ['A'] }], divergentViews: [],
+          keyFindings: ['Trust matters'], researchImplications: ['Study ownership'], bottomLine: 'Ownership shapes trust.',
+          generatedAt: 1, savedAt: 2,
+        } as unknown as StoredAggregateSynthesis,
+      });
+      store.readAggregateInputs.mockResolvedValue({
+        status: 'ok',
+        interviews: [fixture('interview-demo-sarah'), fixture('interview-demo-marcus')],
+        nextCursor: null,
+        totalEligible: 2,
+      });
+
+      const response = await generateFollowup(
+        new Request('http://localhost', { method: 'POST' }),
+        { params: Promise.resolve({ id: sample.id }) },
+      );
+
+      expect(response.status).toBe(200);
+      expect(generateFollowupStudy).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('follow-up', () => {
