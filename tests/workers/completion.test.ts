@@ -3,6 +3,7 @@ import { evictDurableObject, reset, runInDurableObject } from 'cloudflare:test';
 import { persistCompletedInterview } from '../../cloudflare/workspace/completion';
 import type { WorkspaceContext } from '../../cloudflare/workspace/context';
 import type { LinkRevokeOutcome } from '../../src/lib/storage/types';
+import type { StoredInterview } from '../../src/types';
 import { testEnv, workspaceStub } from './helpers';
 import {
   alarmAt,
@@ -611,6 +612,52 @@ describe('frozen inputs and integrity (JOB-02, ST-05)', () => {
     const accepted = { ...input, initialAnalysis: { ...frozenInput(study), studyConfig: reordered, injected: 'dropped' } };
     expect(await workspaceStub().persistCompletedInterview(accepted)).toEqual({ status: 'created' });
     expect(await sql(`SELECT input_json FROM analysis_jobs`)).toEqual([{ input_json: JSON.stringify(frozenInput(study)) }]);
+  });
+
+  it('the record\'s provider commitment must be the stored configuration\'s, naming that revision\'s provider and model', async () => {
+    const study = await createStudy({ aiProviderCommitment: 'fixed' });
+    const participant = await enrolParticipant(study);
+    const events = captureStoreEvents();
+    const refusals: Array<Partial<StoredInterview>> = [
+      {},
+      { providerCommitment: 'may-change' },
+      { providerCommitment: 'fixed', conductedByModel: 'some-other-model' },
+      { providerCommitment: 'fixed', conductedByProvider: 'claude' },
+      { providerCommitment: 'sometimes' as never },
+    ];
+    for (const overrides of refusals) {
+      const record = interviewRecord(participant, overrides);
+      if (!('providerCommitment' in overrides)) delete (record as Partial<StoredInterview>).providerCommitment;
+      expect(await workspaceStub().persistCompletedInterview(await persistInput(participant, { interview: record })))
+        .toEqual({ status: 'unavailable' });
+    }
+    expect(await count('interviews')).toBe(0);
+    expect(events().length).toBe(refusals.length - 1);
+
+    const kept = interviewRecord(participant, { providerCommitment: 'fixed' });
+    expect(await workspaceStub().persistCompletedInterview(await persistInput(participant, { interview: kept })))
+      .toEqual({ status: 'created' });
+  });
+
+  it('a fixed commitment never rests on the installation-default provider', async () => {
+    const study = await createStudy({ aiProvider: undefined, aiProviderCommitment: 'fixed' });
+    const participant = await enrolParticipant(study);
+    const resolved = { ...frozenInput(study), requestedProvider: 'gemini' as const };
+    for (const overrides of [{ providerCommitment: 'fixed' as const }, { providerCommitment: 'fixed' as const, conductedByProvider: 'gemini' as const }]) {
+      const input = { ...(await persistInput(participant, { interview: interviewRecord(participant, overrides) })), initialAnalysis: resolved };
+      expect(await workspaceStub().persistCompletedInterview(input)).toEqual({ status: 'unavailable' });
+    }
+    expect(await count('interviews')).toBe(0);
+  });
+
+  it('a study without a provider commitment refuses a record that claims one', async () => {
+    const study = await createStudy();
+    const participant = await enrolParticipant(study);
+    const record = interviewRecord(participant, { providerCommitment: 'fixed' });
+    expect(await workspaceStub().persistCompletedInterview(await persistInput(participant, { interview: record })))
+      .toEqual({ status: 'unavailable' });
+    expect(await workspaceStub().persistCompletedInterview(await persistInput(participant)))
+      .toEqual({ status: 'created' });
   });
 
   it('JOB-02: a study without an explicit provider accepts the caller-resolved installation provider', async () => {

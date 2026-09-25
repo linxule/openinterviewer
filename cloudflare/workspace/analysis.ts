@@ -24,6 +24,7 @@ import { isProviderType } from '../../src/lib/providers/synthesisModel';
 import { validateSynthesisResult } from '../../src/lib/providerValidation';
 import { validateProvenance } from '../../src/lib/synthesisProvenance';
 import { covers } from '../../src/lib/providers/endpoint';
+import { commitmentCovers } from '../../src/lib/providerCommitment';
 import { serializedByteLength } from '../analysis/policy';
 import { logJobEvent, type JobOperation } from '../analysis/telemetry';
 import type * as Rpc from './rpcTypes';
@@ -484,6 +485,11 @@ export async function acceptAnalysisRetry(
       // consent covers; the frozen disclosure is the interview's own record.
       const disclosed = state.record.consentTransport === 'cloudflare-gateway' ? state.record.consentTransport : undefined;
       if (!covers(disclosed ?? 'direct', input.transport ?? 'direct')) return { status: 'transport-not-disclosed' };
+      // A fixed provider commitment: the transcript goes only to the provider
+      // and model its participant's consent named (lib/providerCommitment.ts).
+      if (!commitmentCovers(state.record, input.input.requestedProvider, input.input.requestedModel)) {
+        return { status: 'provider-not-disclosed' };
+      }
       const { disclosedTransport: _callerDisclosure, ...acceptedInput } = input.input;
       void _callerDisclosure;
       const frozen: Protocol.FrozenAnalysisInput = disclosed

@@ -82,6 +82,7 @@ Hosted study create/delete is a durable cross-database operation. Preserve the o
 - Opaque participant links: `src/lib/participantLinks.ts`
 - Server-recorded consent: `src/lib/participantConsent.ts`
 - Consent coverage of the provider transport (Cloudflare; disclosed transport vs the current route): `src/lib/transportDisclosure.ts`
+- The consent notice's provider commitment (`fixed` or `may-change`) and the retry check that keeps it: `src/lib/providerCommitment.ts`
 - Canonical study loading: `src/lib/canonicalStudy.ts`
 - Save validation and deferred analysis: `src/lib/interviewSubmission.ts`, `src/lib/interviewAnalysis.ts`, `src/lib/analysisState.ts`
 - Server-generated synthesis provenance: `src/lib/synthesisProvenance.ts`
@@ -109,6 +110,7 @@ On Cloudflare the participant sequence is the same, with analysis queued by the 
 - Hosted provider resolution must never fall back to platform-owner API keys.
 - Hosted researcher BYOS remains on `AI_TRANSPORT=direct`. Standalone Gateway requests pin one creator endpoint, configure no model fallback, and keep actual execution provenance.
 - Cloudflare AI Gateway requests go only to the installation's gateway on each provider's native path, carry exactly the six `cf-aig-*` headers, never fall back to direct on a malformed configuration, and record `aiTransport`. A provider call carrying participant content runs only when the transport disclosed at consent covers the current one (direct always does).
+- An interview saved under a study whose consent notice promised a `fixed` provider commitment is sent only to the provider and model it records (`conductedByProvider`, `conductedByModel`). The retry route checks this on both targets, and on Cloudflare the Durable Object checks it again when it accepts the retry. The object also refuses a saved record whose commitment differs from its own configuration at that revision.
 - User-provided Redis URLs remain restricted to HTTPS Upstash hosts; preserve bounded validation deadlines.
 - AI/provider failure is an error. Never substitute a plausible research response, synthesis, or greeting.
 - Completion persistence and study mutation remain atomic and idempotent under retries and concurrency.

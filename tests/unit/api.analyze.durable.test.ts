@@ -362,6 +362,8 @@ describe('POST /api/interviews/[id]/analyze on Cloudflare — acceptance (API-01
     ['a foreign or missing interview', { status: 'not-found' }, 404, { error: 'Interview not found' }],
     ['a transport the interview\'s consent does not cover (D9)', { status: 'transport-not-disclosed' }, 409,
       { code: 'TRANSPORT_NOT_DISCLOSED', uncoveredInterviewCount: 1 }],
+    ['a provider or model the interview\'s fixed commitment does not cover', { status: 'provider-not-disclosed' }, 409,
+      { code: 'PROVIDER_NOT_DISCLOSED' }],
     ['a maintenance hold', { status: 'held', reason: 'maintenance' }, 503, { retryable: true, reason: 'maintenance' }],
     ['a recovery-epoch hold', { status: 'held', reason: 'recovery-epoch-mismatch' }, 503,
       { retryable: true, reason: 'workspace-unavailable' }],

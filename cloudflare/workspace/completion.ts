@@ -20,6 +20,7 @@ import {
 } from './context';
 import { consentMatches, readConsent, resolveLink, sha256Hex } from './participants';
 import { logRequestEvent } from '../../src/lib/requestLog';
+import { isProviderCommitment } from '../../src/lib/providerCommitment';
 import {
   decodeStudyRow,
   INTERVIEW_ID,
@@ -102,6 +103,7 @@ async function prepare(input: Rpc.PersistInput): Promise<Prepared | null> {
     || !isSafeTime(interview.completedAt)
     || (interview.studyRevision !== undefined && !isRevision(interview.studyRevision))
     || (interview.consentTransport !== undefined && interview.consentTransport !== 'cloudflare-gateway')
+    || (interview.providerCommitment !== undefined && !isProviderCommitment(interview.providerCommitment))
   ) {
     return null;
   }
@@ -213,6 +215,14 @@ function decide(ws: WorkspaceContext, prepared: Prepared): Decision {
     canonicalJson(requested.studyConfig) !== canonicalJson(study.config)
     || (study.config.aiProvider && requested.requestedProvider !== study.config.aiProvider)
     || (study.config.aiModel && requested.requestedModel !== study.config.aiModel)
+    // The record's provider commitment is the object's own configuration at
+    // this revision, and a fixed one names that revision's provider and model.
+    || (interview.providerCommitment ?? null) !== (study.config.aiProviderCommitment ?? null)
+    // A fixed one needs the study's own explicit provider and model: it never
+    // rests on the installation-default fallback.
+    || (interview.providerCommitment === 'fixed'
+      && (typeof study.config.aiProvider !== 'string' || typeof study.config.aiModel !== 'string'
+        || interview.conductedByProvider !== study.config.aiProvider || interview.conductedByModel !== study.config.aiModel))
   ) {
     logInvalid();
     return refuse({ status: 'unavailable' });

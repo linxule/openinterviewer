@@ -61,6 +61,49 @@ describe('Consent server recording', () => {
     expect(document.body).not.toHaveTextContent(/API key|GEMINI_API_KEY|AIza/i);
   });
 
+  describe('provider commitment in the data notice', () => {
+    const begin = (config: Parameters<typeof makeStudyConfig>[0]) => {
+      useStore.setState(useStore.getInitialState(), true);
+      useStore.getState().beginParticipantSession(makeStudyConfig({ id: 'study-a', ...config }), 'participant-handle-a-123456');
+    };
+
+    it('fixed: names the model and says the study does not switch provider or model', () => {
+      begin({ aiProvider: 'claude', aiModel: 'claude-sonnet-5', aiProviderCommitment: 'fixed' });
+      render(<Consent />);
+
+      expect(screen.getByText(/Your responses are sent to Anthropic Claude\./)).toBeInTheDocument();
+      expect(screen.getByText(
+        /The interview and any later analysis of your responses use Claude Sonnet 5 \(Anthropic Claude\); the study does not switch them to another AI provider or model\./,
+      )).toBeInTheDocument();
+    });
+
+    it('fixed: a custom OpenRouter model is named by its id', () => {
+      begin({ aiProvider: 'openrouter', aiModel: 'acme/model-x', aiProviderCommitment: 'fixed' });
+      render(<Consent />);
+
+      expect(screen.getByText(
+        /use acme\/model-x through OpenRouter; the study does not switch them to another AI service or model\. OpenRouter may use a different ZDR-compatible upstream provider for each request\./,
+      )).toBeInTheDocument();
+      expect(document.body).not.toHaveTextContent(/another AI provider or model/);
+    });
+
+    it('may-change: says the researcher may later use a different provider or model', () => {
+      begin({ aiProvider: 'claude', aiModel: 'claude-sonnet-5', aiProviderCommitment: 'may-change' });
+      render(<Consent />);
+
+      expect(screen.getByText(/The researcher may later analyze your responses with a different AI provider or model\./)).toBeInTheDocument();
+      expect(document.body).not.toHaveTextContent(/does not switch/);
+    });
+
+    it('a study saved before commitments existed keeps the old notice', () => {
+      begin({ aiProvider: 'claude', aiModel: 'claude-sonnet-5' });
+      render(<Consent />);
+
+      expect(screen.getByText(/Your responses are sent to Anthropic Claude\./)).toBeInTheDocument();
+      expect(document.body).not.toHaveTextContent(/does not switch|may later analyze/);
+    });
+  });
+
   it('disables the primary consent button until the provider configuration is ready', () => {
     useStore.getState().beginParticipantSession(
       makeStudyConfig({ id: 'study-unconfigured', aiModel: '' }),

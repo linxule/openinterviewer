@@ -335,7 +335,14 @@ Two worked examples to paste into Interviewer Manner:
 
 Instructions ride every turn: a long manner costs tokens under hosted quotas. Each interview record snapshots the instructions in force when it was saved, so later study edits do not rewrite its record.
 
-Analysis uses the study's current configured provider and model, including when the study was edited after collection; the result records the study revision used. Each interview separately records the provider and model configured when it was saved. Researcher previews do not store research records; if preview analysis fails, **Export transcript** still opens the transcript download.
+Analysis uses the study's current configured provider and model, including when the study was edited after collection; the result records the study revision used. Each interview separately records the provider and model configured when it was saved.
+
+Each study also sets what participants are told about the AI provider (**AI Provider → What participants are told**):
+
+- **Only this provider and model** (the default for new studies). The consent notice names the provider and the model, and says the study does not switch them. An interview saved under this setting can be re-analyzed only with that provider and model. After you switch the study to another one, re-analyzing an earlier interview is refused (`PROVIDER_NOT_DISCLOSED`) until you set the study back.
+- **The provider or model may change.** The consent notice names the provider and says you may later analyze responses with a different provider or model. Re-analysis uses whatever the study is set to.
+
+Studies saved before this setting existed keep their old notice, and their interviews are not checked, until the study is saved again. Aggregate analysis and follow-up generation read only interviews saved under the study's current revision, and every settings edit starts a new revision, so they never reach a transcript under another provider or model. Researcher previews do not store research records; if preview analysis fails, **Export transcript** still opens the transcript download.
 
 Editing a study advances its revision and invalidates links and participant sessions issued for the previous revision. Generate and distribute a new link after a consequential edit.
 
