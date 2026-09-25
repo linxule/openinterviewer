@@ -396,7 +396,7 @@ export function isRestoreBookmark(value: unknown): value is string {
   return typeof value === 'string' && RESTORE_BOOKMARK.test(value);
 }
 
-// ---------- Researcher sign-in budget (Cloudflare target only, gap F5) ----------
+// ---------- Researcher sign-in budget (standalone, both targets; gap F5) ----------
 
 /** Per-client attempts counted in one window opened by the first counted attempt. */
 export const LOGIN_CLIENT_MAX_FAILURES = 10;
@@ -406,7 +406,7 @@ export const LOGIN_GLOBAL_MAX_FAILURES = 200;
 export const LOGIN_GLOBAL_WINDOW_SECONDS = 60 * 60;
 
 export type LoginBudgetInput = {
-  /** The invocation's admission identity; the client digests it before any RPC. */
+  /** The request's admission identity; the client digests it before it reaches storage. */
   identity: AdmissionIdentity | null;
   now: number;
 };
@@ -419,11 +419,12 @@ export type LoginBudgetAdmitOutcome =
 export type LoginBudgetRefundOutcome = { status: 'refunded' } | { status: 'unavailable' };
 
 /**
- * The durable failed-sign-in budget. `admitLoginAttempt` atomically refuses at
- * the limit or counts the attempt, before the password is compared; a correct
- * password refunds it, so only failures stay counted. Any doubt on admission
- * is `unavailable` (the route fails closed); a lost refund leaves the attempt
- * counted.
+ * The failed-sign-in budget: the WorkspaceStore object on Cloudflare
+ * (durableObject.ts), the deployment's Redis on Node (redisLoginBudget.ts).
+ * `admitLoginAttempt` atomically refuses at the limit or counts the attempt,
+ * before the password is compared; a correct password refunds it, so only
+ * failures stay counted. Any doubt on admission is `unavailable` (the route
+ * fails closed); a lost refund leaves the attempt counted.
  */
 export interface LoginAttemptBudgetPort {
   admitLoginAttempt(input: LoginBudgetInput): Promise<LoginBudgetAdmitOutcome>;

@@ -31,7 +31,7 @@
     "setup:check": "node scripts/check-setup.mjs",
     "check": "node scripts/check-sync-artifacts.mjs && npm run lint && npm run typecheck && npm run test",
     "test:cloudflare": "vitest run --config vitest.workers.config.mts",
-    "test:contract:redis": "vitest run --config vitest.integration.config.mts tests/integration/workspaceStore.redis.contract.test.ts",
+    "test:contract:redis": "vitest run --config vitest.integration.config.mts tests/integration/workspaceStore.redis.contract.test.ts tests/integration/signInBudget.redis.test.ts",
     "test:inventory:redis": "vitest run --config vitest.integration.config.mts tests/integration/inventoryRedis.test.ts",
     "typegen:cloudflare": "wrangler types --strict-vars=false cloudflare/worker-configuration.d.ts",
     "build:cloudflare": "node scripts/cloudflare/build.mjs",

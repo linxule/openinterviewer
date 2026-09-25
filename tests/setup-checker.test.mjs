@@ -597,7 +597,7 @@ test('SETUP-02 Cloudflare rejects placeholder and reused credentials', () => {
   assert.deepEqual(errorCodes(weak), ['env.ADMIN_PASSWORD.short']);
 });
 
-test('SETUP-02 Cloudflare refuses an ADMIN_PASSWORD whose sign-in body exceeds 1 KiB, like readiness', () => {
+test('SETUP-02 standalone refuses an ADMIN_PASSWORD whose sign-in body exceeds 1 KiB, like readiness', () => {
   for (const [shape, longest, onePast] of [
     ['ASCII', 'a'.repeat(1_009), 'a'.repeat(1_010)],
     ['three-byte', '€'.repeat(336), '€'.repeat(337)],
@@ -612,14 +612,15 @@ test('SETUP-02 Cloudflare refuses an ADMIN_PASSWORD whose sign-in body exceeds 1
     assert.match(message, /1024 bytes \(at most 1009 ASCII characters/);
     assert.equal(message.includes(onePast), false, 'the message never contains the value');
   }
-  // The bound is Cloudflare sign-in's; the Node target keeps no maximum.
-  const node = validateSetup({
+  // Node standalone sign-in reads the same bounded body, so it has the same maximum.
+  const node = (password) => validateSetup({
     mode: 'standalone',
     production: true,
-    env: { ...validStandaloneEnv(), ADMIN_PASSWORD: 'a'.repeat(1_010) },
+    env: { ...validStandaloneEnv(), ADMIN_PASSWORD: password },
     nodeVersion: '24.19.0',
   });
-  assert.equal(node.ok, true, JSON.stringify(node.checks));
+  assert.equal(node('a'.repeat(1_009)).ok, true, JSON.stringify(node('a'.repeat(1_009)).checks));
+  assert.deepEqual(errorCodes(node('a'.repeat(1_010))), ['env.ADMIN_PASSWORD.too_long']);
 });
 
 test('SETUP-02 OPERATOR_TOKEN is optional but, when set, must be a strong independent credential', () => {

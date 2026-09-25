@@ -1,11 +1,12 @@
-// The Cloudflare sign-in body bound (gap F5), shared by POST /api/auth and the
-// readiness validator, so a password the deployment accepts can always be
+// The standalone sign-in body bound (gap F5; named for the Cloudflare target,
+// which introduced it, and enforced on Node too), shared by POST /api/auth and
+// the readiness validators, so a password the deployment accepts can always be
 // sent. The installer (scripts/cloudflare/installer/model.mjs), the setup
 // checker (via the installer module) and the operator CLI
 // (scripts/cloudflare/operator.mjs) hold the same limit;
 // tests/unit/adminPasswordLimit.test.ts ties them together.
 
-/** Largest POST /api/auth body the Cloudflare target reads. */
+/** Largest POST /api/auth body a standalone deployment reads. */
 export const MAX_CLOUDFLARE_LOGIN_BODY_BYTES = 1024;
 
 /** UTF-8 size of the sign-in body carrying `password`, as the Login form and the operator CLI send it. */
@@ -16,6 +17,7 @@ export function loginBodyBytes(password: string): number {
 /**
  * Longest ASCII password, in UTF-16 code units, whose sign-in body can fit
  * (every code unit costs at least one byte). A reference for tests only: the
- * Login form deliberately sets no length limit, since Node targets have none.
+ * Login form deliberately sets no length limit (readiness and the setup
+ * checker report a password that cannot fit).
  */
 export const MAX_LOGIN_PASSWORD_LENGTH = MAX_CLOUDFLARE_LOGIN_BODY_BYTES - loginBodyBytes('');

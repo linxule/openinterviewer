@@ -427,8 +427,12 @@ describe('RT-01 Node target keeps its existing validation', () => {
     expect(getPublicConfig({ ...nodeEnv, KV_REST_API_URL: undefined }).errors).toEqual(['missing_standalone_redis_url']);
   });
 
-  it('F5 leaves the Node target without the Cloudflare sign-in body bound', () => {
-    expect(getPublicConfig({ ...nodeEnv, ADMIN_PASSWORD: 'a'.repeat(2_000) })).toMatchObject({ ready: true, errors: [] });
+  it('F5 holds the Node target to the same sign-in body bound', () => {
+    expect(getPublicConfig({ ...nodeEnv, ADMIN_PASSWORD: 'a'.repeat(1_009) })).toMatchObject({ ready: true, errors: [] });
+    expect(getPublicConfig({ ...nodeEnv, ADMIN_PASSWORD: 'a'.repeat(2_000) })).toMatchObject({
+      ready: false,
+      errors: ['admin_password_too_long'],
+    });
   });
 
   it('RT-11 refuses Cloudflare AI Gateway on the Node target', () => {

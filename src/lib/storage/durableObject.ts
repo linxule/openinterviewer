@@ -62,7 +62,7 @@ import type {
 } from './types';
 import { RESEARCHER_AI_KEY_PREFIX } from './types';
 import type { AdmissionIdentity } from '../runtime/workerInvocation';
-import { normalizeClientAddress } from '../runtime/clientAddress';
+import { signInBudgetSubject } from '../runtime/clientAddress';
 import { logRequestEvent } from '../requestLog';
 
 export type DurableWorkspaceConfig = {
@@ -719,27 +719,19 @@ export function createDurableWorkspaceStore(config: DurableWorkspaceConfig): Dur
 // ---------- Researcher sign-in budget (gap F5) ----------
 
 /**
- * The sign-in budget subject for one admission identity: the full normalized
- * address, IPv4 or IPv6 (RT-07 retains full IPv6 rather than a subnet policy;
- * an IPv6 host rotating through its /64 is bounded by the global window, see
- * DEVIATIONS.md). IPv4-mapped IPv6 normalizes to the IPv4 address. Requests
- * without a usable address share one `unknown` subject and Workers
- * subrequests one `subrequest` subject.
- */
-function loginSubject(identity: AdmissionIdentity | null): string {
-  if (identity?.kind === 'subrequest') return 'subrequest';
-  if (identity?.kind !== 'address') return 'unknown';
-  const address = normalizeClientAddress(identity.address);
-  return address === null ? 'unknown' : `address:${address}`;
-}
-
-/**
  * The sign-in budget's client scope: an HMAC (keyed by RATE_LIMIT_SALT) of the
- * identity's subject (loginSubject), domain-separated from participant budget
- * keys. Neither the `unknown` nor the `subrequest` scope is an unlimited path.
+ * identity's subject (signInBudgetSubject: the IPv4 address, the IPv6 /64, or
+ * the shared `unknown` or `subrequest` scope), domain-separated from
+ * participant budget keys. Neither shared scope is an unlimited path. The Node
+ * sign-in budget (redisLoginBudget.ts) keys clients with the same function.
+ *
+ * `login:v1` stays: the /64 subjects carry their own `address64:` tag, so no
+ * v1 subject changed meaning. IPv4, `unknown` and `subrequest` windows open
+ * before an upgrade still count after it, and the per-address IPv6 windows
+ * they replace are never read again and expire within 15 minutes.
  */
 export function loginClientKey(rateLimitSalt: string, identity: AdmissionIdentity | null): Promise<string> {
-  return hmacSha256Hex(rateLimitSalt, `login:v1\u0000${loginSubject(identity)}`);
+  return hmacSha256Hex(rateLimitSalt, `login:v1\u0000${signInBudgetSubject(identity)}`);
 }
 
 function isRetryAfter(value: unknown): value is number {

@@ -60,7 +60,7 @@ const MAX_IMPORT_BODY_BYTES = 24 * 1024 * 1024;
 const IMPORT_ATTEMPTS = 3;
 const SESSION_COOKIE = 'research-auth';
 /**
- * The Cloudflare sign-in body bound: MAX_CLOUDFLARE_LOGIN_BODY_BYTES in
+ * The standalone sign-in body bound: MAX_CLOUDFLARE_LOGIN_BODY_BYTES in
  * src/lib/loginBody.ts, which POST /api/auth enforces (tests/unit/adminPasswordLimit.test.ts
  * keeps the two equal).
  */

@@ -7,8 +7,8 @@
 // configuration, session signing and durable client (HMAC client keys); only
 // the WorkspaceStore object behind WORKSPACE_STORE is a scripted fake
 // recording every RPC. The budget itself runs against real SQLite, including
-// a concurrent burst, in tests/workers/login.test.ts.
-// The Node target's sign-in is unchanged and never touches the budget.
+// a concurrent burst, in tests/workers/login.test.ts. The Node target's
+// budget over Redis is tests/unit/api.auth.node.test.ts.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -367,29 +367,5 @@ describe('F5 Cloudflare sign-in budget', () => {
     allow();
     delete process.env.OPENAI_API_KEY;
     expect((await POST(login({ password: PASSWORD }))).status).toBe(200);
-  });
-});
-
-describe('Node target sign-in is unchanged', () => {
-  beforeEach(() => {
-    delete runtimeGlobals[WORKER_RUNTIME_MARKER];
-    delete runtimeGlobals[WORKER_INVOCATION_ACCESSOR];
-    process.env.DEPLOYMENT_TARGET = '';
-  });
-
-  it('accepts the process.env password and refuses others without any budget RPC', async () => {
-    const accepted = await POST(login({ password: PASSWORD }));
-    expect(accepted.status).toBe(200);
-    expect(await accepted.json()).toEqual({ success: true });
-    const refused = await POST(login({ password: 'not-the-password-000' }));
-    expect(refused.status).toBe(401);
-    expect(await refused.json()).toEqual({ error: 'Invalid password' });
-    expect(rpcCalls).toEqual([]);
-  });
-
-  it('keeps the existing 500 for malformed JSON', async () => {
-    const response = await POST(login('{"password":'));
-    expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: 'Authentication failed' });
   });
 });

@@ -276,28 +276,30 @@ describe('F5 durable client against the real object', () => {
     expect(JSON.stringify(keys)).not.toContain('203.0.113.7');
   });
 
-  it('F5 RT-07 an IPv6 client is its full normalized address: equivalent spellings share one budget, other addresses in the /64 do not', async () => {
+  it('F5 RT-07 (owner amendment) an IPv6 client is its /64: every address and spelling in it shares one budget, another /64 does not', async () => {
     const client = budget();
-    const sameAddress = [
+    const sameSubnet = [
       '2001:db8:0:1::1',
-      '2001:0db8:0000:0001:0000:0000:0000:0001',
-      '2001:DB8:0:1:0:0:0:1',
+      '2001:0db8:0000:0001:0000:0000:0000:0002',
+      '2001:DB8:0:1:1234:5678:9abc:def0',
+      '2001:db8:0:1:ffff:ffff:ffff:ffff',
     ];
     for (let attempt = 0; attempt < LOGIN_CLIENT_MAX_FAILURES; attempt += 1) {
-      const address = sameAddress[attempt % sameAddress.length];
+      const address = sameSubnet[attempt % sameSubnet.length];
       expect(await client.admitLoginAttempt({ identity: { kind: 'address', address }, now: T0 })).toEqual({ status: 'admitted' });
     }
-    for (const address of sameAddress) {
+    // A host rotating through its /64 gets no fresh window.
+    for (const address of [...sameSubnet, '2001:db8:0:1::abcd']) {
       expect(await client.admitLoginAttempt({ identity: { kind: 'address', address }, now: T0 })).toMatchObject({ status: 'limited', scope: 'client' });
     }
-    // RT-07 introduces no subnet policy: another interface in the same /64 has its own budget.
-    for (const address of ['2001:db8:0:1::2', '2001:db8:0:1:1234:5678:9abc:def0']) {
+    for (const address of ['2001:db8:0:2::1', '2001:db8:1:1::1']) {
       expect(await client.admitLoginAttempt({ identity: { kind: 'address', address }, now: T0 })).toEqual({ status: 'admitted' });
     }
 
-    const keys = await Promise.all(sameAddress.map((address) => loginClientKey(SALT, { kind: 'address', address })));
+    const keys = await Promise.all(sameSubnet.map((address) => loginClientKey(SALT, { kind: 'address', address })));
     expect(new Set(keys).size).toBe(1);
-    expect(await loginClientKey(SALT, { kind: 'address', address: '2001:db8:0:1::2' })).not.toBe(keys[0]);
+    expect(keys[0]).toBe(createHmac('sha256', SALT).update('login:v1\u0000address64:2001:0db8:0000:0001').digest('hex'));
+    expect(await loginClientKey(SALT, { kind: 'address', address: '2001:db8:0:2::1' })).not.toBe(keys[0]);
     expect(await attempts(keys[0])).toBe(LOGIN_CLIENT_MAX_FAILURES);
   });
 

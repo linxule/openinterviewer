@@ -98,3 +98,34 @@ export function nodeForwardedAddress(headers: HeaderSource): string {
     || 'unknown';
   return forwarded.split(',')[0].trim() || 'unknown';
 }
+
+/**
+ * The Node header chain's first address as an admission identity, normalized
+ * like CF-Connecting-IP. Used only by the Node sign-in budget; participant
+ * limits on Node keep the raw nodeForwardedAddress value.
+ */
+export function nodeAdmissionIdentity(headers: HeaderSource): AdmissionIdentity {
+  const raw = nodeForwardedAddress(headers);
+  if (raw === 'unknown') return { kind: 'unknown', reason: 'missing' };
+  const address = normalizeClientAddress(raw);
+  return address ? { kind: 'address', address } : { kind: 'unknown', reason: 'invalid' };
+}
+
+/**
+ * The researcher sign-in budget's client subject (both standalone targets).
+ * IPv4, including IPv4-mapped IPv6, is the full address. IPv6 is its /64, the
+ * first four groups of the full form (owner amendment to RT-07, 25 September
+ * 2026): one host commonly holds a whole /64, so a per-address key would give
+ * it a fresh window for every address it rotates through. The `address64:`
+ * tag keeps /64 subjects apart from every IPv4 subject. Requests without a
+ * usable address share one `unknown` subject and Workers subrequests one
+ * `subrequest` subject.
+ */
+export function signInBudgetSubject(identity: AdmissionIdentity | null): string {
+  if (identity?.kind === 'subrequest') return 'subrequest';
+  if (identity?.kind !== 'address') return 'unknown';
+  const address = normalizeClientAddress(identity.address);
+  if (address === null) return 'unknown';
+  if (!address.includes(':')) return `address:${address}`;
+  return `address64:${address.split(':').slice(0, 4).join(':')}`;
+}

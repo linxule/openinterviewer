@@ -167,7 +167,7 @@ jobs:
         run: npm run test:redis-crash
         env:
           REDIS_URL: ''
-      - name: WorkspaceStore contract on real Redis
+      - name: WorkspaceStore contract and sign-in budget on real Redis
         run: npm run test:contract:redis
         env:
           REDIS_URL: ''
