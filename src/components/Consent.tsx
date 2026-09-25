@@ -101,7 +101,11 @@ const Consent: React.FC = () => {
   const providerCommitmentNotice = !providerConfigurationReady
     ? null
     : studyConfig.aiProviderCommitment === 'fixed'
-    ? `The interview and any later analysis of your responses use ${selectedModelName} (${selectedProviderName}); the study does not switch them to another AI provider or model.`
+    ? selectedProviderId === 'openrouter'
+      // OpenRouter picks the upstream inference provider per request (no
+      // pinning), so the promise covers the service and the model only.
+      ? `The interview and any later analysis of your responses use ${selectedModelName} through OpenRouter; the study does not switch them to another AI service or model. OpenRouter may use a different ZDR-compatible upstream provider for each request.`
+      : `The interview and any later analysis of your responses use ${selectedModelName} (${selectedProviderName}); the study does not switch them to another AI provider or model.`
     : studyConfig.aiProviderCommitment === 'may-change'
     ? 'The researcher may later analyze your responses with a different AI provider or model.'
     : null;

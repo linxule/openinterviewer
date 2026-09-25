@@ -81,7 +81,10 @@ describe('Consent server recording', () => {
       begin({ aiProvider: 'openrouter', aiModel: 'acme/model-x', aiProviderCommitment: 'fixed' });
       render(<Consent />);
 
-      expect(screen.getByText(/use acme\/model-x \(OpenRouter\); the study does not switch/)).toBeInTheDocument();
+      expect(screen.getByText(
+        /use acme\/model-x through OpenRouter; the study does not switch them to another AI service or model\. OpenRouter may use a different ZDR-compatible upstream provider for each request\./,
+      )).toBeInTheDocument();
+      expect(document.body).not.toHaveTextContent(/another AI provider or model/);
     });
 
     it('may-change: says the researcher may later use a different provider or model', () => {

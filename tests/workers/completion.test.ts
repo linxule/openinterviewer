@@ -639,6 +639,17 @@ describe('frozen inputs and integrity (JOB-02, ST-05)', () => {
       .toEqual({ status: 'created' });
   });
 
+  it('a fixed commitment never rests on the installation-default provider', async () => {
+    const study = await createStudy({ aiProvider: undefined, aiProviderCommitment: 'fixed' });
+    const participant = await enrolParticipant(study);
+    const resolved = { ...frozenInput(study), requestedProvider: 'gemini' as const };
+    for (const overrides of [{ providerCommitment: 'fixed' as const }, { providerCommitment: 'fixed' as const, conductedByProvider: 'gemini' as const }]) {
+      const input = { ...(await persistInput(participant, { interview: interviewRecord(participant, overrides) })), initialAnalysis: resolved };
+      expect(await workspaceStub().persistCompletedInterview(input)).toEqual({ status: 'unavailable' });
+    }
+    expect(await count('interviews')).toBe(0);
+  });
+
   it('a study without a provider commitment refuses a record that claims one', async () => {
     const study = await createStudy();
     const participant = await enrolParticipant(study);

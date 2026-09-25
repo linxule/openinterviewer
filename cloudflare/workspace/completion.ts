@@ -218,8 +218,11 @@ function decide(ws: WorkspaceContext, prepared: Prepared): Decision {
     // The record's provider commitment is the object's own configuration at
     // this revision, and a fixed one names that revision's provider and model.
     || (interview.providerCommitment ?? null) !== (study.config.aiProviderCommitment ?? null)
+    // A fixed one needs the study's own explicit provider and model: it never
+    // rests on the installation-default fallback.
     || (interview.providerCommitment === 'fixed'
-      && (interview.conductedByProvider !== study.config.aiProvider || interview.conductedByModel !== study.config.aiModel))
+      && (typeof study.config.aiProvider !== 'string' || typeof study.config.aiModel !== 'string'
+        || interview.conductedByProvider !== study.config.aiProvider || interview.conductedByModel !== study.config.aiModel))
   ) {
     logInvalid();
     return refuse({ status: 'unavailable' });
