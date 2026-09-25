@@ -8,6 +8,7 @@
 // object's own receipt/generation semantics are exercised against real
 // SQLite in tests/workers/analysis.test.ts.
 
+import { createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeStoredStudy, makeStudyConfig } from '../fixtures/models';
 
@@ -42,6 +43,7 @@ import {
 } from '@/lib/runtime/workerInvocation';
 import type { AcceptAnalysisRetryInput } from '@/lib/storage/analysisProtocol';
 import { analysisRequestFingerprint, analysisRequestKeyDigest } from '@/lib/storage/durableObject';
+import { STANDALONE_RESEARCHER_AI_POLICY } from '@/lib/researcherAiBudget';
 import type { StoredStudy } from '@/types';
 
 const WORKSPACE_ID = 'ws_0123456789abcdef0123456789abcdef';
@@ -133,7 +135,9 @@ function post(options: {
   interviewId?: string;
 } = {}) {
   const headers: Record<string, string> = {};
+  const session = cookieJar.get(SESSION_COOKIE_NAME);
   const merged: Record<string, string | undefined> = {
+    ...(session ? { Cookie: `${SESSION_COOKIE_NAME}=${session}` } : {}),
     'X-OpenInterviewer-Analysis-Version': '2',
     'Idempotency-Key': KEY,
     'Content-Type': 'application/json',
@@ -439,6 +443,55 @@ describe('POST /api/interviews/[id]/analyze on Cloudflare — acceptance (API-01
     handlers.getStudy = () => ({ status: 'unavailable' });
     expect((await post()).status).toBe(503);
 
+    expect(methods()).not.toContain('acceptAnalysisRetry');
+  });
+});
+
+describe('POST /api/interviews/[id]/analyze on Cloudflare — researcher AI budget (D15)', () => {
+  const hmac = (text: string) => createHmac('sha256', CLOUDFLARE_ENV.RATE_LIMIT_SALT).update(text).digest('hex');
+  const accepted = () => ({ status: 'accepted', body: { status: 'pending', generation: 2, phase: 'queued', pollAfterMs: 2000 } });
+
+  it('D15: the retry carries salted session and workspace analysis counters for the object to charge at allocation', async () => {
+    handlers.acceptAnalysisRetry = accepted;
+
+    expect((await post()).status).toBe(202);
+
+    const [input] = acceptInputs();
+    const policy = STANDALONE_RESEARCHER_AI_POLICY.analysis;
+    expect(input.budget).toHaveLength(2);
+    expect(input.budget?.[0]).toMatchObject(policy.session);
+    expect(input.budget?.[0].key).toMatch(/^[a-f0-9]{64}$/);
+    expect(input.budget?.[1]).toEqual({
+      key: hmac(`researcher-ai:analysis:researcher:${policy.researcher.windowSeconds}:workspace`),
+      ...policy.researcher,
+    });
+    expect(JSON.stringify(rpcCalls)).not.toContain('researcher-ai:');
+    // No separate admission RPC: charging is part of the allocation transaction.
+    expect(methods()).toEqual(['getStudy', 'acceptAnalysisRetry']);
+  });
+
+  it('D15: a limited allocation is 429 with Retry-After, uncacheable, and allocates nothing', async () => {
+    handlers.acceptAnalysisRetry = () => ({ status: 'limited', retryAfterSeconds: 1_800 });
+
+    const response = await post();
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBe('1800');
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toEqual({
+      error: 'Too many AI requests from this workspace. Please wait before trying again.',
+      retryable: true,
+    });
+  });
+
+  it('D15: a request whose own cookie is not a verified researcher session never reaches allocation', async () => {
+    handlers.acceptAnalysisRetry = accepted;
+
+    const response = await post({ headers: { Cookie: `${SESSION_COOKIE_NAME}=forged` } });
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toMatchObject({ retryable: true });
     expect(methods()).not.toContain('acceptAnalysisRetry');
   });
 });

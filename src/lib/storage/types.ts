@@ -173,6 +173,31 @@ export type AdmissionOutcome =
   | { status: 'held'; reason: WorkspaceHoldReason }
   | { status: 'unavailable' };
 
+// ---------- Researcher AI budget (standalone targets, D15) ----------
+
+/** Every researcher AI budget key starts with this; participant keys start with `rate-limit:`. */
+export const RESEARCHER_AI_KEY_PREFIX = 'researcher-ai:';
+
+export type ResearcherAiOperation = 'greeting' | 'interview' | 'synthesis' | 'aggregate' | 'followup' | 'analysis';
+
+/**
+ * One researcher budget scope. Keys start with `researcher-ai:` (never a
+ * participant `rate-limit:` key); the durable store receives them salted and
+ * digested.
+ */
+export type ResearcherAiCounter = {
+  key: string;
+  maximum: number;
+  windowSeconds: number;
+};
+
+export type ResearcherAiAdmissionInput = {
+  operation: ResearcherAiOperation;
+  /** Counters in STANDALONE_RESEARCHER_AI_POLICY scope order. */
+  counters: ResearcherAiCounter[];
+  now: number;
+};
+
 // ---------- Completion ----------
 
 export type PersistCompletedInterviewInput = {
@@ -277,6 +302,12 @@ export interface WorkspaceStorePort {
   recordConsent(input: ConsentBinding & { now: number }): Promise<RecordConsentOutcome>;
   verifyConsent(input: ConsentBinding & { now: number }): Promise<VerifyConsentOutcome>;
   admitParticipantRequest(input: AdmissionInput): Promise<AdmissionOutcome>;
+  /**
+   * Check every researcher AI counter, then charge every one, atomically,
+   * before a researcher-initiated provider call. A hosted store never admits
+   * (`unavailable`): hosted mode keeps its platform limiter.
+   */
+  admitResearcherAiRequest(input: ResearcherAiAdmissionInput): Promise<AdmissionOutcome>;
 
   persistCompletedInterview(input: PersistCompletedInterviewInput): Promise<PersistCompletedInterviewOutcome>;
 
@@ -323,9 +354,15 @@ export type AggregateInputsPurpose = 'aggregate' | 'follow-up';
  */
 export interface DurableWorkspaceStorePort extends WorkspaceStorePort {
   readonly backend: 'durable-object';
-  acceptAnalysisRetry(input: Omit<AcceptAnalysisRetryInput, 'requestKeyDigest' | 'requestFingerprint'> & {
+  /**
+   * `budget` is the researcher `analysis` counters: the object charges them
+   * only when it allocates a new generation, so a receipt replay, an existing
+   * active generation or any refusal is never charged.
+   */
+  acceptAnalysisRetry(input: Omit<AcceptAnalysisRetryInput, 'requestKeyDigest' | 'requestFingerprint' | 'budget'> & {
     rawIdempotencyKey: string;
     apiVersion: 2;
+    budget: ResearcherAiCounter[];
   }): Promise<AcceptAnalysisRetryOutcome>;
   readAnalysisStatus(input: { studyId: string; interviewId: string }): Promise<ReadAnalysisStatusOutcome>;
   beginExport(input: { maximum: number }): Promise<ExportBegin>;

@@ -44,6 +44,7 @@ import {
   projectAnalysisState,
   type AnalysisRow,
 } from './projection';
+import { chargeBudgetWindows, isValidCounterList } from './budget';
 
 export const RETRY_RECEIPT_FAMILY = 'analysis-retry';
 
@@ -410,7 +411,8 @@ function validRetryInput(input: Protocol.AcceptAnalysisRetryInput): boolean {
     && Number.isSafeInteger(input.now) && input.now > 0
     && isFrozenInput(input.input)
     && input.input.studyConfig.id === input.studyId
-    && (input.transport === undefined || input.transport === 'cloudflare-gateway');
+    && (input.transport === undefined || input.transport === 'cloudflare-gateway')
+    && (input.budget === undefined || isValidCounterList(input.budget));
 }
 
 function legacyAttempts(record: StoredInterview): { attempts: number; lastAttemptAt: number | null } {
@@ -497,6 +499,16 @@ export async function acceptAnalysisRetry(
         : acceptedInput;
       const generation = currentGeneration + 1;
       if (!Number.isSafeInteger(generation)) return { status: 'unavailable' };
+      // D15: only a newly allocated generation pays; every branch above
+      // (receipt replay, existing active generation, refusals) is free.
+      if (input.budget) {
+        const charged = chargeBudgetWindows(ws, input.budget, input.now);
+        if (charged.status === 'corrupt') {
+          logCorrupt('retry');
+          return { status: 'unavailable' };
+        }
+        if (charged.status === 'limited') return { status: 'limited', retryAfterSeconds: charged.retryAfterSeconds };
+      }
 
       if (!state.row) {
         const legacy = legacyAttempts(state.record);

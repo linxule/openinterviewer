@@ -31,6 +31,12 @@ import {
 } from '@/lib/canonicalStudy';
 import { mapInterviewLoad } from '@/lib/ownedStudies';
 import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
+import {
+  researcherAiBudgetResponse,
+  researcherAiCounters,
+  researcherAiIdentityResponse,
+  researcherAiLimitedResponse,
+} from '@/lib/researcherAiBudget';
 import { runInterviewAnalysis } from '@/lib/interviewAnalysis';
 import { createRequestId, logRequestEvent, logRequestFailure } from '@/lib/requestLog';
 import { readBoundedJsonObject } from '@/lib/requestBody';
@@ -147,6 +153,8 @@ async function synchronousAnalysisPost(request: Request, params: RouteParams['pa
       { researcherId: gated.researcherId },
     );
     if (platformLimited) return platformLimited;
+    const budgetLimited = await researcherAiBudgetResponse(request, 'analysis', gated.context.store, ROUTE);
+    if (budgetLimited) return budgetLimited;
 
     const outcome = await runInterviewAnalysis({
       interviewId: id,
@@ -379,6 +387,8 @@ function acceptOutcomeResponse(outcome: AcceptAnalysisRetryOutcome): NextRespons
       return researcherProviderNotDisclosedResponse({ 'Cache-Control': 'no-store' });
     case 'held':
       return heldResponse(outcome.reason);
+    case 'limited':
+      return researcherAiLimitedResponse(outcome.retryAfterSeconds);
     default:
       // corrupt (already logged by the store as corrupt-record) or
       // unavailable, including an allocation whose commit is unknown: the
@@ -435,6 +445,10 @@ async function durableAnalysisPost(request: Request, params: RouteParams['params
       return noStoreJson({ error: 'AI provider is not configured on the server.', retryable: false }, 503);
     }
 
+    // D15: the object charges these only when it allocates a new generation.
+    const budget = await researcherAiCounters(request, 'analysis');
+    if (!budget) return researcherAiIdentityResponse(ROUTE, 'analysis');
+
     const outcome = await store.acceptAnalysisRetry({
       studyId,
       interviewId,
@@ -443,6 +457,7 @@ async function durableAnalysisPost(request: Request, params: RouteParams['params
       expectedGeneration,
       input: frozen.input,
       ...(current.transport === 'cloudflare-gateway' ? { transport: current.transport } : {}),
+      budget,
       now: Date.now(),
     });
     return acceptOutcomeResponse(outcome);

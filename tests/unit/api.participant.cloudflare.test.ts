@@ -11,7 +11,7 @@
 // object's own transactions are exercised against real SQLite in
 // tests/workers/.
 
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeStoredInterview, makeStoredStudy, makeStudyConfig } from '../fixtures/models';
 
@@ -59,6 +59,7 @@ import {
   type WorkerInvocation,
 } from '@/lib/runtime/workerInvocation';
 import { ANALYSIS_INPUT_SCHEMA_VERSION } from '@/lib/storage/analysisProtocol';
+import { STANDALONE_RESEARCHER_AI_POLICY } from '@/lib/researcherAiBudget';
 import type { StoredStudy } from '@/types';
 
 const WORKSPACE_ID = 'ws_0123456789abcdef0123456789abcdef';
@@ -176,6 +177,7 @@ function defaultHandlers(): Record<string, Handler> {
     getParticipantLink: () => ({ status: 'found', link: linkRecord }),
     verifyConsent: () => acceptedConsent,
     admitParticipantRequest: () => ({ status: 'admitted' }),
+    admitResearcherAiRequest: () => ({ status: 'admitted' }),
   };
 }
 
@@ -899,7 +901,7 @@ describe('researcher preview under maintenance (gap F26)', () => {
     expect(response.status).toBe(200);
     expect(provider.synthesizeInterview).toHaveBeenCalledOnce();
     expect(rpcMethods()).not.toContain('persistCompletedInterview');
-    expect(rpcMethods().every(method => ['getStudy', 'readiness'].includes(method))).toBe(true);
+    expect(rpcMethods().every(method => ['getStudy', 'readiness', 'admitResearcherAiRequest'].includes(method))).toBe(true);
   });
 
   it.each(['frozen', 'recovery'] as const)('F26: preview synthesis is refused while %s, before the provider', async (maintenance) => {
@@ -925,6 +927,100 @@ describe('researcher preview under maintenance (gap F26)', () => {
     await expect(response.json()).resolves.toMatchObject({ retryable: false, reason: 'workspace-unavailable' });
     expect(providerFactory).not.toHaveBeenCalled();
     expect(rpcMethods()).not.toContain('admitParticipantRequest');
+  });
+});
+
+describe('researcher AI budget on preview routes (D15)', () => {
+  const SALT = CLOUDFLARE_ENV.RATE_LIMIT_SALT;
+  const hmac = (text: string) => createHmac('sha256', SALT).update(text).digest('hex');
+
+  const previews = {
+    greeting: () => researcherRequest(`${ORIGIN}/api/greeting`, {
+      method: 'POST', preview: true, body: JSON.stringify({ studyId: STUDY_ID }),
+    }).then(greetingPOST),
+    interview: () => researcherRequest(`${ORIGIN}/api/interview`, {
+      method: 'POST', preview: true, body: JSON.stringify({ ...interviewBody, studyId: STUDY_ID }),
+    }).then(interviewPOST),
+    synthesis: () => researcherRequest(`${ORIGIN}/api/synthesis`, {
+      method: 'POST', preview: true, body: JSON.stringify({ studyId: STUDY_ID, history, behaviorData, participantProfile: null }),
+    }).then(synthesisPOST),
+  };
+  const providerCall = {
+    greeting: provider.getInterviewGreeting,
+    interview: provider.generateInterviewResponse,
+    synthesis: provider.synthesizeInterview,
+  };
+  const operations = Object.keys(previews) as Array<keyof typeof previews>;
+
+  it.each(operations)('D15: a %s preview charges the workspace budget once, with salted researcher keys, before the provider', async (operation) => {
+    const response = await previews[operation]();
+
+    expect(response.status).toBe(200);
+    expect(providerCall[operation]).toHaveBeenCalledOnce();
+    const [admission, ...more] = rpcInputs('admitResearcherAiRequest');
+    expect(more).toEqual([]);
+    expect(rpcMethods()).not.toContain('admitParticipantRequest');
+    const policy = STANDALONE_RESEARCHER_AI_POLICY[operation];
+    const counters = admission.counters as Array<{ key: string; maximum: number; windowSeconds: number }>;
+    expect(admission.operation).toBe(operation);
+    expect(counters).toHaveLength(2);
+    expect(counters[0]).toMatchObject(policy.session);
+    expect(counters[0].key).toMatch(/^[a-f0-9]{64}$/);
+    expect(counters[1]).toEqual({
+      key: hmac(`researcher-ai:${operation}:researcher:${policy.researcher.windowSeconds}:workspace`),
+      ...policy.researcher,
+    });
+    expect(JSON.stringify(admission)).not.toContain('researcher-ai:');
+  });
+
+  it('D15: the session scope follows the signed-in session; the workspace scope is shared by every session', async () => {
+    await previews.greeting();
+    await new Promise(resolve => setTimeout(resolve, 1_100)); // a later iat signs a different token
+    await previews.greeting();
+    const [first, second] = rpcInputs('admitResearcherAiRequest').map(input => input.counters as Array<{ key: string }>);
+    expect(first[0].key).not.toBe(second[0].key);
+    expect(first[1].key).toBe(second[1].key);
+  });
+
+  it.each(operations)('D15: a limited %s preview is 429 with Retry-After and never reaches the provider', async (operation) => {
+    handlers.admitResearcherAiRequest = () => ({ status: 'limited', rejectedIndex: 0, retryAfterSeconds: 42 });
+
+    const response = await previews[operation]();
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBe('42');
+    await expect(response.json()).resolves.toEqual({
+      error: 'Too many AI requests from this workspace. Please wait before trying again.',
+      retryable: true,
+    });
+    expect(providerFactory).not.toHaveBeenCalled();
+  });
+
+  it.each(operations)('D15: an unusable budget store fails a %s preview closed (503) before the provider', async (operation) => {
+    delete handlers.admitResearcherAiRequest;
+
+    const response = await previews[operation]();
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({ retryable: true });
+    expect(providerFactory).not.toHaveBeenCalled();
+  });
+
+  it('D15: a hold reported by the budget (maintenance began after readiness) is the held-workspace 503', async () => {
+    handlers.admitResearcherAiRequest = () => ({ status: 'held', reason: 'maintenance' });
+
+    const response = await previews.synthesis();
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({ reason: 'maintenance', retryable: true });
+    expect(providerFactory).not.toHaveBeenCalled();
+  });
+
+  it('D15: a participant greeting or interview never charges the researcher budget', async () => {
+    await greetingPOST(await participantRequest('/api/greeting', {}));
+    await interviewPOST(await participantRequest('/api/interview', interviewBody));
+    expect(rpcMethods()).toContain('admitParticipantRequest');
+    expect(rpcMethods()).not.toContain('admitResearcherAiRequest');
   });
 });
 

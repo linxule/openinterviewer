@@ -47,6 +47,8 @@ import type {
   PersistCompletedInterviewInput,
   PersistCompletedInterviewOutcome,
   RecordConsentOutcome,
+  ResearcherAiAdmissionInput,
+  ResearcherAiCounter,
   SaveAggregateOutcome,
   SeedSampleInput,
   SeedSampleOutcome,
@@ -58,6 +60,7 @@ import type {
   VerifyConsentOutcome,
   WorkspaceHoldReason,
 } from './types';
+import { RESEARCHER_AI_KEY_PREFIX } from './types';
 import type { AdmissionIdentity } from '../runtime/workerInvocation';
 import { normalizeClientAddress } from '../runtime/clientAddress';
 import { logRequestEvent } from '../requestLog';
@@ -255,6 +258,7 @@ const CLEAR_SAMPLE: StatusTable<ClearSampleOutcome> = {
 };
 const ACCEPT_RETRY: StatusTable<AcceptAnalysisRetryOutcome> = {
   accepted: true,
+  limited: true,
   'transport-not-disclosed': true,
   'provider-not-disclosed': true,
   existing: true,
@@ -315,6 +319,27 @@ function toHex(buffer: ArrayBuffer): string {
 
 export async function sha256Hex(text: string): Promise<string> {
   return toHex(await crypto.subtle.digest('SHA-256', encoder.encode(text)));
+}
+
+/**
+ * Researcher AI counters salted and digested for the object, or null when a
+ * key is not a researcher key: a `rate-limit:` participant key can never be
+ * charged as a researcher budget, or the reverse (the digests of the two
+ * prefixes never meet).
+ */
+async function researcherAiRpcCounters(
+  salt: string,
+  counters: ResearcherAiCounter[],
+): Promise<ResearcherAiCounter[] | null> {
+  if (!Array.isArray(counters) || counters.length === 0) return null;
+  if (!counters.every((counter) => typeof counter?.key === 'string' && counter.key.startsWith(RESEARCHER_AI_KEY_PREFIX))) {
+    return null;
+  }
+  return Promise.all(counters.map(async (counter) => ({
+    key: await hmacSha256Hex(salt, counter.key),
+    maximum: counter.maximum,
+    windowSeconds: counter.windowSeconds,
+  })));
 }
 
 export async function hmacSha256Hex(secret: string, text: string): Promise<string> {
@@ -577,6 +602,21 @@ export function createDurableWorkspaceStore(config: DurableWorkspaceConfig): Dur
       }
     },
 
+    async admitResearcherAiRequest(input: ResearcherAiAdmissionInput): Promise<AdmissionOutcome> {
+      try {
+        const counters = await researcherAiRpcCounters(config.rateLimitSalt, input.counters);
+        if (!counters) return unavailable;
+        return await call<AdmissionOutcome>(
+          'admitResearcherAiRequest',
+          { operation: input.operation, counters, now: input.now },
+          unavailable,
+          inUnion(ADMISSION),
+        );
+      } catch {
+        return unavailable;
+      }
+    },
+
     async persistCompletedInterview(input: PersistCompletedInterviewInput): Promise<PersistCompletedInterviewOutcome> {
       // The durable backend re-verifies consent and needs the initial job's frozen inputs.
       if (!input.consent || !input.initialAnalysis) return unavailable;
@@ -627,8 +667,10 @@ export function createDurableWorkspaceStore(config: DurableWorkspaceConfig): Dur
           expectedGeneration: input.expectedGeneration,
           input: input.input,
           ...(input.transport === 'cloudflare-gateway' ? { transport: input.transport } : {}),
+          budget: await researcherAiRpcCounters(config.rateLimitSalt, input.budget) ?? undefined,
           now: input.now,
         };
+        if (!rpcInput.budget) return unavailable;
         // An unknown allocation commit is reported as unavailable; the caller
         // replays the same key and body (API-01).
         return await call<AcceptAnalysisRetryOutcome>('acceptAnalysisRetry', rpcInput, unavailable, inUnion(ACCEPT_RETRY));

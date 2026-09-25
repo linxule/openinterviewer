@@ -21,6 +21,7 @@ import {
 import { AggregateSynthesisResult, StudyConfig } from '@/types';
 import { validateResolvedAggregateSynthesis } from '@/lib/providerValidation';
 import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
+import { researcherAiBudgetResponse } from '@/lib/researcherAiBudget';
 import { providerErrorResponse } from '@/lib/providerErrorResponse';
 import { aggregateProvenance } from '@/lib/synthesisProvenance';
 import {
@@ -188,6 +189,8 @@ export async function POST(
       { researcherId: gated.researcherId }
     );
     if (platformLimited) return platformLimited;
+    const budgetLimited = await researcherAiBudgetResponse(request, 'followup', store, ROUTE);
+    if (budgetLimited) return budgetLimited;
 
     // Get the configured AI provider with researcher's API keys.
     let provider;

@@ -681,6 +681,41 @@ describe('consent and admission (ST-01, ST-06)', () => {
   });
 });
 
+describe('researcher AI admission (D15)', () => {
+  const counters = [
+    { key: 'researcher-ai:aggregate:session:3600:abc', maximum: 20, windowSeconds: 3_600 },
+    { key: 'researcher-ai:aggregate:researcher:86400:workspace', maximum: 100, windowSeconds: 86_400 },
+  ];
+
+  it('D15: runs the same check-all-then-charge script over researcher keys', async () => {
+    const evalMock = vi.fn().mockResolvedValueOnce([1, 0, 0]).mockResolvedValueOnce([0, 2, 1_234]);
+    const store = createRedisWorkspaceStore(asPort({ eval: evalMock }), { researcherId: null });
+
+    expect(await store.admitResearcherAiRequest({ operation: 'aggregate', counters, now: 1 })).toEqual({ status: 'admitted' });
+    expect(await store.admitResearcherAiRequest({ operation: 'aggregate', counters, now: 1 }))
+      .toEqual({ status: 'limited', rejectedIndex: 1, retryAfterSeconds: 1_234 });
+    expect(evalMock).toHaveBeenCalledWith(
+      expect.stringContaining("redis.call('INCR', KEYS[i])"),
+      counters.map(counter => counter.key),
+      ['20', '3600', '100', '86400'],
+    );
+  });
+
+  it('D15: an outage is unavailable; a participant key or a hosted store never charges', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const evalMock = vi.fn().mockRejectedValueOnce(new RedisCommitAmbiguousError('may-have-committed'));
+    const standalone = createRedisWorkspaceStore(asPort({ eval: evalMock }), { researcherId: null });
+    expect(await standalone.admitResearcherAiRequest({ operation: 'analysis', counters, now: 1 })).toEqual({ status: 'unavailable' });
+
+    const participantKey = [{ key: 'rate-limit:greeting:session:600:s', maximum: 3, windowSeconds: 600 }];
+    expect(await standalone.admitResearcherAiRequest({ operation: 'greeting', counters: participantKey, now: 1 }))
+      .toEqual({ status: 'unavailable' });
+    const hosted = createRedisWorkspaceStore(asPort({ eval: evalMock }), { researcherId: 'researcher-a' });
+    expect(await hosted.admitResearcherAiRequest({ operation: 'analysis', counters, now: 1 })).toEqual({ status: 'unavailable' });
+    expect(evalMock).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('completion (ST-01)', () => {
   it('ST-01: completion delegates the frozen plan and identity and ignores durable-only inputs', async () => {
     kvMock.persistCompletedInterview.mockResolvedValue({ status: 'rate-limited' });

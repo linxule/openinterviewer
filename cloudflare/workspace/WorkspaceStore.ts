@@ -12,6 +12,7 @@ import { applyMigrations } from './migrate';
 import { HELD_ALARM_RETRY_MS, readMeta, type WorkspaceContext, type WorkspaceEnv } from './context';
 import * as studies from './studies';
 import * as participants from './participants';
+import * as budget from './budget';
 import * as completion from './completion';
 import * as reads from './reads';
 import * as sample from './sample';
@@ -185,6 +186,12 @@ export class WorkspaceStore extends DurableObject<WorkspaceEnv> {
     const held = this.requireInitialized();
     if (held) return { status: 'held', reason: held };
     return participants.admitParticipantRequest(this.ws, input);
+  }
+
+  async admitResearcherAiRequest(input: Port.ResearcherAiAdmissionInput): Promise<Port.AdmissionOutcome> {
+    const held = this.requireInitialized();
+    if (held) return { status: 'held', reason: held };
+    return budget.admitResearcherAiRequest(this.ws, input);
   }
 
   // ---------- Completion ----------

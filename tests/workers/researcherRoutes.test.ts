@@ -31,7 +31,7 @@ import { GET as interviewsGET } from '../../src/app/api/interviews/route';
 import { GET as studiesGET } from '../../src/app/api/studies/route';
 import { createSessionToken, SESSION_COOKIE_NAME } from '../../src/lib/auth';
 import { forEachEligibleAggregateInput, loadDurableAggregateInputs } from '../../src/lib/ownedStudies';
-import { createDurableWorkspaceStore, MAX_LIST_INTERVIEWS_BYTES } from '../../src/lib/storage/durableObject';
+import { createDurableWorkspaceStore, hmacSha256Hex, MAX_LIST_INTERVIEWS_BYTES } from '../../src/lib/storage/durableObject';
 import { WORKER_INVOCATION_ACCESSOR, WORKER_RUNTIME_MARKER, type WorkerInvocation } from '../../src/lib/runtime/workerInvocation';
 import type { StoredInterview, StoredStudy } from '../../src/types';
 import { createStudy, DAY, sampleInterview, setMaintenance, sha256Hex, sql, studyConfig, T0, testEnv } from './fixtures';
@@ -260,6 +260,52 @@ describe('aggregate and follow-up inputs carry their route purpose to the object
     );
 
     expect(response.status).toBe(503);
+    expect(provider.generateFollowupStudy).not.toHaveBeenCalled();
+  });
+});
+
+describe('researcher AI budget through the real object (D15)', () => {
+  const workspaceKey = (operation: string, windowSeconds: number) =>
+    hmacSha256Hex(SALT, `researcher-ai:${operation}:researcher:${windowSeconds}:workspace`);
+
+  async function preparedFollowup() {
+    const study = await createStudy();
+    await insertAnalyzed(study.id, 'session-a', T0 - 1);
+    await insertAnalyzed(study.id, 'session-b', T0 - 2);
+    await saveStoredAggregate(study, ['session-a', 'session-b']);
+    return async () => followupPOST(
+      await researcherRequest(`${ORIGIN}/api/studies/${study.id}/generate-followup`, 'POST', {}),
+      { params: Promise.resolve({ id: study.id }) },
+    );
+  }
+
+  it('D15: a served follow-up charges the salted session and workspace windows once', async () => {
+    const followup = await preparedFollowup();
+
+    expect((await followup()).status).toBe(200);
+
+    const rows = await sql<{ scope_key: string; count: number; window_seconds: number }>(
+      `SELECT scope_key, count, window_seconds FROM budget_windows ORDER BY window_seconds`,
+    );
+    expect(rows).toEqual([
+      { scope_key: expect.stringMatching(/^[a-f0-9]{64}$/), count: 1, window_seconds: 3_600 },
+      { scope_key: await workspaceKey('followup', 86_400), count: 1, window_seconds: 86_400 },
+    ]);
+  });
+
+  it('D15: an exhausted workspace budget answers 429 before the provider, whatever the session', async () => {
+    const followup = await preparedFollowup();
+    await sql(
+      `INSERT INTO budget_windows (scope_key, count, window_seconds, expires_at) VALUES (?, 100, 86400, ?)`,
+      await workspaceKey('followup', 86_400),
+      Date.now() + DAY,
+    );
+
+    const response = await followup();
+
+    expect(response.status).toBe(429);
+    expect(Number(response.headers.get('Retry-After'))).toBeGreaterThan(86_000);
+    expect(providerFactory).not.toHaveBeenCalled();
     expect(provider.generateFollowupStudy).not.toHaveBeenCalled();
   });
 });

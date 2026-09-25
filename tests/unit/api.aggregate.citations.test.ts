@@ -44,6 +44,11 @@ vi.mock('@/lib/providers', async (importOriginal) => {
 
 const platformRateLimitMock = vi.hoisted(() => ({ hostedAiRateLimitResponse: vi.fn() }));
 vi.mock('@/lib/platformAiRateLimit', () => platformRateLimitMock);
+const researcherBudgetMock = vi.hoisted(() => ({ researcherAiBudgetResponse: vi.fn(async () => null) }));
+vi.mock('@/lib/researcherAiBudget', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/researcherAiBudget')>()),
+  ...researcherBudgetMock,
+}));
 
 const provenanceMock = vi.hoisted(() => ({
   aggregateProvenance: vi.fn(() => ({

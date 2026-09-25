@@ -27,6 +27,11 @@ vi.mock('@/lib/canonicalStudy', () => canonicalMock);
 
 const rateLimitMock = vi.hoisted(() => ({ hostedAiRateLimitResponse: vi.fn().mockResolvedValue(null) }));
 vi.mock('@/lib/platformAiRateLimit', () => rateLimitMock);
+const researcherBudgetMock = vi.hoisted(() => ({ researcherAiBudgetResponse: vi.fn(async () => null) }));
+vi.mock('@/lib/researcherAiBudget', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/researcherAiBudget')>()),
+  ...researcherBudgetMock,
+}));
 
 const analysisMock = vi.hoisted(() => ({ runInterviewAnalysis: vi.fn() }));
 vi.mock('@/lib/interviewAnalysis', () => analysisMock);
@@ -151,6 +156,22 @@ describe('Node target keeps the synchronous analyze contract (API-01 compatibili
     });
     return context;
   }
+
+  it('D15: the researcher AI budget is charged on the request store before the analysis runs; a refusal runs nothing', async () => {
+    const context = authorizedNodeContext();
+    const refusal = new Response(null, { status: 429 });
+    researcherBudgetMock.researcherAiBudgetResponse.mockResolvedValueOnce(refusal as never);
+
+    const { request, params } = makeRequest('interview-in-a', 'study-a');
+    const response = await POST(request, { params });
+
+    expect(response).toBe(refusal);
+    expect(researcherBudgetMock.researcherAiBudgetResponse).toHaveBeenCalledWith(
+      request, 'analysis', context.store, '/api/interviews/[id]/analyze',
+    );
+    expect(rateLimitMock.hostedAiRateLimitResponse).toHaveBeenCalledOnce();
+    expect(analysisMock.runInterviewAnalysis).not.toHaveBeenCalled();
+  });
 
   it('API-01 ignores the additive v2 header, key and body and still runs one synchronous analysis', async () => {
     const context = authorizedNodeContext();

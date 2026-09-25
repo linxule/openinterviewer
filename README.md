@@ -299,6 +299,21 @@ For participants:
 
 Finishing saves the transcript before starting analysis in the background. If the save fails, keep the tab open and use **Retry save**. Once the save is confirmed, the participant can close the tab even if analysis is still pending or fails. Researchers can use **Run analysis** on an interview or the pending-analysis batch action on a study to recover unfinished analysis. The saved transcript and JSON remain available from the interview detail view. Researchers can also customize the participant thank-you text in study setup.
 
+#### Researcher AI request limits
+
+On a standalone installation (Node or Cloudflare), every AI call the researcher starts is counted before the provider is called: preview greetings, preview turns and preview analysis, aggregate analysis, follow-up study generation and **Run analysis**. Each operation has a limit per signed-in session and a limit for the whole workspace, so signing in again does not reset the workspace limit. At a limit the request is refused with HTTP 429, a `Retry-After` header and "Too many AI requests from this workspace. Please wait before trying again."; nothing is sent to the provider and nothing is charged by it. Participant interviews have their own limits and never count here.
+
+| Operation | Per session | Per workspace |
+| --- | --- | --- |
+| Preview greeting | 10 per 10 minutes | 200 per day |
+| Preview turn | 60 per hour | 1,000 per day |
+| Preview analysis | 10 per hour | 100 per day |
+| Aggregate analysis | 20 per hour | 100 per day |
+| Follow-up study | 20 per hour | 100 per day |
+| Run analysis | 100 per hour | 500 per day |
+
+A window opens at the first counted request and does not slide. On Cloudflare, **Run analysis** is counted only when it starts new work: repeating a request that was already accepted, or asking again while an analysis is still running, is free. On Node every **Run analysis** request is counted. The limits are set in `STANDALONE_RESEARCHER_AI_POLICY` (`src/lib/researcherAiBudget.ts`). Hosted accounts use the hosted platform limits instead.
+
 ### How the interviewer is controlled
 
 **Interview Structure** balances coverage and depth through three modes: Structured, Standard, and Exploratory.

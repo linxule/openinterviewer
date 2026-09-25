@@ -61,6 +61,8 @@ import {
   type WorkerInvocation,
 } from '@/lib/runtime/workerInvocation';
 import type { StoreReadiness } from '@/lib/storage/types';
+import { createSessionToken, SESSION_COOKIE_NAME } from '@/lib/auth';
+import { STANDALONE_RESEARCHER_AI_POLICY } from '@/lib/researcherAiBudget';
 
 const CLOUDFLARE_ENV: Record<string, string> = {
   DEPLOYMENT_TARGET: 'cloudflare',
@@ -90,13 +92,15 @@ const STORE_METHODS = [
   'listParticipantLinks', 'revokeParticipantLink', 'recordConsent', 'verifyConsent', 'admitParticipantRequest',
   'persistCompletedInterview', 'getInterview', 'listInterviews', 'getAggregate', 'saveAggregate',
   'seedSampleWorkspace', 'clearSampleWorkspace', 'acceptAnalysisRetry', 'readAnalysisStatus', 'beginExport',
-  'readExportPage', 'verifyExportSequence', 'readAggregateInputs',
+  'readExportPage', 'verifyExportSequence', 'readAggregateInputs', 'admitResearcherAiRequest',
 ] as const;
 type StoreMethod = (typeof STORE_METHODS)[number];
 type FakeStore = { backend: 'durable-object' } & Record<StoreMethod, Mock>;
 
 const runtimeGlobals = globalThis as unknown as Record<symbol, unknown>;
 let store: FakeStore;
+/** A signed researcher session cookie: the researcher AI budget keys its session scope on it. */
+let researcherCookie = '';
 
 function fakeDurableStore(): FakeStore {
   const fake = { backend: 'durable-object' } as FakeStore;
@@ -152,7 +156,7 @@ const ready = (maintenance: 'open' | 'draining' | 'frozen' | 'recovery' = 'open'
 function jsonRequest(url: string, method: string, body?: unknown, headers: Record<string, string> = {}): Request {
   return new Request(url, {
     method,
-    headers: { 'Content-Type': 'application/json', ...headers },
+    headers: { 'Content-Type': 'application/json', Cookie: researcherCookie, ...headers },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
 }
@@ -188,11 +192,13 @@ function analyzed(study: StoredStudy, id: string, extra: Partial<StoredInterview
   return makeStoredInterview({ id, studyId: study.id, studyRevision: study.revision, synthesis, ...extra });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
   store = fakeDurableStore();
   setCloudflareEnv();
   authorize();
+  researcherCookie = `${SESSION_COOKIE_NAME}=${await createSessionToken()}`;
+  store.admitResearcherAiRequest.mockResolvedValue({ status: 'admitted' });
   getInterviewProvider.mockReturnValue({ synthesizeAggregate, generateFollowupStudy });
   synthesizeAggregate.mockResolvedValue({
     value: aggregateOutput,
@@ -671,7 +677,7 @@ describe('aggregate read and aggregate synthesis on Cloudflare (RT-09, ST-08)', 
 describe('POST /api/studies/[id]/generate-followup on Cloudflare (RT-09, F26)', () => {
   const study = studyAt(3);
   const params = { params: Promise.resolve({ id: study.id }) };
-  const followupRequest = () => new Request('http://localhost', { method: 'POST' });
+  const followupRequest = () => new Request('http://localhost', { method: 'POST', headers: { Cookie: researcherCookie } });
   const storedAggregate = {
     studyId: study.id,
     studyRevision: 3,
@@ -1059,7 +1065,7 @@ describe('aggregate and follow-up consent coverage on Cloudflare AI Gateway (D9,
   describe('follow-up', () => {
     const study = studyAt(3);
     const params = { params: Promise.resolve({ id: study.id }) };
-    const followupRequest = () => new Request('http://localhost', { method: 'POST' });
+    const followupRequest = () => new Request('http://localhost', { method: 'POST', headers: { Cookie: researcherCookie } });
     const storedAggregate = {
       studyId: study.id, studyRevision: 3, interviewIds: ['a', 'b'], interviewCount: 2,
       aiProvider: 'openai', aiModel: 'gpt-5.6-terra-served', requestedAiModel: 'gpt-5.6-terra',
@@ -1101,5 +1107,106 @@ describe('aggregate and follow-up consent coverage on Cloudflare AI Gateway (D9,
       expect(response.status).toBe(200);
       expect(generateFollowupStudy).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe('researcher AI budget on aggregate synthesis and follow-up on Cloudflare (D15)', () => {
+  const GATEWAY_ROUTE: ProviderRoute = {
+    transport: 'cloudflare-gateway',
+    accountId: '0123456789abcdef0123456789abcdef',
+    gatewayId: 'oi-unit-test',
+    token: 'synthetic-ai-gateway-run-token-0123456789',
+  };
+  const study = studyAt(3);
+  const params = { params: Promise.resolve({ id: study.id }) };
+  const aggregateRequest = () => jsonRequest('http://localhost/api/synthesis/aggregate', 'POST', { studyId: study.id });
+  const followupRequest = () => new Request('http://localhost', { method: 'POST', headers: { Cookie: researcherCookie } });
+  const storedAggregate = {
+    studyId: study.id, studyRevision: 3, interviewIds: ['a', 'b'], interviewCount: 2,
+    aiProvider: 'openai', aiModel: 'gpt-5.6-terra-served', requestedAiModel: 'gpt-5.6-terra',
+    commonThemes: [{ theme: 'Trust', frequency: 2, representativeQuotes: ['A'] }], divergentViews: [],
+    keyFindings: ['Trust matters'], researchImplications: ['Study ownership'], bottomLine: 'Ownership shapes trust.',
+    generatedAt: 1, savedAt: 2,
+  } as unknown as StoredAggregateSynthesis;
+
+  beforeEach(() => {
+    store.readiness.mockResolvedValue(ready());
+    store.getStudy.mockResolvedValue({ status: 'found', study });
+    store.getAggregate.mockResolvedValue({ status: 'found', aggregate: storedAggregate });
+    store.readAggregateInputs.mockResolvedValue({
+      status: 'ok', interviews: [analyzed(study, 'a'), analyzed(study, 'b')], nextCursor: null, totalEligible: 2,
+    });
+    store.saveAggregate.mockResolvedValue('saved');
+  });
+
+  const cases = [
+    { operation: 'aggregate' as const, run: () => synthesizeAggregateRoute(aggregateRequest()), provider: synthesizeAggregate },
+    { operation: 'followup' as const, run: () => generateFollowup(followupRequest(), params), provider: generateFollowupStudy },
+  ];
+
+  it.each(cases)('D15: $operation charges the session and workspace scopes once, before the provider', async ({ operation, run, provider }) => {
+    const response = await run();
+
+    expect(response.status).toBe(200);
+    expect(store.admitResearcherAiRequest).toHaveBeenCalledTimes(1);
+    const [input] = store.admitResearcherAiRequest.mock.calls[0];
+    const policy = STANDALONE_RESEARCHER_AI_POLICY[operation];
+    expect(input).toEqual({
+      operation,
+      counters: [
+        { key: expect.stringMatching(new RegExp(`^researcher-ai:${operation}:session:${policy.session.windowSeconds}:[a-f0-9]{64}$`)), ...policy.session },
+        { key: `researcher-ai:${operation}:researcher:${policy.researcher.windowSeconds}:workspace`, ...policy.researcher },
+      ],
+      now: expect.any(Number),
+    });
+    expect(JSON.stringify(input)).not.toContain(researcherCookie.split('=')[1]);
+    expect(store.admitResearcherAiRequest.mock.invocationCallOrder[0]).toBeLessThan(provider.mock.invocationCallOrder[0]);
+  });
+
+  it.each(cases)('D15: a limited $operation is 429 with Retry-After and makes no provider call or write', async ({ run, provider }) => {
+    store.admitResearcherAiRequest.mockResolvedValue({ status: 'limited', rejectedIndex: 1, retryAfterSeconds: 3_600 });
+
+    const response = await run();
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBe('3600');
+    await expect(response.json()).resolves.toEqual({
+      error: 'Too many AI requests from this workspace. Please wait before trying again.',
+      retryable: true,
+    });
+    expect(getInterviewProvider).not.toHaveBeenCalled();
+    expect(provider).not.toHaveBeenCalled();
+    expect(store.saveAggregate).not.toHaveBeenCalled();
+  });
+
+  it.each(cases)('D15: an unavailable budget store fails $operation closed (503) before the provider', async ({ run, provider }) => {
+    store.admitResearcherAiRequest.mockResolvedValue({ status: 'unavailable' });
+
+    const response = await run();
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({ retryable: true });
+    expect(provider).not.toHaveBeenCalled();
+  });
+
+  it.each(cases)('D15: $operation without a signed researcher session cookie fails closed without charging', async ({ run, provider }) => {
+    researcherCookie = `${SESSION_COOKIE_NAME}=not-a-session`;
+
+    const response = await run();
+
+    expect(response.status).toBe(503);
+    expect(store.admitResearcherAiRequest).not.toHaveBeenCalled();
+    expect(provider).not.toHaveBeenCalled();
+  });
+
+  it('D15: a refusal that makes no provider call (too few interviews, transport not disclosed) charges nothing', async () => {
+    store.readAggregateInputs.mockResolvedValueOnce({ status: 'ok', interviews: [analyzed(study, 'a')], nextCursor: null, totalEligible: 1 });
+    expect((await synthesizeAggregateRoute(aggregateRequest())).status).toBe(400);
+
+    authorize(cloudflareContext({ providerRoute: GATEWAY_ROUTE }));
+    expect((await synthesizeAggregateRoute(aggregateRequest())).status).toBe(409);
+    expect((await generateFollowup(followupRequest(), params)).status).toBe(409);
+
+    expect(store.admitResearcherAiRequest).not.toHaveBeenCalled();
   });
 });

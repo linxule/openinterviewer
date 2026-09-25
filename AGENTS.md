@@ -65,7 +65,7 @@ The sample-workspace seed is not the public demo. `/demo` is component-memory-on
 - Disposable Redis fault harness: `tests/helpers/disposableRedis.ts`, `tests/helpers/faultManifest.ts`
 - Portable research-store port, analysis protocol and backend selection: `src/lib/storage/` (`types.ts`, `analysisProtocol.ts`, `resolve.ts`, Redis adapter `redis.ts`, Durable Object client `durableObject.ts`)
 - Cloudflare Worker entry (OpenNext wrapper, Queue handler): `cloudflare/worker.ts`; it strips the reserved `x-openinterviewer-internal-*` headers from every request before OpenNext with `cloudflare/internalHeaders.ts`
-- `WorkspaceStore` Durable Object and its domain modules (schema, studies, links, completion, analysis jobs, single-alarm scheduler, export snapshots, maintenance/backup/import, login budget): `cloudflare/workspace/`
+- `WorkspaceStore` Durable Object and its domain modules (schema, studies, links, completion, analysis jobs, single-alarm scheduler, export snapshots, maintenance/backup/import, login budget, participant and researcher AI budget windows): `cloudflare/workspace/`
 - Queue consumer and queued provider execution policy: `cloudflare/analysis/`
 - Operational backup format: `src/lib/backup/format.ts`
 
@@ -92,7 +92,7 @@ Hosted study create/delete is a durable cross-database operation. Preserve the o
 - Cloudflare provider endpoints (explicit per-adapter endpoints, direct or Cloudflare AI Gateway routes with the exact `cf-aig-*` header set, route resolution shared by readiness, the fetch path and the Queue consumer, refused SDK environment overrides, `covers()`): `src/lib/providers/endpoint.ts`
 - Provider result validation/errors: `src/lib/providerValidation.ts`, `src/lib/providerErrors.ts`
 - Evidence citation matching (render-time classification; verdicts never stored): `src/lib/evidence.ts`
-- Participant and hosted platform limits: `src/lib/rateLimit.ts`, `src/lib/platformAiRateLimit.ts`
+- Participant and hosted platform limits: `src/lib/rateLimit.ts`, `src/lib/platformAiRateLimit.ts`; the standalone researcher AI budget (`STANDALONE_RESEARCHER_AI_POLICY`, charged before every researcher-initiated provider call): `src/lib/researcherAiBudget.ts`
 - Browser API clients: `src/services/`
 - Session-scoped workflow state: `src/store.ts`, persisted through `src/lib/tolerantSessionStorage.ts` (a failed write leaves the session in memory only)
 

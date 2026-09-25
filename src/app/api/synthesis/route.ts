@@ -21,6 +21,7 @@ import { loadCanonicalStudy, researcherPreviewHoldResponse } from '@/lib/canonic
 import { deploymentNotReadyResponse } from '@/lib/runtime/readinessGate';
 import { providerErrorResponse } from '@/lib/providerErrorResponse';
 import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
+import { researcherAiBudgetResponse } from '@/lib/researcherAiBudget';
 import { validateBehavior, validateProfile, validateTranscript } from '@/lib/interviewSubmission';
 import { readBoundedJsonObject } from '@/lib/requestBody';
 import {
@@ -113,6 +114,8 @@ export async function POST(request: Request) {
     // frozen, in recovery or otherwise held. Always allowed on Redis.
     const previewHeld = await researcherPreviewHoldResponse(context.store, ROUTE);
     if (previewHeld) return previewHeld;
+    const budgetLimited = await researcherAiBudgetResponse(request, 'synthesis', context.store, ROUTE);
+    if (budgetLimited) return budgetLimited;
 
     const platformLimited = await hostedAiRateLimitResponse(
       request,

@@ -65,6 +65,11 @@ vi.mock('@/lib/kv', () => kvMock);
 
 const platformRateLimitMock = vi.hoisted(() => ({ hostedAiRateLimitResponse: vi.fn() }));
 vi.mock('@/lib/platformAiRateLimit', () => platformRateLimitMock);
+const researcherBudgetMock = vi.hoisted(() => ({ researcherAiBudgetResponse: vi.fn(async () => null) }));
+vi.mock('@/lib/researcherAiBudget', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/researcherAiBudget')>()),
+  ...researcherBudgetMock,
+}));
 
 const consentMock = vi.hoisted(() => ({ verifyParticipantConsent: vi.fn() }));
 vi.mock('@/lib/participantConsent', () => consentMock);
@@ -214,6 +219,22 @@ describe('POST /api/synthesis evidence telemetry (researcher preview)', () => {
   });
 });
 
+describe('POST /api/synthesis — researcher AI budget (D15)', () => {
+  it('D15: a preview is charged on the request store before the provider; a refusal constructs no provider', async () => {
+    const refusal = new Response(null, { status: 429 });
+    researcherBudgetMock.researcherAiBudgetResponse.mockResolvedValueOnce(refusal as never);
+
+    const res = await synthesisPOST(makeRequest());
+
+    expect(res).toBe(refusal);
+    const { context } = await contextMock.getParticipantRequestContext();
+    expect(researcherBudgetMock.researcherAiBudgetResponse).toHaveBeenCalledWith(
+      expect.any(Request), 'synthesis', context.store, '/api/synthesis',
+    );
+    expect(providersMock.getInterviewProvider).not.toHaveBeenCalled();
+  });
+});
+
 describe('POST /api/synthesis — participant tokens are refused', () => {
   it('returns 403 for a participant token, with no provider call', async () => {
     contextMock.getParticipantRequestContext.mockResolvedValue({
@@ -231,5 +252,6 @@ describe('POST /api/synthesis — participant tokens are refused', () => {
     expect(res.status).toBe(403);
     expect(provider.synthesizeInterview).not.toHaveBeenCalled();
     expect(platformRateLimitMock.hostedAiRateLimitResponse).not.toHaveBeenCalled();
+    expect(researcherBudgetMock.researcherAiBudgetResponse).not.toHaveBeenCalled();
   });
 });

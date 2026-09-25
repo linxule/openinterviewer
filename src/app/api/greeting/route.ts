@@ -21,6 +21,7 @@ import {
 import { providerErrorResponse } from '@/lib/providerErrorResponse';
 import { participantAdmissionRefusal } from '@/lib/rateLimit';
 import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
+import { researcherAiBudgetResponse } from '@/lib/researcherAiBudget';
 import { readBoundedJsonObject } from '@/lib/requestBody';
 import { deploymentNotReadyResponse } from '@/lib/runtime/readinessGate';
 import { covers } from '@/lib/providers/endpoint';
@@ -130,6 +131,8 @@ export async function POST(request: Request) {
     } else {
       const previewHeld = await researcherPreviewHoldResponse(context.store, ROUTE);
       if (previewHeld) return previewHeld;
+      const budgetLimited = await researcherAiBudgetResponse(request, 'greeting', context.store, ROUTE);
+      if (budgetLimited) return budgetLimited;
     }
 
     const platformLimited = await hostedAiRateLimitResponse(
