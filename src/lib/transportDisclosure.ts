@@ -6,7 +6,7 @@
 // disclosed one. Node deployments bind no transport to consent.
 
 import { NextResponse } from 'next/server';
-import type { AIProviderType } from '@/types';
+import type { AIProviderType, StoredInterview } from '@/types';
 import { isCloudflareTarget } from './runtime/capabilities';
 import {
   covers,
@@ -15,6 +15,7 @@ import {
   type ProviderRoute,
 } from './providers/endpoint';
 import { isProviderType } from './providers/synthesisModel';
+import { isSampleFixtureInterview } from './sampleFixtures';
 
 export type CurrentTransport =
   /** Node: consent binds no transport. */
@@ -43,6 +44,19 @@ export function disclosedMember(
   transport: EffectiveTransport,
 ): { disclosedTransport?: 'cloudflare-gateway' } {
   return transport === 'cloudflare-gateway' ? { disclosedTransport: 'cloudflare-gateway' } : {};
+}
+
+/**
+ * The consent disclosures a researcher call over these interviews must cover.
+ * Sample fixtures are synthetic, have no participant and carry no disclosure,
+ * so they need none; every other interview counts, absent meaning direct.
+ */
+export function participantDisclosures(
+  interviews: ReadonlyArray<Pick<StoredInterview, 'id' | 'studyId' | 'consentTransport'>>,
+): Array<'cloudflare-gateway' | undefined> {
+  return interviews
+    .filter((interview) => !isSampleFixtureInterview(interview))
+    .map((interview) => interview.consentTransport);
 }
 
 /** Whether every record's disclosure covers `current`; absent means direct. */

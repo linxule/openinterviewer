@@ -38,6 +38,7 @@ import {
   currentProviderTransport,
   providerNotConfiguredResponse,
   researcherTransportNotDisclosedResponse,
+  participantDisclosures,
   uncoveredCount,
 } from '@/lib/transportDisclosure';
 
@@ -148,14 +149,12 @@ export async function POST(request: Request) {
 
     // D9 (Cloudflare): every included transcript's consent must cover the
     // transport this call would use. An uncovered interview refuses the whole
-    // call; interviews are never silently dropped from an aggregate.
+    // call; interviews are never silently dropped from an aggregate. Sample
+    // fixtures are synthetic and need no disclosure.
     const current = currentProviderTransport(gated.context, study.config.aiProvider);
     if (current.applies) {
       if (!current.ok) return providerNotConfiguredResponse();
-      const uncovered = uncoveredCount(
-        currentRevisionInterviews.map(interview => interview.consentTransport),
-        current.transport,
-      );
+      const uncovered = uncoveredCount(participantDisclosures(currentRevisionInterviews), current.transport);
       if (uncovered > 0) return researcherTransportNotDisclosedResponse(uncovered);
     }
 

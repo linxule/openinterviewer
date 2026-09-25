@@ -73,7 +73,7 @@ The transport disclosed at consent is recorded with the consent, the saved inter
 - a consent page rendered for another transport gets 409 `DISCLOSURE_CHANGED` and must be reopened. A page from before this release sends no transport; it could only have disclosed direct, so a direct installation accepts it and a gateway installation refuses it (verified on staging 2026-09-24: before this rule, a tab left open during an update to this release got a spurious 409);
 - switching to direct is always covered.
 
-Drain first (`draining`, wait for no pending/claimed/started jobs and no active sessions, up to the 4-hour consent lifetime), then change the transport, then `open`. The sample workspace's seeded interviews carry no disclosure, so its aggregate is refused on the gateway.
+Drain first (`draining`, wait for no pending/claimed/started jobs and no active sessions, up to the 4-hour consent lifetime), then change the transport, then `open`. The sample workspace's seeded interviews are synthetic and need no disclosure, so its aggregate and follow-up run on either transport; a participant interview saved in the sample study is checked like any other.
 
 The switch itself is an installer operation from the workstation that holds the receipt (INSTALLER.md, AI transport):
 

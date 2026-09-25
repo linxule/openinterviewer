@@ -12,12 +12,13 @@ import {
   BehaviorData,
   DEFAULT_GEMINI_MODEL,
 } from '@/types';
+import { SAMPLE_STUDY_ID } from './sampleFixtures';
 
 // ============================================
 // Demo Study Configuration
 // ============================================
 
-const DEMO_STUDY_ID = 'demo-study-adaptive-self';
+const DEMO_STUDY_ID = SAMPLE_STUDY_ID;
 const DEMO_STUDY_REVISION = 1;
 
 export const DEMO_STUDY_CONFIG: StudyConfig = {

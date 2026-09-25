@@ -27,6 +27,7 @@ import {
   currentProviderTransport,
   providerNotConfiguredResponse,
   researcherTransportNotDisclosedResponse,
+  participantDisclosures,
   uncoveredCount,
 } from '@/lib/transportDisclosure';
 import { createRequestId, logRequestFailure } from '@/lib/requestLog';
@@ -133,7 +134,7 @@ export async function POST(
         for (const interview of page) {
           if (wanted.has(interview.id) && !eligibleIds.has(interview.id)) {
             eligibleIds.add(interview.id);
-            sourceDisclosures.push(interview.consentTransport);
+            sourceDisclosures.push(...participantDisclosures([interview]));
           }
         }
         return eligibleIds.size < wanted.size;
