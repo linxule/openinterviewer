@@ -14,7 +14,7 @@ const CHANGE_OPTIONS = [
   'provider', 'jurisdiction', 'origin', 'account-id', 'import-target', 'secrets-stdin',
   'operator-token-file', 'reveal-operator-token', 'change-provider', 'yes',
   'provider-keys', 'add-provider-key', 'rotate-provider-key',
-  'ai-transport', 'change-ai-transport', 'rotate-ai-gateway-token', 'rotate-admin-password',
+  'ai-transport', 'change-ai-transport', 'rotate-ai-gateway-token', 'rotate-admin-password', 'forget-provider-key',
 ];
 
 export async function configCommand(ctx) {
