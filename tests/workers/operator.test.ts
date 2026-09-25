@@ -217,10 +217,10 @@ describe('maintenance transitions (OPS-01)', () => {
 
   it('OPS-01: maintenance matrix — draining refuses entry and researcher mutations but keeps consent, admission and settlement; frozen and recovery refuse writes; reads stay open', async () => {
     const env = testEnv as unknown as WorkspaceEnv;
-    const classes: OperationClass[] = ['read', 'participant-entry', 'participant-session', 'researcher-mutation', 'job-settlement'];
+    const classes: OperationClass[] = ['read', 'participant-entry', 'participant-session', 'researcher-mutation', 'researcher-ai', 'job-settlement'];
     const expected: Record<MaintenanceState, OperationClass[]> = {
       open: classes,
-      draining: ['read', 'participant-session', 'job-settlement'],
+      draining: ['read', 'participant-session', 'researcher-ai', 'job-settlement'],
       frozen: ['read'],
       recovery: ['read'],
     };

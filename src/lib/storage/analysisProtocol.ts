@@ -163,11 +163,19 @@ export type AcceptAnalysisRetryInput = {
    * disclosure covers it (D9); otherwise `transport-not-disclosed`.
    */
   transport?: 'cloudflare-gateway';
+  /**
+   * Researcher AI budget windows (D15; hex64 salted keys), checked and charged
+   * in the allocation transaction only when a new generation is allocated.
+   * The durable client always sends them.
+   */
+  budget?: Array<{ key: string; maximum: number; windowSeconds: number }>;
   now: number;
 };
 
 export type AcceptAnalysisRetryOutcome =
   | { status: 'accepted'; body: AnalysisStatusBody }
+  /** The researcher AI budget refused a new generation; nothing was written. */
+  | { status: 'limited'; retryAfterSeconds: number }
   | { status: 'transport-not-disclosed' }
   | { status: 'provider-not-disclosed' }
   | { status: 'existing'; body: AnalysisStatusBody }

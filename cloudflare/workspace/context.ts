@@ -43,6 +43,8 @@ export type WorkspaceContext = {
  * - participant-entry: link exchange / new collection starts; open only.
  * - participant-session: consent, admission, save by an existing session; open or draining.
  * - researcher-mutation: study/link/aggregate/sample writes and analysis retries; open only.
+ * - researcher-ai: researcher AI budget charges before a paid researcher
+ *   call (D15); open or draining, the states a paid no-write call runs in (F26).
  * - job-settlement: dispatch, claim, start, finish; open or draining.
  */
 export type OperationClass =
@@ -50,6 +52,7 @@ export type OperationClass =
   | 'participant-entry'
   | 'participant-session'
   | 'researcher-mutation'
+  | 'researcher-ai'
   | 'job-settlement';
 
 const ALLOWED: Record<OperationClass, ReadonlyArray<MaintenanceState>> = {
@@ -57,6 +60,7 @@ const ALLOWED: Record<OperationClass, ReadonlyArray<MaintenanceState>> = {
   'participant-entry': ['open'],
   'participant-session': ['open', 'draining'],
   'researcher-mutation': ['open'],
+  'researcher-ai': ['open', 'draining'],
   'job-settlement': ['open', 'draining'],
 };
 

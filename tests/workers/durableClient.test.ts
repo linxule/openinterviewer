@@ -412,8 +412,10 @@ describe('durable client transport contract (ST-01, JOB-04)', () => {
     const store = createDurableWorkspaceStore({ namespace: fake.namespace, workspaceId: testEnv.WORKSPACE_ID, jurisdiction: '', rateLimitSalt: SALT });
     const key = crypto.randomUUID();
     const frozen = frozenInput((await createStudyInput()).candidate);
+    const budgetKey = 'researcher-ai:analysis:researcher:86400:workspace';
     const outcome = await store.acceptAnalysisRetry({
       studyId: 'study-a', interviewId: 'session-a', expectedGeneration: 1, input: frozen, now: T0, rawIdempotencyKey: key, apiVersion: 2,
+      budget: [{ key: budgetKey, maximum: 500, windowSeconds: 86_400 }],
     });
     expect(outcome.status).toBe('accepted');
     const sent = fake.calls[0].input as Record<string, unknown>;
@@ -425,9 +427,11 @@ describe('durable client transport contract (ST-01, JOB-04)', () => {
       requestFingerprint: await sha256Hex('analysis-retry:v2\u00001'),
       expectedGeneration: 1,
       input: frozen,
+      budget: [{ key: createHmac('sha256', SALT).update(budgetKey).digest('hex'), maximum: 500, windowSeconds: 86_400 }],
       now: T0,
     });
     expect(JSON.stringify(sent)).not.toContain(key);
+    expect(JSON.stringify(sent)).not.toContain('researcher-ai:');
     expect(await analysisRequestKeyDigest({ workspaceId: testEnv.WORKSPACE_ID, studyId: 'study-a', interviewId: 'session-b', rawIdempotencyKey: key }))
       .not.toBe(sent.requestKeyDigest);
     expect(await analysisRequestFingerprint(2)).not.toBe(sent.requestFingerprint);
@@ -476,6 +480,7 @@ describe('durable client transport contract (ST-01, JOB-04)', () => {
     expect(await store.seedSampleWorkspace({ studies: [], interviews: [], now: T0 })).toEqual(unavailable);
     expect(await store.acceptAnalysisRetry({
       studyId: 's', interviewId: 'i', expectedGeneration: 0, input: frozenInput(study), now: T0, rawIdempotencyKey: 'k', apiVersion: 2,
+      budget: [{ key: 'researcher-ai:analysis:researcher:86400:workspace', maximum: 1, windowSeconds: 1 }],
     })).toEqual(unavailable);
   });
 
@@ -530,6 +535,7 @@ describe('durable client transport contract (ST-01, JOB-04)', () => {
     expect(await store.seedSampleWorkspace({ studies: [], interviews: [], now: T0 })).toEqual(unavailable);
     expect(await store.acceptAnalysisRetry({
       studyId: 's', interviewId: 'i', expectedGeneration: 0, input: frozenInput(study), now: T0, rawIdempotencyKey: 'k', apiVersion: 2,
+      budget: [{ key: 'researcher-ai:analysis:researcher:86400:workspace', maximum: 1, windowSeconds: 1 }],
     })).toEqual(unavailable);
     expect(await store.readAnalysisStatus({ studyId: 's', interviewId: 'i' })).toEqual(unavailable);
     expect(await store.beginExport({ maximum: 500 })).toEqual(unavailable);

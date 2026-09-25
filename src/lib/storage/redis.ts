@@ -73,6 +73,7 @@ import type {
   StudyListView,
   WorkspaceStorePort,
 } from './types';
+import { RESEARCHER_AI_KEY_PREFIX } from './types';
 
 export type RedisWorkspaceStoreOptions = {
   /** Hosted researcher id; null in standalone. */
@@ -287,6 +288,31 @@ export function createRedisWorkspaceStore(client: RedisPort, options: RedisWorks
         };
       } catch (error) {
         logRequestFailure({ event: 'kv.unavailable', operation: input.operation }, error);
+        return { status: 'unavailable' };
+      }
+    },
+
+    // Same check-all-then-charge script as participant admission, over
+    // `researcher-ai:` keys. A hosted store keeps the platform limiter and
+    // never charges the researcher's own database.
+    async admitResearcherAiRequest(input): Promise<AdmissionOutcome> {
+      if (researcherId !== null) return { status: 'unavailable' };
+      if (
+        input.counters.length === 0
+        || !input.counters.every(counter => counter.key.startsWith(RESEARCHER_AI_KEY_PREFIX))
+      ) {
+        return { status: 'unavailable' };
+      }
+      try {
+        const decision = await consumeParticipantRateLimits(client, input.counters);
+        if (decision.allowed) return { status: 'admitted' };
+        return {
+          status: 'limited',
+          rejectedIndex: decision.rejectedIndex,
+          retryAfterSeconds: decision.retryAfterSeconds,
+        };
+      } catch (error) {
+        logRequestFailure({ event: 'kv.unavailable', operation: `researcher-ai-${input.operation}` }, error);
         return { status: 'unavailable' };
       }
     },

@@ -32,6 +32,7 @@ import type { ParticipantLinkRecord } from '@/lib/participantLinks';
 import type { ParticipantRateLimitCounter, PersistRatePlanRow } from '@/lib/rateLimit';
 import type {
   PersistCompletedInterviewInput,
+  ResearcherAiCounter,
   WorkspaceStorePort,
 } from '@/lib/storage/types';
 
@@ -696,6 +697,51 @@ export function defineWorkspaceStoreContract(label: string, harness: WorkspaceSt
         expect((await admitSession()).status).toBe('admitted');
         const third = expectStatus(await admitSession(), 'limited');
         expect(third.rejectedIndex).toBe(1);
+      });
+    });
+
+    describe('researcher AI admission (D15)', () => {
+      const researcherCounter = (maximum: number): ResearcherAiCounter =>
+        ({ key: `researcher-ai:aggregate:session:3600:${uid()}`, maximum, windowSeconds: 3_600 });
+
+      it('D15: admits up to the maximum, then refuses without charging any other scope', async () => {
+        const store = await harness.createStore();
+        const limited = researcherCounter(1);
+        const shared = researcherCounter(2);
+        const admit = (counters: ResearcherAiCounter[]) =>
+          store.admitResearcherAiRequest({ operation: 'aggregate', counters, now: Date.now() });
+
+        expect(await admit([limited, shared])).toEqual({ status: 'admitted' });
+        const refused = expectStatus(await admit([limited, shared]), 'limited');
+        expect(refused.rejectedIndex).toBe(0);
+        expect(refused.retryAfterSeconds).toBeGreaterThanOrEqual(1);
+        expect(refused.retryAfterSeconds).toBeLessThanOrEqual(3_600);
+
+        expect(await admit([researcherCounter(5), shared])).toEqual({ status: 'admitted' });
+        expect(expectStatus(await admit([researcherCounter(5), shared]), 'limited').rejectedIndex).toBe(1);
+      });
+
+      it('D15: concurrent admissions never exceed the maximum', async () => {
+        const store = await harness.createStore();
+        const counter = researcherCounter(3);
+        const outcomes = await Promise.all(Array.from({ length: 8 }, () =>
+          store.admitResearcherAiRequest({ operation: 'aggregate', counters: [counter], now: Date.now() })));
+        expect(outcomes.filter(outcome => outcome.status === 'admitted')).toHaveLength(3);
+        expect(outcomes.filter(outcome => outcome.status === 'limited')).toHaveLength(5);
+      });
+
+      it('D15: a participant key is never charged as a researcher budget, and the two budgets are separate', async () => {
+        const store = await harness.createStore();
+        const subject = uid();
+        const participant = { key: `rate-limit:greeting:session:600:${subject}`, maximum: 1, windowSeconds: 600 };
+        const researcher = { key: `researcher-ai:greeting:session:600:${subject}`, maximum: 1, windowSeconds: 600 };
+
+        expect(await store.admitResearcherAiRequest({ operation: 'greeting', counters: [participant], now: Date.now() }))
+          .toEqual({ status: 'unavailable' });
+        expect(await store.admitParticipantRequest({ operation: 'greeting', counters: [participant], now: Date.now() }))
+          .toEqual({ status: 'admitted' });
+        expect(await store.admitResearcherAiRequest({ operation: 'greeting', counters: [researcher], now: Date.now() }))
+          .toEqual({ status: 'admitted' });
       });
     });
 

@@ -41,6 +41,11 @@ vi.mock('@/lib/providers', async (importOriginal) => {
 
 const platformRateLimitMock = vi.hoisted(() => ({ hostedAiRateLimitResponse: vi.fn() }));
 vi.mock('@/lib/platformAiRateLimit', () => platformRateLimitMock);
+const researcherBudgetMock = vi.hoisted(() => ({ researcherAiBudgetResponse: vi.fn(async () => null) }));
+vi.mock('@/lib/researcherAiBudget', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/researcherAiBudget')>()),
+  ...researcherBudgetMock,
+}));
 
 const provenanceMock = vi.hoisted(() => ({ aggregateProvenance: vi.fn() }));
 vi.mock('@/lib/synthesisProvenance', () => provenanceMock);
@@ -308,5 +313,23 @@ describe('follow-up synthesis provenance', () => {
       retryable: true,
     });
     expect(JSON.stringify(body)).not.toContain('secret upstream response');
+  });
+});
+
+describe('follow-up researcher AI budget (D15)', () => {
+  it('D15: charges the request workspace store after the hosted limiter and before the provider; a refusal stops there', async () => {
+    const refusal = new Response(null, { status: 429 });
+    researcherBudgetMock.researcherAiBudgetResponse.mockResolvedValueOnce(refusal as never);
+
+    const response = await POST(request(), { params: Promise.resolve({ id: parentStudy.id }) });
+
+    expect(response).toBe(refusal);
+    const { context } = await contextMock.getRequestContext();
+    expect(researcherBudgetMock.researcherAiBudgetResponse).toHaveBeenCalledWith(
+      expect.any(Request), 'followup', context.store, '/api/studies/[id]/generate-followup',
+    );
+    expect(platformRateLimitMock.hostedAiRateLimitResponse).toHaveBeenCalledOnce();
+    expect(getInterviewProvider).not.toHaveBeenCalled();
+    expect(generateFollowupStudy).not.toHaveBeenCalled();
   });
 });

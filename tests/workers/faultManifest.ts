@@ -46,6 +46,7 @@ const BACKUP = 'tests/workers/backup.test.ts';
 const OPERATOR = 'tests/workers/operator.test.ts';
 const SCHEMA = 'tests/workers/schema.migrations.test.ts';
 const RESEARCHER_ROUTES = 'tests/workers/researcherRoutes.test.ts';
+const RESEARCHER_AI = 'tests/workers/researcherAi.test.ts';
 const RESTART_COMMITTED = 'tests/cloudflare-restart/committed.restart.test.ts';
 const RESTART_LEASE = 'tests/cloudflare-restart/lease.restart.test.ts';
 const RESTART_TRANSACTION = 'tests/cloudflare-restart/transaction.restart.test.ts';
@@ -561,7 +562,7 @@ export const CLOUDFLARE_FAULT_CUTS: ReadonlyArray<CloudflareFaultCut> = [
   },
   {
     id: 'CF-ADMISSION',
-    code: [`${WS}/participants.ts#admitParticipantRequest`, `${STORE}#admitParticipantRequest`],
+    code: [`${WS}/participants.ts#admitParticipantRequest`, `${WS}/budget.ts#chargeBudgetWindows`, `${STORE}#admitParticipantRequest`],
     cut: 'A greeting, interview or save admission charge committed and its reply was lost, before any provider call.',
     durableEvidence: 'The charged budget window members.',
     expectedReply: 'A thrown RPC is `unavailable` in the durable client; the route fails closed (503) before any provider call.',
@@ -570,6 +571,32 @@ export const CLOUDFLARE_FAULT_CUTS: ReadonlyArray<CloudflareFaultCut> = [
       { file: PARTICIPANTS, title: 'ST-06: concurrent admissions never exceed the maximum' },
       { file: PARTICIPANTS, title: 'ST-06: a window opens at first consumption, never slides and restarts after it expires' },
       { file: PARTICIPANTS, title: 'ST-06: a denial reports the 0-based rejected row and mutates no scope' },
+    ],
+  },
+
+  {
+    id: 'CF-RESEARCHER-AI-ADMISSION',
+    code: [`${WS}/budget.ts#admitResearcherAiRequest`, `${WS}/budget.ts#chargeBudgetWindows`, `${STORE}#admitResearcherAiRequest`],
+    cut: 'A researcher AI budget charge (preview, aggregate or follow-up) committed and its reply was lost, before any provider call.',
+    durableEvidence: 'The charged session and workspace budget windows.',
+    expectedReply: 'A thrown RPC is `unavailable` in the durable client; the route fails closed (503) before any provider call.',
+    nextAction: 'A retry is charged again inside the same fixed windows, so researcher-initiated paid calls stay bounded by the window maxima.',
+    coverage: [
+      { file: RESEARCHER_AI, title: 'D15: concurrent admissions never exceed the maximum' },
+      { file: RESEARCHER_AI, title: 'D15: a denial reports the 0-based rejected row and mutates no scope' },
+      { file: RESEARCHER_AI, title: 'D15/F26: the researcher-ai gate admits while open or draining and holds while frozen or in recovery' },
+    ],
+  },
+  {
+    id: 'CF-RETRY-BUDGET',
+    code: [`${WS}/analysis.ts#acceptAnalysisRetry`, `${WS}/budget.ts#chargeBudgetWindows`, `${STORE}#acceptAnalysisRetry`],
+    cut: 'A retry allocation charges the researcher `analysis` budget inside its own transaction: the charge and the new generation commit together or not at all.',
+    durableEvidence: 'Charged windows only alongside a new generation, its receipt and a mutation-sequence bump; a refusal or limit leaves neither.',
+    expectedReply: '`limited` (the analyze route answers 429 with Retry-After) with nothing allocated, or the usual allocation outcomes.',
+    nextAction: 'A receipt replay or a second key against active work is answered without a charge; after the window the same action allocates.',
+    coverage: [
+      { file: RESEARCHER_AI, title: 'D15: only a newly allocated generation is charged; a receipt replay and existing active work are free' },
+      { file: RESEARCHER_AI, title: 'D15: an exhausted budget is limited and allocates nothing: no job, receipt, analysis row or sequence bump' },
     ],
   },
 

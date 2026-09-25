@@ -213,6 +213,15 @@ describe('researcher retry keeps a fixed provider commitment', () => {
     expect(await sqlRows('SELECT job_id FROM analysis_jobs WHERE interview_id = ?', seeded.interviewId)).toEqual([]);
   });
 
+  it('a refused retry charges no researcher AI budget', async () => {
+    const seeded = await seedInterview({ provider: 'openai', record: committed('fixed') });
+    const budget = [{ key: 'a'.repeat(64), maximum: 5, windowSeconds: 3_600 }];
+    const input = { ...frozenInput(seeded.config, 1), requestedProvider: 'claude' as const, requestedModel: 'claude-sonnet-5' };
+    expect(await workspaceStub().acceptAnalysisRetry(retryInput(seeded, { input, budget })))
+      .toEqual({ status: 'provider-not-disclosed' });
+    expect(await sqlRows('SELECT scope_key FROM budget_windows')).toEqual([]);
+  });
+
   it('accepts a retry on the committed provider and model', async () => {
     const seeded = await seedInterview({ provider: 'openai', record: committed('fixed') });
     expect(await workspaceStub().acceptAnalysisRetry(retryInput(seeded))).toMatchObject({ status: 'accepted' });

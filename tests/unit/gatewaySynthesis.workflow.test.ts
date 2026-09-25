@@ -68,6 +68,10 @@ vi.mock('@/lib/rateLimit', async (importOriginal) => ({
 vi.mock('@/lib/platformAiRateLimit', () => ({
   hostedAiRateLimitResponse: vi.fn(async () => null),
 }));
+vi.mock('@/lib/researcherAiBudget', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/researcherAiBudget')>()),
+  researcherAiBudgetResponse: vi.fn(async () => null),
+}));
 
 // The save route schedules the deferred analysis via `after()`; this file
 // exercises that analysis explicitly (see `runInterviewAnalysis` below)

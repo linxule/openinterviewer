@@ -19,6 +19,7 @@ import {
   readStudyRow,
   STUDY_ID,
 } from './studies';
+import { chargeBudgetWindows, isValidCounterList } from './budget';
 
 /** Unexpired, unrevoked links per workspace (Redis also counted revoked and expired-but-unpruned links). */
 export const MAX_ACTIVE_LINKS = 1_000;
@@ -26,8 +27,6 @@ export const CONSENT_TTL_MS = 4 * 60 * 60 * 1000;
 
 const SESSION_ID = /^[A-Za-z0-9_-]{16,128}$/;
 const CONSENT_STUDY_ID = /^[A-Za-z0-9_-]{1,120}$/;
-const MAX_ADMISSION_COUNTERS = 8;
-const MAX_WINDOW_SECONDS = 31 * 24 * 60 * 60;
 
 export async function sha256Hex(text: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
@@ -406,33 +405,16 @@ export async function verifyConsent(ws: WorkspaceContext, input: Rpc.ConsentInpu
 
 // ---------- Greeting/interview admission (first-consumption windows) ----------
 
-function isValidCounter(counter: unknown): counter is { key: string; maximum: number; windowSeconds: number } {
-  return isPlainObject(counter)
-    && isHex64(counter.key)
-    && typeof counter.maximum === 'number'
-    && Number.isSafeInteger(counter.maximum)
-    && counter.maximum >= 0
-    && typeof counter.windowSeconds === 'number'
-    && Number.isSafeInteger(counter.windowSeconds)
-    && counter.windowSeconds > 0
-    && counter.windowSeconds <= MAX_WINDOW_SECONDS;
-}
-
-type WindowRow = { count: number; expires_at: number };
-
 /**
  * Check every counter, then charge every counter, in one synchronous
- * transaction. `rejectedIndex` is 0-based in counter order; a denial mutates
- * no scope. A window opens at its first charge and never slides.
+ * transaction (budget.ts). `rejectedIndex` is 0-based in counter order; a
+ * denial mutates no scope. A window opens at its first charge and never slides.
  */
 export async function admitParticipantRequest(ws: WorkspaceContext, input: Port.AdmissionInput): Promise<Port.AdmissionOutcome> {
   try {
     if (
       (input?.operation !== 'greeting' && input?.operation !== 'interview')
-      || !Array.isArray(input.counters)
-      || input.counters.length === 0
-      || input.counters.length > MAX_ADMISSION_COUNTERS
-      || !input.counters.every(isValidCounter)
+      || !isValidCounterList(input.counters)
       || !isSafeTime(input.now)
     ) {
       return { status: 'unavailable' };
@@ -441,44 +423,12 @@ export async function admitParticipantRequest(ws: WorkspaceContext, input: Port.
     return ws.storage.transactionSync((): Port.AdmissionOutcome => {
       const checked = gate(ws, 'participant-session');
       if (!checked.ok) return { status: 'held', reason: checked.reason };
-      for (let index = 0; index < counters.length; index += 1) {
-        const counter = counters[index];
-        const row = ws.sql
-          .exec<WindowRow>(`SELECT count, expires_at FROM budget_windows WHERE scope_key = ?`, counter.key)
-          .toArray()[0];
-        const active = row && row.expires_at > now ? row : null;
-        if (active && (!Number.isSafeInteger(active.count) || active.count < 0 || !isSafeTime(active.expires_at))) {
-          logCorruptRecord('admitParticipantRequest');
-          return { status: 'unavailable' };
-        }
-        const count = active ? active.count : 0;
-        if (count >= counter.maximum) {
-          const retryAfterSeconds = active
-            ? Math.max(1, Math.ceil((active.expires_at - now) / 1000))
-            : Math.max(1, counter.windowSeconds);
-          return { status: 'limited', rejectedIndex: index, retryAfterSeconds };
-        }
+      const charged = chargeBudgetWindows(ws, counters, now);
+      if (charged.status === 'corrupt') {
+        logCorruptRecord('admitParticipantRequest');
+        return { status: 'unavailable' };
       }
-      for (let index = 0; index < counters.length; index += 1) {
-        const counter = counters[index];
-        // Re-read: the same scope may appear twice in one request.
-        const row = ws.sql
-          .exec<WindowRow>(`SELECT count, expires_at FROM budget_windows WHERE scope_key = ?`, counter.key)
-          .toArray()[0];
-        if (row && row.expires_at > now) {
-          ws.sql.exec(`UPDATE budget_windows SET count = count + 1 WHERE scope_key = ?`, counter.key);
-        } else {
-          ws.sql.exec(
-            `INSERT INTO budget_windows (scope_key, count, window_seconds, expires_at) VALUES (?, 1, ?, ?)
-             ON CONFLICT (scope_key) DO UPDATE SET
-               count = 1, window_seconds = excluded.window_seconds, expires_at = excluded.expires_at`,
-            counter.key,
-            counter.windowSeconds,
-            now + counter.windowSeconds * 1000,
-          );
-        }
-      }
-      return { status: 'admitted' };
+      return charged;
     });
   } catch (error) {
     logStorageFailure('admitParticipantRequest', error);

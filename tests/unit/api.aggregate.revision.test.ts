@@ -41,6 +41,11 @@ vi.mock('@/lib/providers', async (importOriginal) => {
 
 const platformRateLimitMock = vi.hoisted(() => ({ hostedAiRateLimitResponse: vi.fn() }));
 vi.mock('@/lib/platformAiRateLimit', () => platformRateLimitMock);
+const researcherBudgetMock = vi.hoisted(() => ({ researcherAiBudgetResponse: vi.fn(async () => null) }));
+vi.mock('@/lib/researcherAiBudget', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/researcherAiBudget')>()),
+  ...researcherBudgetMock,
+}));
 
 const provenanceMock = vi.hoisted(() => ({
   aggregateProvenance: vi.fn(() => ({
@@ -273,5 +278,50 @@ describe('aggregate synthesis revision provenance', () => {
     await expect(response.json()).resolves.toEqual({
       error: 'AI provider is not configured on the server.',
     });
+  });
+});
+
+describe('aggregate researcher AI budget (D15)', () => {
+  it('D15: charges the request workspace store after the hosted limiter and before the provider; a refusal stops before any write', async () => {
+    const study = makeStoredStudy({ id: 'study-budget', revision: 2 });
+    study.config.id = study.id;
+    kvMock.getStudy.mockResolvedValue(study);
+    kvMock.getStudyInterviewsChecked.mockResolvedValue({ status: 'ok', items: [
+      makeStoredInterview({ id: 'a', studyId: study.id, studyRevision: 2, synthesis }),
+      makeStoredInterview({ id: 'b', studyId: study.id, studyRevision: 2, synthesis }),
+    ] });
+    const refusal = new Response(null, { status: 429 });
+    researcherBudgetMock.researcherAiBudgetResponse.mockResolvedValueOnce(refusal as never);
+
+    const response = await POST(new Request('http://localhost/api/synthesis/aggregate', {
+      method: 'POST',
+      body: JSON.stringify({ studyId: study.id }),
+    }));
+
+    expect(response).toBe(refusal);
+    const { context } = await contextMock.getRequestContext();
+    expect(researcherBudgetMock.researcherAiBudgetResponse).toHaveBeenCalledWith(
+      expect.any(Request), 'aggregate', context.store, '/api/synthesis/aggregate',
+    );
+    expect(getInterviewProvider).not.toHaveBeenCalled();
+    expect(synthesizeAggregate).not.toHaveBeenCalled();
+    expect(kvMock.saveStudyAggregate).not.toHaveBeenCalled();
+  });
+
+  it('D15: a request refused before the provider (too few interviews) is never charged', async () => {
+    const study = makeStoredStudy({ id: 'study-budget-few', revision: 2 });
+    study.config.id = study.id;
+    kvMock.getStudy.mockResolvedValue(study);
+    kvMock.getStudyInterviewsChecked.mockResolvedValue({ status: 'ok', items: [
+      makeStoredInterview({ id: 'a', studyId: study.id, studyRevision: 2, synthesis }),
+    ] });
+
+    const response = await POST(new Request('http://localhost/api/synthesis/aggregate', {
+      method: 'POST',
+      body: JSON.stringify({ studyId: study.id }),
+    }));
+
+    expect(response.status).toBe(400);
+    expect(researcherBudgetMock.researcherAiBudgetResponse).not.toHaveBeenCalled();
   });
 });
