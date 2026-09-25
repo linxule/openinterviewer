@@ -192,7 +192,7 @@ npm run setup:check -- --mode standalone
 npm run dev
 ```
 
-Open `http://localhost:3000`. The researcher dashboard uses `ADMIN_PASSWORD`; participant access uses opaque links exchanged for short-lived, HttpOnly session cookies.
+Open `http://localhost:3000`. The researcher dashboard uses `ADMIN_PASSWORD`; participant access uses opaque links exchanged for short-lived, HttpOnly session cookies. Sign-in counts failed attempts in Redis, so it needs the Upstash variables and `RATE_LIMIT_SALT`; without them it answers 503 (see [Security and data boundaries](#security-and-data-boundaries)).
 
 #### Production variables
 
@@ -370,6 +370,8 @@ Editing a study advances its revision and invalidates links and participant sess
 - The opaque code is exchanged for a short-lived HttpOnly, `SameSite=Strict` cookie and removed from the address bar.
 - Participant APIs resolve the live, server-owned study revision and recheck link status.
 - AI failures are errors, not fabricated research responses.
+- Researcher sign-in allows 10 failed attempts per client per 15 minutes and 200 across all clients per hour, on both standalone targets. A client is its IPv4 address, or its /64 for IPv6. Every attempt is counted before the password is compared, and a correct password is not counted. Over a limit sign-in answers 429 with `Retry-After`, even for the correct password; if the attempt store (Durable Object or Redis) or `RATE_LIMIT_SALT` is unavailable it answers 503 rather than skipping the limit.
+- On Node, the sign-in client is the first address of `x-vercel-forwarded-for`, `x-forwarded-for` or `x-real-ip`, as for participant limits. On Vercel the platform sets `x-vercel-forwarded-for`. Behind a host or proxy that passes client-supplied values through, a client can choose its own address, and only the global window bounds it, which it can exhaust to block every sign-in for up to an hour. Put such a host behind a proxy that overwrites the header.
 - On Cloudflare, rate limits use only the validated `CF-Connecting-IP`, automatic invocation logs are disabled (they would record participant link codes in URLs), and no Redis client can be constructed inside the Worker.
 - Researchers remain responsible for consent language, retention, deletion, provider terms, and applicable research/privacy governance.
 
@@ -423,7 +425,7 @@ Cloudflare lanes (no account or credentials needed; everything runs in local wor
 
 ```bash
 npm run test:cloudflare             # real local Durable Object SQLite, alarms and Queue batches
-npm run test:contract:redis         # the shared WorkspaceStore scenarios on disposable Redis
+npm run test:contract:redis         # the shared WorkspaceStore scenarios and the Node sign-in budget on disposable Redis
 npm run test:setup:cloudflare       # installer against a fake wrangler
 npm run build:cloudflare
 npm run test:cloudflare:artifact    # the built Worker artifact in local workerd

@@ -3,8 +3,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   cloudflareAdmissionIdentity,
+  nodeAdmissionIdentity,
   nodeForwardedAddress,
   normalizeClientAddress,
+  signInBudgetSubject,
 } from '@/lib/runtime/clientAddress';
 
 const V6_DOC = '2001:0db8:0000:0000:0000:0000:0000:0001';
@@ -161,5 +163,51 @@ describe('RT-07 Node forwarded chain', () => {
       'cf-connecting-ip': '203.0.113.7',
     }))).toBe('2001:DB8::1');
     expect(nodeForwardedAddress(new Headers({ 'cf-connecting-ip': '203.0.113.7' }))).toBe('unknown');
+  });
+});
+
+describe('F5 Node sign-in admission identity', () => {
+  it('F5 normalizes the first address of the existing header chain', () => {
+    expect(nodeAdmissionIdentity(new Headers({ 'x-forwarded-for': '2001:DB8::1, 10.0.0.1' })))
+      .toEqual({ kind: 'address', address: V6_DOC });
+    expect(nodeAdmissionIdentity(new Headers({
+      'x-vercel-forwarded-for': '::ffff:203.0.113.7',
+      'x-forwarded-for': '198.51.100.1',
+    }))).toEqual({ kind: 'address', address: '203.0.113.7' });
+    expect(nodeAdmissionIdentity(new Headers({ 'cf-connecting-ip': '203.0.113.7' })))
+      .toEqual({ kind: 'unknown', reason: 'missing' });
+    expect(nodeAdmissionIdentity(new Headers({ 'x-real-ip': 'client.example' })))
+      .toEqual({ kind: 'unknown', reason: 'invalid' });
+    expect(nodeAdmissionIdentity(new Headers({ 'x-forwarded-for': '203.0.113.7:443' })))
+      .toEqual({ kind: 'unknown', reason: 'invalid' });
+  });
+});
+
+describe('F5 sign-in budget subject (RT-07 owner amendment: IPv6 by /64)', () => {
+  const subject = (address: string) => signInBudgetSubject({ kind: 'address', address });
+
+  it('F5 keys IPv4 and IPv4-mapped IPv6 by the full address', () => {
+    expect(subject('203.0.113.7')).toBe('address:203.0.113.7');
+    expect(subject('::ffff:203.0.113.7')).toBe('address:203.0.113.7');
+    expect(subject('203.0.113.8')).not.toBe(subject('203.0.113.7'));
+  });
+
+  it('F5 keys IPv6 by its /64: the first four groups of the full form', () => {
+    expect(subject('2001:db8:0:1::1')).toBe('address64:2001:0db8:0000:0001');
+    for (const sameSubnet of ['2001:DB8:0:1::2', '2001:db8:0:1:ffff:ffff:ffff:ffff', '2001:0db8:0000:0001:1234:5678:9abc:def0']) {
+      expect(subject(sameSubnet)).toBe('address64:2001:0db8:0000:0001');
+    }
+    expect(subject('2001:db8:0:2::1')).toBe('address64:2001:0db8:0000:0002');
+    expect(subject('::1')).toBe('address64:0000:0000:0000:0000');
+    // A mapped-looking address outside ::ffff:0:0/96 is an ordinary IPv6 /64.
+    expect(subject('::fffe:203.0.113.7')).toBe('address64:0000:0000:0000:0000');
+  });
+
+  it('F5 keeps the shared unknown and subrequest subjects', () => {
+    expect(signInBudgetSubject(null)).toBe('unknown');
+    expect(signInBudgetSubject({ kind: 'unknown', reason: 'missing' })).toBe('unknown');
+    expect(signInBudgetSubject({ kind: 'unknown', reason: 'invalid' })).toBe('unknown');
+    expect(subject('fe80::1%eth0')).toBe('unknown');
+    expect(signInBudgetSubject({ kind: 'subrequest' })).toBe('subrequest');
   });
 });

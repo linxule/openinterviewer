@@ -38,8 +38,8 @@ export const PASSWORD_SECRET = 'ADMIN_PASSWORD';
 export const MIN_PASSWORD_LENGTH = 16;
 
 /**
- * On Cloudflare, POST /api/auth refuses a body over this many bytes before
- * it compares the password (MAX_CLOUDFLARE_LOGIN_BODY_BYTES in
+ * Standalone POST /api/auth refuses a body over this many bytes before it
+ * compares the password (MAX_CLOUDFLARE_LOGIN_BODY_BYTES in
  * src/lib/loginBody.ts; tests/unit/adminPasswordLimit.test.ts keeps the two
  * equal). The Login page and the operator CLI both send
  * JSON.stringify({ password }), so a longer password could never sign in.

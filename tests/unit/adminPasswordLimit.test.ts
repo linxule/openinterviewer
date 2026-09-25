@@ -4,7 +4,8 @@
 // the operator CLI, the setup checker, the readiness validator and
 // POST /api/auth agree on the 1 KiB sign-in body, so a password the installer
 // accepts is ready and signs in, and one it refuses is reported not ready
-// rather than locking the researcher out.
+// rather than locking the researcher out. Node standalone sign-in reads the
+// same bounded body, and its readiness and setup checks apply the same limit.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -20,7 +21,7 @@ import { validateSuppliedSecret } from '../../scripts/cloudflare/installer/secre
 import { MAX_LOGIN_BODY_BYTES as OPERATOR_MAX_LOGIN_BODY_BYTES } from '../../scripts/cloudflare/operator.mjs';
 import { validateSetup } from '../../scripts/check-setup.mjs';
 import { POST } from '@/app/api/auth/route';
-import { validateCloudflareConfig } from '@/lib/hostedConfig';
+import { validateCloudflareConfig, validateStandaloneConfig } from '@/lib/hostedConfig';
 import { loginBodyBytes, MAX_CLOUDFLARE_LOGIN_BODY_BYTES, MAX_LOGIN_PASSWORD_LENGTH } from '@/lib/loginBody';
 import { WORKER_INVOCATION_ACCESSOR, WORKER_RUNTIME_MARKER, type WorkerInvocation } from '@/lib/runtime/workerInvocation';
 
@@ -41,6 +42,18 @@ const CLOUDFLARE_ENV: Record<string, string> = {
   ANALYSIS_RECOVERY_EPOCH: 'ep_fedcba9876543210fedcba9876543210',
 };
 const BINDINGS = { workspaceStore: true, analysisQueue: true };
+const NODE_ENV_VARS: Record<string, string> = {
+  DEPLOYMENT_MODE: 'standalone',
+  AI_TRANSPORT: 'direct',
+  AI_PROVIDER: 'openai',
+  APP_BASE_URL: 'https://interviews.example.org',
+  SESSION_SECRET: CLOUDFLARE_ENV.SESSION_SECRET,
+  PARTICIPANT_TOKEN_SECRET: CLOUDFLARE_ENV.PARTICIPANT_TOKEN_SECRET,
+  RATE_LIMIT_SALT: CLOUDFLARE_ENV.RATE_LIMIT_SALT,
+  KV_REST_API_URL: 'https://synthetic-password-limit.upstash.io',
+  KV_REST_API_TOKEN: 'synthetic-password-limit-token',
+  OPENAI_API_KEY: 'synthetic-openai-provider-key',
+};
 
 function configuredWith(password: string): NodeJS.ProcessEnv {
   const env: Record<string, string> = { ...CLOUDFLARE_ENV, ADMIN_PASSWORD: password };
@@ -160,5 +173,27 @@ describe('ADMIN_PASSWORD sign-in limit (gap F5)', () => {
       expect(password.length).toBeLessThanOrEqual(MAX_LOGIN_PASSWORD_LENGTH);
     }
     expect(LONGEST_ACCEPTED.ascii.length).toBe(MAX_LOGIN_PASSWORD_LENGTH);
+  });
+
+  it('the Node target applies the same limit in readiness and the setup checker', () => {
+    const nodeEnv = (password: string): NodeJS.ProcessEnv => {
+      const env: Record<string, string> = { ...NODE_ENV_VARS, ADMIN_PASSWORD: password };
+      return env as NodeJS.ProcessEnv;
+    };
+    const checkerErrors = (password: string) => validateSetup({
+      mode: 'standalone',
+      production: true,
+      env: nodeEnv(password),
+      nodeVersion: '24.19.0',
+    }).checks.filter((item: { status: string; code: string }) => item.status === 'error' && item.code.startsWith('env.'))
+      .map((item: { code: string }) => item.code);
+    for (const password of Object.values(LONGEST_ACCEPTED)) {
+      expect(validateStandaloneConfig(nodeEnv(password))).toEqual([]);
+      expect(checkerErrors(password)).toEqual([]);
+    }
+    for (const password of Object.values(ONE_PAST)) {
+      expect(validateStandaloneConfig(nodeEnv(password))).toEqual(['admin_password_too_long']);
+      expect(checkerErrors(password)).toEqual(['env.ADMIN_PASSWORD.too_long']);
+    }
   });
 });

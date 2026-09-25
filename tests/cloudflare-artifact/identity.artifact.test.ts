@@ -65,10 +65,11 @@ describe('RT-07 admission identity in the built Worker', () => {
     expect((await signIn(address('198.51.100.11'))).status).toBe(401);
     expect((await signIn(address('198.51.100.11'), SYNTHETIC_SECRETS.ADMIN_PASSWORD)).status).toBe(200);
 
-    // IPv6: one full normalized form per address, not per /64.
+    // IPv6: one budget per /64 (RT-07 owner amendment), whatever the spelling or interface.
     await exhaust(address('2001:db8:0:0:0:0:0:a'));
     expect((await signIn(address('2001:DB8::A'))).status).toBe(429);
-    expect((await signIn(address('2001:db8::b'))).status).toBe(401);
+    expect((await signIn(address('2001:db8::b'))).status).toBe(429);
+    expect((await signIn(address('2001:db8:0:1::a'))).status).toBe(401);
   });
 
   it('RT-07 invalid CF-Connecting-IP values share the unknown bucket, and a forged internal header cannot leave it', async () => {

@@ -337,6 +337,10 @@ export function validateStandaloneConfig(env: ConfigEnv = process.env): HostedCo
   const adminPassword = present(env.ADMIN_PASSWORD);
   if (!adminPassword) errors.push('missing_admin_password');
   else if (adminPassword.length < 16) errors.push('weak_admin_password');
+  // Sign-in reads at most a 1 KiB body (gap F5), so a longer password could never be sent.
+  else if (loginBodyBytes(env.ADMIN_PASSWORD ?? '') > MAX_CLOUDFLARE_LOGIN_BODY_BYTES) {
+    errors.push('admin_password_too_long');
+  }
 
   const redisUrl = present(env.KV_REST_API_URL);
   if (!redisUrl) errors.push('missing_standalone_redis_url');

@@ -146,7 +146,7 @@ function addRequiredEnv(checks, env, name, options = {}) {
     return false;
   }
 
-  // Cloudflare sign-in reads at most a 1 KiB body and compares the password
+  // Standalone sign-in reads at most a 1 KiB body and compares the password
   // exactly as stored, so a longer one could never sign in (the readiness
   // check reports it as admin_password_too_long).
   if (options.maxLoginBodyBytes && loginBodyBytes(value) > options.maxLoginBodyBytes) {
@@ -790,7 +790,7 @@ export function validateSetup({
   }
 
   if (selectedMode === 'standalone') {
-    addRequiredEnv(checks, env, 'ADMIN_PASSWORD', { minLength: 16 });
+    addRequiredEnv(checks, env, 'ADMIN_PASSWORD', { minLength: 16, maxLoginBodyBytes: MAX_LOGIN_BODY_BYTES });
     addRequiredEnv(checks, env, 'KV_REST_API_URL');
     addRequiredEnv(checks, env, 'KV_REST_API_TOKEN');
     validateUrl(checks, env, 'KV_REST_API_URL', { upstash: true, production });

@@ -39,7 +39,7 @@ A lost response is resolved by reading `status`, never by repeating a transition
 
 ### Sign-in lockout
 
-Sign-in is limited on Cloudflare: 10 failed attempts per client per 15 minutes, and 200 across all clients per hour. Each client is its full normalized address. Each window opens with its first counted attempt and is never extended. Over a limit, `/api/auth` answers 429 with `Retry-After`, and the CLI exits 1 with "retry after N seconds". A client-level lockout clears within 15 minutes. A global lockout means many failures from many clients; it blocks every sign-in, including the correct password, for up to one hour. Sign-in works in every maintenance state and under epoch, identity and bootstrap holds. Only an unsupported schema or unavailable workspace storage refuses it (503).
+Sign-in is limited on Cloudflare: 10 failed attempts per client per 15 minutes, and 200 across all clients per hour. Each client is its IPv4 address, or its /64 for IPv6, so a lockout covers every address in that /64. Each window opens with its first counted attempt and is never extended. Over a limit, `/api/auth` answers 429 with `Retry-After`, and the CLI exits 1 with "retry after N seconds". A client-level lockout clears within 15 minutes. A global lockout means many failures from many clients; it blocks every sign-in, including the correct password, for up to one hour. Sign-in works in every maintenance state and under epoch, identity and bootstrap holds. Only an unsupported schema or unavailable workspace storage refuses it (503).
 
 ### Researcher AI request limits (D15)
 
