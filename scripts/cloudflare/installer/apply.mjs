@@ -52,7 +52,7 @@ import { printVerification, summarizeVerification } from './report.mjs';
 const refuse = (message, hints = []) => new InstallerError(message, { exitCode: REFUSED, hints });
 const now = () => new Date().toISOString();
 
-const UPDATE_ONLY_OPTIONS = ['change-provider', 'add-provider-key', 'rotate-provider-key', 'change-ai-transport', 'rotate-ai-gateway-token', 'rotate-admin-password'];
+const UPDATE_ONLY_OPTIONS = ['change-provider', 'add-provider-key', 'rotate-provider-key', 'change-ai-transport', 'rotate-ai-gateway-token', 'rotate-admin-password', 'forget-provider-key'];
 
 /**
  * The provider keys to bind: the receipt's on resume, otherwise

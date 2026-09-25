@@ -37,8 +37,8 @@ Commands
             with --config and no --install/--env: the config's APP_BASE_URL, without a receipt
             (for a deploy made outside the installer, such as the CI promotion job)
   update    deploy the current checked artifact to an existing installation (--yes), or run one
-            provider-key operation (--add-provider-key, --rotate-provider-key), --rotate-ai-gateway-token
-            or --rotate-admin-password without deploying, or switch --change-provider / --change-ai-transport
+            provider-key operation (--add-provider-key, --rotate-provider-key, --forget-provider-key),
+            --rotate-ai-gateway-token or --rotate-admin-password without deploying, or switch --change-provider / --change-ai-transport
   config    local only: (re)write cloudflare/installations/<install>-<env>/wrangler.jsonc from
             the receipt and print its path; refused until the bootstrap was cleared. This is the
             file to store as CLOUDFLARE_INSTALL_CONFIG for the CI promotion job
@@ -69,6 +69,8 @@ Options
   --rotate-ai-gateway-token     update only: replace the bound Run token after probing it; no deploy
   --rotate-admin-password       update only: replace ADMIN_PASSWORD (stdin JSON or a hidden prompt, asked twice);
                                 no deploy; existing researcher sessions stay valid until they expire
+  --forget-provider-key <p[,p]> update only: after a manual wrangler secret delete, drop those non-default
+                                providers from the receipt once their keys are observed gone; no upload, no deploy
   --yes                         confirm the reviewed plan (apply, resume, update)
   --json                        machine-readable result on stdout (progress goes to stderr)
   --wait-seconds <n>            readiness wait budget (default 180; verify: 0)
@@ -99,6 +101,7 @@ const OPTIONS = {
   'change-ai-transport': { type: 'boolean' },
   'rotate-ai-gateway-token': { type: 'boolean' },
   'rotate-admin-password': { type: 'boolean' },
+  'forget-provider-key': { type: 'string' },
   yes: { type: 'boolean' },
   json: { type: 'boolean' },
   'wait-seconds': { type: 'string' },

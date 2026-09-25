@@ -15,9 +15,13 @@
 //                               gateway, bind the Run token if unbound; then deploy
 //   --rotate-ai-gateway-token   replace the bound Run token (probed first); no deploy
 //   --rotate-admin-password     replace ADMIN_PASSWORD; no deploy
-// Each records a pendingChange in the receipt before its first remote write
-// and clears it once its effect is observed, so rerunning the same update
-// finishes it.
+//   --forget-provider-key <p[,p]> drop non-default providers from providerKeys
+//                               once their keys are observed deleted by hand
+//                               (wrangler secret delete); no upload, no deploy
+// Each operation that writes remote state records a pendingChange in the
+// receipt before its first remote write and clears it once its effect is
+// observed, so rerunning the same update finishes it. --forget-provider-key
+// writes no remote state: its one receipt write is the whole effect.
 
 import { artifactStatus } from './artifact.mjs';
 import { checkToolEnvironment, deployInstallation, ensureConfigFile, gatewayApiFor, resolveAccount, saveReceipt, wranglerFor } from './context.mjs';
@@ -46,7 +50,7 @@ import { verifyInstallation } from './verify.mjs';
 const refuse = (message, hints = []) => new InstallerError(message, { exitCode: REFUSED, hints });
 const now = () => new Date().toISOString();
 const DEPLOY_MESSAGE = /^openinterviewer ([0-9a-f]{12})$/;
-const OPERATIONS = ['change-provider', 'add-provider-key', 'rotate-provider-key', 'change-ai-transport', 'rotate-ai-gateway-token', 'rotate-admin-password'];
+const OPERATIONS = ['change-provider', 'add-provider-key', 'rotate-provider-key', 'change-ai-transport', 'rotate-ai-gateway-token', 'rotate-admin-password', 'forget-provider-key'];
 /** Operations that upload secrets only and never deploy (keyOperation). */
 const KEY_OPERATIONS = ['add-provider-key', 'rotate-provider-key', 'rotate-ai-gateway-token', 'rotate-admin-password'];
 
@@ -93,6 +97,11 @@ function selectOperation(options, receipt) {
     if (providers.length !== 1) throw refuse('--rotate-provider-key takes exactly one provider');
     return { kind: 'rotate-provider-key', provider: providers[0] };
   }
+  if (options['forget-provider-key'] !== undefined) {
+    // `all` would always include the default provider, whose key stays.
+    if (options['forget-provider-key'].trim() === 'all') throw refuse('--forget-provider-key takes provider names, not all');
+    return { kind: 'forget-provider-key', providers: parseProviderList(options['forget-provider-key'], '--forget-provider-key') };
+  }
   if (options['change-provider']) {
     if (!options.provider) throw refuse('--change-provider requires --provider <name>');
     return { kind: 'provider', provider: options.provider };
@@ -133,10 +142,11 @@ function finishes(operation, options) {
  * recorded, every required secret bound, the installation config on the
  * receipt's side (or, while a provider or transport change is pending, on
  * either side), and, on the Cloudflare AI Gateway transport with the
- * management token, the gateway policy (never corrected here).
+ * management token, the gateway policy (never corrected here). The keys
+ * --forget-provider-key is about to drop (`forgetting`) may be missing.
  * Returns the bound secret names.
  */
-async function checkDrift(ctx, receipt, wrangler, account, pending, { gatewayApi, checkGateway }) {
+async function checkDrift(ctx, receipt, wrangler, account, pending, { gatewayApi, checkGateway, forgetting = [] }) {
   const { names } = receipt;
   ctx.out.step(`Checking ${names.worker} for drift`);
   if (!(await wrangler.workerExists(names.worker))) {
@@ -159,7 +169,7 @@ async function checkDrift(ctx, receipt, wrangler, account, pending, { gatewayApi
   ensureConfigFile(ctx, receipt);
   const bound = await wrangler.secretNames(names.worker, ctx.paths.config);
   for (const name of requiredSecretNames(receipt.providerKeys, receipt.aiTransport)) {
-    if (!bound?.has(name)) drift.push(`secret ${name}: missing on ${names.worker}`);
+    if (!bound?.has(name) && !forgetting.includes(name)) drift.push(`secret ${name}: missing on ${names.worker}`);
   }
   if (onDisk) {
     // An interrupted provider or transport change may have left the config on either side.
@@ -192,8 +202,13 @@ async function checkDrift(ctx, receipt, wrangler, account, pending, { gatewayApi
     }
   }
   if (drift.length > 0) {
+    // A non-default key deleted on purpose is recorded with --forget-provider-key (together with any being forgotten now).
+    const forget = Object.keys(PROVIDER_KEYS).filter((provider) => forgetting.includes(PROVIDER_KEYS[provider])
+      || (receipt.providerKeys.includes(provider) && provider !== receipt.provider && !bound?.has(PROVIDER_KEYS[provider])));
+    const deleted = forget.some((provider) => !forgetting.includes(PROVIDER_KEYS[provider]));
     throw refuse(`drift detected; nothing was changed:\n  - ${drift.join('\n  - ')}`, [
       'Restore the recorded state (or the receipt) deliberately, then rerun update.',
+      ...(deleted ? [`If a provider key was deleted on purpose (wrangler secret delete), record that with update --forget-provider-key ${forget.join(',')} --yes.`] : []),
     ]);
   }
   // A provider key bound outside the installer's records is reported, never
@@ -240,7 +255,8 @@ async function assertLatestDeploymentRecorded(receipt, wrangler, pending) {
     throw refuse(`the newest deployment of ${receipt.names.worker} does not serve a single version at 100%`, hints);
   }
   const message = DEPLOY_MESSAGE.exec(latest.annotations?.['workers/message'] ?? '');
-  const lastEvent = receipt.secretEvents.at(-1);
+  // A forget event records no deployment of its own (the delete was manual).
+  const lastEvent = receipt.secretEvents.findLast((event) => event.kind !== 'forget-provider-key');
   const byMessage = Boolean(message);
   const byEvent = Boolean(lastEvent?.deploymentId) && lastEvent.deploymentId === latest.id && lastEvent.at >= lastDeploy.at;
   const created = Date.parse(latest.created_on ?? '');
@@ -413,6 +429,46 @@ async function keyOperation(ctx, receipt, wrangler, bound, operation, pending, {
 }
 
 /**
+ * --forget-provider-key <p[,p]>: after the operator deleted the keys by hand
+ * (`wrangler secret delete`), drop the providers from providerKeys once every
+ * name is observed gone. The installer never deletes a secret itself; while
+ * any of them is bound nothing changes. No upload, no deploy, no
+ * pendingChange: the one atomic receipt write (providerKeys and the event
+ * together) is the whole effect, so an interrupted run leaves nothing half done.
+ */
+async function forgetOperation(ctx, receipt, bound, operation, { gatewayApi = null } = {}) {
+  const { names } = receipt;
+  const { providers } = operation;
+  const keyNames = providers.map((provider) => PROVIDER_KEYS[provider]);
+  const stillBound = keyNames.filter((name) => bound.has(name));
+  if (stillBound.length > 0) {
+    throw refuse(`${stillBound.join(', ')} ${stillBound.length === 1 ? 'is' : 'are'} still bound to ${names.worker}; the installer never deletes a secret, so nothing was changed`, [
+      'Delete deliberately first:',
+      ...stillBound.map((name) => `  wrangler secret delete ${name} --name ${names.worker}`),
+      `Then rerun update --forget-provider-key ${providers.join(',')} --yes.`,
+    ]);
+  }
+  ctx.out.step(`Forgetting ${keyNames.join(', ')}: observed deleted from ${names.worker} (no secret changes, no deploy)`);
+  receipt.providerKeys = receipt.providerKeys.filter((entry) => !providers.includes(entry));
+  receipt.secretEvents.push({ kind: operation.kind, names: keyNames, uploaded: [], at: now(), deploymentId: null });
+  saveReceipt(ctx, receipt);
+
+  const version = receipt.deployments.at(-1)?.commit ?? null;
+  return finishWithVerification(ctx, receipt, {
+    operation: operation.kind,
+    version,
+    gatewayApi,
+    onHeldLines: [
+      `Forgot ${keyNames.join(', ')} on ${names.worker}; the workspace is held in a maintenance state (draining, frozen or recovery).`,
+      'Run verify after reopening it (RUNBOOK.md, maintenance modes).',
+    ],
+    failure: `update forgot ${keyNames.join(', ')}`,
+    onFailureHints: ['The receipt no longer records the key; check the readiness errors above.'],
+    doneLine: `Forgot ${keyNames.join(', ')} on ${names.worker}; provider keys: ${receipt.providerKeys.join(', ')}. If the manual delete deployed a new Worker version (as a secret put does), the next key operation refuses until a plain update redeploys a checked release.`,
+  });
+}
+
+/**
  * --change-ai-transport --ai-transport <t>: resumable through a pendingChange
  * of kind `ai-transport`, recorded before the first remote write. To the
  * gateway: ensure the installation's gateway (create or adopt on evidence,
@@ -544,6 +600,17 @@ export async function updateCommand(ctx) {
   if (operation.kind === 'rotate-provider-key' && !receipt.providerKeys.includes(operation.provider)) {
     requested.push(`provider keys: ${operation.provider} is not recorded (${receipt.providerKeys.join(', ')}). Bind it with --add-provider-key.`);
   }
+  if (operation.kind === 'forget-provider-key') {
+    for (const forget of operation.providers.filter((entry) => !receipt.providerKeys.includes(entry))) {
+      const forgotten = receipt.secretEvents.findLast((event) => event.kind === 'forget-provider-key' && event.names?.includes(PROVIDER_KEYS[forget]));
+      requested.push(`provider keys: ${forget} is not recorded (${receipt.providerKeys.join(', ')}); ${forgotten ? `it was forgotten at ${forgotten.at}, nothing to do` : 'there is nothing to forget'}.`);
+    }
+    if (receipt.providerKeys.every((entry) => operation.providers.includes(entry))) {
+      requested.push(`provider keys: forgetting ${operation.providers.join(', ')} would leave no provider key; an installation always keeps its default provider's key.`);
+    } else if (operation.providers.includes(receipt.provider)) {
+      requested.push(`provider keys: ${receipt.provider} is the default provider (AI_PROVIDER). Switch the default first with --provider <other> --change-provider (a deploy), then forget ${receipt.provider}.`);
+    }
+  }
   if (options['ai-transport'] && options['ai-transport'] !== receipt.aiTransport && operation.kind !== 'ai-transport') {
     requested.push(`AI transport: installed ${receipt.aiTransport}, requested ${options['ai-transport']}. Pass --change-ai-transport to switch it.`);
   }
@@ -574,8 +641,12 @@ export async function updateCommand(ctx) {
     });
     wrangler.useAccount(account.id);
     const { names } = receipt;
-    const bound = await checkDrift(ctx, receipt, wrangler, account, pending, { gatewayApi, checkGateway });
+    const forgetting = operation.kind === 'forget-provider-key' ? operation.providers.map((entry) => PROVIDER_KEYS[entry]) : [];
+    const bound = await checkDrift(ctx, receipt, wrangler, account, pending, { gatewayApi, checkGateway, forgetting });
 
+    if (operation.kind === 'forget-provider-key') {
+      return await forgetOperation(ctx, receipt, bound, operation, { gatewayApi });
+    }
     if (KEY_OPERATIONS.includes(operation.kind)) {
       return await keyOperation(ctx, receipt, wrangler, bound, operation, pending, { gatewayApi });
     }
