@@ -1053,7 +1053,7 @@ describe('aggregate and follow-up consent coverage on Cloudflare AI Gateway (D9,
       });
 
       const response = await generateFollowup(
-        new Request('http://localhost', { method: 'POST' }),
+        new Request('http://localhost', { method: 'POST', headers: { Cookie: researcherCookie } }),
         { params: Promise.resolve({ id: sample.id }) },
       );
 
