@@ -311,7 +311,7 @@ function upstashShim(options: {
   override?: (command: string[]) => { error: string } | null;
   replies?: string[];
   fail?: (commands: string[][]) => number | null;
-  client?: RawClient;
+  client?: { sendCommand(command: readonly string[]): Promise<unknown> };
 }): typeof fetch {
   return (async (input: string | URL | Request, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
