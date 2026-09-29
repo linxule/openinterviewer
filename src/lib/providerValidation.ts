@@ -17,6 +17,16 @@ import {
   AggregateTheme,
 } from '@/types';
 import { MAX_AGGREGATE_QUOTE_REFS } from '@/lib/prompts/synthesis';
+import type { ExplorationProviderPayload, ExplorationQuoteClaim } from './exploration/types';
+import { MAX_EXPLORATION_SELECTED_INTERVIEWS } from './exploration/types';
+import {
+  MAX_EXPLORATION_ANSWER_CHARS,
+  MAX_EXPLORATION_CLAIMS,
+  MAX_EXPLORATION_FINDINGS,
+  MAX_EXPLORATION_INTERPRETATION_CHARS,
+  MAX_EXPLORATION_LIMITATIONS,
+  MAX_EXPLORATION_PAYLOAD_BYTES,
+} from './providerSchemas';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -393,6 +403,7 @@ export function validateResolvedAggregateSynthesis(
   input: unknown
 ): Omit<AggregateSynthesisResult,
   'studyId' | 'studyRevision' | 'interviewIds' | 'interviewCount'
+  | 'scope'
   | 'aiProvider' | 'aiModel' | 'requestedAiModel' | 'routedProvider' | 'aiTransport'
   | 'generatedAt'
 > {
@@ -472,4 +483,77 @@ export function validateFollowupStudy(input: unknown): FollowupStudy {
     researchQuestion: input.researchQuestion,
     coreQuestions: input.coreQuestions,
   };
+}
+
+// ============================================
+// Transcript-backed researcher exploration
+// ============================================
+
+function explorationKeys(value: UnknownRecord, keys: readonly string[], field: string): void {
+  if (Object.keys(value).some((key) => !keys.includes(key))) {
+    fail('exploration', field, 'must not carry unknown fields');
+  }
+}
+
+function explorationText(value: unknown, maximum: number, field: string): string {
+  if (typeof value !== 'string' || !value.trim() || value.length > maximum) {
+    fail('exploration', field, `must be a non-empty string of at most ${maximum} characters`);
+  }
+  return value;
+}
+
+function explorationClaims(value: unknown, field: string): ExplorationQuoteClaim[] {
+  if (!Array.isArray(value) || value.length > MAX_EXPLORATION_CLAIMS) {
+    fail('exploration', field, `must be an array of at most ${MAX_EXPLORATION_CLAIMS} claims`);
+  }
+  return value.map((claim, i) => {
+    const path = `${field}[${i}]`;
+    if (!isRecord(claim)) fail('exploration', path, 'must be an object');
+    explorationKeys(claim, ['interviewIndex', 'turnIndex', 'quote'], path);
+    if (!Number.isSafeInteger(claim.interviewIndex)
+      || typeof claim.interviewIndex !== 'number'
+      || claim.interviewIndex < 1
+      || claim.interviewIndex > MAX_EXPLORATION_SELECTED_INTERVIEWS) {
+      fail('exploration', `${path}.interviewIndex`, `must be an integer between 1 and ${MAX_EXPLORATION_SELECTED_INTERVIEWS}`);
+    }
+    if (!Number.isSafeInteger(claim.turnIndex) || typeof claim.turnIndex !== 'number' || claim.turnIndex < 1 || claim.turnIndex > 100_000) {
+      fail('exploration', `${path}.turnIndex`, 'must be an integer between 1 and 100000');
+    }
+    return {
+      interviewIndex: claim.interviewIndex,
+      turnIndex: claim.turnIndex,
+      quote: explorationText(claim.quote, MAX_EVIDENCE_QUOTE, `${path}.quote`),
+    };
+  });
+}
+
+/** Shape and resource bounds only; the server resolves positions and quotations. */
+export function validateExplorationPayload(input: unknown): ExplorationProviderPayload {
+  if (!isRecord(input)) fail('exploration', 'root', 'must be an object');
+  explorationKeys(input, ['answer', 'findings', 'limitations'], 'root');
+  const answer = explorationText(input.answer, MAX_EXPLORATION_ANSWER_CHARS, 'answer');
+  if (!Array.isArray(input.findings) || input.findings.length > MAX_EXPLORATION_FINDINGS) {
+    fail('exploration', 'findings', `must be an array of at most ${MAX_EXPLORATION_FINDINGS} items`);
+  }
+  const findings = input.findings.map((finding, i) => {
+    const path = `findings[${i}]`;
+    if (!isRecord(finding)) fail('exploration', path, 'must be an object');
+    explorationKeys(finding, ['heading', 'interpretation', 'supporting', 'challenging', 'uncertain'], path);
+    return {
+      heading: explorationText(finding.heading, 200, `${path}.heading`),
+      interpretation: explorationText(finding.interpretation, MAX_EXPLORATION_INTERPRETATION_CHARS, `${path}.interpretation`),
+      supporting: explorationClaims(finding.supporting, `${path}.supporting`),
+      challenging: explorationClaims(finding.challenging, `${path}.challenging`),
+      uncertain: explorationClaims(finding.uncertain, `${path}.uncertain`),
+    };
+  });
+  if (!Array.isArray(input.limitations) || input.limitations.length > MAX_EXPLORATION_LIMITATIONS) {
+    fail('exploration', 'limitations', `must be an array of at most ${MAX_EXPLORATION_LIMITATIONS} items`);
+  }
+  const limitations = input.limitations.map((value, i) => explorationText(value, 2_000, `limitations[${i}]`));
+  const result = { answer, findings, limitations };
+  if (new TextEncoder().encode(JSON.stringify(result)).byteLength > MAX_EXPLORATION_PAYLOAD_BYTES) {
+    fail('exploration', 'root', `must serialize to at most ${MAX_EXPLORATION_PAYLOAD_BYTES} bytes`);
+  }
+  return result;
 }

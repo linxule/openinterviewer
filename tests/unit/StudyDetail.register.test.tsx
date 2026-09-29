@@ -200,7 +200,7 @@ describe('StudyDetail register table', () => {
 
     const toggle = await screen.findByRole('switch', { name: 'Participant access' });
     expect(toggle).toHaveAttribute('aria-checked', 'true');
-    expect(toggle).toHaveTextContent('ENABLED');
+    expect(toggle).toHaveTextContent('OPEN · PAUSE');
   });
 
   it('pluralizes a one-interview study header as "1 interview"', async () => {

@@ -18,6 +18,7 @@ const RESEARCHER_AI_OPERATIONS: ReadonlySet<Port.ResearcherAiOperation> = new Se
   'aggregate',
   'followup',
   'analysis',
+  'exploration',
 ]);
 
 export type BudgetCounter = { key: string; maximum: number; windowSeconds: number };

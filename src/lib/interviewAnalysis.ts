@@ -21,6 +21,7 @@ import { validateProvenance } from './synthesisProvenance';
 import { resolveEvidenceRef } from './evidence';
 import { createRequestId, logRequestEvent, logRequestFailure } from './requestLog';
 import type { InterviewAnalysisFailureKind, StoredStudy } from '@/types';
+import { interviewAnalysisConfig } from './interviewCollectionContext';
 
 export type RunAnalysisOutcome =
   | { status: 'complete' | 'already-complete' | 'busy' | 'not-found' | 'unavailable' }
@@ -131,7 +132,7 @@ export async function runInterviewAnalysis(input: {
     const provider = getInterviewProvider(study.config, providerKeys);
     result = await provider.synthesizeInterview(
       interview.transcript,
-      study.config,
+      interviewAnalysisConfig(interview, study.config),
       interview.behaviorData,
       interview.participantProfile,
     );

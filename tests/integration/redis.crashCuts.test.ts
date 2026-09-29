@@ -31,6 +31,7 @@ import {
   DELETE_EMPTY_STUDY_SCRIPT,
   createStudyAtomic,
   deleteStudy,
+  deleteInterview,
   encodeMutationGuard,
   encodeInterviewValue,
   getInterviewChecked,
@@ -546,7 +547,7 @@ describe('standalone create/delete W1/W2/S1–S4/D1–D4', () => {
     return {
       studyId,
       studyRevision: 1,
-      interviewIds: ['interview-x'],
+      interviewIds: [`interview-${studyId}`],
       interviewCount: 1,
       aiProvider: 'gemini' as const,
       aiModel: 'gemini-2.5-flash',
@@ -565,7 +566,11 @@ describe('standalone create/delete W1/W2/S1–S4/D1–D4', () => {
     expect(await createStudyAtomic(study, redis)).toBe('created');
     const aggregate = fixtureAggregate(study.id);
 
+    const sourceId = aggregate.interviewIds[0];
+    await redis.set(`interview:${sourceId}`, encodeInterviewValue(makeStoredInterview({ id: sourceId, studyId: study.id })));
+    await redis.sadd(`study-interviews:${study.id}`, sourceId);
     expect(await saveStudyAggregate(aggregate, redis)).toBe('saved');
+    expect(await deleteInterview(sourceId, study.id, redis)).toBe(true);
     expect(await getStudyAggregateChecked(study.id, redis)).toEqual({ status: 'found', aggregate });
     expect(await getStudyAggregateChecked(uuid(), redis)).toEqual({ status: 'not-found' });
 
@@ -577,7 +582,11 @@ describe('standalone create/delete W1/W2/S1–S4/D1–D4', () => {
     const study = makeStoredStudy({ id: uuid(), createdAt: NOW, updatedAt: NOW });
     expect(await createStudyAtomic(study, redis)).toBe('created');
     const aggregate = fixtureAggregate(study.id);
+    const sourceId = aggregate.interviewIds[0];
+    await redis.set(`interview:${sourceId}`, encodeInterviewValue(makeStoredInterview({ id: sourceId, studyId: study.id })));
+    await redis.sadd(`study-interviews:${study.id}`, sourceId);
     expect(await saveStudyAggregate(aggregate, redis)).toBe('saved');
+    expect(await deleteInterview(sourceId, study.id, redis)).toBe(true);
 
     armCut('D5');
     expect((await deleteStudy(study.id, redis)).status).toBe('unavailable');
@@ -592,8 +601,11 @@ describe('standalone create/delete W1/W2/S1–S4/D1–D4', () => {
     const study = makeStoredStudy({ id: uuid(), createdAt: NOW, updatedAt: NOW });
     expect(await createStudyAtomic(study, redis)).toBe('created');
     const aggregate = fixtureAggregate(study.id);
+    const sourceId = aggregate.interviewIds[0];
+    await redis.set(`interview:${sourceId}`, encodeInterviewValue(makeStoredInterview({ id: sourceId, studyId: study.id })));
+    await redis.sadd(`study-interviews:${study.id}`, sourceId);
     expect(await saveStudyAggregate(aggregate, redis)).toBe('saved');
-    await redis.sadd(`study-interviews:${study.id}`, 'interview-x');
+    expect(await redis.scard(`study-interviews:${study.id}`)).toBe(1);
 
     const result = await deleteStudy(study.id, redis);
     expect(result.status).toBe('conflict');
@@ -820,7 +832,7 @@ describe('study JSON preservation on owned Redis', () => {
     expect(disabled.status).toBe('updated');
     if (disabled.status !== 'updated') throw new Error('Link toggle failed');
     expect(disabled.study.config).toEqual({ ...config, linksEnabled: false });
-    expect(disabled.study.revision).toBe(2);
+    expect(disabled.study.revision).toBe(1);
     expect(await readStored(studyId, prefixed)).toEqual(disabled.study);
 
     const replacement = {
@@ -831,11 +843,11 @@ describe('study JSON preservation on owned Redis', () => {
         { id: 'choice', label: 'Choice', extractionHint: 'Pick one', required: true, options: ['one', escapedText] },
       ],
     };
-    const replaced = await replaceStudyConfigAtomic(studyId, 2, replacement, redis);
+    const replaced = await replaceStudyConfigAtomic(studyId, 1, replacement, redis);
     expect(replaced.status).toBe('updated');
     if (replaced.status !== 'updated') throw new Error('Config replacement failed');
-    expect(replaced.study.config).toEqual(replacement);
-    expect(replaced.study.revision).toBe(3);
+    expect(replaced.study.config).toEqual({ ...replacement, linksEnabled: false });
+    expect(replaced.study.revision).toBe(2);
     expect(validateStudyConfig(replaced.study.config).ok).toBe(true);
     expect(await readStored(studyId, prefixed)).toEqual(replaced.study);
 
@@ -843,7 +855,7 @@ describe('study JSON preservation on owned Redis', () => {
     expect(enabled.status).toBe('updated');
     if (enabled.status !== 'updated') throw new Error('Link toggle failed');
     expect(enabled.study.config).toEqual({ ...replacement, linksEnabled: true });
-    expect(enabled.study.revision).toBe(4);
+    expect(enabled.study.revision).toBe(2);
     expect(validateStudyConfig(enabled.study.config).ok).toBe(true);
     expect(await readStored(studyId, prefixed)).toEqual(enabled.study);
   });
@@ -952,6 +964,11 @@ describe('transport response-loss and undecodable-after-commit', () => {
 });
 
 describe('slice P: interview analysis attach preserves untouched JSON types', () => {
+  beforeAll(async () => {
+    // Analysis now atomically verifies its parent, including legacy records.
+    const config = makeStudyConfig({ id: 'study-1' });
+    expect(await createStudyAtomic(makeStoredStudy({ id: 'study-1', config }), redis)).toBe('created');
+  });
   it('counts a delayed contender after intervening failures without overwriting its attempt-start time', async () => {
     const interview = makeStoredInterview({ id: `interview-${uuid()}` });
     await redis.set(`interview:${interview.id}`, encodeInterviewValue(interview));

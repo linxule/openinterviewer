@@ -45,6 +45,32 @@ afterEach(() => {
 });
 
 describe('GatewayProvider', () => {
+  it.each([
+    ['openai', 'gpt-6.1-sol', 'openai/gpt-6.1-sol', 'openai'],
+    ['openai', 'gpt-6-sol', 'openai/gpt-6-sol', 'openai'],
+    ['openai', 'gpt-6-luna', 'openai/gpt-6-luna', 'openai'],
+    ['claude', 'claude-sonnet-5-5', 'anthropic/claude-sonnet-5.5', 'anthropic'],
+  ] as const)('%s %s uses its verified catalog ID and creator-only route', async (providerId, model, gatewayModel, route) => {
+    const served = `${gatewayModel}-synthetic-snapshot`;
+    generateTextMock.mockResolvedValue({ output: synthesisOutput(), text: '', response: { modelId: served } });
+    const config = makeStudyConfig({ aiProvider: providerId, aiModel: model, enableReasoning: false });
+    const provider = new GatewayProvider(providerId, model);
+    const result = await provider.synthesizeInterview(
+      [], config, { timePerTopic: {}, messagesPerTopic: {}, topicsExplored: [], contradictions: [] }, null,
+    );
+
+    expect(gatewayMock).toHaveBeenCalledWith(gatewayModel);
+    expect(generateTextMock).toHaveBeenCalledTimes(1);
+    expect(generateTextMock.mock.calls[0][0]).toMatchObject({
+      maxRetries: 0,
+      providerOptions: { gateway: { only: [route], disallowPromptTraining: true } },
+    });
+    expect(generateTextMock.mock.calls[0][0]).not.toHaveProperty('temperature');
+    expect(generateTextMock.mock.calls[0][0]).not.toHaveProperty('tools');
+    expect(result.execution).toEqual({ provider: providerId, requestedModel: gatewayModel, model: served, routedProvider: route });
+    expect(config.aiModel).toBe(model);
+  });
+
   it('uses strict structured output, pins the creator endpoint, and configures no retry or model fallback', async () => {
     generateTextMock.mockResolvedValue({
       output: {

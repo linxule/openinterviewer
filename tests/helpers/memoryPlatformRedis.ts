@@ -273,6 +273,8 @@ export class MemoryPlatformRedis {
         && op.generation === Number(generation)
         && op.kind === kind
         && op.idempotencyHash === (incoming.idempotencyHash ?? null)
+        && op.deleteInterviews === (incoming.deleteInterviews ?? undefined)
+        && op.expectedRevision === (incoming.expectedRevision ?? undefined)
       ) {
         return ['oi:begin-replay', existing];
       }

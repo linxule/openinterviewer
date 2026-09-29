@@ -9,6 +9,7 @@ import type { StoredAggregateSynthesis, StoredInterview } from '../../src/types'
 import type * as Rpc from './rpcTypes';
 import { bumpMutationSeq, gate, type WorkspaceContext } from './context';
 import { CorruptRecordError, projectInterview, type AnalysisRow } from './projection';
+import { isDatasetManifest } from '../../src/lib/exploration/validation';
 import {
   INTERVIEW_ID,
   isPlainObject,
@@ -265,6 +266,7 @@ function decodeAggregate(json: string, studyId: string): StoredAggregateSynthesi
   if (rec.studyId !== studyId) return null;
   if ('_receipt' in rec) return null;
   if (!Number.isSafeInteger(rec.studyRevision) || (rec.studyRevision as number) < 0) return null;
+  if (rec.scope !== undefined && (!isDatasetManifest(rec.scope) || rec.scope.studyId !== studyId)) return null;
   if (!Number.isSafeInteger(rec.savedAt) || !Number.isSafeInteger(rec.generatedAt)) return null;
   if (!Array.isArray(rec.interviewIds) || rec.interviewIds.length === 0) return null;
   if (rec.interviewIds.some((id) => typeof id !== 'string' || id.length === 0 || id.length > 200)) return null;
@@ -317,7 +319,14 @@ export async function saveAggregate(ws: WorkspaceContext, input: Rpc.SaveAggrega
     const studyId = aggregate.studyId;
     return ws.storage.transactionSync((): Port.SaveAggregateOutcome => {
       if (!gate(ws, 'researcher-mutation').ok) return 'held';
-      if (!readStudyRow(ws, studyId)) return 'study-not-found';
+      const study = readStudyRow(ws, studyId);
+      if (!study) return 'study-not-found';
+      if (aggregate.studyRevision !== study.revision) return 'unavailable';
+      if (aggregate.scope && (aggregate.scope.sources.length !== aggregate.interviewIds.length
+        || aggregate.scope.sources.some(source => !aggregate.interviewIds.includes(source.interviewId)
+          || ws.sql.exec(`SELECT 1 FROM interviews WHERE id = ? AND study_id = ?`, source.interviewId, studyId).toArray().length !== 1))) {
+        return 'unavailable';
+      }
       ws.sql.exec(
         `INSERT INTO aggregates (study_id, aggregate_json, saved_at) VALUES (?, ?, ?)
          ON CONFLICT (study_id) DO UPDATE SET aggregate_json = excluded.aggregate_json, saved_at = excluded.saved_at`,

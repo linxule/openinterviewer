@@ -1,3 +1,4 @@
+import type { ExplorationProviderInput, ExplorationProviderPayload } from '../exploration/types';
 import OpenAI from 'openai';
 import {
   AIProvider,
@@ -10,6 +11,8 @@ import {
 import { gatewayFetch, type EffectiveTransport, type ProviderEndpoint } from './endpoint';
 import {
   buildAggregateSynthesisPrompt,
+  buildExplorationPrompt,
+  explorationSystemPrompt,
   buildGreetingPrompt,
   buildSynthesisPrompt,
 } from '../prompts';
@@ -33,6 +36,7 @@ import {
 } from '../providerErrors';
 import {
   validateAggregateSynthesisPayload,
+  validateExplorationPayload,
   validateFollowupStudy,
   validateInterviewResponse,
   validateSynthesisResult,
@@ -40,6 +44,7 @@ import {
 } from '../providerValidation';
 import {
   aggregateSynthesisResponseSchema,
+  explorationResponseSchema,
   followupStudyResponseSchema,
   interviewResponseSchema,
   synthesisResponseSchema,
@@ -48,6 +53,7 @@ import {
 import {
   buildFollowupPrompt,
   execution,
+  explorationPolicy,
   formatInterviewHistory,
   GREETING_DEADLINE_MS,
   INTERVIEW_DEADLINE_MS,
@@ -62,9 +68,13 @@ import { resolveSynthesisModel } from './synthesisModel';
 
 export function getOpenAIReasoning(
   enableReasoning?: boolean,
+  model?: string,
 ): OpenAI.Responses.ResponseCreateParams['reasoning'] {
   if (enableReasoning === undefined) return undefined;
-  return { effort: enableReasoning ? 'medium' : 'none' };
+  // GPT-6.1 Sol and Astra require reasoning. The low setting honors the
+  // researcher's lower-latency intent without sending an unsupported `none`.
+  const requiresReasoning = /^gpt-6(?:\.1-sol|-astra)(?:$|-)/.test(model ?? '');
+  return { effort: enableReasoning ? 'medium' : requiresReasoning ? 'low' : 'none' };
 }
 
 export class OpenAIProvider implements AIProvider {
@@ -135,8 +145,8 @@ export class OpenAIProvider implements AIProvider {
                 },
               }
             : {}),
-          ...(getOpenAIReasoning(options.enableReasoning)
-            ? { reasoning: getOpenAIReasoning(options.enableReasoning) }
+          ...(getOpenAIReasoning(options.enableReasoning, options.model)
+            ? { reasoning: getOpenAIReasoning(options.enableReasoning, options.model) }
             : {}),
         }, {
           signal,
@@ -235,6 +245,28 @@ export class OpenAIProvider implements AIProvider {
       'aggregate-synthesis',
       validateAggregateSynthesisPayload,
     );
+    return providerResult(value, execution('openai', requestedModel, response.model, undefined, this.transport));
+  }
+
+  async exploreStudy(
+    input: ExplorationProviderInput,
+    policy?: ProviderExecutionPolicy,
+  ): Promise<ProviderResult<ExplorationProviderPayload>> {
+    const attemptPolicy = explorationPolicy(policy);
+    const requestedModel = resolveSynthesisModel(input.studyConfig);
+    const response = await this.createResponse({
+      model: requestedModel,
+      input: buildExplorationPrompt(input),
+      instructions: explorationSystemPrompt,
+      schema: explorationResponseSchema,
+      schemaName: 'study_exploration',
+      enableReasoning: input.studyConfig.enableReasoning ?? true,
+      maxOutputTokens: 12_000,
+      deadlineMs: attemptPolicy.deadlineMs,
+      operation: 'exploration',
+      policy: attemptPolicy,
+    });
+    const value = this.parseStructured(response.output_text, 'exploration', validateExplorationPayload);
     return providerResult(value, execution('openai', requestedModel, response.model, undefined, this.transport));
   }
 

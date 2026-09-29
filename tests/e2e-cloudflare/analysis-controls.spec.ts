@@ -36,7 +36,7 @@ const START_UNAVAILABLE = 'Analysis is temporarily unavailable. Please try again
 const HELD_START_COPY = 'Analysis is paused while this workspace is under maintenance. Nothing was started; try again later.';
 const UNCONFIRMED_START_COPY =
   'The request may still have been accepted. Check the status before running it again. Running it again repeats this request rather than starting another.';
-const AGGREGATE_NEEDS_TWO = 'Need at least 2 analyzed interviews to generate aggregate analysis.';
+const AGGREGATE_NEEDS_TWO = 'Need at least 2 analyzed interviews in this dataset to generate aggregate analysis.';
 const OPERATOR_TOKEN = 'e2e-cloudflare-operator-token-00000000000001';
 const POLL_AFTER_MS = 2000;
 const ANALYZE_PATH = /^\/api\/interviews\/[^/]+\/analyze$/;
@@ -104,7 +104,10 @@ async function selectTabByKeyboard(page: Page, from: string, target: string, arr
   const next = page.getByRole('tab', { name: target, exact: true });
   await pressUntilFocused(page, selected, arrow === 'ArrowLeft' ? 'Shift+Tab' : 'Tab');
   await expectFocusRing(selected);
-  await page.keyboard.press(arrow);
+  for (let steps = 0; steps < await page.getByRole('tab').count(); steps += 1) {
+    await page.keyboard.press(arrow);
+    if (await next.evaluate(element => element === document.activeElement)) break;
+  }
   await expect(next).toBeFocused();
   await page.keyboard.press(key);
   await expect(next).toHaveAttribute('aria-selected', 'true');
@@ -404,9 +407,9 @@ test('the batch works from the keyboard alone; its disabled states say why; a lo
   // Overview: aggregate analysis is disabled with fewer than two analyzed
   // interviews, and the reason is the next thing a screen reader reaches.
   await page.goto(studyUrl);
-  const aggregate = page.getByRole('button', { name: 'Analyze All Interviews', exact: true });
+  const aggregate = page.getByRole('button', { name: 'Analyze selected interviews', exact: true });
   await expect(aggregate).toBeDisabled();
-  await expectReasonFollows(page.getByRole('tabpanel'), 'button "Analyze All Interviews" [disabled]', AGGREGATE_NEEDS_TWO);
+  await expectReasonFollows(page.getByRole('tabpanel'), 'button "Analyze selected interviews" [disabled]', AGGREGATE_NEEDS_TWO);
 
   // Keyboard only to the batch; the paid-retry consequence is its description (UI-CF-04).
   await selectTabByKeyboard(page, 'Overview', 'Interviews', 'ArrowRight', 'Enter');

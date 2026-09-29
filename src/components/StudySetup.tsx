@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useStore } from '@/store';
 import { StudyConfig } from '@/types';
-import { saveStudy } from '@/services/storageService';
+import { readStudy, saveStudy } from '@/services/storageService';
 import {
   IDEMPOTENCY_KEY_CONSUMED,
   IDEMPOTENCY_KEY_REUSE,
@@ -19,14 +19,18 @@ import { BRACKETED_PLACEHOLDER, THANK_YOU_TEXT_PLACEHOLDER_ERROR } from '@/lib/t
 import { Button, Coordinate, Icon, Label, Notice, Rule } from '@/components/ui';
 import { useSetTrailingCrumb } from '@/components/shell/breadcrumb';
 import {
-  UUID_V4,
   adoptCreateIdempotencyKey,
   isCreateIntentKey,
   persistCreateIdempotency,
   readAuthorityEpoch,
+  releaseCreateIdempotency,
   setupIntentKey,
   writeAuthorityEpoch,
 } from '@/lib/studyDraftSession';
+import {
+  copyStudyConfiguration, discardResearcherDraft, followupDraftSourceId, readResearcherDraft, researcherDraftKey,
+  studySetupIntent, writeResearcherDraft,
+} from '@/lib/researcherStudyDraft';
 import { useStudyDraft } from '@/components/studySetup/useStudyDraft';
 import { ConfigStatus, PROVIDER_ENV_NAME, isProviderConfigured } from '@/components/studySetup/providerStatus';
 import { StudyDetailsSection } from '@/components/studySetup/StudyDetailsSection';
@@ -39,7 +43,9 @@ import { LinkSettingsSection } from '@/components/studySetup/LinkSettingsSection
 import { ConsentSection } from '@/components/studySetup/ConsentSection';
 import { ThankYouSection } from '@/components/studySetup/ThankYouSection';
 
-const StudySetup: React.FC = () => {
+const sectionsForExample = ['study-details', 'profile-fields', 'core-questions', 'topic-areas', 'ai-provider', 'interview-structure', 'interviewer-manner', 'link-settings', 'consent-text', 'thank-you-text'];
+
+const StudySetupForm: React.FC = () => {
   const router = useRouter();
   const searchParams = useSearchParams();
   const {
@@ -51,7 +57,22 @@ const StudySetup: React.FC = () => {
     setAiTransport,
   } = useStore();
 
-  const draft = useStudyDraft(studyConfig);
+  const prefillType = searchParams.get('prefill');
+  const setupIntent = studySetupIntent(prefillType);
+  const requestedStudyId = searchParams.get('studyId') ?? (setupIntent === 'followup' ? followupDraftSourceId() : null);
+  const matchingConfig = setupIntent === 'edit' && studyConfig?.id === requestedStudyId ? studyConfig : null;
+  const draft = useStudyDraft(matchingConfig);
+  const [draftReady, setDraftReady] = useState(setupIntent === 'create');
+  const [draftLoadError, setDraftLoadError] = useState<string | null>(null);
+  const [restoredDraft, setRestoredDraft] = useState(false);
+  const [draftStorageAvailable, setDraftStorageAvailable] = useState(true);
+  const [restoredRevisionChanged, setRestoredRevisionChanged] = useState(false);
+  const baselineConfigRef = useRef<StudyConfig>(matchingConfig ?? copyStudyConfiguration({}));
+  const exampleRequestedRef = useRef(false);
+  const persistenceReadyRef = useRef(false);
+  const draftSourceRevisionRef = useRef<number | null>(null);
+  const draftSessionKey = researcherDraftKey(setupIntent, requestedStudyId);
+  const draftSnapshot = JSON.stringify({ ...draft.snapshotConfig(), id: 'draft', createdAt: 0 });
 
   // Participant link generation
   const [participantLink, setParticipantLink] = useState<string | null>(null);
@@ -79,28 +100,24 @@ const StudySetup: React.FC = () => {
   // Study revision, made legible (F1, M6)
   const [studyRevision, setStudyRevision] = useState<number | null>(null);
 
-  const initialPrefill = searchParams.get('prefill');
-  const existingServerId = studyConfig?.id && UUID_V4.test(studyConfig.id) ? studyConfig.id : null;
-  const initialIntentKey = setupIntentKey(
-    initialPrefill || (existingServerId && initialPrefill !== 'followup' ? 'edit' : null),
-    searchParams.get('studyId') || existingServerId,
-    null
-  );
-  const initialAuthorityEpoch = readAuthorityEpoch();
-  const initialCreateKey = isCreateIntentKey(initialIntentKey)
-    ? adoptCreateIdempotencyKey(initialIntentKey, initialAuthorityEpoch)
-    : null;
-  const authorityEpochRef = useRef(initialAuthorityEpoch);
+  const initialIntentKey = setupIntentKey(prefillType, requestedStudyId, setupIntent === 'followup' ? requestedStudyId : null);
+  const [initialAuthority] = useState(() => {
+    const epoch = readAuthorityEpoch();
+    return {
+      epoch,
+      createKey: isCreateIntentKey(initialIntentKey) ? adoptCreateIdempotencyKey(initialIntentKey, epoch) : null,
+    };
+  });
+  const authorityEpochRef = useRef(initialAuthority.epoch);
   const lastAuthRef = useRef<boolean | null>(null);
   const actionGenerationRef = useRef(0);
   const createCompletedRef = useRef(false);
   const intentKeyRef = useRef(initialIntentKey);
-  const createIdempotencyKeyRef = useRef<string | null>(initialCreateKey);
+  const createIdempotencyKeyRef = useRef<string | null>(initialAuthority.createKey);
 
   // Document mode vs. edit mode (F1, M5.3): a saved study opens as a document
   // with a per-section Edit affordance; a new study opens fully editable.
-  const editStudyId = initialPrefill === 'edit' ? searchParams.get('studyId') : null;
-  const [documentMode, setDocumentMode] = useState(() => Boolean(existingServerId || editStudyId));
+  const [documentMode, setDocumentMode] = useState(setupIntent === 'edit');
   const [openSections, setOpenSections] = useState<string[]>([]);
   const isEditing = (id: string) => !documentMode || openSections.includes(id);
   const openSection = (id: string) => setOpenSections((open) => (open.includes(id) ? open : [...open, id]));
@@ -110,20 +127,6 @@ const StudySetup: React.FC = () => {
   // Config status (API keys)
   const [configStatus, setConfigStatus] = useState<ConfigStatus | null>(null);
   const [configStatusError, setConfigStatusError] = useState<string | null>(null);
-
-  // Sync savedStudyId with persisted config
-  // Server-assigned IDs are UUIDs, client-side IDs start with "study-"
-  useEffect(() => {
-    if (studyConfig?.id && !studyConfig.id.startsWith('study-')) {
-      // Server UUID - this is a saved study
-      draft.setSavedStudyId(studyConfig.id);
-    } else {
-      // No config or client-generated ID - clear to prevent overwriting other studies
-      draft.setSavedStudyId(null);
-      setDocumentMode(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [studyConfig?.id]);
 
   // Check auth status on mount — HTTP 200 is not enough; the JSON body is the truth.
   useEffect(() => {
@@ -197,59 +200,103 @@ const StudySetup: React.FC = () => {
     };
   }, [isAuthenticated, setAiTransport]);
 
-  // Check for follow-up or edit prefill on mount
+  // The URL owns intent and identity. A session's last preview is never edit authority.
   useEffect(() => {
-    const prefillType = searchParams.get('prefill');
-    if (prefillType === 'followup' || prefillType === 'edit') {
-      const prefillData = sessionStorage.getItem('prefillStudyConfig');
-      if (prefillData) {
-        try {
-          const config = JSON.parse(prefillData) as Partial<StudyConfig>;
-          // Populate form fields
-          draft.hydratePrefill(config);
+    let cancelled = false;
+    persistenceReadyRef.current = false;
+    setDraftReady(false);
+    setDraftLoadError(null);
+    setRestoredDraft(false);
+    setRestoredRevisionChanged(false);
+    setDocumentMode(setupIntent === 'edit');
+    setOpenSections([]);
+    draft.setSavedStudyId(setupIntent === 'edit' && matchingConfig ? requestedStudyId : null);
+    draft.setParentStudyInfo(null);
+    draft.setIsDirty(false);
+    if (!matchingConfig) draft.syncFromStudyConfig(copyStudyConfiguration({}));
+    setParticipantLink(null);
+    setLinkError(null);
+    setSaveError(null);
+    setSaveSuccess(false);
+    setSavePending(false);
+    setStudyRevision(null);
 
-          // Store parent study info for display and saving (followup only)
-          if (prefillType === 'followup' && config.parentStudyId && config.parentStudyName) {
-            draft.setParentStudyInfo({
-              id: config.parentStudyId,
-              name: config.parentStudyName
-            });
-          }
-
-          // For edit mode, set the study ID so saves become updates
-          if (prefillType === 'edit') {
-            const studyId = searchParams.get('studyId');
-            if (studyId) {
-              draft.setSavedStudyId(studyId);
-              draft.setIsDirty(false); // Not dirty initially - matches saved state
-            }
-          } else {
-            // Mark as dirty since we loaded prefill data that needs saving
-            draft.setIsDirty(true);
-          }
-
-          // Clear sessionStorage after loading
-          sessionStorage.removeItem('prefillStudyConfig');
-        } catch (error) {
-          console.error('Error parsing prefill config:', error);
-        }
+    const hydrate = (config: StudyConfig, revision: number | null) => {
+      if (cancelled) return;
+      baselineConfigRef.current = config;
+      const restored = readResearcherDraft(draftSessionKey);
+      draftSourceRevisionRef.current = restored ? restored.revision : revision;
+      draft.syncFromStudyConfig(restored
+        ? { ...restored.config, id: config.id, createdAt: config.createdAt, linksEnabled: config.linksEnabled }
+        : config);
+      draft.setSavedStudyId(setupIntent === 'edit' ? requestedStudyId : null);
+      if (setupIntent === 'followup' && config.parentStudyId && config.parentStudyName) {
+        draft.setParentStudyInfo({ id: config.parentStudyId, name: config.parentStudyName });
       }
+      draft.setIsDirty(Boolean(restored) || setupIntent === 'duplicate' || setupIntent === 'followup');
+      setRestoredDraft(Boolean(restored));
+      setRestoredRevisionChanged(Boolean(restored && restored.revision !== revision && setupIntent === 'edit'));
+      setStudyRevision(revision);
+      persistenceReadyRef.current = true;
+      setDraftReady(true);
+    };
+
+    if (setupIntent === 'edit' || setupIntent === 'duplicate') {
+      if (!requestedStudyId) {
+        setDraftLoadError('This study link has no study ID. Open My Studies and choose the study again.');
+      } else {
+        void readStudy(requestedStudyId).then(outcome => {
+          if (cancelled) return;
+          if (outcome.status !== 'ok') { setDraftLoadError(outcome.error); return; }
+          if (outcome.value.id !== requestedStudyId || outcome.value.config.id !== requestedStudyId) {
+            setDraftLoadError('The study response did not match this study. No changes have been applied.');
+            return;
+          }
+          const canonical = outcome.value.config;
+          if (setupIntent === 'duplicate') {
+            hydrate(copyStudyConfiguration({ ...canonical, name: `${canonical.name} — test` }), null);
+          } else {
+            hydrate(canonical, outcome.value.revision ?? null);
+          }
+        }).catch(() => {
+          if (!cancelled) setDraftLoadError('The study could not be loaded. Refresh this page and try again.');
+        });
+      }
+    } else if (setupIntent === 'followup') {
+      try {
+        const config = JSON.parse(sessionStorage.getItem('prefillStudyConfig') ?? 'null') as Partial<StudyConfig> | null;
+        if (!config?.parentStudyId || !config.parentStudyName) {
+          setDraftLoadError('The follow-up draft is unavailable. Return to the original study to generate it again.');
+        } else {
+          hydrate({ ...copyStudyConfiguration(config), parentStudyId: config.parentStudyId, parentStudyName: config.parentStudyName }, null);
+        }
+      } catch { setDraftLoadError('The follow-up draft could not be loaded. Return to the original study.'); }
+    } else {
+      hydrate(copyStudyConfiguration({}), null);
     }
+    return () => { cancelled = true; persistenceReadyRef.current = false; };
+    // Intent changes fully replace the draft; form setters are intentionally not dependencies.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
+  }, [setupIntent, requestedStudyId, draftSessionKey]);
+
+  // Drafts stay in this browser session, not on a live study. Preserve raw unfinished fields.
+  useEffect(() => {
+    if (!draftReady || !persistenceReadyRef.current || !draft.isDirty) return;
+    setDraftStorageAvailable(writeResearcherDraft(draftSessionKey, JSON.parse(draftSnapshot), draftSourceRevisionRef.current));
+  }, [draftReady, draft.isDirty, draftSessionKey, draftSnapshot, studyRevision, restoredRevisionChanged]);
+
+  useEffect(() => {
+    if (!draft.isDirty) return;
+    const guard = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', guard);
+    return () => window.removeEventListener('beforeunload', guard);
+  }, [draft.isDirty]);
 
   // One UUID v4 per create/follow-up intent. Remounts restore via intentKey +
   // authorityEpoch. Edit never owns a key. Intent change invalidates in-flight work.
   useEffect(() => {
     const prefill = searchParams.get('prefill');
-    let nextIntent = setupIntentKey(
-      prefill,
-      searchParams.get('studyId'),
-      draft.parentStudyInfo?.id ?? null
-    );
-    if (nextIntent === 'create' && intentKeyRef.current.startsWith('edit:')) {
-      nextIntent = intentKeyRef.current;
-    }
+    const nextIntent = setupIntentKey(prefill, requestedStudyId, draft.parentStudyInfo?.id ?? (setupIntent === 'followup' ? requestedStudyId : null));
     const current = intentKeyRef.current;
     if (
       current === 'followup'
@@ -285,7 +332,7 @@ const StudySetup: React.FC = () => {
       nextIntent,
       authorityEpochRef.current
     );
-  }, [searchParams, draft.parentStudyInfo?.id]);
+  }, [searchParams, requestedStudyId, setupIntent, draft.parentStudyInfo?.id]);
 
   useEffect(() => {
     if (isAuthenticated === null) return;
@@ -308,30 +355,46 @@ const StudySetup: React.FC = () => {
     }
   }, [isAuthenticated]);
 
-  // Sync form with studyConfig when it changes (e.g., after loading example)
+  // Loading an example is explicit; unrelated preview/session state cannot hydrate this form.
   useEffect(() => {
-    if (studyConfig) {
-      draft.syncFromStudyConfig(studyConfig);
+    if (exampleRequestedRef.current && studyConfig && studyConfig.id.startsWith('study-')) {
+      exampleRequestedRef.current = false;
+      draft.syncFromStudyConfig({
+        ...copyStudyConfiguration(studyConfig),
+        ...(setupIntent === 'edit' ? {
+          id: baselineConfigRef.current.id,
+          createdAt: baselineConfigRef.current.createdAt,
+          linksEnabled: baselineConfigRef.current.linksEnabled,
+          parentStudyId: baselineConfigRef.current.parentStudyId,
+          parentStudyName: baselineConfigRef.current.parentStudyName,
+          generatedFrom: baselineConfigRef.current.generatedFrom,
+        } : {}),
+      });
+      draft.setIsDirty(true);
+      setOpenSections(sectionsForExample);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [studyConfig]);
 
-  // studyRevision, made legible (F1, M6.1). Display-only and fail-silent: the
-  // server, not this line, is the authority on what a save may do.
-  useEffect(() => {
-    if (!draft.savedStudyId) { setStudyRevision(null); return; }
-    let cancelled = false;
-    void (async () => {
-      try {
-        const res = await fetch(`/api/studies/${draft.savedStudyId}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        const revision = data?.study?.revision;
-        if (!cancelled && Number.isSafeInteger(revision) && revision >= 1) setStudyRevision(revision);
-      } catch { /* display only: never surface, never block */ }
-    })();
-    return () => { cancelled = true; };
-  }, [draft.savedStudyId]);
+  const discardDraft = () => {
+    if (isSaving) return;
+    if (!window.confirm('Discard these unsaved changes? The saved study will not change.')) return;
+    setDraftStorageAvailable(discardResearcherDraft(draftSessionKey));
+    draftSourceRevisionRef.current = studyRevision;
+    draft.syncFromStudyConfig(baselineConfigRef.current);
+    draft.setIsDirty(setupIntent === 'duplicate' || setupIntent === 'followup');
+    setRestoredDraft(false);
+    setRestoredRevisionChanged(false);
+    setSaveError(null);
+    setOpenSections([]);
+  };
+
+  const handleLoadExample = () => {
+    if (isSaving) return;
+    if (draft.isDirty && !window.confirm('Replace this unsaved draft with the example? The saved study will not change.')) return;
+    exampleRequestedRef.current = true;
+    loadExampleStudy();
+  };
 
   const requireResearcherAuth = () => {
     if (isAuthenticated === true) return true;
@@ -369,7 +432,7 @@ const StudySetup: React.FC = () => {
   };
 
   const handlePreview = async () => {
-    if (isPreviewLoading) return;
+    if (isPreviewLoading || !draftReady || isSaving) return;
     if (!requireResearcherAuth()) return;
     if (!requireConfiguredProvider(setSaveError)) return;
     if (!requireValidModel(setSaveError)) return;
@@ -403,6 +466,7 @@ const StudySetup: React.FC = () => {
   };
 
   const handleGenerateLink = async () => {
+    if (!draftReady || isSaving) return;
     if (!requireResearcherAuth()) {
       setLinkError('auth');
       return;
@@ -466,7 +530,7 @@ const StudySetup: React.FC = () => {
     epoch: number,
     idempotencyKey: string | null
   ) => {
-    if (ticket !== actionGenerationRef.current) return false;
+    if (!mounted.current || ticket !== actionGenerationRef.current) return false;
     if (intentKey !== intentKeyRef.current) return false;
     if (epoch !== authorityEpochRef.current) return false;
     if (
@@ -480,6 +544,7 @@ const StudySetup: React.FC = () => {
   };
 
   const handleSaveStudy = async () => {
+    if (!draftReady || restoredRevisionChanged || isSaving) return;
     // Fix auth race condition: check for explicit false, not falsy
     if (isAuthenticated === false) {
       router.push('/login');
@@ -514,8 +579,14 @@ const StudySetup: React.FC = () => {
         config,
         updateStudyId: draft.savedStudyId || undefined,
         confirmed: true,
+        ...(studyRevision !== null ? { expectedRevision: studyRevision } : {}),
       });
       if (!applySaveIfCurrent(ticket, intentKey, epoch, idempotencyKey)) return;
+      if (retry.classification.outcome === 'unauthorized') {
+        setIsAuthenticated(false);
+        router.push('/login');
+        return;
+      }
       if (retry.classification.outcome === 'pending-create') {
         setSavePending(true);
         setSaveError(retry.classification.body.message || 'Study update is awaiting reconciliation.');
@@ -525,10 +596,15 @@ const StudySetup: React.FC = () => {
         const study = retry.classification.body.study;
         draft.setSavedStudyId(study.id);
         if (study.config) setStudyConfig(study.config as StudyConfig);
+        discardResearcherDraft(draftSessionKey);
         setSaveSuccess(true);
         draft.setIsDirty(false);
         router.push(`/studies/${study.id}`);
+        return;
       }
+      setSaveError(retry.classification.outcome === 'error'
+        ? retry.classification.body.error || 'The confirmed update could not be saved. Review the current study and try again.'
+        : 'The confirmed update did not return a saved study. Review the current study and try again.');
     };
 
     try {
@@ -545,6 +621,7 @@ const StudySetup: React.FC = () => {
         config,
         updateStudyId: isUpdate ? draft.savedStudyId || undefined : undefined,
         idempotencyKey: isUpdate ? undefined : idempotencyKey || undefined,
+        ...(isUpdate && studyRevision !== null ? { expectedRevision: studyRevision } : {}),
       });
       if (!applySaveIfCurrent(ticket, intentKey, epoch, idempotencyKey)) return;
 
@@ -571,8 +648,12 @@ const StudySetup: React.FC = () => {
         draft.setSavedStudyId(study.id);
         if (study.config) setStudyConfig(study.config as StudyConfig);
         if (Number.isSafeInteger(study.revision)) setStudyRevision(study.revision as number);
+        discardResearcherDraft(draftSessionKey);
         draft.setIsDirty(false);
-        if (!isUpdate) createCompletedRef.current = true;
+        if (!isUpdate) {
+          createCompletedRef.current = true;
+          if (idempotencyKey) releaseCreateIdempotency(intentKey, epoch, idempotencyKey);
+        }
         setSaveSuccess(true);
         router.push(`/studies/${study.id}`);
         return;
@@ -658,12 +739,12 @@ const StudySetup: React.FC = () => {
           <h1 className="font-sans text-[24px] font-semibold leading-[32px] text-ink-900">Study Setup</h1>
 
           <div className="order-last flex w-full flex-wrap gap-2 sm:order-none sm:ml-auto sm:w-auto">
-            <Button variant="quiet" onClick={loadExampleStudy}>Load Example</Button>
+            <Button variant="quiet" onClick={handleLoadExample} disabled={!draftReady || isSaving}>Load Example</Button>
             {hasRequiredFields && (
               <>
                 <Button
                   onClick={handleSaveStudy}
-                  disabled={!isAuthenticated || !selectedProviderConfigured || !selectedModelValid || isSaving || (!!draft.savedStudyId && !draft.isDirty && !savePending)}
+                  disabled={!draftReady || restoredRevisionChanged || !isAuthenticated || !selectedProviderConfigured || !selectedModelValid || isSaving || (!!draft.savedStudyId && !draft.isDirty && !savePending)}
                   variant={saveVariant}
                   className={saveClassName}
                 >
@@ -672,7 +753,7 @@ const StudySetup: React.FC = () => {
                 <Button
                   variant="quiet"
                   onClick={handlePreview}
-                  disabled={isPreviewLoading || isAuthenticated !== true || !selectedProviderConfigured || !draft.savedStudyId || draft.isDirty}
+                  disabled={!draftReady || isSaving || isPreviewLoading || isAuthenticated !== true || !selectedProviderConfigured || !draft.savedStudyId || draft.isDirty}
                 >
                   {isPreviewLoading ? 'Loading...' : 'Preview'}
                 </Button>
@@ -684,6 +765,43 @@ const StudySetup: React.FC = () => {
           Configure your research interview study
         </p>
       </div>
+
+      {isSaving && (
+        <p role="status" className="mb-6 text-[13px] text-ink-500">Saving this version. Editing will resume if the save cannot be completed.</p>
+      )}
+
+      {draftLoadError ? (
+        <Notice tone="error" eyebrow="Study could not be loaded" className="mb-6">
+          <p className="mt-1 text-[13px] text-ink-700">{draftLoadError}</p>
+          <Button variant="quiet" className="mt-3" onClick={() => router.push('/studies')}>My Studies</Button>
+        </Notice>
+      ) : !draftReady ? (
+        <p role="status" className="mb-6 text-[13px] text-ink-500">Loading this study…</p>
+      ) : null}
+
+      {draftReady && (draft.isDirty || restoredDraft) && (
+        <Notice tone="neutral" eyebrow={restoredDraft ? 'Restored unsaved draft' : 'Unsaved changes'} className="mb-6">
+          <p className="mt-1 text-[13px] text-ink-700">
+            {draftStorageAvailable
+              ? 'This draft is kept in this browser session. The saved study changes only when you save.'
+              : 'Browser storage is unavailable. This draft is in memory only; keep this page open until you save.'}
+          </p>
+          {restoredRevisionChanged && (
+            <div className="mt-2 text-[13px] text-ink-700">
+              <p>The saved study changed since this draft began. Saving is paused until you review its current revision{studyRevision ? ` (${studyRevision})` : ''}. Your draft may replace newer changes.</p>
+              <a href={`/studies/${encodeURIComponent(requestedStudyId ?? '')}?tab=settings`} target="_blank" rel="noreferrer" className="mt-2 inline-block min-h-11 text-action underline underline-offset-2">Review current saved study</a>
+              <Button variant="quiet" className="ml-3" disabled={isSaving} onClick={() => { draftSourceRevisionRef.current = studyRevision; setRestoredRevisionChanged(false); }}>I reviewed the current revision</Button>
+            </div>
+          )}
+          <Button variant="quiet" className="mt-3" onClick={discardDraft} disabled={isSaving}>Discard draft</Button>
+        </Notice>
+      )}
+
+      {setupIntent === 'duplicate' && draftReady && (
+        <Notice tone="neutral" eyebrow="Test study" className="mb-6">
+          <p className="mt-1 text-[13px] text-ink-700">Only the study configuration was copied. Interviews, participant links, consent records, and analysis stay with the original study. Save this new study before previewing it.</p>
+        </Notice>
+      )}
 
       {saveError && (
         <Notice tone="error" className="mb-6 flex items-start justify-between gap-3">
@@ -728,7 +846,13 @@ const StudySetup: React.FC = () => {
         </div>
       )}
 
-      <div className="lg:grid lg:grid-cols-[1fr_13rem] lg:items-start lg:gap-10">
+      <div
+        className="lg:grid lg:grid-cols-[1fr_13rem] lg:items-start lg:gap-10"
+        inert={!draftReady || isSaving}
+        aria-busy={isSaving}
+        onChangeCapture={(event) => { if (isSaving) event.stopPropagation(); }}
+        onClickCapture={(event) => { if (isSaving) { event.preventDefault(); event.stopPropagation(); } }}
+      >
         <div className="space-y-12">
           {draft.parentStudyInfo && (
             <Notice tone="neutral" eyebrow="Follow-up Study">
@@ -870,7 +994,7 @@ const StudySetup: React.FC = () => {
                     variant="primary"
                     className="w-full"
                     onClick={handleGenerateLink}
-                    disabled={isGeneratingLink || !selectedProviderConfigured || !draft.savedStudyId || draft.isDirty}
+                    disabled={!draftReady || isSaving || isGeneratingLink || !selectedProviderConfigured || !draft.savedStudyId || draft.isDirty}
                   >
                     {isGeneratingLink ? 'Generating...' : 'Generate Participant Link'}
                   </Button>
@@ -894,7 +1018,7 @@ const StudySetup: React.FC = () => {
               variant="primary"
               className="w-full"
               onClick={handlePreview}
-              disabled={!isValid || isAuthenticated !== true || !selectedProviderConfigured || !draft.savedStudyId || draft.isDirty || isPreviewLoading}
+              disabled={!draftReady || isSaving || !isValid || isAuthenticated !== true || !selectedProviderConfigured || !draft.savedStudyId || draft.isDirty || isPreviewLoading}
             >
               Preview Saved Study
             </Button>
@@ -922,4 +1046,10 @@ const StudySetup: React.FC = () => {
   );
 };
 
-export default StudySetup;
+export default function StudySetup() {
+  const searchParams = useSearchParams();
+  // A different intent gets a fresh component state, including asynchronous action guards.
+  const intent = studySetupIntent(searchParams.get('prefill'));
+  const sourceId = searchParams.get('studyId') ?? (intent === 'followup' ? followupDraftSourceId() : null);
+  return <StudySetupForm key={`${intent}:${sourceId ?? 'new'}`} />;
+}

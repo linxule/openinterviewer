@@ -22,6 +22,8 @@ const contextMock = vi.hoisted(() => ({
 }));
 
 vi.mock('@/lib/researcherContext', () => contextMock);
+// This fixture exercises legacy archives without notebook records.
+vi.mock('@/lib/storage/redisExploration', () => ({ createRedisExplorationStore: () => undefined }));
 
 const kvMock = vi.hoisted(() => ({
   getAllInterviewsChecked: vi.fn(),

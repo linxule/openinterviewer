@@ -4,6 +4,13 @@
 
 export type ProviderJsonSchema = Record<string, unknown>;
 
+export const MAX_EXPLORATION_PAYLOAD_BYTES = 128 * 1024;
+export const MAX_EXPLORATION_FINDINGS = 20;
+export const MAX_EXPLORATION_CLAIMS = 10;
+export const MAX_EXPLORATION_ANSWER_CHARS = 20_000;
+export const MAX_EXPLORATION_INTERPRETATION_CHARS = 8_000;
+export const MAX_EXPLORATION_LIMITATIONS = 20;
+
 const stringArray = {
   type: 'array',
   items: { type: 'string' },
@@ -163,4 +170,49 @@ export const followupStudyResponseSchema = {
     },
   },
   required: ['name', 'researchQuestion', 'coreQuestions'],
+} as const satisfies ProviderJsonSchema;
+
+const explorationQuoteClaims = {
+  type: 'array',
+  maxItems: MAX_EXPLORATION_CLAIMS,
+  items: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      interviewIndex: { type: 'integer', minimum: 1, maximum: 100 },
+      turnIndex: { type: 'integer', minimum: 1, maximum: 100_000 },
+      quote: { type: 'string', maxLength: 2_000 },
+    },
+    required: ['interviewIndex', 'turnIndex', 'quote'],
+  },
+} as const;
+
+export const explorationResponseSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    answer: { type: 'string', maxLength: MAX_EXPLORATION_ANSWER_CHARS },
+    findings: {
+      type: 'array',
+      maxItems: MAX_EXPLORATION_FINDINGS,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          heading: { type: 'string', maxLength: 200 },
+          interpretation: { type: 'string', maxLength: MAX_EXPLORATION_INTERPRETATION_CHARS },
+          supporting: explorationQuoteClaims,
+          challenging: explorationQuoteClaims,
+          uncertain: explorationQuoteClaims,
+        },
+        required: ['heading', 'interpretation', 'supporting', 'challenging', 'uncertain'],
+      },
+    },
+    limitations: {
+      type: 'array',
+      maxItems: MAX_EXPLORATION_LIMITATIONS,
+      items: { type: 'string', maxLength: 2_000 },
+    },
+  },
+  required: ['answer', 'findings', 'limitations'],
 } as const satisfies ProviderJsonSchema;

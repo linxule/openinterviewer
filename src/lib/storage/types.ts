@@ -39,6 +39,7 @@ import type {
   ReadAnalysisStatusOutcome,
 } from './analysisProtocol';
 import type { AdmissionIdentity } from '../runtime/workerInvocation';
+import type { ExplorationAnswer, ExplorationStorePort } from '../exploration/types';
 
 export type {
   AggregateLoadResult,
@@ -178,7 +179,7 @@ export type AdmissionOutcome =
 /** Every researcher AI budget key starts with this; participant keys start with `rate-limit:`. */
 export const RESEARCHER_AI_KEY_PREFIX = 'researcher-ai:';
 
-export type ResearcherAiOperation = 'greeting' | 'interview' | 'synthesis' | 'aggregate' | 'followup' | 'analysis';
+export type ResearcherAiOperation = 'greeting' | 'interview' | 'synthesis' | 'aggregate' | 'followup' | 'analysis' | 'exploration';
 
 /**
  * One researcher budget scope. Keys start with `researcher-ai:` (never a
@@ -268,7 +269,10 @@ export type ListInterviewsInput =
   | { scope: 'all'; maximum: number };
 
 export interface WorkspaceStorePort {
+  /** Node's bounded delete fence; DO deletion is one atomic transaction. */
+  studyMutationStatus?(studyId: string): Promise<'ready' | 'deleting' | 'missing' | 'unavailable'>;
   readonly backend: WorkspaceBackend;
+  readonly exploration?: ExplorationStorePort;
 
   readiness(): Promise<StoreReadiness>;
 
@@ -290,7 +294,12 @@ export interface WorkspaceStorePort {
     enabled: boolean;
     now: number;
   }): Promise<StudyMutationOutcome>;
-  deleteStudy(input: { studyId: string; now: number }): Promise<DeleteStudyOutcome>;
+  deleteStudy(input: {
+    studyId: string;
+    now: number;
+    deleteInterviews?: boolean;
+    expectedRevision?: number;
+  }): Promise<DeleteStudyOutcome>;
 
   createParticipantLink(input: CreateLinkInput): Promise<CreateLinkOutcome>;
   /** Link exchange: resolves the opaque code (digest lookup; raw code never stored). */
@@ -332,7 +341,7 @@ export type ExportBegin =
   | { status: 'unavailable' };
 
 export type ExportPage =
-  | { status: 'ok'; interviews: StoredInterview[]; aggregates: StoredAggregateSynthesis[]; nextCursor: string | null }
+  | { status: 'ok'; interviews: StoredInterview[]; aggregates: StoredAggregateSynthesis[]; explorations?: ExplorationAnswer[]; nextCursor: string | null }
   | { status: 'changed' }
   | { status: 'unavailable' };
 
@@ -365,9 +374,9 @@ export interface DurableWorkspaceStorePort extends WorkspaceStorePort {
     budget: ResearcherAiCounter[];
   }): Promise<AcceptAnalysisRetryOutcome>;
   readAnalysisStatus(input: { studyId: string; interviewId: string }): Promise<ReadAnalysisStatusOutcome>;
-  beginExport(input: { maximum: number }): Promise<ExportBegin>;
-  readExportPage(input: { sequence: number; cursor: string | null; pageSize: number; maxPageBytes: number }): Promise<ExportPage>;
-  verifyExportSequence(input: { sequence: number }): Promise<'unchanged' | 'changed' | 'unavailable'>;
+  beginExport(input: { maximum: number; studyId?: string }): Promise<ExportBegin>;
+  readExportPage(input: { sequence: number; cursor: string | null; pageSize: number; maxPageBytes: number; studyId?: string }): Promise<ExportPage>;
+  verifyExportSequence(input: { sequence: number; studyId?: string }): Promise<'unchanged' | 'changed' | 'unavailable'>;
   readAggregateInputs(input: {
     studyId: string;
     studyRevision: number;

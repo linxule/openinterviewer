@@ -127,7 +127,7 @@ describe('StudyDetail — analysis batch action', () => {
     expect(screen.queryByText(/^Analyze \d+ pending$/)).not.toBeInTheDocument();
   });
 
-  it('disables Analyze All Interviews with one analyzed interview and names analyzed interviews in the prompt', async () => {
+  it('disables Analyze selected interviews with one analyzed interview and names analyzed interviews in the prompt', async () => {
     storageMock.readStudyInterviews.mockResolvedValue(ok([
       makeStoredInterview({
         id: 'interview-a', studyId: 'study-batch', studyRevision: 1, synthesis: analyzedSynthesis,
@@ -145,8 +145,8 @@ describe('StudyDetail — analysis batch action', () => {
     renderStudyDetail('study-batch');
     await screen.findByRole('heading', { name: 'Batch Study' });
 
-    expect(screen.getByRole('button', { name: 'Analyze All Interviews' })).toBeDisabled();
-    expect(screen.getByText('Need at least 2 analyzed interviews to generate aggregate analysis.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Analyze selected interviews' })).toBeDisabled();
+    expect(screen.getByText('Need at least 2 analyzed interviews in this dataset to generate aggregate analysis.')).toBeInTheDocument();
   });
 
   it.each<[number, string]>([

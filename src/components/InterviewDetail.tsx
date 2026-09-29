@@ -22,6 +22,21 @@ const INTERVIEW_TABS = [
   { id: 'analysis', label: 'Analysis' },
 ] as const satisfies readonly TabItem<'transcript' | 'analysis'>[];
 
+function profileEntries(interview: StoredInterview) {
+  const saved = interview.participantProfile?.fields ?? [];
+  const schema = interview.collectionConfig?.profileSchema;
+  const ids = [...new Set([...(schema?.map(field => field.id) ?? []), ...saved.map(field => field.fieldId)])];
+  return ids.map(id => {
+    const definition = schema?.find(field => field.id === id);
+    const field = saved.find(value => value.fieldId === id);
+    const value = field?.value?.trim();
+    const status = field?.status === 'refused' ? 'Declined to answer'
+      : field?.status === 'vague' ? `Vague${value ? `: ${value}` : ''}`
+      : field?.status === 'extracted' && value ? value : 'Not recorded';
+    return { id, label: definition?.label ?? id, status, definitionKnown: !!definition };
+  });
+}
+
 const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId, turn }) => {
   const router = useRouter();
   const [interview, setInterview] = useState<StoredInterview | null>(null);
@@ -134,15 +149,11 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId,
       ``
     ];
 
-    // Add participant profile
-    if (interview.participantProfile?.fields.length > 0) {
-      lines.push(`## Participant Profile`);
-      interview.participantProfile.fields.forEach(f => {
-        if (f.status === 'extracted' && f.value) {
-          lines.push(`- **${f.fieldId}**: ${f.value}`);
-        }
-      });
-      lines.push(``);
+    const profile = profileEntries(interview);
+    if (profile.length > 0) {
+      lines.push('## Participant Profile');
+      profile.forEach(field => lines.push(`- **${field.label}**: ${field.status}${field.definitionKnown ? '' : ' (original field definition unavailable)'}`));
+      lines.push('');
     }
 
     lines.push(`## Conversation`);
@@ -240,20 +251,20 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId,
         </dd>
       </dl>
 
-      {/* Participant Profile */}
-      {interview.participantProfile && interview.participantProfile.fields.length > 0 && (
+      {/* Collection-time definitions only; current study labels cannot relabel historical responses. */}
+      {profileEntries(interview).length > 0 && (
         <div className="mb-8 border-t border-ink-300 pt-4">
           <Label>Participant profile</Label>
-          <div className="mt-2 grid grid-cols-2 gap-3 text-[13px] md:grid-cols-3">
-            {interview.participantProfile.fields
-              .filter(f => f.status === 'extracted' && f.value)
-              .map(f => (
-                <div key={f.fieldId}>
-                  <span className="text-ink-500">{f.fieldId}:</span>{' '}
-                  <span className="text-ink-900">{f.value}</span>
-                </div>
-              ))}
-          </div>
+          {!interview.collectionConfig && <p className="mt-2 max-w-measure text-[13px] text-ink-500">Original profile definitions were not recorded for this interview. Field IDs are shown without reconstructing historical labels.</p>}
+          <dl className="mt-2 grid grid-cols-1 gap-3 text-[13px] sm:grid-cols-2 md:grid-cols-3">
+            {profileEntries(interview).map(field => (
+              <div key={field.id} className="break-words border-t border-ink-300 pt-2">
+                <dt className="text-ink-500">{field.label}</dt>
+                <dd className="mt-1 text-ink-900">{field.status}</dd>
+                {!field.definitionKnown && <p className="mt-1 text-[12px] text-ink-500">Original field definition unavailable</p>}
+              </div>
+            ))}
+          </dl>
         </div>
       )}
 

@@ -93,6 +93,10 @@ class DeferredAdapter implements AIProvider {
     return (await this.adapter()).synthesizeAggregate(...args);
   }
 
+  async exploreStudy(...args: Parameters<AIProvider['exploreStudy']>) {
+    return (await this.adapter()).exploreStudy(...args);
+  }
+
   async generateFollowupStudy(...args: Parameters<AIProvider['generateFollowupStudy']>) {
     return (await this.adapter()).generateFollowupStudy(...args);
   }

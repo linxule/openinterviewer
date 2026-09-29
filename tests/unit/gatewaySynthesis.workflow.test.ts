@@ -88,12 +88,30 @@ import { runInterviewAnalysis } from '@/lib/interviewAnalysis';
 import { createRedisWorkspaceStore } from '@/lib/storage/redis';
 import type { WorkspaceStorePort } from '@/lib/storage/types';
 import type { RedisPort } from '@/lib/redisPort';
+import { SAVE_STUDY_AGGREGATE_SCRIPT } from '@/lib/kv';
 
 function fakeKvClient() {
   const store = new Map<string, unknown>();
   return {
     get: vi.fn(async (key: string) => store.get(key) ?? null),
     set: vi.fn(async (key: string, value: unknown) => { store.set(key, value); return 'OK'; }),
+    // This provider-provenance fixture supplies the lifecycle read and
+    // aggregate-write boundaries. Atomic deletion is exercised by Redis suites.
+    eval: vi.fn(async (script: string, keys: string[], args: unknown[]) => {
+      if (keys.length === 2 && args.length === 1 && keys[0] === `study:${args[0]}` && keys[1] === `study-mutation-guard:${args[0]}`) {
+        const raw = store.get(keys[0]);
+        if (raw === undefined) return 'missing';
+        if (typeof raw !== 'string' || !raw.startsWith('oi:study:')) return 'unavailable';
+        const study = JSON.parse(raw.slice('oi:study:'.length));
+        // Only the active, guard-free study fixture is admitted. A lifecycle
+        // guard is not silently treated as ready by this provenance fixture.
+        return study.id === args[0] && !store.has(keys[1]) ? 'ready' : 'unavailable';
+      }
+      if (script !== SAVE_STUDY_AGGREGATE_SCRIPT) throw new Error('Unexpected fixture script');
+      if (!store.has(keys[0])) return 'study-not-found';
+      store.set(keys[2], args[0]);
+      return 'saved';
+    }),
   };
 }
 
@@ -186,6 +204,7 @@ describe('Gateway synthesis completion and researcher follow-up', () => {
       });
       kvMock.getStudy.mockResolvedValue(study);
       kvMock.getStudyChecked.mockResolvedValue({ status: 'found', study });
+      await sharedContext.kvClient.set(`study:${studyId}`, `oi:study:${JSON.stringify(study)}`);
       for (const output of [synthesisOutput, aggregateOutput, followupOutput]) {
         generateTextMock.mockResolvedValueOnce({ output, text: '', response: { modelId: actualModel } });
       }

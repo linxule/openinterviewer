@@ -183,17 +183,17 @@ describe('revision-bumping mutations (ST-03)', () => {
     expect((await currentStudy(study.id)).revision).toBe(2);
   });
 
-  it('ST-03: toggling links advances the revision and patches only linksEnabled', async () => {
+  it('ST-03: toggling access retains the revision and patches only linksEnabled', async () => {
     const study = await createStudy({ interviewerInstructions: 'Keep it synthetic.' });
     const disabled = await workspaceStub().setStudyLinksEnabled({ studyId: study.id, enabled: false, now: T0 });
     expect(disabled).toEqual({
       status: 'updated',
-      study: { ...study, config: { ...study.config, linksEnabled: false }, revision: 2, updatedAt: T0 },
+      study: { ...study, config: { ...study.config, linksEnabled: false }, revision: 1, updatedAt: T0 },
     });
     const [row] = await sql<{ config_json: string }>(`SELECT config_json FROM studies WHERE id = ?`, study.id);
     expect(row.config_json).toBe(JSON.stringify({ ...study.config, linksEnabled: false }));
     const enabled = await workspaceStub().setStudyLinksEnabled({ studyId: study.id, enabled: true, now: T0 + 1 });
-    expect(enabled.status === 'updated' && enabled.study.revision).toBe(3);
+    expect(enabled.status === 'updated' && enabled.study.revision).toBe(1);
   });
 });
 

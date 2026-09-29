@@ -17,6 +17,7 @@ import type { RedisPort } from '@/lib/redisPort';
 
 const contextMock = vi.hoisted(() => ({ getRequestContext: vi.fn(), getHostedResearcherIdentity: vi.fn() }));
 vi.mock('@/lib/researcherContext', () => contextMock);
+vi.mock('@/lib/storage/redisExploration', () => ({ createRedisExplorationStore: () => undefined }));
 
 const kvMock = vi.hoisted(() => ({
   getAllInterviewsChecked: vi.fn(),

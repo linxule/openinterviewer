@@ -12,6 +12,7 @@ import { upstreamProvider } from '@/lib/providers/openrouter';
 import { ProviderFailure } from '@/lib/providerErrors';
 import {
   aggregateSynthesisResponseSchema,
+  explorationResponseSchema,
   followupStudyResponseSchema,
   interviewResponseSchema,
   synthesisResponseSchema,
@@ -37,6 +38,7 @@ const SCHEMAS = {
   interviewResponseSchema,
   synthesisResponseSchema,
   aggregateSynthesisResponseSchema,
+  explorationResponseSchema,
   followupStudyResponseSchema,
 };
 

@@ -29,6 +29,7 @@ vi.mock('next/navigation', () => ({
 import StudySetup from '@/components/StudySetup';
 
 beforeEach(() => {
+  sessionStorage.clear();
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
     const path = new URL(url, 'http://localhost').pathname;
     if (path === '/api/auth') {

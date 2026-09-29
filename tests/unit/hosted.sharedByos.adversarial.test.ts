@@ -57,12 +57,17 @@ const kvClientMock = vi.hoisted(() => ({
 }));
 vi.mock('@/lib/kvClient', () => kvClientMock);
 
+const explorationMock = vi.hoisted(() => ({ list: vi.fn() }));
+vi.mock('@/lib/storage/redisExploration', () => ({ createRedisExplorationStore: () => explorationMock }));
+beforeEach(() => { explorationMock.list.mockResolvedValue({ status: 'ok', answers: [] }); });
+
 const cryptoMock = vi.hoisted(() => ({ decrypt: vi.fn() }));
 vi.mock('@/lib/crypto', () => cryptoMock);
 
 const kvMock = vi.hoisted(() => ({
   getStudy: vi.fn(),
   getStudyChecked: vi.fn(),
+  getStudyMutationStatus: vi.fn(),
   getInterviewChecked: vi.fn(),
   getStudyInterviewsChecked: vi.fn(),
   getAllInterviewsChecked: vi.fn(),
@@ -151,6 +156,7 @@ const LINK_A = 'e'.repeat(64);
 const platform = new MemoryPlatformRedis();
 
 function seedSharedStorage() {
+  kvMock.getStudyMutationStatus.mockResolvedValue('ready');
   platform.strings.clear();
   platform.hashes.clear();
   platform.sets.clear();
@@ -881,6 +887,28 @@ describe('hosted shared-BYOS researcher list/export/link adversarial matrix', ()
     expect(participantLinksMock.revokeParticipantLink).not.toHaveBeenCalled();
   });
 
+  it('refuses a partial Export All when one owned study is pending, while the other study exports independently', async () => {
+    platform.strings.set(`study-owner:${STUDY_B}`, encodeOwnerRecord({ version: 2, researcherId: RESEARCHER_A, storageId: STORAGE_ID, generation: 1 }));
+    platform.sets.set(`researcher-studies:${RESEARCHER_A}`, new Set([STUDY_A, STUDY_B]));
+    platform.sets.set(`researcher-studies:${RESEARCHER_B}`, new Set());
+    seedLive(STUDY_A, RESEARCHER_A, 'delete');
+    researcherSession(RESEARCHER_A);
+    const all = await exportGET();
+    expect(all.status).toBe(409);
+    expect(await all.json()).toMatchObject({ code: 'STUDY_OPERATION_PENDING', error: expect.stringContaining('individual study') });
+    expect(kvMock.getStudyInterviewsChecked).not.toHaveBeenCalled();
+    expect(explorationMock.list).not.toHaveBeenCalled();
+    expect(cryptoMock.decrypt).not.toHaveBeenCalled();
+
+    const scoped = await exportGET(new Request(`http://localhost/api/interviews/export?studyId=${STUDY_B}`));
+    expect(scoped.status).toBe(200);
+    const zip = await JSZip.loadAsync(await scoped.arrayBuffer());
+    expect(zip.file('summary.csv')).not.toBeNull();
+    expect(kvMock.getStudyInterviewsChecked).toHaveBeenCalledWith(STUDY_B, expect.anything(), 500);
+    expect(kvMock.getStudyInterviewsChecked).not.toHaveBeenCalledWith(STUDY_A, expect.anything(), expect.anything());
+    expect(explorationMock.list).toHaveBeenCalledWith({ studyId: STUDY_B, maximum: 500, pageSize: 25 });
+  });
+
   it('lets B mint and list links on B’s own study after authority allow', async () => {
     researcherSession(RESEARCHER_B);
     researcherLookup.getResearcherByIdChecked.mockImplementation(async (id: string) => ({
@@ -904,5 +932,3 @@ describe('hosted shared-BYOS researcher list/export/link adversarial matrix', ()
     )).toBe(true);
   });
 });
-
-

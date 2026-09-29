@@ -2,7 +2,7 @@
 // "No Interviews Yet". Renders the real Dashboard and storageService; only
 // HTTP is scripted.
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { makeStoredInterview, makeStoredStudy, makeStudyConfig } from '../fixtures/models';
 
 const router = vi.hoisted(() => ({ push: vi.fn() }));
@@ -81,5 +81,73 @@ describe('Dashboard per-study list (UI-CF-02)', () => {
     await selectStudy();
 
     expect(await screen.findByText(TOO_LARGE)).toBeInTheDocument();
+  });
+});
+
+describe('Dashboard selection ownership', () => {
+  const SECOND = 'study-second';
+  const secondStudy = makeStoredStudy({ id: SECOND, config: makeStudyConfig({ id: SECOND, name: 'Second study' }) });
+  const secondInterview = makeStoredInterview({ id: 'second-result', studyId: SECOND, studyName: 'Second study' });
+
+  it('a delayed old read cannot stop the newest loading state or overwrite its result', async () => {
+    let answerOld!: (response: Response) => void;
+    let answerNew!: (response: Response) => void;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/studies?view=summary') return new Response(JSON.stringify({ studies: [study, secondStudy] }));
+      if (url === '/api/interviews') return new Response(JSON.stringify({ interviews: [] }));
+      if (url === `/api/interviews?studyId=${STUDY_ID}`) return new Promise<Response>(resolve => { answerOld = resolve; });
+      if (url === `/api/interviews?studyId=${SECOND}`) return new Promise<Response>(resolve => { answerNew = resolve; });
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+    render(<BreadcrumbProvider><Dashboard /></BreadcrumbProvider>);
+    const filter = await screen.findByRole('combobox');
+    fireEvent.change(filter, { target: { value: STUDY_ID } });
+    fireEvent.change(filter, { target: { value: SECOND } });
+    await act(async () => { answerOld(new Response(JSON.stringify({ error: 'Old read failed' }), { status: 500 })); });
+    expect(screen.getByText('Loading interviews…')).toBeInTheDocument();
+    expect(screen.queryByText('Old read failed')).not.toBeInTheDocument();
+    await act(async () => { answerNew(new Response(JSON.stringify({ interviews: [secondInterview] }))); });
+    expect(await screen.findByRole('button', { name: 'Second study' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Dashboard Study' })).not.toBeInTheDocument();
+  });
+
+  it('late older rows cannot replace the selected dataset after the latest read finished', async () => {
+    let answerOld!: (response: Response) => void;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/studies?view=summary') return new Response(JSON.stringify({ studies: [study, secondStudy] }));
+      if (url === '/api/interviews') return new Response(JSON.stringify({ interviews: [] }));
+      if (url === `/api/interviews?studyId=${STUDY_ID}`) return new Promise<Response>(resolve => { answerOld = resolve; });
+      if (url === `/api/interviews?studyId=${SECOND}`) return new Response(JSON.stringify({ interviews: [secondInterview] }));
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+    render(<BreadcrumbProvider><Dashboard /></BreadcrumbProvider>);
+    const filter = await screen.findByRole('combobox');
+    fireEvent.change(filter, { target: { value: STUDY_ID } });
+    fireEvent.change(filter, { target: { value: SECOND } });
+    expect(await screen.findByRole('button', { name: 'Second study' })).toBeInTheDocument();
+    await act(async () => { answerOld(new Response(JSON.stringify({ interviews: [interview] }))); });
+    expect(screen.getByRole('button', { name: 'Second study' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Dashboard Study' })).not.toBeInTheDocument();
+  });
+
+  it('a successful empty selection clears the prior selection\'s outage', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/studies?view=summary') return new Response(JSON.stringify({ studies: [study, secondStudy] }));
+      if (url === '/api/interviews') return new Response(JSON.stringify({ interviews: [] }));
+      if (url === `/api/interviews?studyId=${STUDY_ID}`) throw new TypeError('Failed to fetch');
+      if (url === `/api/interviews?studyId=${SECOND}`) return new Response(JSON.stringify({ interviews: [] }));
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+    render(<BreadcrumbProvider><Dashboard /></BreadcrumbProvider>);
+    const filter = await screen.findByRole('combobox');
+    fireEvent.change(filter, { target: { value: STUDY_ID } });
+    expect(await screen.findByRole('heading', { name: 'Workspace unavailable' })).toBeInTheDocument();
+    fireEvent.change(filter, { target: { value: SECOND } });
+    expect(await screen.findByText('No Interviews Yet')).toBeInTheDocument();
+    expect(screen.queryByText('Interview storage is temporarily unavailable.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Workspace unavailable' })).not.toBeInTheDocument();
   });
 });

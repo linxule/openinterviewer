@@ -222,6 +222,9 @@ export async function POST(request: Request) {
       id: interviewId,
       studyId: canonical.study.id,
       studyName: canonical.study.config.name,
+      // Original context is server-owned and immutable alongside the
+      // transcript. It must never be replaced by a later study revision.
+      collectionConfig: structuredClone(canonical.study.config),
       participantProfile: clientData.participantProfile || defaultProfile,
       transcript: clientData.transcript,
       // A participant save carries no synthesis: the analysis is a second,

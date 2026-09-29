@@ -28,6 +28,11 @@ describe('setupIntentKey', () => {
     expect(setupIntentKey('followup', null, 'parent-1')).toBe('followup:parent-1');
   });
 
+  it('scopes a duplicate create intent to its source study', () => {
+    expect(setupIntentKey('duplicate', 'study-1', null)).toBe('duplicate:study-1');
+    expect(isCreateIntentKey(setupIntentKey('duplicate', 'study-1', null))).toBe(true);
+  });
+
   it('returns followup with no parent id', () => {
     expect(setupIntentKey('followup', null, null)).toBe('followup');
   });

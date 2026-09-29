@@ -8,9 +8,14 @@ import {
   readStudy,
   readStudyAggregate,
   readStudyInterviews,
+  deleteStudy,
+  exportAllInterviewsChecked,
   reconcileStudyOperations,
   type ResearcherStorageFailure,
 } from '@/services/storageService';
+import type { DatasetDescription, DatasetSelection } from '@/lib/exploration/types';
+import { StudyDatasetSelector, DatasetCoverage } from '@/components/StudyDatasetSelector';
+import { StudyExploration } from '@/components/StudyExploration';
 import { loadAnalysisExecution } from '@/services/analysisExecution';
 import { Button, Coordinate, Icon, Label, Notice, Rule, Tabs } from '@/components/ui';
 import { AggregateReading, ProvenanceFooter } from '@/components/SynthesisReading';
@@ -35,7 +40,7 @@ interface StudyDetailProps {
   studyId: string;
 }
 
-type TabType = 'overview' | 'interviews' | 'settings';
+type TabType = 'overview' | 'explore' | 'interviews' | 'settings';
 
 // The maximum interviews one press of the batch action analyzes. Beyond
 // that, the button analyzes the oldest 25 and the count updates (P8.2).
@@ -96,7 +101,7 @@ function recoveryDisclosure(count: number) {
 }
 
 function isStudyOperationPending(response: Response, data: { code?: string }) {
-  return response.status === 409 && data.code === 'STUDY_OPERATION_PENDING';
+  return response.status === 409 && (data.code === 'STUDY_OPERATION_PENDING' || data.code === 'STUDY_DELETION_PENDING');
 }
 
 function storageFailureCopy(failure: ResearcherStorageFailure): string {
@@ -133,6 +138,41 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
   const [aggregateFailure, setAggregateFailure] = useState<string | null>(null);
   const [refreshFailure, setRefreshFailure] = useState<string | null>(null);
   const [isReconciling, setIsReconciling] = useState(false);
+  const [datasetSelection, setDatasetSelection] = useState<DatasetSelection | undefined>();
+  const [selectedDataset, setSelectedDataset] = useState<DatasetDescription | null>(null);
+  const [choosingDataset, setChoosingDataset] = useState(false);
+  const [explorationVisited, setExplorationVisited] = useState(false);
+  useEffect(() => { if (activeTab === 'explore') setExplorationVisited(true); }, [activeTab]);
+  const [lifecycleError, setLifecycleError] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [deleteStep, setDeleteStep] = useState<0 | 1 | 2>(0);
+  const [deleteRevision, setDeleteRevision] = useState<number | null>(null);
+  const [deleteAcknowledged, setDeleteAcknowledged] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deletePending, setDeletePending] = useState(false);
+  const activeStudyId = useRef(studyId);
+  useEffect(() => { activeStudyId.current = studyId; }, [studyId]);
+  const readGeneration = useRef(0);
+  const linkGeneration = useRef(0);
+
+  useEffect(() => {
+    const syncLocation = () => {
+      const tab = new URLSearchParams(window.location.search).get('tab');
+      if (tab === 'settings' || tab === 'overview' || tab === 'interviews' || tab === 'explore') setActiveTab(tab);
+    };
+    syncLocation();
+    window.addEventListener('popstate', syncLocation);
+    window.addEventListener('hashchange', syncLocation);
+    return () => { window.removeEventListener('popstate', syncLocation); window.removeEventListener('hashchange', syncLocation); };
+  }, [studyId]);
+
+  useEffect(() => {
+    if (activeTab === 'settings' && study && window.location.hash === '#danger-zone') {
+      const element = document.getElementById('danger-zone');
+      element?.scrollIntoView?.({ block: 'start' });
+      element?.focus({ preventScroll: true });
+    }
+  }, [activeTab, study]);
 
   useSetTrailingCrumb(study?.config.name ?? null);
 
@@ -141,12 +181,17 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
   // source of the register's row number below (not the newest-first index).
   const interviewIndex = useMemo(() => buildAggregateInterviewIndex(interviews), [interviews]);
 
-  // The same predicate the route filters on (aggregate/route.ts:72-74), so the
-  // count in the footer is the count a re-analysis would actually cover.
-  const eligibleInterviewCount = useMemo(
-    () => (study ? interviews.filter(i => i.studyRevision === study.revision && i.synthesis).length : 0),
+  const currentRevisionAnalyzedCount = useMemo(
+    () => study ? interviews.filter(interview => interview.studyRevision === study.revision && interview.synthesis).length : 0,
     [interviews, study],
   );
+  const olderInterviewCount = study ? interviews.filter(interview => interview.studyRevision !== study.revision).length : 0;
+  const eligibleInterviewCount = selectedDataset
+    ? interviews.filter(interview => interview.synthesis && selectedDataset.manifest.sources.some(source => source.interviewId === interview.id)).length
+    : currentRevisionAnalyzedCount;
+  const applyDataset = (selection: DatasetSelection, description: DatasetDescription) => {
+    setDatasetSelection(selection); setSelectedDataset(description);
+  };
 
   // Counts by (provider, model) pair — two providers could in principle
   // expose the same model id, and the pair is what the record actually
@@ -211,6 +256,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
   }, [studyId, batchKeys]);
 
   const loadParticipantLinks = useCallback(async () => {
+    const generation = ++linkGeneration.current;
     setLinksLoading(true);
     setLinksError(null);
     try {
@@ -222,8 +268,10 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
         error?: string;
         code?: string;
       };
+      if (generation !== linkGeneration.current) return;
       if (isStudyOperationPending(response, data)) {
         setOperationPending(true);
+        if (data.code === 'STUDY_DELETION_PENDING') setDeletePending(true);
         setParticipantLinks([]);
         return;
       }
@@ -233,10 +281,11 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
       setParticipantLinks(Array.isArray(data.links) ? data.links : []);
       setLinksLoadedAt(Date.now());
     } catch (error) {
+      if (generation !== linkGeneration.current) return;
       console.error('Error loading participant links:', error);
       setLinksError(error instanceof Error ? error.message : 'Failed to load participant links');
     } finally {
-      setLinksLoading(false);
+      if (generation === linkGeneration.current) setLinksLoading(false);
     }
   }, [studyId]);
 
@@ -245,6 +294,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
   // when both reads succeed; otherwise it keeps everything on screen and says
   // it could not refresh (UI-CF-04). A pending study operation commits nothing.
   const loadStudyData = useCallback(async (options?: { quiet?: boolean }) => {
+    const generation = ++readGeneration.current;
     const quiet = options?.quiet === true;
     if (!quiet) setLoading(true);
     try {
@@ -253,8 +303,11 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
         readStudyInterviews(studyId),
         readStudyAggregate(studyId),
       ]);
+      if (generation !== readGeneration.current) return;
       const pending = [studyRead, listRead, aggregateRead].some((read) => read.status === 'pending');
       if (pending) setOperationPending(true);
+      if ([studyRead, listRead, aggregateRead].some(read => read.status === 'pending' && (read as { code?: string }).code === 'STUDY_DELETION_PENDING')) setDeletePending(true);
+      if (pending) return;
 
       if (quiet) {
         if (studyRead.status !== 'ok' || listRead.status !== 'ok') {
@@ -274,7 +327,6 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
         return;
       }
 
-      if (pending) return;
       setRefreshFailure(null);
       if (studyRead.status !== 'ok') {
         setStudy(null);
@@ -289,7 +341,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
       setAggregateFailure(aggregateRead.status === 'ok' ? null : storageFailureCopy(aggregateRead));
       setAggregateOpenNotes({});
     } finally {
-      if (!quiet) setLoading(false);
+      if (!quiet && generation === readGeneration.current) setLoading(false);
     }
   }, [studyId]);
 
@@ -360,11 +412,18 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
   };
 
   useEffect(() => {
+    setOperationPending(false); setDeletePending(false); setDeleteStep(0); setExplorationVisited(false);
+    setIsTogglingLinks(false); setIsGeneratingAggregate(false); setIsGeneratingFollowup(false);
+    setIsExporting(false); setIsDeleting(false); setGeneratingLink(false); setParticipantLink(null); setCopied(false);
+    setSelectedDataset(null); setDatasetSelection(undefined); setLifecycleError(null);
     void loadStudyData();
+    return () => { readGeneration.current += 1; };
   }, [loadStudyData]);
 
   useEffect(() => {
+    setParticipantLinks([]);
     void loadParticipantLinks();
+    return () => { linkGeneration.current += 1; };
   }, [loadParticipantLinks]);
 
   const handleToggleLinksEnabled = async () => {
@@ -380,28 +439,28 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
         body: JSON.stringify({ linksEnabled: newLinksEnabled })
       });
 
-      const data = await response.json().catch(() => ({})) as { code?: string; error?: string };
+      const data = await response.json().catch(() => ({})) as { code?: string; error?: string; study?: StoredStudy };
+      if (activeStudyId.current !== studyId) return;
       if (isStudyOperationPending(response, data)) {
         setOperationPending(true);
+        if (data.code === 'STUDY_DELETION_PENDING') setDeletePending(true);
         return;
       }
       if (!response.ok) {
         throw new Error(data.error || 'Failed to update study');
       }
 
-      // Update local state
-      setStudy({
-        ...study,
-        config: {
-          ...study.config,
-          linksEnabled: newLinksEnabled
-        }
-      });
+      if (!data.study || data.study.id !== studyId || !data.study.config || !Number.isSafeInteger(data.study.revision)) {
+        throw new Error('The updated study could not be confirmed. Refresh before changing access again.');
+      }
+      setStudy(data.study);
+      setLifecycleError(null);
     } catch (error) {
+      if (activeStudyId.current !== studyId) return;
       console.error('Error toggling links:', error);
-      alert('Failed to update link settings');
+      setLifecycleError(error instanceof Error ? error.message : 'Failed to update participant access.');
     } finally {
-      setIsTogglingLinks(false);
+      if (activeStudyId.current === studyId) setIsTogglingLinks(false);
     }
   };
 
@@ -419,8 +478,10 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
       });
 
       const data = await response.json().catch(() => ({})) as { error?: string; code?: string; url?: string };
+      if (activeStudyId.current !== studyId) return;
       if (isStudyOperationPending(response, data)) {
         setOperationPending(true);
+        if (data.code === 'STUDY_DELETION_PENDING') setDeletePending(true);
         return;
       }
       if (!response.ok) {
@@ -431,10 +492,11 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
         await loadParticipantLinks();
       }
     } catch (error) {
+      if (activeStudyId.current !== studyId) return;
       console.error('Error generating link:', error);
       alert(error instanceof Error ? error.message : 'Failed to generate link');
     } finally {
-      setGeneratingLink(false);
+      if (activeStudyId.current === studyId) setGeneratingLink(false);
     }
   };
 
@@ -460,8 +522,10 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
         body: JSON.stringify({ linkId: link.id }),
       });
       const data = await response.json() as { error?: string; code?: string };
+      if (activeStudyId.current !== studyId) return;
       if (isStudyOperationPending(response, data)) {
         setOperationPending(true);
+        if (data.code === 'STUDY_DELETION_PENDING') setDeletePending(true);
         return;
       }
       if (!response.ok) {
@@ -469,10 +533,11 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
       }
       await loadParticipantLinks();
     } catch (error) {
+      if (activeStudyId.current !== studyId) return;
       console.error('Error revoking participant link:', error);
       alert(error instanceof Error ? error.message : 'Failed to revoke participant link');
     } finally {
-      setRevokingLinkId(null);
+      if (activeStudyId.current === studyId) setRevokingLinkId(null);
     }
   };
 
@@ -488,7 +553,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
       const response = await fetch('/api/synthesis/aggregate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ studyId })
+        body: JSON.stringify({ studyId, ...(datasetSelection ? { selection: datasetSelection } : {}) })
       });
 
       const data = await response.json().catch(() => ({})) as {
@@ -496,8 +561,10 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
         code?: string;
         synthesis?: AggregateSynthesisResult;
       };
+      if (activeStudyId.current !== studyId) return;
       if (isStudyOperationPending(response, data)) {
         setOperationPending(true);
+        if (data.code === 'STUDY_DELETION_PENDING') setDeletePending(true);
         return;
       }
       if (!response.ok) {
@@ -508,10 +575,11 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
         setAggregateOpenNotes({});
       }
     } catch (error) {
+      if (activeStudyId.current !== studyId) return;
       console.error('Error generating aggregate synthesis:', error);
       alert(error instanceof Error ? error.message : 'Failed to generate synthesis');
     } finally {
-      setIsGeneratingAggregate(false);
+      if (activeStudyId.current === studyId) setIsGeneratingAggregate(false);
     }
   };
 
@@ -532,8 +600,10 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
         code?: string;
         followUpConfig?: unknown;
       };
+      if (activeStudyId.current !== studyId) return;
       if (isStudyOperationPending(response, data)) {
         setOperationPending(true);
+        if (data.code === 'STUDY_DELETION_PENDING') setDeletePending(true);
         return;
       }
       if (!response.ok) {
@@ -542,13 +612,41 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
 
       // Store prefill config in sessionStorage and navigate to setup
       sessionStorage.setItem('prefillStudyConfig', JSON.stringify(data.followUpConfig));
-      router.push('/setup?prefill=followup');
+      router.push(`/setup?prefill=followup&studyId=${encodeURIComponent(studyId)}`);
     } catch (error) {
+      if (activeStudyId.current !== studyId) return;
       console.error('Error generating follow-up study:', error);
       alert(error instanceof Error ? error.message : 'Failed to generate follow-up study');
     } finally {
-      setIsGeneratingFollowup(false);
+      if (activeStudyId.current === studyId) setIsGeneratingFollowup(false);
     }
+  };
+
+  const handleExportStudy = async () => {
+    setIsExporting(true); setLifecycleError(null);
+    try {
+      const outcome = await exportAllInterviewsChecked(studyId);
+      if (activeStudyId.current !== studyId) return;
+      if (outcome.status !== 'ok') { setLifecycleError(storageFailureCopy(outcome)); return; }
+      const url = URL.createObjectURL(outcome.value);
+      const link = document.createElement('a'); link.href = url; link.download = `study-${studyId}.zip`; link.click(); URL.revokeObjectURL(url);
+    } catch { if (activeStudyId.current === studyId) setLifecycleError('The study export could not be confirmed.'); }
+    finally { if (activeStudyId.current === studyId) setIsExporting(false); }
+  };
+
+  const handleDeleteStudy = async () => {
+    if (isDeleting) return;
+    const confirmation = study && deleteRevision !== null ? { deleteInterviews: true as const, confirmStudyId: studyId, expectedRevision: deleteRevision } : undefined;
+    // A deletion-pending read is persisted proof of the earlier confirmation.
+    // The bodyless retry can only resume it; otherwise legacy empty-only refusal applies.
+    if (!confirmation && !deletePending) return;
+    setIsDeleting(true); setLifecycleError(null);
+    const result = await deleteStudy(studyId, confirmation);
+    if (activeStudyId.current !== studyId) return;
+    setIsDeleting(false);
+    if (result.pending) { setDeletePending(true); setOperationPending(true); setLifecycleError(result.error ?? 'Deletion is pending. The study is not yet confirmed permanently deleted.'); return; }
+    if (result.success) { router.push('/studies'); return; }
+    setLifecycleError(result.error ?? 'The study could not be deleted. No permanent deletion was confirmed.');
   };
 
   const formatDate = (timestamp: number) => {
@@ -579,7 +677,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
     buttons[nextIndex]?.focus();
   };
 
-  if (loading) {
+  if (loading || (study && study.id !== studyId)) {
     return <p className="py-16 font-sans text-[15px] text-ink-500">Loading…</p>;
   }
 
@@ -588,16 +686,17 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
       <div className="max-w-measure">
         {operationPending ? (
           <>
-            <h2 className="font-sans text-[18px] font-semibold text-ink-900">Study change pending</h2>
-            <p className="mt-2 font-sans text-[15px] text-ink-700">A study operation is already in progress.</p>
+            <h2 className="font-sans text-[18px] font-semibold text-ink-900">{deletePending ? 'Permanent deletion pending' : 'Study change pending'}</h2>
+            <p className="mt-2 font-sans text-[15px] text-ink-700">{deletePending ? 'A previously confirmed deletion is still in progress. Partial research data is not shown. Retrying resumes that deletion; completion has not yet been confirmed.' : 'A study operation is already in progress.'}</p>
+            {lifecycleError && <Notice tone="error" role="status" className="mt-3"><p className="text-[13px]">{lifecycleError}</p></Notice>}
             <Button
               type="button"
               variant="quiet"
-              onClick={() => void runReconciliation()}
-              disabled={isReconciling}
+              onClick={() => void (deletePending ? handleDeleteStudy() : runReconciliation())}
+              disabled={isReconciling || isDeleting}
               className="mt-4"
             >
-              {isReconciling ? 'Reconciling…' : 'Reconcile'}
+              {deletePending ? isDeleting ? 'Confirming deletion…' : 'Retry deletion' : isReconciling ? 'Reconciling…' : 'Reconcile'}
             </Button>
           </>
         ) : studyFailure?.status === 'unauthorized' ? (
@@ -633,13 +732,14 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
 
   const tabs: { id: TabType; label: string }[] = [
     { id: 'overview', label: 'Overview' },
+    { id: 'explore', label: 'Explore' },
     { id: 'interviews', label: 'Interviews' },
     { id: 'settings', label: 'Study settings' }
   ];
 
   const aggregateSaved = aggregateSynthesis?.savedAt !== undefined;
   const aggregateIsStale = Boolean(
-    study && aggregateSynthesis && aggregateSynthesis.studyRevision !== study.revision,
+    study && aggregateSynthesis && !aggregateSynthesis.scope && aggregateSynthesis.studyRevision !== study.revision,
   );
   const aggregateNote = (() => {
     if (!aggregateSynthesis) return undefined;
@@ -648,7 +748,8 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
     if (aggregateSynthesis.interviewCount < eligibleInterviewCount) {
       facts.push(`covers ${aggregateSynthesis.interviewCount} of ${eligibleInterviewCount} interviews`);
     }
-    if (aggregateIsStale) facts.push(`study is now rev ${study!.revision}`);
+    if (aggregateSynthesis.scope) facts.push(`historical selected scope: ${aggregateSynthesis.scope.selectedCount} interviews across revisions ${[...new Set(aggregateSynthesis.scope.sources.map(source => source.studyRevision ?? 'unrecorded'))].join(', ')}`);
+    if (aggregateSynthesis.studyRevision !== study.revision) facts.push(`study is now rev ${study!.revision}`);
     return facts.length > 0 ? facts.join(' · ') : undefined;
   })();
 
@@ -672,16 +773,16 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
       </div>
 
       {operationPending && (
-        <Notice tone="error" eyebrow="Pending reconciliation" role="status" className="mb-6">
-          <p className="mt-1 text-[13px] text-ink-700">A study operation is already in progress.</p>
+        <Notice tone="error" eyebrow={deletePending ? 'Deletion pending' : 'Pending reconciliation'} role="status" className="mb-6">
+          <p className="mt-1 text-[13px] text-ink-700">{deletePending ? 'Permanent deletion has not yet been confirmed. Check its progress in Study settings.' : 'A study operation is already in progress.'}</p>
           <Button
             type="button"
             variant="quiet"
-            onClick={() => void runReconciliation()}
+            onClick={() => deletePending ? setActiveTab('settings') : void runReconciliation()}
             disabled={isReconciling}
             className="mt-2"
           >
-            Reconcile
+            {deletePending ? 'View deletion status' : 'Reconcile'}
           </Button>
         </Notice>
       )}
@@ -697,7 +798,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
         </Notice>
       )}
 
-      <Tabs items={tabs} value={activeTab} onValueChange={setActiveTab} label="Study sections" className="mb-8 grid-cols-3">
+      <Tabs items={tabs} value={activeTab} onValueChange={setActiveTab} label="Study sections" className="mb-8 grid-cols-2 sm:grid-cols-4">
       {activeTab === 'overview' && (
         <div>
           <Label>Research Question</Label>
@@ -741,15 +842,21 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
               <Button
                 variant="primary"
                 onClick={handleGenerateAggregateSynthesis}
-                disabled={operationPending || isGeneratingAggregate || eligibleInterviewCount < 2}
+                disabled={operationPending || isGeneratingAggregate || eligibleInterviewCount < 2 || !!selectedDataset?.manifest.pendingAnalysisCount}
                 className="w-full sm:w-auto"
               >
                 {isGeneratingAggregate
                   ? 'Analyzing...'
-                  : aggregateSynthesis ? 'Re-analyze All Interviews' : 'Analyze All Interviews'}
+                  : aggregateSynthesis ? 'Re-analyze selected interviews' : 'Analyze selected interviews'}
               </Button>
             </div>
 
+            <p className="mt-3 text-[13px] text-ink-700">{selectedDataset
+              ? `${selectedDataset.manifest.selectedCount} interviews are selected; ${selectedDataset.manifest.pendingAnalysisCount} need individual analysis before the overview can use this whole dataset. Exploration can read those pending and failed-analysis transcripts directly.`
+              : `${currentRevisionAnalyzedCount} analyzed interviews from current revision ${study.revision} are eligible by default. ${interviews.length} interviews are retained; ${olderInterviewCount} are from other or unrecorded revisions.`}</p>
+            <Button variant="quiet" className="mt-2" onClick={() => setChoosingDataset(previous => !previous)}>{choosingDataset ? 'Close dataset selection' : 'Choose analysis dataset'}</Button>
+            {selectedDataset && <div className="mt-3"><DatasetCoverage dataset={selectedDataset} /></div>}
+            {choosingDataset && <div className="mt-4"><StudyDatasetSelector studyId={studyId} interviews={interviews} initialSelection={datasetSelection} disabled={operationPending || isGeneratingAggregate} onApply={applyDataset} /></div>}
             {aggregateSynthesis ? (
               <div className="mt-6 space-y-6">
                 <AggregateReading
@@ -772,7 +879,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                   <p className="mt-2 text-[13px] text-ink-500">
                     {aggregateIsStale
                       ? `Re-analyze first: this analysis was made at study rev ${aggregateSynthesis.studyRevision} and the study is now at rev ${study!.revision}.`
-                      : 'Generate a new study based on gaps and patterns found in this analysis.'}
+                      : aggregateSynthesis.scope ? 'Generate a new study from the exact historical dataset saved with this analysis, not from newer interviews.' : 'Generate a new study based on gaps and patterns found in this analysis.'}
                   </p>
                 </div>
 
@@ -799,11 +906,11 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                 )}
                 {eligibleInterviewCount < 2 ? (
                   <p className="mt-3 text-[13px] text-ink-500">
-                    Need at least 2 analyzed interviews to generate aggregate analysis.
+                    Need at least 2 analyzed interviews in this dataset to generate aggregate analysis.
                   </p>
                 ) : !aggregateFailure && (
                   <p className="mt-3 text-[13px] text-ink-500">
-                    Click &quot;Analyze All Interviews&quot; to generate cross-interview insights.
+                    Analyze the selected, eligible interviews to generate cross-interview insights.
                   </p>
                 )}
               </>
@@ -811,6 +918,8 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
           </section>
         </div>
       )}
+
+      {(activeTab === 'explore' || explorationVisited) && <div hidden={activeTab !== 'explore'}><StudyExploration key={studyId} study={study} interviews={interviews} disabled={operationPending} initialSelection={datasetSelection} initialDataset={selectedDataset} onDatasetApply={applyDataset} /></div>}
 
       {activeTab === 'interviews' && (
         interviews.length === 0 && listFailure ? (
@@ -1000,6 +1109,16 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
 
       {activeTab === 'settings' && (
         <div className="space-y-8">
+          <section className="border-y border-ink-300 py-4">
+            <h3 className="font-sans text-[15px] font-semibold text-ink-900">Study controls</h3>
+            <Coordinate className="mt-2 block">{`Collection revision ${study.revision}`}</Coordinate>
+            <p className="mt-2 max-w-measure text-[13px] text-ink-700">A collection-configuration edit advances the revision and invalidates earlier participant authority. Retained interviews remain available; choose their revisions explicitly for analysis. Pausing access does not change the protocol revision.</p>
+            <div className="mt-3 flex flex-wrap gap-3">
+              <Button variant="primary" disabled={operationPending} onClick={() => router.push(`/setup?prefill=edit&studyId=${encodeURIComponent(studyId)}`)}>Edit study</Button>
+              <Button variant="quiet" disabled={operationPending || isExporting} onClick={() => void handleExportStudy()}>{isExporting ? 'Preparing study export…' : 'Export this study'}</Button>
+            </div>
+          </section>
+          {lifecycleError && <Notice tone="error" role="status"><p className="text-[13px]">{lifecycleError}</p></Notice>}
           {study.interviewCount > 0 && (
             <Notice tone="neutral" eyebrow={`${study.interviewCount} interview${study.interviewCount > 1 ? 's' : ''} collected`}>
               <p className="mt-1 text-[13px] text-ink-700">
@@ -1087,8 +1206,8 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                 <p className="font-sans text-[15px] font-medium text-ink-900">Participant Access</p>
                 <p id="participant-access-status" className="text-[13px] text-ink-500">
                   {(study.config.linksEnabled ?? true)
-                    ? 'Access enabled - participants can use the link below'
-                    : 'Access disabled - the same link will show an error until re-enabled'}
+                    ? 'Collection is open. Pause access without changing the collection revision.'
+                    : 'Collection is paused. Resume restores still-valid links, not revoked, expired or older-revision authority.'}
                 </p>
               </div>
               <button
@@ -1106,7 +1225,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                     (study.config.linksEnabled ?? true) ? 'border-ink-500 text-ink-900' : 'border-ink-300 text-ink-500'
                   }`}
                 >
-                  {(study.config.linksEnabled ?? true) ? 'ENABLED' : 'DISABLED'}
+                  {(study.config.linksEnabled ?? true) ? 'OPEN · PAUSE' : 'PAUSED · RESUME'}
                 </Coordinate>
               </button>
             </div>
@@ -1250,6 +1369,14 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
               </p>
             </div>
           </div>
+          <section id="danger-zone" tabIndex={-1} className="scroll-mt-8 border-t border-ink-300 pt-5">
+            <h3 className="font-sans text-[17px] font-semibold text-error">Danger Zone</h3>
+            <p className="mt-2 max-w-measure text-[13px] text-ink-700">Permanently delete this study, all associated interviews, analyses, participant links and notebook answers from the application’s live store. Downloaded exports, external backups and already-started provider requests cannot be recalled.</p>
+            {deleteStep === 0 && <Button variant="quiet" disabled={operationPending} className="mt-3" onClick={() => { setDeleteStep(1); setDeleteRevision(study.revision); setDeleteAcknowledged(false); }}>Delete study</Button>}
+            {deleteStep === 1 && <div className="mt-4 border-t border-ink-300 pt-4"><p className="text-[15px] text-ink-900">{`Delete “${study.config.name}” and ${study.interviewCount} associated interviews?`}</p><p className="mt-2 text-[13px] text-ink-700">Export this study first if you want a copy. Deletion cannot be undone.</p><div className="mt-3 flex flex-wrap gap-3"><Button variant="quiet" disabled={isExporting} onClick={() => void handleExportStudy()}>Export before deletion</Button><Button variant="primary" onClick={() => setDeleteStep(2)}>Continue to permanent deletion</Button><Button variant="quiet" onClick={() => setDeleteStep(0)}>Cancel deletion</Button></div></div>}
+            {deleteStep === 2 && <div className="mt-4 border-t border-ink-300 pt-4"><Coordinate className="block">{`Study ${studyId} · confirmed revision ${deleteRevision}`}</Coordinate><label className="mt-3 flex min-h-11 items-start gap-2 text-[13px] text-ink-900"><input type="checkbox" checked={deleteAcknowledged} disabled={deletePending || isDeleting} onChange={event => setDeleteAcknowledged(event.target.checked)} className="mt-1" />I understand that this permanently removes the study and all its live research data.</label><div className="mt-3 flex flex-wrap gap-3"><Button variant="primary" disabled={!deleteAcknowledged || isDeleting || deletePending} onClick={() => void handleDeleteStudy()}>{isDeleting ? 'Confirming deletion…' : 'Permanently delete study and data'}</Button>{!deletePending && <Button variant="quiet" disabled={isDeleting} onClick={() => setDeleteStep(0)}>Cancel deletion</Button>}</div></div>}
+            {deletePending && <Notice tone="error" role="status" className="mt-4"><p className="text-[13px]">Deletion is pending. This page will not claim permanent completion until the server confirms it.</p><Button variant="quiet" disabled={isDeleting} onClick={() => void handleDeleteStudy()}>Check deletion progress</Button></Notice>}
+          </section>
         </div>
       )}
       </Tabs>

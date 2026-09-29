@@ -28,6 +28,7 @@ import type { AIProviderKeys } from './providers';
 import { resolveProviderRoute, type ProviderRoute } from './providers/endpoint';
 import { validateStudyConfig } from './studyConfigValidation';
 import { logRequestFailure } from './requestLog';
+import { studyMutationReadiness, STUDY_DELETION_PENDING_CODE, STUDY_DELETION_PENDING_MESSAGE } from './studyMutationReadiness';
 
 export interface ResearcherContext {
   // Identity (null in standalone mode)
@@ -396,7 +397,23 @@ export async function getAuthorizedResearcherStudyContext(
   studyId: string,
   purpose: AuthorityPurpose,
 ): Promise<RequestContextResult & { owner?: OwnerRecord }> {
-  if (!isHostedMode()) return getRequestContext();
+  if (!isHostedMode()) {
+    const access = await getRequestContext();
+    // Authenticate before asking anything about the named study. Lifecycle
+    // DELETE/reconciliation do not use the read purpose and remain resumable.
+    if (!access.authorized || !access.context || purpose !== 'read') return access;
+    const status = await studyMutationReadiness(access.context.store, studyId);
+    if (status === 'ready' || status === 'missing') return access;
+    return {
+      ...access,
+      authorized: false,
+      context: null,
+      error: status === 'deleting' ? STUDY_DELETION_PENDING_MESSAGE : 'Study storage is temporarily unavailable.',
+      statusCode: status === 'deleting' ? 409 : 503,
+      retryable: true,
+      ...(status === 'deleting' ? { code: STUDY_DELETION_PENDING_CODE } : {}),
+    };
+  }
   const identity = await getHostedResearcherIdentity();
   if (!identity.authorized || !identity.researcherId) {
     return {
@@ -682,6 +699,9 @@ export async function getParticipantRequestContext(
       }
       throw err;
     }
+    const mutationStatus = await studyMutationReadiness(standaloneContext.store, auth.studyId);
+    if (mutationStatus === 'deleting' || mutationStatus === 'missing') return { valid: false, context: null, error: 'This study is no longer active.', statusCode: 404 };
+    if (mutationStatus !== 'ready') return { valid: false, context: null, error: 'Unable to verify study status. Please try again later.', statusCode: 503, retryable: true };
     const link = await standaloneContext.store.getParticipantLinkById({ linkId: auth.linkId, now: Date.now() });
     if (link.status === 'held') {
       // A held workspace is not a storage blip: only maintenance clears on

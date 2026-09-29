@@ -5,7 +5,7 @@
 
 import type * as Port from '../../src/lib/storage/types';
 import type { StoredInterview, StoredStudy } from '../../src/types';
-import { bumpMutationSeq, gate, type WorkspaceContext } from './context';
+import { bumpMutationSeq, gate, RECEIPT_TTL_MS, type WorkspaceContext } from './context';
 import { sha256Hex } from './participants';
 import {
   INTERVIEW_ID,
@@ -201,15 +201,12 @@ export async function clearSampleWorkspace(
           .exec<{ study_id: string }>(`SELECT study_id FROM interviews WHERE id = ?`, interviewId)
           .one().study_id;
         touchedStudies.add(owner);
-        ws.sql.exec(
-          `UPDATE analysis_jobs
-              SET state = 'cancelled', next_due_at = NULL, claim_nonce = NULL, claim_expires_at = NULL,
-                  terminal_at = ?, updated_at = ?
-            WHERE interview_id = ? AND state IN ('pending','claimed','started')`,
-          now,
-          now,
-          interviewId,
-        );
+        // Remove frozen provider inputs as well as the interview; late queue
+        // delivery/settlement sees parent absence or the deletion fence.
+        ws.sql.exec(`DELETE FROM analysis_jobs WHERE interview_id = ?`, interviewId);
+        ws.sql.exec(`DELETE FROM budget_members WHERE member = ?`, interviewId);
+        ws.sql.exec(`UPDATE idempotency_receipts SET disposition = 'deleted', result_json = NULL
+          WHERE operation_family = 'analysis-retry' AND target_id = ?`, interviewId);
         ws.sql.exec(`DELETE FROM analysis WHERE interview_id = ?`, interviewId);
         ws.sql.exec(`DELETE FROM interviews WHERE id = ?`, interviewId);
         writeFence(ws, 'interview', interviewId, now, true);
@@ -220,6 +217,10 @@ export async function clearSampleWorkspace(
         ws.sql.exec(`DELETE FROM aggregates WHERE study_id = ?`, studyId);
         ws.sql.exec(`DELETE FROM participant_links WHERE study_id = ?`, studyId);
         ws.sql.exec(`DELETE FROM consents WHERE study_id = ?`, studyId);
+        ws.sql.exec(`DELETE FROM exploration_answers WHERE study_id = ?`, studyId);
+        ws.sql.exec(`UPDATE idempotency_receipts SET disposition = 'deleted', result_json = NULL
+          WHERE operation_family IN ('exploration', 'study-create') AND target_id = ?`, studyId);
+        ws.sql.exec(`UPDATE idempotency_receipts SET expires_at = ? WHERE operation_family = 'exploration' AND target_id = ?`, now + RECEIPT_TTL_MS, studyId);
         writeFence(ws, 'study', studyId, now, true);
       }
       // A surviving study that lost fixture interviews keeps a derived count.

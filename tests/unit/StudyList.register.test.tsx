@@ -100,7 +100,7 @@ describe('StudyList register table', () => {
     expect(document.activeElement).toBe(rowAButton);
   });
 
-  it('ST-08: shows list items (no configuration) and edits from the full study it reads', async () => {
+  it('opens an explicit edit URL without relying on a consumed session prefill', async () => {
     const study = makeStoredStudy({
       config: makeStudyConfig({ name: 'Study Alpha', coreQuestions: ['One?', 'Two?', 'Three?'] }),
     });
@@ -116,8 +116,8 @@ describe('StudyList register table', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open actions for Study Alpha' }));
     fireEvent.click(screen.getByRole('button', { name: 'Edit & Generate Link' }));
     await waitFor(() => expect(router.push).toHaveBeenCalledWith(`/setup?prefill=edit&studyId=${study.id}`));
-    expect(storageMock.readStudy).toHaveBeenCalledWith(study.id);
-    expect(JSON.parse(sessionStorage.getItem('prefillStudyConfig')!)).toEqual(JSON.parse(JSON.stringify(study.config)));
+    expect(storageMock.readStudy).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem('prefillStudyConfig')).toBeNull();
   });
 
   it('ST-08: whole studies from a server that ignores ?view=summary still render their question count', async () => {
@@ -139,22 +139,26 @@ describe('StudyList register table', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/studies?view=summary');
   });
 
-  it('ST-08: a study that cannot be read is not opened for editing', async () => {
-    const study = makeStoredStudy({ config: makeStudyConfig({ name: 'Study Alpha' }) });
+  it('populated deletion opens the study Settings danger zone without a delete request', async () => {
+    const study = makeStoredStudy({ config: makeStudyConfig({ name: 'Study Alpha' }), interviewCount: 3 });
     storageMock.getAllStudies.mockResolvedValue({ studies: [toStudyListItem(study)], outcome: { status: 'ok' } });
-    storageMock.readStudy.mockResolvedValue({
-      status: 'unavailable', error: 'Study storage is temporarily unavailable.', retryable: true,
-    });
-    const alert = vi.spyOn(window, 'alert').mockImplementation(() => {});
-    sessionStorage.clear();
-
     render(<StudyList />);
     await screen.findByRole('table');
     fireEvent.click(screen.getByRole('button', { name: 'Open actions for Study Alpha' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Edit & Generate Link' }));
-    await waitFor(() => expect(alert).toHaveBeenCalledWith('Study storage is temporarily unavailable.'));
-    expect(router.push).not.toHaveBeenCalled();
-    expect(sessionStorage.getItem('prefillStudyConfig')).toBeNull();
-    alert.mockRestore();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(router.push).toHaveBeenCalledWith(`/studies/${study.id}?tab=settings#danger-zone`);
+    expect(storageMock.deleteStudy).not.toHaveBeenCalled();
+  });
+
+  it('duplicates through an explicit new-study intent without reading or mutating source records', async () => {
+    const study = makeStoredStudy({ config: makeStudyConfig({ name: 'Study Alpha' }), interviewCount: 3 });
+    storageMock.getAllStudies.mockResolvedValue({ studies: [toStudyListItem(study)], outcome: { status: 'ok' } });
+    render(<StudyList />);
+    await screen.findByRole('table');
+    fireEvent.click(screen.getByRole('button', { name: 'Open actions for Study Alpha' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Duplicate as test study' }));
+    expect(router.push).toHaveBeenCalledWith(`/setup?prefill=duplicate&studyId=${study.id}`);
+    expect(storageMock.deleteStudy).not.toHaveBeenCalled();
+    expect(storageMock.readStudy).not.toHaveBeenCalled();
   });
 });

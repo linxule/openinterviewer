@@ -1,3 +1,4 @@
+import type { ExplorationProviderInput, ExplorationProviderPayload } from '../exploration/types';
 import {
   Output,
   gateway,
@@ -7,11 +8,14 @@ import {
 } from 'ai';
 import type {
   AIProvider,
+  ProviderExecutionPolicy,
   ProviderResult,
 } from '../ai';
 import { buildInterviewSystemPrompt } from '../ai';
 import {
   buildAggregateSynthesisPrompt,
+  buildExplorationPrompt,
+  explorationSystemPrompt,
   buildGreetingPrompt,
   buildSynthesisPrompt,
 } from '../prompts';
@@ -34,6 +38,7 @@ import {
 } from '../providerErrors';
 import {
   validateAggregateSynthesisPayload,
+  validateExplorationPayload,
   validateFollowupStudy,
   validateInterviewResponse,
   validateSynthesisResult,
@@ -41,6 +46,7 @@ import {
 } from '../providerValidation';
 import {
   aggregateSynthesisResponseSchema,
+  explorationResponseSchema,
   followupStudyResponseSchema,
   interviewResponseSchema,
   synthesisResponseSchema,
@@ -49,6 +55,7 @@ import {
 import {
   buildFollowupPrompt,
   execution,
+  explorationPolicy,
   formatInterviewHistory,
   GREETING_DEADLINE_MS,
   INTERVIEW_DEADLINE_MS,
@@ -263,6 +270,28 @@ export class GatewayProvider implements AIProvider {
         response.responseModel,
         gatewayRouteForProvider(this.provider),
       ),
+    );
+  }
+
+  async exploreStudy(
+    input: ExplorationProviderInput,
+    policy?: ProviderExecutionPolicy,
+  ): Promise<ProviderResult<ExplorationProviderPayload>> {
+    const attemptPolicy = explorationPolicy(policy);
+    const requestedModel = resolveSynthesisModel(input.studyConfig);
+    const response = await this.createStructured({
+      model: requestedModel,
+      prompt: buildExplorationPrompt(input),
+      system: explorationSystemPrompt,
+      schema: explorationResponseSchema,
+      validate: validateExplorationPayload,
+      maxOutputTokens: 12_000,
+      deadlineMs: attemptPolicy.deadlineMs,
+      operation: 'exploration',
+    });
+    return providerResult(
+      response.value,
+      execution(this.provider, response.gatewayModel, response.responseModel, gatewayRouteForProvider(this.provider)),
     );
   }
 

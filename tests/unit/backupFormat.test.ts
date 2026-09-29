@@ -79,7 +79,22 @@ async function rechecksum(line: string, mutate: (record: Record<string, unknown>
   return JSON.stringify(record);
 }
 
-describe('operational backup format v1 (OPS-02, ST-10)', () => {
+describe('operational backup format v2 and legacy v1 (OPS-02, ST-10)', () => {
+  it('accepts a complete legacy v1/schema1 backup but never permits newer data to omit notebooks', async () => {
+    const { records } = await buildBackup();
+    const manifest = records.find(record => record.kind === 'manifest');
+    if (!manifest || manifest.kind !== 'manifest') throw new Error('missing fixture manifest');
+    const legacy = { ...manifest.manifest, formatVersion: 1 as const, schemaVersion: 1,
+      families: manifest.manifest.families.filter(family => family.name !== 'exploration_answers') };
+    const chunks = records.filter(record => record.kind === 'chunk');
+    const lines = [...chunks, { kind: 'manifest' as const, manifest: legacy },
+      { kind: 'trailer' as const, complete: true as const, manifestSha256: await backupManifestDigest(legacy) }].map(encodeBackupRecord);
+    expect(await validateBackupLines(lines)).toMatchObject({ status: 'valid', manifest: { formatVersion: 1, schemaVersion: 1 } });
+    const unsafe = { ...legacy, schemaVersion: 2 };
+    const invalid = [...chunks, { kind: 'manifest' as const, manifest: unsafe },
+      { kind: 'trailer' as const, complete: true as const, manifestSha256: await backupManifestDigest(unsafe) }].map(encodeBackupRecord);
+    expect(await validateBackupLines(invalid)).toMatchObject({ status: 'rejected', errorClass: 'manifest-invalid' });
+  });
   it('OPS-02: canonical JSON sorts keys at every depth and drops no values', () => {
     expect(canonicalJson({ b: 1, a: [{ d: null, c: 'x' }], e: {} })).toBe('{"a":[{"c":"x","d":null}],"b":1,"e":{}}');
     expect(canonicalJson([])).toBe('[]');
@@ -223,7 +238,7 @@ describe('operational backup format v1 (OPS-02, ST-10)', () => {
   it('OPS-02: the family list is closed and carries no secret, session or credential columns', () => {
     expect(BACKUP_FAMILY_NAMES).toEqual([
       'workspace_meta', 'studies', 'interviews', 'analysis', 'analysis_jobs', 'aggregates',
-      'participant_links', 'consents', 'idempotency_receipts', 'budget_windows', 'budget_members', 'deletion_fences',
+      'participant_links', 'consents', 'idempotency_receipts', 'budget_windows', 'budget_members', 'deletion_fences', 'exploration_answers',
     ]);
     const columns = BACKUP_FAMILIES.flatMap((family) => family.columns.map((column) => column.name));
     for (const column of columns) {

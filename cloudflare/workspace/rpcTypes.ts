@@ -11,6 +11,7 @@ import type {
 } from '../../src/types';
 import type { ParticipantLinkRecord } from '../../src/lib/participantLinks';
 import type { BackupImportManifest } from '../../src/lib/backup/format';
+import type { ExplorationAnswer } from '../../src/lib/exploration/types';
 import type {
   AggregateInputsPurpose,
   LoginBudgetAdmitOutcome,
@@ -35,7 +36,7 @@ export type ReplaceStudyConfigInput = {
 };
 
 export type SetLinksEnabledInput = { studyId: string; enabled: boolean; now: number };
-export type DeleteStudyInput = { studyId: string; now: number };
+export type DeleteStudyInput = { studyId: string; now: number; deleteInterviews?: boolean; expectedRevision?: number };
 
 /**
  * The raw link code never reaches the object: the caller mints it, sends only
@@ -111,7 +112,7 @@ export type AnalysisStatusInput = { studyId: string; interviewId: string };
 
 // ---------- Researcher export ----------
 
-export type BeginExportInput = { maximum: number };
+export type BeginExportInput = { maximum: number; studyId?: string };
 
 export type BeginExportOutcome =
   | { status: 'ok'; sequence: number; count: number; studyIds: string[] }
@@ -120,6 +121,7 @@ export type BeginExportOutcome =
   | { status: 'unavailable' };
 
 export type ExportPageInput = {
+  studyId?: string;
   sequence: number;
   /** Keyset cursor over (created_at DESC, id DESC); null for the first page. */
   cursor: string | null;
@@ -128,11 +130,11 @@ export type ExportPageInput = {
 };
 
 export type ExportPageOutcome =
-  | { status: 'ok'; interviews: StoredInterview[]; aggregates: StoredAggregateSynthesis[]; nextCursor: string | null }
+  | { status: 'ok'; interviews: StoredInterview[]; aggregates: StoredAggregateSynthesis[]; explorations?: ExplorationAnswer[]; nextCursor: string | null }
   | { status: 'changed' }
   | { status: 'unavailable' };
 
-export type ExportSequenceInput = { sequence: number };
+export type ExportSequenceInput = { sequence: number; studyId?: string };
 export type ExportSequenceOutcome = { status: 'unchanged' } | { status: 'changed' } | { status: 'unavailable' };
 
 // ---------- Operator ----------
@@ -164,7 +166,7 @@ export type MaintenanceTransitionOutcome =
   | { status: 'transitioned'; state: MaintenanceState; version: number }
   | { status: 'already'; state: MaintenanceState; version: number }
   | { status: 'conflict'; state: MaintenanceState; version: number }
-  | { status: 'in-flight'; claimed: number; started: number }
+  | { status: 'in-flight'; claimed: number; started: number; explorations?: number }
   | { status: 'invalid-transition' }
   | { status: 'held'; reason: WorkspaceHoldReason }
   | { status: 'unavailable' };

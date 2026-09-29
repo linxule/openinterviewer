@@ -5,6 +5,7 @@ import { useStore } from '@/store';
 import { useRouter, usePathname } from 'next/navigation';
 import { Disclosure } from '@/components/ui';
 import NavigationStatus from '@/components/NavigationStatus';
+import { previewSetupDestination } from '@/lib/previewSetupDestination';
 
 // Mount only after the outgoing page has unmounted. Its async cleanup must
 // run before the shared session is cleared, including an in-flight greeting.
@@ -15,10 +16,11 @@ function PreviewExit() {
     if (started.current) return;
     started.current = true;
     const store = useStore.getState();
+    const destination = previewSetupDestination(store.studyConfig?.id);
     store.resetParticipant();
     store.setViewMode('researcher');
     store.setStep('setup');
-    router.push('/setup');
+    router.push(destination);
   }, [router]);
   return <NavigationStatus>Returning to study setup…</NavigationStatus>;
 }

@@ -118,6 +118,7 @@ async function finishThenDeletePendingStudy(
   studyId: string,
   markerId: string,
   kvClient: RedisPort,
+  confirmation?: { deleteInterviews?: true; expectedRevision?: number },
 ): Promise<'mutation-applied' | 'mutation-cancelled' | 'unavailable' | 'still-pending'> {
   let members: unknown;
   try {
@@ -144,7 +145,7 @@ async function finishThenDeletePendingStudy(
     }
   }
 
-  const deleted = await deleteStudy(studyId, kvClient, markerId);
+  const deleted = await deleteStudy(studyId, kvClient, markerId, ...(confirmation ? [confirmation] as const : []));
   if (deleted.status === 'deleted' || deleted.status === 'not-found') return 'mutation-applied';
   if (deleted.status === 'still-pending') return 'still-pending';
   if (deleted.status === 'conflict' || deleted.status === 'cancelled') return 'mutation-cancelled';
@@ -370,7 +371,9 @@ export async function reconcilePendingStudyOperations(
           break;
         }
         const mutation = operation.kind === 'delete'
-          ? await finishThenDeletePendingStudy(operation.studyId, markerId, kvClient)
+          ? await finishThenDeletePendingStudy(operation.studyId, markerId, kvClient,
+            operation.deleteInterviews === true || operation.expectedRevision !== undefined
+              ? { deleteInterviews: operation.deleteInterviews, expectedRevision: operation.expectedRevision } : undefined)
           : await settleStudyOperationMutation(
             operation.kind,
             operation.studyId,

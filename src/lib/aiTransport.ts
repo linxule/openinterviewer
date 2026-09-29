@@ -46,6 +46,7 @@ export function isGatewayAuthConfigured(
 }
 
 const CLAUDE_GATEWAY_MODEL_ALIASES: Readonly<Record<string, string>> = {
+  'claude-sonnet-5-5': 'claude-sonnet-5.5',
   'claude-haiku-4-5': 'claude-haiku-4.5',
   'claude-sonnet-4-5': 'claude-sonnet-4.5',
   'claude-opus-4-5': 'claude-opus-4.5',

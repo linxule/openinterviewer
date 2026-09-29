@@ -12,6 +12,7 @@ export type HostedAiOperation =
   | 'interview'
   | 'synthesis'
   | 'aggregate'
+  | 'exploration'
   | 'followup'
   | 'analysis';
 
@@ -40,6 +41,11 @@ export const HOSTED_AI_RATE_LIMIT_POLICY: Record<HostedAiOperation, ScopePolicy>
     researcher: { maximum: 2_000, windowSeconds: 86_400 },
   },
   aggregate: {
+    session: { maximum: 20, windowSeconds: 3_600 },
+    network: { maximum: 100, windowSeconds: 3_600 },
+    researcher: { maximum: 100, windowSeconds: 86_400 },
+  },
+  exploration: {
     session: { maximum: 20, windowSeconds: 3_600 },
     network: { maximum: 100, windowSeconds: 3_600 },
     researcher: { maximum: 100, windowSeconds: 86_400 },

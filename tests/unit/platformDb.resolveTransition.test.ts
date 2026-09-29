@@ -123,6 +123,8 @@ describe('resolveStudyOperationV2 script contract', () => {
       `researcher-studies:${RESEARCHER}`,
       `study-op-receipt:${STUDY_ID}:1`,
       `study-op-receipts:${RESEARCHER}`,
+      `participant-links:${RESEARCHER}`,
+      `create-idemp-index:${RESEARCHER}`,
     ]);
   });
 });

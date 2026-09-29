@@ -12,6 +12,7 @@ import {
 import { DEFAULT_PROVIDER_COMMITMENT } from '@/lib/providerCommitment';
 import { DEFAULT_MODEL_BY_PROVIDER } from '@/lib/providerRegistry';
 import { defaultConsentText } from '@/lib/consentText';
+import { copyStudyConfiguration } from '@/lib/researcherStudyDraft';
 
 export interface StudyDraft {
   name: string; description: string; researchQuestion: string;
@@ -53,10 +54,12 @@ export interface StudyDraft {
   setIsDirty(value: boolean): void;
   hydratePrefill(config: Partial<StudyConfig>): void;   // not dirtying
   syncFromStudyConfig(config: StudyConfig): void;       // not dirtying
+  snapshotConfig(): StudyConfig; // raw form values, including unfinished rows
   buildConfig(mode: 'create' | 'update'): StudyConfig;
 }
 
 export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
+  const [baseConfig, setBaseConfig] = useState(studyConfig);
   const [name, setNameState] = useState(studyConfig?.name || '');
   const [description, setDescriptionState] = useState(studyConfig?.description || '');
   const [researchQuestion, setResearchQuestionState] = useState(studyConfig?.researchQuestion || '');
@@ -94,7 +97,7 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
   const [thankYouText, setThankYouTextState] = useState(studyConfig?.thankYouText ?? '');
   const [interviewerInstructions, setInterviewerInstructionsState] = useState(studyConfig?.interviewerInstructions ?? '');
 
-  const [savedStudyId, setSavedStudyId] = useState<string | null>(null);
+  const [savedStudyId, setSavedStudyId] = useState<string | null>(studyConfig?.id ?? null);
   const [parentStudyInfo, setParentStudyInfo] = useState<{ id: string; name: string } | null>(null);
   const [isDirty, setIsDirty] = useState(false);
 
@@ -187,29 +190,11 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
   };
 
   const hydratePrefill = (config: Partial<StudyConfig>) => {
-    if (config.name) setNameState(config.name);
-    if (config.description) setDescriptionState(config.description);
-    if (config.researchQuestion) setResearchQuestionState(config.researchQuestion);
-    if (config.coreQuestions?.length) setCoreQuestions(config.coreQuestions);
-    if (config.topicAreas?.length) setTopicAreas(config.topicAreas);
-    if (config.profileSchema?.length) setProfileSchema(config.profileSchema);
-    if (config.aiBehavior) setAiBehaviorState(config.aiBehavior);
-    if (config.aiProvider) {
-      setAiProvider(config.aiProvider);
-      setAiModelState(config.aiModel || DEFAULT_MODEL_BY_PROVIDER[config.aiProvider]);
-    } else if (config.aiModel) {
-      setAiModelState(config.aiModel);
-    }
-    if (config.aiProviderCommitment) setAiProviderCommitmentState(config.aiProviderCommitment);
-    if (config.enableReasoning !== undefined) setEnableReasoningState(config.enableReasoning);
-    if (config.linkExpiration) setLinkExpirationState(config.linkExpiration);
-    if (config.consentText) setConsentTextState(config.consentText);
-    if (config.researcherContact) setResearcherContactState(config.researcherContact);
-    if (config.thankYouText) setThankYouTextState(config.thankYouText);
-    if (config.interviewerInstructions) setInterviewerInstructionsState(config.interviewerInstructions);
+    syncFromStudyConfig(copyStudyConfiguration(config));
   };
 
   const syncFromStudyConfig = (config: StudyConfig) => {
+    setBaseConfig(config);
     setNameState(config.name);
     setDescriptionState(config.description);
     setResearchQuestionState(config.researchQuestion);
@@ -230,7 +215,7 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
   };
 
   const buildConfig = (mode: 'create' | 'update'): StudyConfig => ({
-    id: savedStudyId || studyConfig?.id || `study-${Date.now()}`,
+    id: mode === 'update' && savedStudyId ? savedStudyId : `study-${Date.now()}`,
     name: name || 'Untitled Study',
     description,
     researchQuestion,
@@ -243,9 +228,9 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
     aiProviderCommitment,
     enableReasoning: aiProvider === 'gemini' ? enableReasoning : undefined,
     linkExpiration,
-    linksEnabled: studyConfig?.linksEnabled ?? true,
+    linksEnabled: mode === 'update' ? baseConfig?.linksEnabled ?? true : true,
     consentText: consentText.trim() || defaultConsentText(researchQuestion),
-    createdAt: studyConfig?.createdAt || Date.now(),
+    createdAt: mode === 'update' ? baseConfig?.createdAt || Date.now() : Date.now(),
     ...(researcherContact.trim() ? { researcherContact: researcherContact.trim() } : {}),
     // Deliberately not defaulted here, unlike consentText one line up: the
     // fallback text is applied at render time instead, not frozen into the
@@ -253,12 +238,24 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
     // every study that never overrode it (P12.3).
     ...(mode === 'update' || thankYouText.trim() ? { thankYouText: thankYouText.trim() } : {}),
     ...(mode === 'update' || interviewerInstructions.trim() ? { interviewerInstructions: interviewerInstructions.trim() } : {}),
+    // An edit is not a new lineage: retain its source metadata unchanged.
+    ...(mode === 'update' && baseConfig?.parentStudyId ? {
+      parentStudyId: baseConfig.parentStudyId,
+      ...(baseConfig.parentStudyName ? { parentStudyName: baseConfig.parentStudyName } : {}),
+      ...(baseConfig.generatedFrom ? { generatedFrom: baseConfig.generatedFrom } : {}),
+    } : {}),
     // Include parent study info if this is a follow-up
     ...(parentStudyInfo && {
       parentStudyId: parentStudyInfo.id,
       parentStudyName: parentStudyInfo.name,
       generatedFrom: 'synthesis' as const
     })
+  });
+
+  const snapshotConfig = (): StudyConfig => ({
+    ...buildConfig(savedStudyId ? 'update' : 'create'),
+    name, consentText, researcherContact, thankYouText, interviewerInstructions,
+    coreQuestions, topicAreas, profileSchema,
   });
 
   return {
@@ -280,6 +277,6 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
     addProfileField, removeProfileField, updateProfileField, toggleFieldRequired,
 
     setSavedStudyId, setParentStudyInfo, setIsDirty,
-    hydratePrefill, syncFromStudyConfig, buildConfig,
+    hydratePrefill, syncFromStudyConfig, buildConfig, snapshotConfig,
   };
 }

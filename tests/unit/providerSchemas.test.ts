@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   aggregateSynthesisResponseSchema,
+  explorationResponseSchema,
   followupStudyResponseSchema,
   interviewResponseSchema,
   synthesisResponseSchema,
@@ -25,6 +26,7 @@ describe('provider-neutral structured output schemas', () => {
       interviewResponseSchema,
       synthesisResponseSchema,
       aggregateSynthesisResponseSchema,
+      explorationResponseSchema,
       followupStudyResponseSchema,
     ]) {
       expectStrictObjects(schema);

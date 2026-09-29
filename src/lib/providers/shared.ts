@@ -3,6 +3,7 @@ import type { AIProviderType, AggregateSynthesisProviderPayload, AggregateSynthe
 import type { FollowupStudy } from '../providerValidation';
 import type { EffectiveTransport } from './endpoint';
 import { ProviderFailure } from '../providerErrors';
+import { EXPLORATION_ATTEMPT_DEADLINE_MS } from '../exploration/types';
 
 export const GREETING_DEADLINE_MS = 30_000;
 export const INTERVIEW_DEADLINE_MS = 60_000;
@@ -18,7 +19,7 @@ export function isQueuedSynthesis(
 
 /**
  * Whether a provider call must be one HTTP attempt with no SDK retry: queued
- * synthesis (JOB-09) and every call on the Cloudflare AI Gateway transport
+ * synthesis (JOB-09), study exploration and every call on the Cloudflare AI Gateway transport
  * (RT-11, like the Vercel gateway adapter). Direct interactive calls keep the
  * SDK defaults.
  */
@@ -26,7 +27,23 @@ export function singleAttempt(
   transport: EffectiveTransport,
   policy?: ProviderExecutionPolicy,
 ): boolean {
-  return transport === 'cloudflare-gateway' || isQueuedSynthesis(policy);
+  return transport === 'cloudflare-gateway' || isQueuedSynthesis(policy) || policy?.kind === 'exploration';
+}
+
+/** Exploration always has one attempt, even if callers omit the policy. */
+export function explorationPolicy(
+  policy?: ProviderExecutionPolicy,
+): Extract<ProviderExecutionPolicy, { kind: 'exploration' }> {
+  if (policy?.kind === 'queued-synthesis') {
+    throw new Error('Exploration requires its own execution policy');
+  }
+  const deadlineMs = policy?.kind === 'exploration'
+    ? policy.deadlineMs
+    : EXPLORATION_ATTEMPT_DEADLINE_MS;
+  if (!Number.isSafeInteger(deadlineMs) || deadlineMs <= 0) {
+    throw new Error('Exploration requires a positive integer deadline');
+  }
+  return { kind: 'exploration', deadlineMs: Math.min(deadlineMs, EXPLORATION_ATTEMPT_DEADLINE_MS) };
 }
 
 /** The synthesis deadline for a policy; a queued deadline never exceeds the default. */

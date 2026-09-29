@@ -139,7 +139,7 @@ beforeEach(() => {
 async function generateAggregate() {
   renderStudyDetail('study-aggregate');
   await screen.findByRole('heading', { name: 'Aggregate Study' });
-  fireEvent.click(screen.getByRole('button', { name: 'Analyze All Interviews' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Analyze selected interviews' }));
   return screen.findByText('The aggregate bottom line.');
 }
 
@@ -203,7 +203,7 @@ describe('StudyDetail aggregate reading', () => {
     expect(footer.textContent).not.toMatch(/receipt/i);
     expect(footer.textContent).not.toMatch(/unsigned/i);
     expect(footer.textContent).not.toMatch(/not saved/);
-    expect(screen.getByRole('button', { name: 'Re-analyze All Interviews' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Re-analyze selected interviews' })).toBeInTheDocument();
   });
 
   it('appends "covers N of M interviews" when a stored aggregate covers fewer than the eligible set', async () => {

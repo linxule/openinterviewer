@@ -21,6 +21,8 @@ import type { PersistRatePlanRow } from './rateLimit';
 import { logRequestFailure } from './requestLog';
 import { STUDY_JSON_LUA } from './studyJsonLua';
 import type { SynthesisProvenance } from './synthesisProvenance';
+import { DELETE_POPULATED_STUDY_SCRIPT, STUDY_AUXILIARY_PURGE_LUA } from './storage/redisStudyPurge';
+import { isDatasetManifest } from './exploration/validation';
 
 // Key prefixes for organizing data
 const INTERVIEW_PREFIX = 'interview:';
@@ -338,7 +340,7 @@ local study, _prefixed = decode_study(redis.call('GET', KEYS[5]))
 if not study then
   return {'oi:persist-not-found'}
 end
-if ARGV[6] ~= '1' and study.config and study.config.linksEnabled == false then
+if study.config and study.config.linksEnabled == false then
   return {'oi:persist-links'}
 end
 if (tonumber(study.revision) or 1) ~= tonumber(ARGV[5]) then
@@ -361,8 +363,8 @@ if existingGuard then
     or existingGuard.studyId ~= study.id
     or existingGuard.deploymentMode ~= mode
     or tostring(existingGuard.expectedRevision) ~= ARGV[5]
-    or (existingGuard.identity and existingGuard.identity.participantSessionId or '') ~= ARGV[8]
-    or (existingGuard.identity and existingGuard.identity.linkId or '') ~= ARGV[9]
+    or (existingGuard.identity and type(existingGuard.identity.participantSessionId) == 'string' and existingGuard.identity.participantSessionId or '') ~= ARGV[8]
+    or (existingGuard.identity and type(existingGuard.identity.linkId) == 'string' and existingGuard.identity.linkId or '') ~= ARGV[9]
   then
     return {'oi:persist-conflict'}
   end
@@ -480,8 +482,8 @@ if guard.interviewId ~= ARGV[2]
   or guard.fingerprint ~= requestFp
   or guard.deploymentMode ~= mode
   or tostring(guard.expectedRevision) ~= ARGV[3]
-  or (guard.identity and guard.identity.participantSessionId or '') ~= ARGV[5]
-  or (guard.identity and guard.identity.linkId or '') ~= ARGV[6]
+  or (guard.identity and type(guard.identity.participantSessionId) == 'string' and guard.identity.participantSessionId or '') ~= ARGV[5]
+  or (guard.identity and type(guard.identity.linkId) == 'string' and guard.identity.linkId or '') ~= ARGV[6]
 then
   -- fault cut persist-conflict
   return {'oi:persist-conflict'}
@@ -703,6 +705,9 @@ end
 if type(interview.studyId) ~= 'string' or type(interview.createdAt) ~= 'number' or type(interview.completedAt) ~= 'number' then
   return {'oi:analysis-corrupt'}
 end
+if #interview.studyId < 1 or #interview.studyId > 128 or not string.match(interview.studyId, '^[A-Za-z0-9_-]+$') then
+  return {'oi:analysis-corrupt'}
+end
 
 local op = ARGV[1]
 local nowMs = tonumber(ARGV[3])
@@ -716,6 +721,7 @@ local state = nil
 if analysisRaw and analysisRaw ~= 'null' then
   local dok, decoded = pcall(cjson.decode, analysisRaw)
   if dok and type(decoded) == 'table' then state = decoded end
+  if not state then return {'oi:analysis-corrupt'} end
 end
 
 local effectiveStatus
@@ -724,15 +730,36 @@ local effectiveClaimedAt
 local attempts = 0
 if state then
   effectiveStatus = state.status
+  if effectiveStatus ~= 'pending' and effectiveStatus ~= 'running' and effectiveStatus ~= 'failed' and effectiveStatus ~= 'complete' then
+    return {'oi:analysis-corrupt'}
+  end
   effectiveClaimId = state.claimId
   effectiveClaimedAt = tonumber(state.claimedAt)
   attempts = state.attempts
   if type(attempts) ~= 'number' or attempts < 0 or attempts > 9007199254740991 or attempts ~= math.floor(attempts) then
     return {'oi:analysis-corrupt'}
   end
+  if effectiveStatus == 'running' and type(state.lastAttemptAt) ~= 'number' then return {'oi:analysis-corrupt'} end
 else
   local synthesisRaw = json_object_value(body, 'synthesis')
   effectiveStatus = (synthesisRaw and synthesisRaw ~= 'null') and 'complete' or 'pending'
+end
+
+-- Resolve the parent from validated stored identity, not a caller's study id.
+-- A bounded deletion may leave this row readable until its next purge pass;
+-- neither a new paid attempt nor a late result may cross that tombstone.
+local parentRaw = redis.call('GET', 'study:' .. interview.studyId)
+if not parentRaw then return {'oi:analysis-unavailable'} end
+local parentBody = string.sub(parentRaw, 1, 9) == 'oi:study:' and string.sub(parentRaw, 10) or parentRaw
+local pok, parent = pcall(cjson.decode, parentBody)
+if not pok or type(parent) ~= 'table' or parent.id ~= interview.studyId then return {'oi:analysis-unavailable'} end
+local guardRaw = redis.call('GET', 'study-mutation-guard:' .. interview.studyId)
+if guardRaw then
+  if string.sub(guardRaw, 1, 7) ~= 'oi:smg:' then return {'oi:analysis-unavailable'} end
+  local gok, guard = pcall(cjson.decode, string.sub(guardRaw, 8))
+  if not gok or type(guard) ~= 'table' or guard.studyId ~= interview.studyId or guard.state ~= 'created' then
+    return {'oi:analysis-unavailable'}
+  end
 end
 
 if op == 'claim' then
@@ -1069,13 +1096,19 @@ export async function clearSampleWorkspaceRecords(
   let wrote = false;
   try {
     for (const studyId of input.studyIds) {
-      await client.del(`${STUDY_PREFIX}${studyId}`);
+      const deletion = await deleteStudy(studyId, client, undefined, { deleteInterviews: true });
+      if (deletion.status !== 'deleted') {
+        return { status: deletion.status === 'unavailable' && !wrote ? 'unavailable' : 'ambiguous' };
+      }
       wrote = true;
-      await client.srem(ALL_STUDIES_KEY, studyId);
-      await client.del(`${STUDY_AGGREGATE_PREFIX}${studyId}`);
+      // Sample identities are intentionally reusable on reseed. Their
+      // maintenance-only terminal receipt must not mask a later clear.
+      const marker = standaloneDeleteMarkerId(studyId);
+      if (marker) await client.del(receiptKey(marker));
     }
     for (const interviewId of input.interviewIds) {
       await client.del(`${INTERVIEW_PREFIX}${interviewId}`);
+      await client.del(`interview-fingerprint:${interviewId}`, `${INTERVIEW_PERSISTING_PREFIX}${interviewId}`);
       wrote = true;
       for (const studyId of input.studyIds) {
         await client.srem(`${STUDY_INDEX_PREFIX}${studyId}`, interviewId);
@@ -1147,6 +1180,9 @@ export interface StudyMutationGuard {
   generation: number;
   state: 'in-flight' | 'cancelled' | 'deleted' | 'created';
   markerId: string;
+  /** A confirmed purge remains authorized when the hosted reconciler resumes it. */
+  deleteInterviews?: true;
+  expectedRevision?: number;
 }
 
 export const RECEIPT_TTL_SECONDS = 604_800;
@@ -1233,6 +1269,9 @@ export function parseMutationGuard(value: unknown): StudyMutationGuard | null {
     return null;
   }
   if (typeof payload.markerId !== 'string' || payload.markerId.length === 0) return null;
+  if (payload.deleteInterviews !== undefined && payload.deleteInterviews !== true) return null;
+  if (payload.expectedRevision !== undefined && (!Number.isSafeInteger(payload.expectedRevision)
+    || (payload.expectedRevision as number) < 1 || (payload.expectedRevision as number) > MAX_STUDY_REVISION)) return null;
   return {
     version: 2,
     studyId: payload.studyId,
@@ -1240,6 +1279,8 @@ export function parseMutationGuard(value: unknown): StudyMutationGuard | null {
     generation: payload.generation as number,
     state: payload.state,
     markerId: payload.markerId,
+    ...(payload.deleteInterviews === true ? { deleteInterviews: true as const } : {}),
+    ...(payload.expectedRevision !== undefined ? { expectedRevision: payload.expectedRevision as number } : {}),
   };
 }
 
@@ -1564,13 +1605,13 @@ end
 export const SET_STUDY_LINKS_SCRIPT = `${STUDY_CAS_LUA}
 local study, prefixed, studyJson = decode_study(redis.call('GET', KEYS[1]))
 if not study then return {'oi:not-found'} end
-local nextRev = (tonumber(study.revision) or 1) + 1
-if nextRev > 99999999999999 then return {'oi:invalid'} end
+if (study.config.linksEnabled ~= false) == (ARGV[1] == '1') then
+  return {'oi:updated', 'oi:json:' .. studyJson}
+end
 local configJson = study.config and json_object_value(studyJson, 'config') or '{}'
 local updatedJson = patch_json_object(studyJson, {
   {'config', patch_json_object(configJson, {{'linksEnabled', ARGV[1] == '1' and 'true' or 'false'}})},
-  {'updatedAt', ARGV[2]},
-  {'revision', string.format('%.0f', nextRev)}
+  {'updatedAt', ARGV[2]}
 })
 redis.call('SET', KEYS[1], encode_study(updatedJson, prefixed))
 return {'oi:updated', 'oi:json:' .. updatedJson}
@@ -1606,10 +1647,33 @@ if (tonumber(study.revision) or 1) ~= tonumber(ARGV[1]) then
 end
 local cok, config = pcall(cjson.decode, ARGV[2])
 if not cok or type(config) ~= 'table' then return {'oi:invalid'} end
+local function equal(a, b)
+  if type(a) ~= type(b) then return false end
+  if type(a) ~= 'table' then return a == b end
+  for k, v in pairs(a) do if not equal(v, b[k]) then return false end end
+  for k, _ in pairs(b) do if a[k] == nil then return false end end
+  return true
+end
+-- Identity timestamps are server-owned. Missing linksEnabled historically
+-- means true; every other absent vs explicit value remains significant.
+local current = study.config
+if type(current) ~= 'table' then return {'oi:invalid'} end
+config.id = current.id
+config.createdAt = current.createdAt
+local currentEnabled = current.linksEnabled
+current.linksEnabled = currentEnabled ~= false
+config.linksEnabled = currentEnabled ~= false
+if equal(current, config) then return {'oi:updated', 'oi:json:' .. studyJson} end
+local currentConfigJson = json_object_value(studyJson, 'config')
+local nextConfigJson = patch_json_object(ARGV[2], {
+  {'linksEnabled', currentEnabled ~= false and 'true' or 'false'},
+  {'id', json_object_value(currentConfigJson, 'id')},
+  {'createdAt', json_object_value(currentConfigJson, 'createdAt')}
+})
 local nextRev = (tonumber(study.revision) or 1) + 1
 if nextRev > 99999999999999 then return {'oi:invalid'} end
 local updatedJson = patch_json_object(studyJson, {
-  {'config', ARGV[2]},
+  {'config', nextConfigJson},
   {'updatedAt', ARGV[3]},
   {'revision', string.format('%.0f', nextRev)}
 })
@@ -1653,6 +1717,34 @@ export type StudyLoadResult =
   | { status: 'found'; study: StoredStudy }
   | { status: 'not-found' }
   | { status: 'unavailable' };
+
+/** Identifier-only lifecycle gate for participant authority and paid/export contexts. */
+export async function getStudyMutationStatus(
+  studyId: string,
+  client?: RedisPort,
+): Promise<'ready' | 'deleting' | 'missing' | 'unavailable'> {
+  if (!STUDY_ID_TOKEN.test(studyId)) return 'unavailable';
+  try {
+    const result = await resolveClient(client).eval(`
+local raw = redis.call('GET', KEYS[1])
+if not raw then return 'missing' end
+local payload = string.sub(raw, 1, 9) == 'oi:study:' and string.sub(raw, 10) or raw
+local ok, study = pcall(cjson.decode, payload)
+if not ok or type(study) ~= 'table' or study.id ~= ARGV[1] then return 'unavailable' end
+local rawGuard = redis.call('GET', KEYS[2])
+if not rawGuard then return 'ready' end
+if string.sub(rawGuard, 1, 7) ~= 'oi:smg:' then return 'unavailable' end
+local gok, guard = pcall(cjson.decode, string.sub(rawGuard, 8))
+if not gok or type(guard) ~= 'table' or guard.studyId ~= ARGV[1] then return 'unavailable' end
+if guard.state == 'created' and guard.kind == 'create' then return 'ready' end
+if guard.kind == 'delete' and (guard.state == 'in-flight' or guard.state == 'deleted') then return 'deleting' end
+return 'unavailable'`, [`study:${studyId}`, mutationGuardKey(studyId)], [studyId]);
+    return result === 'ready' || result === 'deleting' || result === 'missing' ? result : 'unavailable';
+  } catch (error) {
+    logRequestFailure({ event: 'kv.unavailable', operation: 'study-lifecycle' }, error);
+    return 'unavailable';
+  }
+}
 
 // Read a study, distinguishing "no such record" from "storage could not be read".
 export async function getStudyChecked(id: string, client?: RedisPort): Promise<StudyLoadResult> {
@@ -1701,6 +1793,9 @@ function decodeStoredAggregate(value: unknown, studyId: string): StoredAggregate
   if (!Array.isArray(rec.keyFindings) || !Array.isArray(rec.researchImplications)) return null;
   if (typeof rec.bottomLine !== 'string') return null;
   if (typeof rec.aiProvider !== 'string' || typeof rec.aiModel !== 'string') return null;
+  if (rec.scope !== undefined && (!isDatasetManifest(rec.scope) || rec.scope.studyId !== studyId
+    || rec.scope.selectedCount !== rec.interviewCount
+    || rec.scope.sources.some(source => !(rec.interviewIds as string[]).includes(source.interviewId)))) return null;
   return parsed.payload as unknown as StoredAggregateSynthesis;
 }
 
@@ -1736,11 +1831,36 @@ export async function getStudyAggregateChecked(
  */
 export const MAX_STORED_AGGREGATE_BYTES = 256_000;
 
-export type SaveAggregateResult = 'saved' | 'too-large' | 'unavailable';
+export type SaveAggregateResult = 'saved' | 'too-large' | 'unavailable' | 'study-not-found' | 'held';
 
-// Persist the aggregate synthesis for a study. One SET, no options, no TTL,
-// no Lua: a single-key SET of one string cannot leave a torn value. Latest
-// replaces; there is no history and no CAS (see slice-N-spec.md N12).
+export const SAVE_STUDY_AGGREGATE_SCRIPT = `
+local raw = redis.call('GET', KEYS[1])
+if not raw then return 'study-not-found' end
+local payload = string.sub(raw, 1, 9) == 'oi:study:' and string.sub(raw, 10) or raw
+local ok, study = pcall(cjson.decode, payload)
+if not ok or type(study) ~= 'table' or study.id ~= ARGV[2] then return 'unavailable' end
+if (tonumber(study.revision) or 1) ~= tonumber(ARGV[3]) then return 'unavailable' end
+local guardRaw = redis.call('GET', KEYS[2])
+if guardRaw then
+  if string.sub(guardRaw, 1, 7) ~= 'oi:smg:' then return 'unavailable' end
+  local gok, guard = pcall(cjson.decode, string.sub(guardRaw, 8))
+  if not gok or type(guard) ~= 'table' then return 'unavailable' end
+  if guard.state ~= 'created' then return 'held' end
+end
+local idsOk, ids = pcall(cjson.decode, ARGV[4])
+if not idsOk or type(ids) ~= 'table' or #ids > 1000 then return 'unavailable' end
+for _, id in ipairs(ids) do
+  local interviewRaw = redis.call('GET', 'interview:' .. id)
+  if not interviewRaw then return 'unavailable' end
+  local body = string.sub(interviewRaw, 1, 13) == 'oi:interview:' and string.sub(interviewRaw, 14) or interviewRaw
+  local iok, interview = pcall(cjson.decode, body)
+  if not iok or type(interview) ~= 'table' or interview.studyId ~= ARGV[2] or interview.id ~= id then return 'unavailable' end
+end
+redis.call('SET', KEYS[3], ARGV[1])
+return 'saved'
+`;
+
+// Latest replaces; the study existence/deletion fence and attach are atomic.
 export async function saveStudyAggregate(
   aggregate: StoredAggregateSynthesis,
   client?: RedisPort,
@@ -1748,10 +1868,13 @@ export async function saveStudyAggregate(
   if (!STUDY_ID_TOKEN.test(aggregate.studyId)) return 'unavailable';
   const value = encodeAggregateValue(aggregate);
   if (new TextEncoder().encode(value).byteLength > MAX_STORED_AGGREGATE_BYTES) return 'too-large';
+  if (!decodeStoredAggregate(value, aggregate.studyId) || aggregate.interviewIds.length > 1000) return 'unavailable';
   try {
     const kv = resolveClient(client);
-    await kv.set(`${STUDY_AGGREGATE_PREFIX}${aggregate.studyId}`, value);
-    return 'saved';
+    const outcome = await kv.eval(SAVE_STUDY_AGGREGATE_SCRIPT,
+      [`study:${aggregate.studyId}`, mutationGuardKey(aggregate.studyId), `${STUDY_AGGREGATE_PREFIX}${aggregate.studyId}`],
+      [value, aggregate.studyId, String(aggregate.studyRevision), JSON.stringify(aggregate.interviewIds)]);
+    return outcome === 'saved' || outcome === 'study-not-found' || outcome === 'held' ? outcome : 'unavailable';
   } catch (error) {
     logRequestFailure({ event: 'kv.unavailable' }, error);
     return 'unavailable';
@@ -1794,7 +1917,7 @@ export async function getAllStudiesChecked(
   }
 }
 
-export const DELETE_EMPTY_STUDY_SCRIPT = `
+export const DELETE_EMPTY_STUDY_SCRIPT = `${STUDY_AUXILIARY_PURGE_LUA}
 local function receipt_resolution(value)
   if type(value) ~= 'string' or string.sub(value, 1, 11) ~= 'oi:receipt:' then return nil end
   local ok, obj = pcall(cjson.decode, string.sub(value, 12))
@@ -1883,6 +2006,24 @@ elseif redis.call('SCARD', KEYS[6]) > 0 then
   return {'oi:still-pending'}
 end
 
+if redis.call('SCARD', KEYS[2]) > 0 then
+  -- Repair the legacy refused-delete leak, but never clear another operation.
+  cleanup_this_generation()
+  return {'oi:conflict', 'oi:revision:0'}
+end
+
+local studyRaw = redis.call('GET', KEYS[1])
+if ARGV[7] and ARGV[7] ~= '' and studyRaw then
+  local payload = string.sub(studyRaw, 1, 9) == 'oi:study:' and string.sub(studyRaw, 10) or studyRaw
+  local sok, study = pcall(cjson.decode, payload)
+  if not sok or type(study) ~= 'table' then return {'oi:byos-unavailable'} end
+  if (tonumber(study.revision) or 1) ~= tonumber(ARGV[7]) then
+    return {'oi:conflict', 'oi:revision:' .. string.format('%.0f', tonumber(study.revision) or 1)}
+  end
+end
+
+if not valid_auxiliary_types(ARGV[1], mode) then return {'oi:byos-unavailable'} end
+
 if mode == 'hosted' then
   redis.call('SET', KEYS[4], ARGV[4])
 else
@@ -1890,9 +2031,7 @@ else
 end
 -- fault cut D1: mutation guard written, study present
 
-if redis.call('SCARD', KEYS[2]) > 0 then
-  return {'oi:conflict', 'oi:revision:0'}
-end
+if not purge_auxiliary(ARGV[1], mode) then return {'oi:still-pending'} end
 
 -- The aggregate is a cache of a paid model call. Deleting it here means a
 -- refused delete (the study still has interviews) never destroys it, and the
@@ -1945,10 +2084,15 @@ function deleteResult(
 export async function deleteStudy(
   id: string,
   client?: RedisPort,
-  operationMarkerId?: string
+  operationMarkerId?: string,
+  options?: { deleteInterviews?: boolean; expectedRevision?: number }
 ): Promise<DeleteStudyResult> {
   const markerId = operationMarkerId || standaloneDeleteMarkerId(id);
   if (!markerId || !STUDY_ID_TOKEN.test(id)) {
+    return deleteResult('unavailable', 'Failed to delete study');
+  }
+  if (options?.expectedRevision !== undefined && (!Number.isSafeInteger(options.expectedRevision)
+    || options.expectedRevision < 1 || options.expectedRevision > MAX_STUDY_REVISION)) {
     return deleteResult('unavailable', 'Failed to delete study');
   }
 
@@ -1970,6 +2114,8 @@ export async function deleteStudy(
     generation: 1,
     state: 'in-flight',
     markerId,
+    ...(options?.deleteInterviews === true ? { deleteInterviews: true as const } : {}),
+    ...(options?.expectedRevision !== undefined ? { expectedRevision: options.expectedRevision } : {}),
   };
 
   try {
@@ -1978,6 +2124,13 @@ export async function deleteStudy(
     const hosted = resolvedMode.mode === 'hosted';
 
     const kv = resolveClient(client);
+    const pendingGuard = parseMutationGuard(await kv.get(mutationGuardKey(id)));
+    const resumingPurge = pendingGuard?.kind === 'delete' && pendingGuard.state === 'in-flight'
+      && pendingGuard.markerId === markerId && pendingGuard.deleteInterviews === true;
+    if (resumingPurge) {
+      guard.deleteInterviews = true;
+      guard.expectedRevision = pendingGuard.expectedRevision;
+    }
     const existing = await kv.get(receiptKey(markerId));
     if (existing !== null && existing !== undefined) {
       const parsed = parseOperationReceipt(existing);
@@ -2017,7 +2170,7 @@ export async function deleteStudy(
           `${STUDY_AGGREGATE_PREFIX}${id}`,
         ];
     const wire = await kv.eval(
-      DELETE_EMPTY_STUDY_SCRIPT,
+      options?.deleteInterviews === true || resumingPurge ? DELETE_POPULATED_STUDY_SCRIPT : DELETE_EMPTY_STUDY_SCRIPT,
       keys,
       [
         id,
@@ -2026,6 +2179,7 @@ export async function deleteStudy(
         encodeMutationGuard(guard),
         '1',
         resolvedMode.mode,
+        guard.expectedRevision === undefined ? '' : String(guard.expectedRevision),
       ]
     );
     const parsed = parseCreateDeleteResult(wire);

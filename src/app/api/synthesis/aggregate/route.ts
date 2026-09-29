@@ -1,6 +1,6 @@
 // POST /api/synthesis/aggregate - Generate aggregate synthesis across interviews
 // Server-side only - requires authenticated session
-// Analyzes all interviews for a study to find cross-participant patterns
+// Analyzes an explicit corpus, or legacy current-revision analyzed interviews.
 
 export const dynamic = 'force-dynamic';
 
@@ -14,6 +14,7 @@ import {
   aggregateInputTooLargeBody,
   loadDurableAggregateInputs,
   MAX_AGGREGATE_INTERVIEWS,
+  MAX_AGGREGATE_INPUT_BYTES,
   mapCollectionLoad,
   mapReadinessHold,
   mapStudyLoad,
@@ -35,6 +36,12 @@ import { createRequestId, logRequestEvent, logRequestFailure } from '@/lib/reque
 import { resolveEvidenceRef, withRecordBackedEvidence } from '@/lib/evidence';
 import { deploymentNotReadyResponse } from '@/lib/runtime/readinessGate';
 import { isDurableWorkspaceStore } from '@/lib/storage/types';
+import { loadStudyDataset } from '@/lib/exploration/dataset';
+import { parseDatasetSelection, serializedBytes } from '@/lib/exploration/validation';
+import type { DatasetManifest } from '@/lib/exploration/types';
+import { commitmentCovers } from '@/lib/providerCommitment';
+import { researcherProviderNotDisclosedResponse } from '@/lib/providerCommitmentResponse';
+import { isAwaitingAnalysis } from '@/lib/analysisState';
 import {
   currentProviderTransport,
   providerNotConfiguredResponse,
@@ -54,7 +61,7 @@ export async function POST(request: Request) {
     const notReady = deploymentNotReadyResponse(ROUTE);
     if (notReady) return notReady;
 
-    const parsedBody = await readBoundedJsonObject(request, 4_096);
+    const parsedBody = await readBoundedJsonObject(request, 32_768);
     if (!parsedBody.ok) {
       return NextResponse.json(
         { error: parsedBody.status === 413 ? 'Aggregate request is too large.' : 'Invalid aggregate request.' },
@@ -70,6 +77,11 @@ export async function POST(request: Request) {
         { error: 'Missing required field: studyId' },
         { status: 400 }
       );
+    }
+    const explicitSelection = Object.hasOwn(parsedBody.value, 'selection');
+    const selection = explicitSelection ? parseDatasetSelection(parsedBody.value.selection) : undefined;
+    if (explicitSelection && !selection) {
+      return NextResponse.json({ error: 'Invalid dataset selection.' }, { status: 400 });
     }
 
     const gated = await getAuthorizedResearcherStudyContext(studyId, 'read');
@@ -107,8 +119,32 @@ export async function POST(request: Request) {
     if (!studyMapped.ok) return NextResponse.json(studyMapped.body, { status: studyMapped.status });
     const study = studyMapped.study;
 
-    let currentRevisionInterviews: StoredInterview[];
-    if (isDurableWorkspaceStore(store)) {
+    let selectedInterviews: StoredInterview[];
+    let scope: DatasetManifest | undefined;
+    if (selection) {
+      const dataset = await loadStudyDataset({ studyId, selection, store });
+      if (dataset.status === 'invalid-selection') {
+        return NextResponse.json({ error: 'The selected dataset is invalid. Refresh the study and review your selection.' }, { status: 400 });
+      }
+      if (dataset.status === 'too-large') {
+        return NextResponse.json({ error: INTERVIEW_MESSAGES.tooLarge }, { status: 413 });
+      }
+      if (dataset.status !== 'ok') {
+        return NextResponse.json({ error: INTERVIEW_MESSAGES.unavailable, retryable: true }, { status: 503 });
+      }
+      selectedInterviews = dataset.interviews;
+      scope = dataset.description.manifest;
+      const unanalyzed = selectedInterviews.filter(interview => !interview.synthesis || isAwaitingAnalysis(interview)).length;
+      if (unanalyzed > 0) {
+        return NextResponse.json({
+          error: 'Analyze the selected interviews before generating an aggregate, or explore their saved transcripts directly.',
+          code: 'DATASET_ANALYSIS_REQUIRED',
+          selectedInterviewCount: selectedInterviews.length,
+          unanalyzedInterviewCount: unanalyzed,
+          scope,
+        }, { status: 409 });
+      }
+    } else if (isDurableWorkspaceStore(store)) {
       // Bounded keyset pages of current-revision analyzed interviews only,
       // never the 1,000 full-record collection (RT-09).
       const inputs = await loadDurableAggregateInputs(store, study);
@@ -121,7 +157,7 @@ export async function POST(request: Request) {
       if (inputs.status === 'input-too-large') {
         return NextResponse.json(aggregateInputTooLargeBody(), { status: 413 });
       }
-      currentRevisionInterviews = inputs.interviews;
+      selectedInterviews = inputs.interviews;
     } else {
       const loadedInterviews = await store.listInterviews({
         scope: 'study',
@@ -132,20 +168,32 @@ export async function POST(request: Request) {
       if (!interviewsMapped.ok) {
         return NextResponse.json(interviewsMapped.body, { status: interviewsMapped.status });
       }
-      currentRevisionInterviews = interviewsMapped.items.filter(
+      if (interviewsMapped.items.some(interview => interview.studyId !== study.id)) {
+        return NextResponse.json({ error: INTERVIEW_MESSAGES.unavailable, retryable: true }, { status: 503 });
+      }
+      selectedInterviews = interviewsMapped.items.filter(
         interview => interview.studyRevision === study.revision && interview.synthesis
       );
     }
 
-    if (currentRevisionInterviews.length < 2) {
+    if (serializedBytes(selectedInterviews) > MAX_AGGREGATE_INPUT_BYTES) {
+      return NextResponse.json(aggregateInputTooLargeBody(), { status: 413 });
+    }
+
+    if (selectedInterviews.length < 2) {
       return NextResponse.json(
         {
-          error: 'Need at least 2 completed interviews from the current study revision',
+          error: scope ? 'Need at least 2 analyzed interviews in the selected dataset' : 'Need at least 2 completed interviews from the current study revision',
           studyRevision: study.revision,
-          eligibleInterviewCount: currentRevisionInterviews.length,
+          eligibleInterviewCount: selectedInterviews.length,
+          ...(scope ? { scope } : {}),
         },
         { status: 400 }
       );
+    }
+
+    if (selectedInterviews.some(interview => !commitmentCovers(interview, study.config.aiProvider, study.config.aiModel))) {
+      return researcherProviderNotDisclosedResponse();
     }
 
     // D9 (Cloudflare): every included transcript's consent must cover the
@@ -155,7 +203,7 @@ export async function POST(request: Request) {
     const current = currentProviderTransport(gated.context, study.config.aiProvider);
     if (current.applies) {
       if (!current.ok) return providerNotConfiguredResponse();
-      const uncovered = uncoveredCount(participantDisclosures(currentRevisionInterviews), current.transport);
+      const uncovered = uncoveredCount(participantDisclosures(selectedInterviews), current.transport);
       if (uncovered > 0) return researcherTransportNotDisclosedResponse(uncovered);
     }
 
@@ -164,7 +212,7 @@ export async function POST(request: Request) {
     // names: every surviving ref's quote is the record's own characters, and
     // an unlocatable ref never reaches the prompt. Legacy (evidence-shaped)
     // themes pass through unchanged, by identity (L7.1).
-    const syntheses: SynthesisResult[] = currentRevisionInterviews.map(
+    const syntheses: SynthesisResult[] = selectedInterviews.map(
       interview => withRecordBackedEvidence(interview.synthesis!, interview.transcript)
     );
 
@@ -194,7 +242,7 @@ export async function POST(request: Request) {
       aggregateResult = await provider.synthesizeAggregate(
         study.config,
         syntheses,
-        currentRevisionInterviews.length
+        selectedInterviews.length
       );
     } catch (providerError) {
       return providerErrorResponse(providerError);
@@ -204,7 +252,7 @@ export async function POST(request: Request) {
     // signing (L7.2). This is the one place a fabricated id could otherwise
     // enter a signed record: the model never sees or returns an interview
     // id, only a 1-based position into the same array the route built.
-    const interviewIds = currentRevisionInterviews.map(interview => interview.id);
+    const interviewIds = selectedInterviews.map(interview => interview.id);
     const commonThemes: AggregateTheme[] = aggregateResult.value.commonThemes.map(theme => ({
       theme: theme.theme,
       frequency: theme.frequency,
@@ -226,7 +274,8 @@ export async function POST(request: Request) {
       studyId,
       studyRevision: study.revision,
       interviewIds,
-      interviewCount: currentRevisionInterviews.length,
+      interviewCount: selectedInterviews.length,
+      ...(scope ? { scope } : {}),
       aiProvider: aggregateResult.execution.provider,
       requestedAiModel: aggregateResult.execution.requestedModel,
       aiModel: aggregateResult.execution.model,
@@ -265,7 +314,7 @@ export async function POST(request: Request) {
         route: ROUTE,
         refsOffered: claims.length,
         refsLocated: claims.filter(claim => {
-          const interview = currentRevisionInterviews[claim.interviewIndex - 1];
+          const interview = selectedInterviews[claim.interviewIndex - 1];
           return interview !== undefined
             && resolveEvidenceRef(
                  { quote: claim.quote, turnIndex: claim.turnIndex },

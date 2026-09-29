@@ -319,4 +319,33 @@ describe('platformDb v2 beginCreate/beginDelete', () => {
     expect(result.status).toBe('invalid');
     expect(redis.evalCalls).toBe(0);
   });
+
+  it('retains legacy empty-only operations and validates explicit deletion confirmation at the wire boundary', () => {
+    const legacy = buildPendingStudyOperationV2({
+      kind: 'delete', researcherId: RESEARCHER, studyId: STUDY_ID, generation: 1,
+      opNonce: NONCE, createdAt: NOW, idempotencyHash: null, fingerprint: null,
+    });
+    expect(parsePendingStudyOperationV2(encodeOperationRecord(legacy))).toEqual(legacy);
+    const confirmed = { ...legacy, deleteInterviews: true as const, expectedRevision: 7 };
+    expect(parsePendingStudyOperationV2(encodeOperationRecord(confirmed))).toEqual(confirmed);
+    for (const invalid of [
+      { ...legacy, deleteInterviews: false },
+      { ...legacy, deleteInterviews: 'true' },
+      { ...legacy, expectedRevision: 0 },
+      { ...legacy, expectedRevision: 1.5 },
+      { ...legacy, expectedRevision: Number.MAX_SAFE_INTEGER },
+      { ...confirmed, kind: 'create', id: `create:${STUDY_ID}:1`, idempotencyHash: HASH, fingerprint: FINGERPRINT },
+    ]) {
+      expect(parsePendingStudyOperationV2(`oi:op:${JSON.stringify(invalid)}`)).toBeNull();
+    }
+  });
+
+  it('rejects invalid deletion choices before contacting Redis', async () => {
+    const redis = new MemoryPlatformRedis();
+    const input = { ...createInput(redis), idempotencyHash: null, fingerprint: null };
+    expect((await beginDeleteStudyOperationV2({ ...input, expectedRevision: 0 })).status).toBe('invalid');
+    expect((await beginDeleteStudyOperationV2({ ...input, expectedRevision: 1.5 })).status).toBe('invalid');
+    expect((await beginCreateStudyOperationV2({ ...createInput(redis), deleteInterviews: true })).status).toBe('invalid');
+    expect(redis.evalCalls).toBe(0);
+  });
 });

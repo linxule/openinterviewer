@@ -15,6 +15,7 @@ import { logRequestEvent, type RequestLogReason } from './requestLog';
 import { participantStoreAdmissionResponse } from './rateLimit';
 import { isProviderType, resolveSynthesisModel } from './providers/synthesisModel';
 import { ANALYSIS_INPUT_SCHEMA_VERSION, type FrozenAnalysisInput } from './storage/analysisProtocol';
+import { studyMutationReadiness } from './studyMutationReadiness';
 import {
   isDurableWorkspaceStore,
   type WorkspaceHoldReason,
@@ -35,7 +36,7 @@ function malformedStudyResponse(): NextResponse {
 }
 
 export async function loadCanonicalStudy(opts: {
-  store: Pick<WorkspaceStorePort, 'getStudy'>;
+  store: Pick<WorkspaceStorePort, 'getStudy' | 'studyMutationStatus'>;
   tokenStudyId?: string;
   legacyBodyStudyId?: string;
   isAdmin?: boolean;
@@ -52,6 +53,13 @@ export async function loadCanonicalStudy(opts: {
 
   let loaded: Awaited<ReturnType<WorkspaceStorePort['getStudy']>>;
   try {
+    // Recheck after context resolution: deletion may have started since the
+    // participant token or researcher preview was admitted.
+    const mutationStatus = await studyMutationReadiness(opts.store, studyId);
+    if (mutationStatus === 'deleting' || mutationStatus === 'missing') {
+      return { ok: false, response: NextResponse.json({ error: 'Study not found or no longer active' }, { status: 404 }) };
+    }
+    if (mutationStatus !== 'ready') throw new Error('Study mutation status is unavailable');
     loaded = await opts.store.getStudy(studyId);
   } catch {
     loaded = { status: 'unavailable' };

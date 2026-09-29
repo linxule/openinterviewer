@@ -188,12 +188,9 @@ class MemoryIdempRedis {
       return ['oi:idemp-unavailable'];
     }
     if (nextState === 'pending') return ['oi:idemp-unavailable'];
-    const next = {
-      ...record,
-      state: nextState,
-      updatedAt: now,
-      operationId: opId ?? record.operationId,
-    };
+    const next: CreateIdempotencyRecord = nextState === 'deleted'
+      ? { ...record, state: 'deleted', study: null, updatedAt: now, operationId: opId ?? record.operationId }
+      : { ...record, state: 'created', study: record.study!, updatedAt: now, operationId: opId ?? record.operationId };
     const encoded = encodeCreateIdempotencyRecord(next);
     this.strings.set(keys[0], encoded);
     return ['oi:idemp-replay', encoded];
@@ -330,6 +327,21 @@ describe('create idempotency helpers', () => {
     expect(parseIdempotencyResult(['oi:begin-started', 'x'])).toEqual({ status: 'unavailable' });
     expect(parseIdempotencyResult({ tag: 'oi:idemp-quota' })).toEqual({ status: 'unavailable' });
   });
+
+  it('reads deleted receipts without returning legacy study content, but requires content for active receipts', () => {
+    const study = mintCreateStudy(makeStudyConfig(), 10, IDEMPOTENCY_KEY);
+    const legacy: CreateIdempotencyRecord = {
+      version: 2, researcherId: RESEARCHER, studyId: study.id,
+      createdAt: 10, updatedAt: 20, fingerprint: createFingerprint(study.config),
+      state: 'deleted', operationId: null, study,
+    };
+    expect(parseCreateIdempotencyRecord(encodeCreateIdempotencyRecord(legacy)))
+      .toEqual({ ...legacy, study: null });
+    expect(parseCreateIdempotencyRecord(encodeCreateIdempotencyRecord({ ...legacy, study: null })))
+      .toEqual({ ...legacy, study: null });
+    expect(parseCreateIdempotencyRecord(`oi:idemp:${JSON.stringify({ ...legacy, state: 'created', study: null })}`))
+      .toBeNull();
+  });
 });
 
 describe('beginCreateIdempotency mapping', () => {
@@ -436,6 +448,7 @@ describe('beginCreateIdempotency mapping', () => {
     expect(deleted.status).toBe('ok');
     if (deleted.status !== 'ok') throw new Error('expected deleted');
     expect(deleted.record.state).toBe('deleted');
+    expect(deleted.record.study).toBeNull();
     expect(parseCreateIdempotencyRecord(await memory.get(keys.mapping))?.state).toBe('deleted');
   });
 
@@ -585,7 +598,7 @@ describe('POST /api/studies idempotency', () => {
       fingerprint,
       state: 'deleted',
       operationId: 'create:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-      study,
+      study: null,
     }));
     const consumed = await POST(request({ config: study.config }));
     expect(consumed.status).toBe(409);

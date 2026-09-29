@@ -48,6 +48,8 @@ import {
   type WorkspaceMeta,
 } from './context';
 import { CorruptRecordError, parseRecord } from './projection';
+import { isExplorationAnswer } from '../../src/lib/exploration/validation';
+import { decodeAnswerRow } from './exploration';
 import { readJob, settleJob, type JobRow } from './analysis';
 
 /** Bounded, write-free readiness: schema, identity, epoch and maintenance state. */
@@ -194,8 +196,10 @@ function recordedTransition(sql: SqlStorage, version: number): { from: string; t
   return { from: detail.from, to: detail.to };
 }
 
-function inFlightCounts(sql: SqlStorage): { claimed: number; started: number } {
-  const counts = { claimed: 0, started: 0 };
+type InFlightCounts = { claimed: number; started: number; explorations?: number };
+
+function inFlightCounts(sql: SqlStorage): InFlightCounts {
+  const counts: InFlightCounts = { claimed: 0, started: 0 };
   for (const row of sql
     .exec<{ state: string; n: number }>(
       `SELECT state, COUNT(*) AS n FROM analysis_jobs WHERE state IN ('claimed', 'started') GROUP BY state`,
@@ -204,7 +208,30 @@ function inFlightCounts(sql: SqlStorage): { claimed: number; started: number } {
     if (row.state === 'claimed') counts.claimed = row.n;
     else counts.started = row.n;
   }
+  const explorations = countRunningExplorations(sql);
+  if (explorations > 0) counts.explorations = explorations;
   return counts;
+}
+
+function countRunningExplorations(sql: SqlStorage): number {
+  return sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM exploration_answers WHERE status = 'running'`).one().n;
+}
+
+function classifyExplorations(sql: SqlStorage, now: number, failureKind: string): number {
+  const count = countRunningExplorations(sql);
+  if (count === 0) return 0;
+  // Classification must not turn a malformed notebook row into an apparently
+  // valid uncertainty marker. Consume and validate rows before the first write.
+  for (const row of sql.exec<{ id: string; study_id: string; record_json: string; request_fingerprint: string; created_at: number; updated_at: number; status: string }>(
+    `SELECT * FROM exploration_answers WHERE status = 'running'`,
+  )) {
+    if (!decodeAnswerRow(row)) throw new CorruptRecordError('record');
+  }
+  sql.exec(`UPDATE exploration_answers SET status = 'recovery-required', updated_at = MAX(updated_at, ?),
+    record_json = json_set(record_json, '$.status', 'recovery-required', '$.failureKind', ?, '$.updatedAt', MAX(updated_at, ?))
+    WHERE status = 'running'`, now, failureKind, now);
+  bumpMutationSeq(sql, now);
+  return count;
 }
 
 function jobsInStates(sql: SqlStorage, states: ReadonlyArray<'pending' | 'claimed' | 'started'>): JobRow[] {
@@ -235,8 +262,8 @@ function settleRecoveryRequired(sql: SqlStorage, job: JobRow, now: number): void
  * started attempt's paid outcome is uncertain, so it becomes
  * recovery-required. Nothing is inferred from elapsed time.
  */
-function classifyInFlight(sql: SqlStorage, now: number, dueAt: number): { claimed: number; started: number } {
-  const counts = { claimed: 0, started: 0 };
+function classifyInFlight(sql: SqlStorage, now: number, dueAt: number): InFlightCounts {
+  const counts: InFlightCounts = { claimed: 0, started: 0 };
   for (const job of jobsInStates(sql, ['claimed', 'started'])) {
     if (job.state === 'started') {
       settleRecoveryRequired(sql, job, now);
@@ -261,6 +288,8 @@ function classifyInFlight(sql: SqlStorage, now: number, dueAt: number): { claime
     bumpMutationSeq(sql, now);
     counts.claimed += 1;
   }
+  const explorations = classifyExplorations(sql, now, 'maintenance');
+  if (explorations > 0) counts.explorations = explorations;
   return counts;
 }
 
@@ -299,7 +328,7 @@ export async function transitionMaintenance(ws: WorkspaceContext, input: Rpc.Mai
     }
     if (nextState === 'frozen' && !input.classifyInFlight) {
       const inFlight = inFlightCounts(ws.sql);
-      if (inFlight.claimed + inFlight.started > 0) return { status: 'in-flight', ...inFlight };
+      if (inFlight.claimed + inFlight.started + (inFlight.explorations ?? 0) > 0) return { status: 'in-flight', ...inFlight };
     }
     const version = expectedVersion + 1;
     const apply = (): Rpc.MaintenanceTransitionOutcome | null => {
@@ -309,7 +338,7 @@ export async function transitionMaintenance(ws: WorkspaceContext, input: Rpc.Mai
           ? { status: 'conflict', state: current.maintenanceState, version: current.maintenanceVersion }
           : { status: 'unavailable' };
       }
-      const classified = nextState === 'frozen' ? classifyInFlight(ws.sql, now, Date.now()) : { claimed: 0, started: 0 };
+      const classified: InFlightCounts = nextState === 'frozen' ? classifyInFlight(ws.sql, now, Date.now()) : { claimed: 0, started: 0 };
       ws.sql.exec(
         `UPDATE workspace_meta SET maintenance_state = ?, maintenance_version = ?, updated_at = ? WHERE singleton = 1`,
         nextState,
@@ -322,6 +351,7 @@ export async function transitionMaintenance(ws: WorkspaceContext, input: Rpc.Mai
         version,
         classifiedClaimed: classified.claimed,
         classifiedStarted: classified.started,
+        ...(classified.explorations ? { classifiedExplorations: classified.explorations } : {}),
       });
       return null;
     };
@@ -546,6 +576,12 @@ function rowIdentityValid(family: BackupFamily, row: Record<string, string | num
       const aggregate = JSON.parse(row.aggregate_json as string) as { studyId?: unknown } | null;
       return !!aggregate && aggregate.studyId === row.study_id;
     }
+    if (family.name === 'exploration_answers') {
+      return isExplorationAnswer(JSON.parse(row.record_json as string))
+        && decodeAnswerRow({ id: row.id as string, study_id: row.study_id as string,
+          record_json: row.record_json as string, request_fingerprint: row.request_fingerprint as string,
+          created_at: row.created_at as number, updated_at: row.updated_at as number, status: row.status as string }) !== null;
+    }
     return true;
   } catch (error) {
     if (error instanceof CorruptRecordError || error instanceof SyntaxError) return false;
@@ -566,12 +602,18 @@ const REFERENCE_CHECKS: ReadonlyArray<{ name: string; query: string }> = [
   { name: 'analysis_jobs.interview_id', query: `SELECT COUNT(*) AS n FROM analysis_jobs c WHERE NOT EXISTS (SELECT 1 FROM interviews p WHERE p.id = c.interview_id)` },
   { name: 'aggregates.study_id', query: `SELECT COUNT(*) AS n FROM aggregates c WHERE NOT EXISTS (SELECT 1 FROM studies p WHERE p.id = c.study_id)` },
   { name: 'participant_links.study_id', query: `SELECT COUNT(*) AS n FROM participant_links c WHERE NOT EXISTS (SELECT 1 FROM studies p WHERE p.id = c.study_id)` },
+  { name: 'exploration_answers.study_id', query: `SELECT COUNT(*) AS n FROM exploration_answers c WHERE NOT EXISTS (SELECT 1 FROM studies p WHERE p.id = c.study_id)` },
+  { name: 'exploration_answers.sources', query: `SELECT COUNT(*) AS n FROM exploration_answers a, json_each(a.record_json, '$.scope.sources') s WHERE NOT EXISTS
+      (SELECT 1 FROM interviews i WHERE i.id = json_extract(s.value, '$.interviewId') AND i.study_id = a.study_id)` },
+  { name: 'exploration_answers.parent', query: `SELECT COUNT(*) AS n FROM exploration_answers a WHERE json_extract(a.record_json, '$.parentAnswerId') IS NOT NULL AND NOT EXISTS
+      (SELECT 1 FROM exploration_answers p WHERE p.id = json_extract(a.record_json, '$.parentAnswerId') AND p.study_id = a.study_id)` },
 ];
 
 function finalizeImport(ws: WorkspaceContext, manifest: BackupManifest, manifestDigest: string, now: number): Rpc.BackupImportOutcome {
   const accepted = acceptedChunks(ws.sql);
   for (const family of BACKUP_FAMILIES) {
-    const described = manifest.families.find((candidate) => candidate.name === family.name)!;
+    const described = manifest.families.find((candidate) => candidate.name === family.name)
+      ?? { count: 0, chunks: [] }; // v1 had no exploration family.
     const chunks = (accepted.get(family.name) ?? []).slice().sort((a, b) => a.index - b.index);
     if (chunks.length !== described.chunks.length || chunks.some((chunk, position) => chunk.index !== position)) {
       return reject('chunk-missing', { [`${family.name}.chunks`]: chunks.length, [`${family.name}.expected`]: described.chunks.length });
@@ -603,12 +645,15 @@ export async function importBackupChunk(ws: WorkspaceContext, input: Rpc.BackupI
     const presented = input.manifest as unknown;
     if (!presented || typeof presented !== 'object') return reject('manifest-invalid');
     const presentedVersion = (presented as { formatVersion?: unknown }).formatVersion;
-    if (presentedVersion !== BACKUP_FORMAT_VERSION) return reject('format-unsupported');
+    if (presentedVersion !== BACKUP_FORMAT_VERSION && presentedVersion !== 1) return reject('format-unsupported');
     // The complete manifest (watermark, export time and every chunk
     // descriptor): an import is bound to exactly one backup file.
     const manifest = manifestFromImport(presented);
     if (!manifest) return reject('manifest-invalid');
-    if (manifest.schemaVersion !== storedSchemaVersion(ws.sql)) return reject('schema-unsupported');
+    if (manifest.schemaVersion !== storedSchemaVersion(ws.sql)
+      && !(manifest.formatVersion === 1 && manifest.schemaVersion === 1 && storedSchemaVersion(ws.sql) === 2)) {
+      return reject('schema-unsupported');
+    }
     if (!isValidWorkspaceId(manifest.sourceWorkspaceId)) return reject('manifest-invalid');
     const chunk = input.chunk;
     if ((chunk === null || chunk === undefined) === !input.finalize) return reject('request-invalid');
@@ -665,7 +710,7 @@ export async function importBackupChunk(ws: WorkspaceContext, input: Rpc.BackupI
         return { status: 'rejected', errorClass: 'row-too-large', counts: { rows: rows.length, oversized } };
       }
       // Every chunk must be the one the manifest describes at (family, index).
-      const descriptor = manifest.families.find((candidate) => candidate.name === family.name)!.chunks[chunk.index];
+      const descriptor = manifest.families.find((candidate) => candidate.name === family.name)?.chunks[chunk.index];
       if (!descriptor) return reject('chunk-unexpected', { rows: rows.length });
       if (descriptor.sha256 !== chunk.sha256) return reject('checksum-mismatch', { rows: rows.length });
       if (descriptor.rows !== rows.length) return reject('count-mismatch', { rows: rows.length, expected: descriptor.rows });
@@ -776,11 +821,16 @@ export async function activateRecoveryEpoch(ws: WorkspaceContext, input: Rpc.Act
       // generation's paid outcome is uncertain, so none resumes automatically.
       const restored = jobsInStates(ws.sql, ['pending', 'claimed', 'started']);
       for (const job of restored) settleRecoveryRequired(ws.sql, job, now);
+      // A restored notebook reservation may have reached its provider before
+      // the snapshot. Never resume or repeat it automatically. A signed,
+      // known-result receipt can still settle this exact attempt save-only.
+      const reconciledExplorations = classifyExplorations(ws.sql, now, 'restored-attempt');
       const reconciledJobs = restored.length;
       ws.sql.exec(`UPDATE workspace_meta SET activated_epoch = ?, updated_at = ? WHERE singleton = 1`, configured, now);
       // workspace_meta changed: a backup taken in recovery must see a new watermark.
       bumpMutationSeq(ws.sql, now);
-      audit(ws.sql, now, 'epoch.activate', { from: meta.activatedEpoch, to: configured, reconciledJobs });
+      audit(ws.sql, now, 'epoch.activate', { from: meta.activatedEpoch, to: configured, reconciledJobs,
+        ...(reconciledExplorations ? { reconciledExplorations } : {}) });
       logOperator('epoch.activate');
       return { status: 'activated', reconciledJobs };
     });

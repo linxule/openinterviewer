@@ -111,6 +111,12 @@ beforeEach(() => {
 });
 
 describe('POST /api/interviews/save — provider down, participant saved', () => {
+  it('snapshots canonical original configuration and drops browser-asserted historical definitions', async () => {
+    const submitted = makeStoredInterview({ studyId: 'study-a', collectionConfig: { name: 'Untrusted historical label' } as never });
+    const response = await POST(makeRequest(submitted));
+    expect(response.status).toBe(200);
+    expect(kvMock.persistCompletedInterview.mock.calls[0][0].collectionConfig).toEqual({ name: 'Canonical Study', aiProvider: 'gemini', aiModel: 'gemini-3.7-flash' });
+  });
   it('returns 200 with created:true and persists synthesis:null / analysis pending, with no _receipt anywhere in the body', async () => {
     const interview = makeStoredInterview({ id: 'interview-no-provider', studyId: 'study-a' });
     const bodyText = JSON.stringify(interview);

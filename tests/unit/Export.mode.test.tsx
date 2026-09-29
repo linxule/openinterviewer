@@ -38,6 +38,11 @@ describe('Export view-mode boundaries', () => {
     expect(screen.queryByRole('group', { name: 'Session summary' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /download json/i })).not.toBeInTheDocument();
     expect(useStore.getState().interviewHistory).toEqual([]);
+    if (action === 'Return to study setup') {
+      expect(routerMock.push).toHaveBeenCalledExactlyOnceWith('/setup?prefill=edit&studyId=study-export');
+      expect(useStore.getState().studyConfig?.id).toBe('study-export');
+    }
+    if (action === 'Create New Study') expect(routerMock.push).toHaveBeenCalledExactlyOnceWith('/setup');
   });
 
   it('does not expose researcher export or reset controls to participants', () => {

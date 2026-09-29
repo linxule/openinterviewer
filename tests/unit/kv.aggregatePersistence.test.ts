@@ -32,15 +32,16 @@ function fixtureAggregate(overrides: Partial<StoredAggregateSynthesis> = {}): St
 
 describe('aggregate synthesis persistence', () => {
   it('writes with the expected key and value prefix, and returns saved', async () => {
-    const setMock = vi.fn().mockResolvedValue('OK');
-    const client = { set: setMock } as unknown as RedisPort;
+    const evalMock = vi.fn().mockResolvedValue('saved');
+    const client = { eval: evalMock } as unknown as RedisPort;
     const aggregate = fixtureAggregate();
 
     await expect(saveStudyAggregate(aggregate, client)).resolves.toBe('saved');
 
-    expect(setMock).toHaveBeenCalledTimes(1);
-    const [key, value] = setMock.mock.calls[0] as [string, string];
-    expect(key).toBe(`${STUDY_AGGREGATE_PREFIX}study-a`);
+    expect(evalMock).toHaveBeenCalledTimes(1);
+    const [, keys, args] = evalMock.mock.calls[0] as [string, string[], string[]];
+    const value = args[0];
+    expect(keys).toEqual(['study:study-a', 'study-mutation-guard:study-a', `${STUDY_AGGREGATE_PREFIX}study-a`]);
     expect(value.startsWith(AGGREGATE_VALUE_PREFIX)).toBe(true);
   });
 
@@ -48,9 +49,9 @@ describe('aggregate synthesis persistence', () => {
     const aggregate = fixtureAggregate();
     let stored: string | null = null;
     const client = {
-      set: vi.fn().mockImplementation(async (_key: string, value: string) => {
-        stored = value;
-        return 'OK';
+      eval: vi.fn().mockImplementation(async (_script: string, _keys: string[], args: string[]) => {
+        stored = args[0];
+        return 'saved';
       }),
       get: vi.fn().mockImplementation(async () => stored),
     } as unknown as RedisPort;
@@ -110,7 +111,7 @@ describe('aggregate synthesis persistence', () => {
 
   it('returns unavailable when the write throws', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const client = { set: vi.fn().mockRejectedValue(new Error('down')) } as unknown as RedisPort;
+    const client = { eval: vi.fn().mockRejectedValue(new Error('down')) } as unknown as RedisPort;
 
     await expect(saveStudyAggregate(fixtureAggregate(), client)).resolves.toBe('unavailable');
     errorSpy.mockRestore();

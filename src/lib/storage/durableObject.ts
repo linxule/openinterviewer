@@ -64,6 +64,8 @@ import { RESEARCHER_AI_KEY_PREFIX } from './types';
 import type { AdmissionIdentity } from '../runtime/workerInvocation';
 import { signInBudgetSubject } from '../runtime/clientAddress';
 import { logRequestEvent } from '../requestLog';
+import type * as E from '../exploration/types';
+import { isExplorationAnswer } from '../exploration/validation';
 
 export type DurableWorkspaceConfig = {
   /** env.WORKSPACE_STORE (DurableObjectNamespace). */
@@ -412,6 +414,15 @@ export function createDurableWorkspaceStore(config: DurableWorkspaceConfig): Dur
 
   const unavailable = { status: 'unavailable' } as const;
   const ambiguous = { status: 'ambiguous' } as const;
+  const explorationOutcome = (statuses: string[], withAnswer: string[] = [], identity?: { studyId: string; answerId?: string; requestFingerprint?: string }) => (value: unknown): boolean => {
+    if (!value || typeof value !== 'object') return false;
+    const result = value as Record<string, unknown>;
+    return typeof result.status === 'string' && statuses.includes(result.status)
+      && (!withAnswer.includes(result.status) || (isExplorationAnswer(result.answer)
+        && (!identity || (result.answer.studyId === identity.studyId
+          && (identity.answerId === undefined || result.answer.id === identity.answerId)
+          && (identity.requestFingerprint === undefined || result.answer.requestFingerprint === identity.requestFingerprint)))));
+  };
 
   // Assembled from keyset pages so only the route maximum and the Worker
   // byte ceiling limit a collection, never one RPC response's size. Each
@@ -645,6 +656,29 @@ export function createDurableWorkspaceStore(config: DurableWorkspaceConfig): Dur
 
     saveAggregate: (aggregate: StoredAggregateSynthesis) =>
       call<SaveAggregateOutcome>('saveAggregate', { aggregate, now: Date.now() }, 'unavailable', acceptSaveAggregate),
+
+    exploration: {
+      lookup: (input) => call<E.ExplorationLookupOutcome>('lookupExploration', input, unavailable,
+        explorationOutcome(['found', 'not-found', 'key-reuse', 'unavailable'], ['found'], input)),
+      reserve: (input) => call<E.ExplorationReserveOutcome>('reserveExploration', input, unavailable,
+        explorationOutcome(['created', 'replay', 'key-reuse', 'quota', 'study-not-found', 'revision-stale', 'held', 'unavailable'], ['created', 'replay'], input.answer)),
+      get: (input) => call<E.ExplorationReadOutcome>('getExploration', input, unavailable,
+        explorationOutcome(['found', 'not-found', 'unavailable'], ['found'], input)),
+      list: (input) => call<E.ExplorationListOutcome>('listExplorations', input, unavailable, value => {
+        if (!value || typeof value !== 'object') return false;
+        const result = value as Record<string, unknown>;
+        return result.status === 'unavailable' || result.status === 'too-large'
+          || (result.status === 'ok' && Array.isArray(result.answers) && result.answers.length <= input.maximum
+            && (input.pageSize === undefined || result.answers.length <= input.pageSize)
+            && (result.nextCursor === undefined || result.nextCursor === null
+              || (typeof result.nextCursor === 'string' && /^([0-9]{1,16}):([A-Za-z0-9_-]{1,120})$/.test(result.nextCursor)))
+            && result.answers.every(answer => isExplorationAnswer(answer) && answer.studyId === input.studyId));
+      }),
+      complete: (input) => call<E.ExplorationWriteOutcome>('completeExploration', input, unavailable,
+        explorationOutcome(['saved', 'study-not-found', 'not-found', 'conflict', 'held', 'unavailable'], ['saved'], input)),
+      fail: (input) => call<E.ExplorationWriteOutcome>('failExploration', input, unavailable,
+        explorationOutcome(['saved', 'study-not-found', 'not-found', 'conflict', 'held', 'unavailable'], ['saved'], input)),
+    },
 
     seedSampleWorkspace: (input: SeedSampleInput) =>
       call<SeedSampleOutcome>('seedSampleWorkspace', input, unavailable, inUnion(SEED_SAMPLE)),

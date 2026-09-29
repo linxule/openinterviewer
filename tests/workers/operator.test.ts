@@ -6,6 +6,7 @@ import { runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { gate, type OperationClass, type WorkspaceContext, type WorkspaceEnv } from '../../cloudflare/workspace/context';
 import type { RestoreBookmarkInput, RestoreBookmarkOutcome } from '../../cloudflare/workspace/rpcTypes';
 import type { MaintenanceState } from '../../src/lib/storage/types';
+import { CURRENT_SCHEMA_VERSION } from '../../cloudflare/workspace/schema';
 import { testEnv, workspaceStub } from './helpers';
 
 const NOW = Date.now();
@@ -84,7 +85,7 @@ function envelope(n: number, epoch: string) {
 async function reset(): Promise<void> {
   await runInDurableObject(workspaceStub(), async (_instance, state) => {
     const sql = state.storage.sql;
-    for (const table of ['analysis_jobs', 'analysis', 'interviews', 'aggregates', 'participant_links', 'consents', 'budget_windows', 'studies', 'operator_audit']) {
+    for (const table of ['analysis_jobs', 'analysis', 'interviews', 'aggregates', 'participant_links', 'consents', 'budget_windows', 'exploration_answers', 'studies', 'operator_audit']) {
       sql.exec(`DELETE FROM ${table}`);
     }
     sql.exec(`UPDATE workspace_meta SET maintenance_state = 'open', maintenance_version = 0, activated_epoch = ?`, testEnv.ANALYSIS_RECOVERY_EPOCH);
@@ -171,7 +172,7 @@ describe('operator status (OPS-01)', () => {
     expect(status).toMatchObject({
       status: 'ok',
       workspaceId: testEnv.WORKSPACE_ID,
-      schemaVersion: 1,
+      schemaVersion: CURRENT_SCHEMA_VERSION,
       maintenance: { state: 'open', version: 0 },
       epoch: { activated: testEnv.ANALYSIS_RECOVERY_EPOCH, configuredMatches: true },
       jobs: { pending: 1, claimed: 1, started: 1, recoveryRequired: 1 },
@@ -243,7 +244,7 @@ describe('maintenance transitions (OPS-01)', () => {
       const now = Date.now();
       const exchange = await stub.getParticipantLink({ linkId, now, purpose: 'exchange' });
       const session = await stub.getParticipantLink({ linkId, now, purpose: 'session' });
-      const mutation = await stub.setStudyLinksEnabled({ studyId: 'study-ops', enabled: false, now });
+      const mutation = await stub.setStudyLinksEnabled({ studyId: 'study-ops', enabled: true, now });
       const admission = await stub.admitParticipantRequest({ operation: 'greeting', counters: [counter], now });
       const revision = await withSql((sql) => sql.exec<{ revision: number }>(`SELECT revision FROM studies WHERE id = 'study-ops'`).one().revision);
       const consent = await stub.recordConsent({

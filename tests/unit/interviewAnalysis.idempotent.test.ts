@@ -63,6 +63,23 @@ beforeEach(() => {
 });
 
 describe('runInterviewAnalysis: concurrency', () => {
+  it('retains original collection question and profile meanings while using the authorized current provider/model', async () => {
+    const original = makeStudyConfig({ researchQuestion: 'Original research question', profileSchema: [{ id: 'role', label: 'Job title', extractionHint: 'title', required: false }], aiProvider: 'openai', aiModel: 'gpt-original' });
+    kvMock.getInterviewChecked.mockResolvedValue({ status: 'found', interview: makeStoredInterview({ id: 'interview-a', collectionConfig: original }) });
+    kvMock.claimInterviewAnalysis.mockResolvedValue({ status: 'claimed', claimId: 'claim-1', attempts: 1 });
+    synthesizeInterview.mockResolvedValue(providerResult());
+    kvMock.attachInterviewAnalysis.mockResolvedValue({ status: 'written' });
+    await runInterviewAnalysis(baseInput());
+    expect(synthesizeInterview.mock.calls[0][1]).toMatchObject({ researchQuestion: 'Original research question', profileSchema: original.profileSchema, aiProvider: 'gemini', aiModel: 'gemini-3.7-flash' });
+  });
+
+  it('does not relabel legacy profiles or research questions with the latest collection definitions', async () => {
+    kvMock.claimInterviewAnalysis.mockResolvedValue({ status: 'claimed', claimId: 'claim-1', attempts: 1 });
+    synthesizeInterview.mockResolvedValue(providerResult());
+    kvMock.attachInterviewAnalysis.mockResolvedValue({ status: 'written' });
+    await runInterviewAnalysis(baseInput());
+    expect(synthesizeInterview.mock.calls[0][1]).toMatchObject({ profileSchema: [], topicAreas: [], researchQuestion: 'Original collection research question unavailable (legacy record).' });
+  });
   it('two racing calls produce exactly one synthesizeInterview and one attachInterviewAnalysis; the loser gets busy with no second write', async () => {
     kvMock.claimInterviewAnalysis
       .mockResolvedValueOnce({ status: 'claimed', claimId: 'claim-1', attempts: 1 })

@@ -2,7 +2,8 @@
 
 OpenInterviewer is an open-source platform for adaptive, AI-assisted qualitative interviews. Researchers configure a study, share an opaque participant link, and review transcripts and synthesis in a dashboard.
 
-See the [v4.2.0 release notes](docs/releases/v4.2.0.md) for the per-study choice of what participants are told
+See the [v5.0.0 release notes](docs/releases/v5.0.0.md) for saved study exploration, explicit datasets,
+study deletion and workflow controls. The [v4.2.0 release notes](docs/releases/v4.2.0.md) cover the per-study choice of what participants are told
 about the AI provider, researcher AI budgets and sign-in limits, the [v4.1.1 notes](docs/releases/v4.1.1.md) for
 self-hosted fonts and dependency updates, the [v4.1.0 notes](docs/releases/v4.1.0.md) for participant-session and link-privacy fixes and
 admin-password rotation, and the [v4.0.0 notes](docs/releases/v4.0.0.md) for the Cloudflare standalone
@@ -254,7 +255,7 @@ The Vercel transport uses [`ai`](https://ai-sdk.dev/docs) with [Vercel AI Gatewa
 
 OpenRouter is a routing service: interview content is sent to the selected upstream inference endpoint under the researcher's OpenRouter account. The application records the OpenRouter adapter, requested model, resolved response model, and routed upstream provider in generation provenance. Provenance is written server-side when the deferred analysis attaches its result; the browser never supplies it. Privacy and structured-output routing constraints can make some models unavailable; the application reports that as a provider error instead of silently relaxing the policy.
 
-The built-in model catalog was reviewed against the official [Gemini](https://ai.google.dev/gemini-api/docs/models), [Claude](https://platform.claude.com/docs/en/about-claude/models/overview), [OpenAI](https://developers.openai.com/api/docs/models), and [OpenRouter](https://openrouter.ai/models) catalogs on **2026-08-14**. Without an environment or per-study override, the built-in defaults are `gemini-3.8-flash`, `claude-sonnet-5`, `gpt-5.6-terra`, and `openai/gpt-5.6-terra`, respectively. Existing saved studies that use the catalogued Gemini 2.5/3.1 or Claude 4.5 model IDs remain accepted; changing a default does not rewrite them. OpenRouter offers curated entries plus a bounded `provider/model` slug, but it does not support `openrouter/auto` or promise that every catalog model satisfies this application's strict-schema and zero-data-retention requirements.
+Claude and OpenAI defaults were updated against the official [Claude Sonnet 5.5](https://platform.claude.com/docs/en/models/sonnet-5-5/overview) and [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol) documentation on **2026-09-29**. Without an environment or per-study override, new studies default to `gemini-3.8-flash`, `claude-sonnet-5-5`, `gpt-6.1-sol`, and `openai/gpt-5.6-terra`, respectively. Gemini and OpenRouter defaults are unchanged from the **2026-08-14** catalog review. Existing saved studies keep their configured models, and legacy catalog IDs remain accepted. GPT-6 Luna is available as a lower-cost OpenAI choice. GPT-6.1 Sol requires reasoning: turning extra reasoning off selects `low`, not the unsupported `none`. Sonnet 5.5 uses `between_tools` when extra reasoning is off. The native Sonnet ID maps to `anthropic/claude-sonnet-5.5` on Vercel Gateway. OpenRouter offers curated entries plus a bounded `provider/model` slug, but it does not support `openrouter/auto` or promise that every catalog model satisfies this application's strict-schema and zero-data-retention requirements.
 
 ## Setup diagnostics
 
@@ -288,8 +289,26 @@ For researchers:
 3. Generate an opaque participant link from the saved revision.
 4. Share the link and collect interviews.
 5. Review individual transcripts and synthesis.
-6. Run aggregate analysis and export research records.
-7. Disable links when collection pauses or ends.
+6. Choose a dataset, run aggregate analysis, or ask questions in **Explore**; export the study or workspace.
+7. Pause and resume collection without replacing links, or delete a study in Settings when its retention period ends.
+
+### Explore this study
+
+**Explore** answers questions against saved transcripts in one study, including interviews whose individual analysis is pending or failed. Select revisions, particular interviews, or recorded profile fields first. Unknown, refused, vague and ambiguous profile values remain unknown; a numeric range accepts only a recorded scalar number, not an inferred age. Original field definitions are preserved for newly saved interviews. Older records without those definitions are visibly unknown, not relabeled with today's schema.
+
+Ask for provisional archetypes, concerns, unexpected themes, or evidence supporting and challenging a hypothesis. Answers save with the question, exact source manifest, scope counts, timestamps, and requested and served model provenance. Findings separate supporting, challenging and uncertain quotations. A quotation matched to a participant's transcript is a located quotation, not proof that the interpretation is correct or that a theme is prevalent.
+
+One request includes the full selected corpus: at most 100 interviews and 64 KiB of serialized transcript/profile context. Larger selections are refused before a provider request; narrow the dataset or export it. Nothing is silently sampled. Dataset inspection is bounded at 1,000 saved interviews. There is no cross-study chat, vector index or web search.
+
+Every admitted question is durable and idempotent. Checking the same attempt does not call the provider again. A timeout or uncertain interruption becomes **Needs recovery**; starting another attempt is an explicit action and may incur another provider charge. A generated answer that could not be saved remains downloadable and can be saved using its signed, save-only receipt for 24 hours, without another model call. Each study retains at most 500 attempts.
+
+### Study lifecycle
+
+**New study**, **Edit study** and **Duplicate for testing** have separate draft identities. Reloading an edit loads the matching saved study; a restored stale draft requires review before saving. Duplicate copies configuration only, not interviews, links or analysis. Preview still runs the saved revision.
+
+Pausing blocks participant entry, calls and completion but preserves the revision and active links. Resuming restores those links; revoked or expired links remain unusable. Saving unchanged configuration does not advance the revision. A real settings change still advances it and invalidates old participant authority.
+
+Settings includes a **Danger Zone**. Deleting a populated study requires two confirmations tied to its identifier and reviewed revision. It removes the live study, interviews, links, aggregate and exploration notebook. Large Redis deletions are resumable; a pending operation is not reported as complete. Late analysis writes cannot recreate the study. Downloads, external backups and provider requests already started are outside this live-store deletion. Legacy unindexed consent records contain identifiers and a hash, not transcripts, and expire after four hours; new consent records are indexed for cleanup.
 
 For participants:
 
@@ -302,7 +321,7 @@ Finishing saves the transcript before starting analysis in the background. If th
 
 #### Researcher AI request limits
 
-On a standalone installation (Node or Cloudflare), every AI call the researcher starts is counted before the provider is called: preview greetings, preview turns and preview analysis, aggregate analysis, follow-up study generation and **Run analysis**. Each operation has a limit per signed-in session and a limit for the whole workspace, so signing in again does not reset the workspace limit. At a limit the request is refused with HTTP 429, a `Retry-After` header and "Too many AI requests from this workspace. Please wait before trying again."; nothing is sent to the provider and nothing is charged by it. Participant interviews have their own limits and never count here.
+On a standalone installation (Node or Cloudflare), every AI call the researcher starts is counted before the provider is called: preview greetings, preview turns and preview analysis, aggregate analysis, study exploration, follow-up study generation and **Run analysis**. Each operation has a limit per signed-in session and a limit for the whole workspace, so signing in again does not reset the workspace limit. At a limit the request is refused with HTTP 429, a `Retry-After` header and "Too many AI requests from this workspace. Please wait before trying again."; nothing is sent to the provider and nothing is charged by it. Participant interviews have their own limits and never count here.
 
 | Operation | Per session | Per workspace |
 | --- | --- | --- |
@@ -310,10 +329,13 @@ On a standalone installation (Node or Cloudflare), every AI call the researcher 
 | Preview turn | 60 per hour | 1,000 per day |
 | Preview analysis | 10 per hour | 100 per day |
 | Aggregate analysis | 20 per hour | 100 per day |
+| Study exploration | 20 per hour | 100 per day |
 | Follow-up study | 20 per hour | 100 per day |
 | Run analysis | 100 per hour | 500 per day |
 
 A window opens at the first counted request and does not slide. On Cloudflare, **Run analysis** is counted only when it starts new work: repeating a request that was already accepted, or asking again while an analysis is still running, is free. On Node every **Run analysis** request is counted. The limits are set in `STANDALONE_RESEARCHER_AI_POLICY` (`src/lib/researcherAiBudget.ts`). Hosted accounts use the hosted platform limits instead.
+
+Exploration reserves a notebook attempt before checking the budget. If the budget refuses it, the notebook records a failed, budget-limited attempt and no model request is made; the response retains that attempt rather than losing its identity behind a standalone error. Replaying or saving an existing attempt does not consume another AI budget.
 
 ### How the interviewer is controlled
 
@@ -358,9 +380,9 @@ Each study also sets what participants are told about the AI provider (**AI Prov
 - **Only this provider and model** (the default for new studies). The consent notice names the provider and the model, and says the study does not switch them. An interview saved under this setting can be re-analyzed only with that provider and model. After you switch the study to another one, re-analyzing an earlier interview is refused (`PROVIDER_NOT_DISCLOSED`) until you set the study back.
 - **The provider or model may change.** The consent notice names the provider and says you may later analyze responses with a different provider or model. Re-analysis uses whatever the study is set to.
 
-Studies saved before this setting existed keep their old notice, and their interviews are not checked, until the study is saved again. Aggregate analysis and follow-up generation read only interviews saved under the study's current revision, and every settings edit starts a new revision, so they never reach a transcript under another provider or model. Researcher previews do not store research records; if preview analysis fails, **Export transcript** still opens the transcript download.
+Studies saved before this setting existed keep their old notice, and their interviews are not checked, until the study is saved again. Aggregate analysis defaults to the current revision, but an explicit dataset may include earlier revisions. Aggregate analysis, exploration and follow-up generation check each selected interview's provider commitment and transport disclosure before sending content. Follow-up generation preserves the stored aggregate's source scope. Researcher previews do not store research records; if preview analysis fails, **Export transcript** still opens the transcript download.
 
-Editing a study advances its revision and invalidates links and participant sessions issued for the previous revision. Generate and distribute a new link after a consequential edit.
+Changing study configuration advances its revision and invalidates links and participant sessions issued for the previous revision. Generate and distribute a new link after a consequential edit. Pausing/resuming collection and unchanged saves do not advance the revision.
 
 ## Security and data boundaries
 
@@ -442,7 +464,7 @@ The browser suite covers the keyless demo plus standalone direct and Gateway res
 
 Production logs are allowlisted JSON and never contain prompts, keys, or bodies. An `interview.analysis` event with `reason: corrupt-record` means a stored interview record was refused for structural reasons and left unchanged; it is not a Redis outage (`reason: unavailable`) and will not resolve by retrying. Real-Redis crash and shared-BYOS adversarial jobs also refuse inherited production Redis connections.
 
-Live-provider compatibility is a separate, paid check that the fixture suites cannot make. `tests/smoke/provider-provenance.smoke.test.ts` runs one real synthesis call through the direct adapter for a single provider and confirms the served response names a model:
+Live-provider compatibility is a separate, paid check that the fixture suites cannot make. `tests/smoke/provider-provenance.smoke.test.ts` runs one real synthesis call through the direct adapter for a single provider and confirms the served response names a model. Set `SMOKE_EXPLORATION=1` to add one exploration call; authorize two paid calls for that opt-in. Each test allows one HTTP attempt, disables automatic retries, and uses synthetic interviews only:
 
 ```bash
 SMOKE_PROVIDER=gemini GEMINI_API_KEY=... npx vitest run --config vitest.smoke.config.mts

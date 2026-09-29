@@ -296,6 +296,19 @@ return {'oi:link-found', raw}
 `;
 
 const CREATE_LINK_SCRIPT = `
+local studyRaw = redis.call('GET', KEYS[4])
+if not studyRaw then return -2 end
+local payload = string.sub(studyRaw, 1, 9) == 'oi:study:' and string.sub(studyRaw, 10) or studyRaw
+local ok, study = pcall(cjson.decode, payload)
+if not ok or type(study) ~= 'table' then return -3 end
+if (tonumber(study.revision) or 1) ~= tonumber(ARGV[6]) then return -4 end
+if study.config and study.config.linksEnabled == false then return -5 end
+local guardRaw = redis.call('GET', KEYS[5])
+if guardRaw then
+  if string.sub(guardRaw, 1, 7) ~= 'oi:smg:' then return -3 end
+  local gok, guard = pcall(cjson.decode, string.sub(guardRaw, 8))
+  if not gok or type(guard) ~= 'table' or guard.state ~= 'created' then return -3 end
+end
 if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
 if ARGV[2] ~= '' then
   local current = redis.call('SCARD', KEYS[2])
@@ -311,6 +324,7 @@ if ARGV[2] ~= '' then
 end
 redis.call('SET', KEYS[1], ARGV[1])
 if ARGV[2] ~= '' then redis.call('SADD', KEYS[2], ARGV[2]) end
+redis.call('SADD', KEYS[3], ARGV[2])
 if ARGV[3] ~= '' then redis.call('PEXPIREAT', KEYS[1], ARGV[3]) end
 return 1
 `;
@@ -496,7 +510,8 @@ export async function createParticipantLinkRecord(options: {
       }
       const created = await client.eval(
         CREATE_LINK_SCRIPT,
-        [recordKey(id), researcherLinkIndexKey(options.researcherId)],
+        [recordKey(id), researcherLinkIndexKey(options.researcherId), `study-link-index:${options.studyId}`,
+          `study:${options.studyId}`, `study-mutation-guard:${options.studyId}`],
         [
           JSON.stringify(link),
           // Hosted links are indexed per researcher. Standalone links share a
@@ -505,10 +520,12 @@ export async function createParticipantLinkRecord(options: {
           options.expiresAt ? String(options.expiresAt) : '',
           'participant-link:',
           String(MAX_INDEXED_LINKS),
+          String(options.studyRevision),
         ],
       );
       if (Number(created) === 1) return { status: 'created', code, link };
       if (Number(created) === -1) return { status: 'quota-exceeded' };
+      if (Number(created) < -1) return { status: 'unavailable' };
     }
     return { status: 'unavailable' };
   } catch (error) {

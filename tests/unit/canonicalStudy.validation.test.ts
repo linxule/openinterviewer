@@ -60,6 +60,22 @@ describe('canonical study validation', () => {
 });
 
 describe('canonical study store outcomes (ST-01)', () => {
+  it.each(['deleting', 'missing'] as const)('refuses %s participant/preview authority before reading canonical configuration', async status => {
+    const studyMutationStatus = vi.fn().mockResolvedValue(status);
+    for (const isAdmin of [false, true]) {
+      const result = await loadCanonicalStudy({ store: { getStudy, studyMutationStatus }, tokenStudyId: 'study-a', isAdmin });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.response.status).toBe(404);
+    }
+    expect(getStudy).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when lifecycle status cannot be checked', async () => {
+    const result = await loadCanonicalStudy({ store: { getStudy, studyMutationStatus: vi.fn().mockRejectedValue(new Error('Redis unavailable')) }, tokenStudyId: 'study-a' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.response.status).toBe(503);
+    expect(getStudy).not.toHaveBeenCalled();
+  });
   it('ST-01: a confirmed miss is 404 and never a storage error', async () => {
     getStudy.mockResolvedValue({ status: 'not-found' });
     const result = await loadCanonicalStudy({ store, tokenStudyId: 'study-missing' });

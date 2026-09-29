@@ -7,9 +7,10 @@ import type { ProviderCommitment, StoredInterview } from '@/types';
  * the notice says the researcher may later use another provider or model.
  * Records without a commitment (saved before it existed) are not checked.
  *
- * Only a researcher retry can reach an older transcript with a newer
- * configuration: aggregate and follow-up read only interviews saved under the
- * study's current revision, and every configuration edit advances it.
+ * Researcher retries and explicitly scoped aggregate, exploration and
+ * follow-up calls can reach older transcripts with the current configuration.
+ * Every source must pass this check before a provider call, regardless of
+ * which revision or analysis state the researcher selected.
  */
 export const PROVIDER_COMMITMENTS: readonly ProviderCommitment[] = ['fixed', 'may-change'];
 

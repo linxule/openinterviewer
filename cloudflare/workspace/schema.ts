@@ -189,6 +189,25 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
       `CREATE INDEX login_attempts_by_expiry ON login_attempts (expires_at)`,
     ],
   },
+  {
+    version: 2,
+    name: 'durable study exploration notebook',
+    // Older builds omit notebooks from delete, export and operational backup.
+    // They must refuse the upgraded workspace, not silently lose artifacts.
+    minReaderVersion: 2,
+    statements: [
+      `CREATE TABLE exploration_answers (
+        id TEXT PRIMARY KEY,
+        study_id TEXT NOT NULL,
+        record_json TEXT NOT NULL,
+        request_fingerprint TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('running','complete','failed','recovery-required'))
+      )`,
+      `CREATE INDEX exploration_answers_by_study ON exploration_answers (study_id, created_at, id)`,
+    ],
+  },
 ];
 
 /** Highest schema version this build can read and write. */

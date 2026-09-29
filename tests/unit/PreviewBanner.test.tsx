@@ -59,6 +59,17 @@ describe('PreviewBanner mode isolation', () => {
     expect(navigation.push).toHaveBeenCalledWith('/setup');
   });
 
+  it('returns a saved preview to its own edit intent without clearing its configuration', () => {
+    const config = makeStudyConfig({ id: 'saved-preview' });
+    useStore.setState({ viewMode: 'preview', studyConfig: config, interviewHistory: [{ id: 'preview-turn', role: 'user', content: 'Disposable preview', timestamp: 1 }] });
+    render(<PreviewBanner />);
+    fireEvent.click(screen.getByRole('button', { name: 'Exit Preview' }));
+    expect(navigation.push).toHaveBeenCalledExactlyOnceWith('/setup?prefill=edit&studyId=saved-preview');
+    expect(useStore.getState().studyConfig).toEqual(config);
+    expect(useStore.getState().interviewHistory).toEqual([]);
+    expect(useStore.getState().viewMode).toBe('researcher');
+  });
+
   it('unmounts a preview before clearing it and ignores a greeting that arrives during the route change', async () => {
     navigation.pathname = '/interview';
     let answer!: (text: string) => void;

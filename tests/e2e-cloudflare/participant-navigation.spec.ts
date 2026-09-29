@@ -178,8 +178,8 @@ test('a memory-only session lost to a failed Flight navigation says how to recov
 });
 
 test('leaving preview removes the old screen before clearing its session and awaiting setup', async ({ page, request }) => {
-  await createStudy(page);
-  await page.goto('/setup');
+  const { studyId } = await createStudy(page);
+  await page.goto(`/setup?prefill=edit&studyId=${studyId}`);
   await page.getByRole('button', { name: 'Preview', exact: true }).click();
   await page.getByRole('button', { name: 'I consent — begin the interview' }).click();
   await expect(page.getByText(GREETING, { exact: true })).toBeVisible();
@@ -199,7 +199,7 @@ test('leaving preview removes the old screen before clearing its session and awa
   expect(await count(request, 'greeting')).toBe(1);
 
   release();
-  await expect(page).toHaveURL(/\/setup$/);
+  await expect(page).toHaveURL(new RegExp(`/setup\\?prefill=edit&studyId=${studyId}$`));
   await expect(page.getByRole('status').filter({ hasText: 'Returning to study setup' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Preview', exact: true })).toBeEnabled();
   expect((await fixtureState(request)).refused).toEqual([]);

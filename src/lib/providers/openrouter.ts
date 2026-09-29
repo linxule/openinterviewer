@@ -1,3 +1,4 @@
+import type { ExplorationProviderInput, ExplorationProviderPayload } from '../exploration/types';
 import { HTTPClient, OpenRouter } from '@openrouter/sdk';
 import {
   AIProvider,
@@ -10,6 +11,8 @@ import {
 import { withExactGatewayHeaders, type EffectiveTransport, type ProviderEndpoint } from './endpoint';
 import {
   buildAggregateSynthesisPrompt,
+  buildExplorationPrompt,
+  explorationSystemPrompt,
   buildGreetingPrompt,
   buildSynthesisPrompt,
 } from '../prompts';
@@ -33,6 +36,7 @@ import {
 } from '../providerErrors';
 import {
   validateAggregateSynthesisPayload,
+  validateExplorationPayload,
   validateFollowupStudy,
   validateInterviewResponse,
   validateSynthesisResult,
@@ -40,6 +44,7 @@ import {
 } from '../providerValidation';
 import {
   aggregateSynthesisResponseSchema,
+  explorationResponseSchema,
   followupStudyResponseSchema,
   interviewResponseSchema,
   synthesisResponseSchema,
@@ -48,6 +53,7 @@ import {
 import {
   buildFollowupPrompt,
   execution,
+  explorationPolicy,
   formatInterviewHistory,
   GREETING_DEADLINE_MS,
   INTERVIEW_DEADLINE_MS,
@@ -279,6 +285,28 @@ export class OpenRouterProvider implements AIProvider {
       'aggregate-synthesis',
       validateAggregateSynthesisPayload,
     );
+    return providerResult(value, this.executionFor(response, requestedModel));
+  }
+
+  async exploreStudy(
+    input: ExplorationProviderInput,
+    policy?: ProviderExecutionPolicy,
+  ): Promise<ProviderResult<ExplorationProviderPayload>> {
+    const attemptPolicy = explorationPolicy(policy);
+    const requestedModel = resolveSynthesisModel(input.studyConfig);
+    const response = await this.send({
+      model: requestedModel,
+      input: buildExplorationPrompt(input),
+      system: explorationSystemPrompt,
+      schema: explorationResponseSchema,
+      schemaName: 'study_exploration',
+      enableReasoning: input.studyConfig.enableReasoning ?? true,
+      maxCompletionTokens: 12_000,
+      deadlineMs: attemptPolicy.deadlineMs,
+      operation: 'exploration',
+      policy: attemptPolicy,
+    });
+    const value = this.parseStructured(response, 'exploration', validateExplorationPayload);
     return providerResult(value, this.executionFor(response, requestedModel));
   }
 

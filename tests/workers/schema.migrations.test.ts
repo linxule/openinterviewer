@@ -97,7 +97,7 @@ describe('migration runner (ST-09)', () => {
     await runInDurableObject(scratchObject('interrupted'), (_instance, state) => {
       expect(() => applyMigrations(state.storage, [...MIGRATIONS, broken])).toThrow();
       expect(tableExists(state, 'st09_partial')).toBe(false);
-      expect(ledger(state).map((row) => row.version)).toEqual([CURRENT_SCHEMA_VERSION]);
+      expect(ledger(state).map((row) => row.version)).toEqual(MIGRATIONS.map(migration => migration.version));
 
       const fixed: Migration = { ...broken, statements: broken.statements.slice(0, 2) };
       expect(applyMigrations(state.storage, [...MIGRATIONS, fixed])).toEqual({ status: 'ready', storedVersion: N, applied: [N] });

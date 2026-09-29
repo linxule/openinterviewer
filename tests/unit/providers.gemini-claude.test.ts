@@ -166,6 +166,56 @@ describe('GeminiProvider Interactions API', () => {
 });
 
 describe('ClaudeProvider native structured output', () => {
+  it.each([
+    ['claude-sonnet-5-5', 'between_tools'],
+    ['claude-sonnet-5', 'disabled'],
+    ['claude-sonnet-4-5', 'disabled'],
+  ])('%s uses compatible reasoning-off semantics without forced tools or sampling', async (model, thinkingType) => {
+    claudeCreateMock.mockResolvedValue({
+      content: [
+        { type: 'redacted_thinking', data: 'opaque synthetic block' },
+        { type: 'text', text: JSON.stringify(interview) },
+      ],
+      model,
+    });
+    const provider = new ClaudeProvider(model, 'claude-test');
+    const result = await provider.generateInterviewResponse(
+      [{ id: 'm1', role: 'user', content: 'Hello', timestamp: 1 }],
+      makeStudyConfig({ aiProvider: 'claude', aiModel: model, enableReasoning: false }),
+      null, progress, '',
+    );
+
+    expect(result).toEqual(interview);
+    expect(claudeCreateMock).toHaveBeenCalledTimes(1);
+    const request = claudeCreateMock.mock.calls[0][0];
+    expect(request.thinking).toEqual({ type: thinkingType });
+    expect(request.output_config.format.type).toBe('json_schema');
+    expect(request.output_config.format.schema.additionalProperties).toBe(false);
+    expect(request.messages).toEqual([{ role: 'user', content: 'Hello' }]);
+    for (const name of ['tools', 'tool_choice', 'temperature', 'top_p', 'top_k']) {
+      expect(request).not.toHaveProperty(name);
+    }
+  });
+
+  it.each([false, true])('fails closed on a Sonnet 5.5 refusal even with schema-valid text (%s)', async (hasText) => {
+    claudeCreateMock.mockResolvedValue({
+      content: [
+        { type: 'redacted_thinking', data: 'opaque synthetic block' },
+        ...(hasText ? [{ type: 'text', text: JSON.stringify(synthesis) }] : []),
+      ],
+      model: 'claude-sonnet-5-5',
+      stop_reason: 'refusal',
+    });
+    const provider = new ClaudeProvider('claude-sonnet-5-5', 'claude-test');
+
+    await expect(provider.synthesizeInterview(
+      [], makeStudyConfig({ aiProvider: 'claude', aiModel: 'claude-sonnet-5-5' }), behavior, null,
+      { kind: 'queued-synthesis', deadlineMs: 5_000 },
+    )).rejects.toMatchObject({ kind: 'invalid-response' });
+    expect(claudeCreateMock).toHaveBeenCalledTimes(1);
+    expect(claudeCreateMock.mock.calls[0][1].maxRetries).toBe(0);
+  });
+
   it('uses output_config.format and adaptive thinking without pseudo-tools', async () => {
     claudeCreateMock.mockResolvedValue({
       content: [{ type: 'text', text: JSON.stringify(interview) }],

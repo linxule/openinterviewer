@@ -25,7 +25,10 @@ vi.mock('@/store', () => ({
 const routerMock = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock('next/navigation', () => ({
   useRouter: () => routerMock,
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => {
+    const config = storeMock.state.studyConfig as { id?: string } | null;
+    return new URLSearchParams(config?.id && !config.id.startsWith('study-') ? `prefill=edit&studyId=${config.id}` : '');
+  },
 }));
 
 import StudySetup from '@/components/StudySetup';
@@ -54,6 +57,7 @@ const fetchMock = vi.hoisted(() => ({
 }));
 
 beforeEach(() => {
+  sessionStorage.clear();
   fetchMock.fn.mockReset();
   fetchMock.calls.length = 0;
   fetchMock.authenticated = false;
@@ -81,6 +85,10 @@ beforeEach(() => {
           ? fetchMock.configStatus
           : { error: 'status unavailable' },
       };
+    }
+    if (path.startsWith('/api/studies/')) {
+      const config = storeMock.state.studyConfig as { id: string };
+      return { ok: true, status: 200, json: async () => ({ study: { id: config.id, config, revision: 1 } }) };
     }
     if (path === '/api/studies') {
       return { ok: true, status: 201, json: async () => ({ study: { id: 's-1', config: {} } }) };

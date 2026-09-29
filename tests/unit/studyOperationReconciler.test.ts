@@ -207,6 +207,15 @@ beforeEach(() => {
 });
 
 describe('study operation reconciliation', () => {
+  it('retains confirmed populated-delete intent across a pre-mutation BYOS outage', async () => {
+    const confirmed: PendingStudyOperationV2 = { ...operation({ studyId: studyIdAt(9), phase: 'pending', kind: 'delete' }), deleteInterviews: true, expectedRevision: 3 };
+    const platform = fakePlatform({ wire: registryPairs([confirmed]) });
+    byosMembers([]);
+    const result = await reconcilePendingStudyOperations({ researcherId: RESEARCHER, now: NOW, platform });
+    expect(result).toMatchObject({ status: 'ok', completed: 1 });
+    expect(kvMock.deleteStudy).toHaveBeenCalledWith(confirmed.studyId, BYOS, `delete:${confirmed.studyId}:1`, { deleteInterviews: true, expectedRevision: 3 });
+    expect(platformMock.resolveStudyOperationV2).toHaveBeenCalledWith(expect.objectContaining({ resolution: 'delete-complete' }));
+  });
   it('loads the HASH once and fails closed on overflow', async () => {
     const platform = fakePlatform({ wire: ['oi:ops-overflow'] });
     await expect(reconcilePendingStudyOperations({

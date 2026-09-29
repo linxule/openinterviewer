@@ -90,6 +90,44 @@ beforeEach(() => {
 });
 
 describe('DELETE /api/studies/[id] standalone — no getStudy shortcut', () => {
+  const confirmedRequest = (confirmation: unknown) => new Request(`http://localhost/api/studies/${STUDY_ID}`, {
+    method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(confirmation),
+  });
+
+  it('passes explicit populated deletion and reviewed revision into the atomic store, without a preliminary GET', async () => {
+    const response = await DELETE(confirmedRequest({ deleteInterviews: true, confirmStudyId: STUDY_ID, expectedRevision: 4 }), routeContext);
+    expect(response.status).toBe(200);
+    expect(kvMock.deleteStudy).toHaveBeenCalledWith(STUDY_ID, { name: 'standalone-kv' }, `delete:${STUDY_ID}:0`, { deleteInterviews: true, expectedRevision: 4 });
+    expect(kvMock.getStudy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {},
+    { deleteInterviews: true, confirmStudyId: 'other-study', expectedRevision: 1 },
+    { deleteInterviews: false, confirmStudyId: STUDY_ID, expectedRevision: 1 },
+    { deleteInterviews: true, confirmStudyId: STUDY_ID },
+    { deleteInterviews: true, confirmStudyId: STUDY_ID, expectedRevision: 0 },
+    { deleteInterviews: true, confirmStudyId: STUDY_ID, expectedRevision: 1, force: true },
+  ])('rejects incomplete or mismatched destructive confirmation before any mutation (%j)', async body => {
+    const response = await DELETE(confirmedRequest(body), routeContext);
+    expect(response.status).toBe(400);
+    expect(kvMock.deleteStudy).not.toHaveBeenCalled();
+    expect(platformMock.beginDeleteStudyOperationV2).not.toHaveBeenCalled();
+    expect(contextMock.getRequestContext).not.toHaveBeenCalled();
+  });
+
+  it('bounds streamed deletion confirmation before mutation', async () => {
+    const response = await DELETE(confirmedRequest({ padding: 'x'.repeat(1025) }), routeContext);
+    expect(response.status).toBe(413);
+    expect(kvMock.deleteStudy).not.toHaveBeenCalled();
+  });
+
+  it('reports an unfinished confirmed purge as pending, not deleted', async () => {
+    kvMock.deleteStudy.mockResolvedValue({ status: 'still-pending', success: false });
+    const response = await DELETE(confirmedRequest({ deleteInterviews: true, confirmStudyId: STUDY_ID, expectedRevision: 4 }), routeContext);
+    expect(response.status).toBe(202);
+    expect(await response.json()).toMatchObject({ success: false, reconciliationPending: true });
+  });
   it('does not pre-GET the study body', async () => {
     const response = await DELETE(deleteRequest, routeContext);
     const body = await response.json();

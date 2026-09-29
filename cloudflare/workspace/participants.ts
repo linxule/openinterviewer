@@ -180,6 +180,11 @@ export async function getParticipantLink(ws: WorkspaceContext, input: Rpc.GetLin
         logCorruptRecord('getParticipantLink');
         return { status: 'unavailable' };
       }
+      if (state.status === 'found' && purpose !== 'researcher') {
+        const row = readStudyRow(ws, state.link.studyId);
+        const study = row ? decodeStudyRow(row) : null;
+        if (!study || study.config.linksEnabled === false || study.revision !== state.link.studyRevision) return { status: 'not-found' };
+      }
       return state;
     });
   } catch (error) {
@@ -341,6 +346,9 @@ export async function recordConsent(ws: WorkspaceContext, input: Rpc.ConsentInpu
     return ws.storage.transactionSync((): Port.RecordConsentOutcome => {
       const checked = gate(ws, 'participant-session');
       if (!checked.ok) return { status: 'held', reason: checked.reason };
+      const row = readStudyRow(ws, input.studyId);
+      const study = row ? decodeStudyRow(row) : null;
+      if (!study || study.revision !== input.studyRevision || study.config.linksEnabled === false) return { status: 'conflict' };
       const existing = readConsent(ws, sessionDigest, input.now);
       if (existing === 'malformed') {
         logCorruptRecord('recordConsent');
@@ -357,9 +365,6 @@ export async function recordConsent(ws: WorkspaceContext, input: Rpc.ConsentInpu
           : { status: 'conflict' };
       }
       // The store also refuses consent to a study revision that no longer exists.
-      const row = readStudyRow(ws, input.studyId);
-      const study = row ? decodeStudyRow(row) : null;
-      if (!study || study.revision !== input.studyRevision) return { status: 'conflict' };
       const consent: ParticipantConsentRecord = {
         version: 1,
         participantSessionId: input.participantSessionId,

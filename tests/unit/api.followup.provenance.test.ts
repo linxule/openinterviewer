@@ -6,6 +6,7 @@ import { standaloneTestContext } from '../helpers/workspaceStoreFixture';
 import type { RedisPort } from '@/lib/redisPort';
 import { StoredStudy } from '@/types';
 import { ProviderFailure } from '@/lib/providerErrors';
+import { buildDatasetDescription } from '@/lib/exploration/dataset';
 
 // Fixture model standing in for the study's researcher-configured model.
 const GEMINI_SYNTHESIS_MODEL = 'gemini-3.7-flash';
@@ -26,6 +27,7 @@ const kvMock = vi.hoisted(() => ({
   getStudyChecked: vi.fn(),
   getStudyInterviewsChecked: vi.fn(),
   getStudyAggregateChecked: vi.fn(),
+  getInterviewChecked: vi.fn(),
 }));
 vi.mock('@/lib/kv', () => kvMock);
 
@@ -124,6 +126,82 @@ afterEach(() => {
 });
 
 describe('follow-up synthesis provenance', () => {
+  async function scopedAggregate() {
+    const sources = [
+      makeStoredInterview({ id: 'interview-a', studyId: parentStudy.id, studyRevision: 2, synthesis: {} as never }),
+      makeStoredInterview({ id: 'interview-b', studyId: parentStudy.id, studyRevision: 2, synthesis: {} as never }),
+    ];
+    const dataset = await buildDatasetDescription(parentStudy.id, sources, { revisions: [2] });
+    if (dataset.status !== 'ok') throw new Error('Invalid fixture dataset');
+    const scoped = { ...aggregate, studyRevision: 2, scope: dataset.description.manifest };
+    kvMock.getStudyAggregateChecked.mockResolvedValue({ status: 'found', aggregate: scoped });
+    kvMock.getInterviewChecked.mockImplementation(async (id: string) => {
+      const interview = sources.find(source => source.id === id);
+      return interview ? { status: 'found', interview } : { status: 'not-found' };
+    });
+    return { sources, scoped };
+  }
+
+  it('keeps an explicitly scoped historical aggregate bound to its original sources after a configuration edit', async () => {
+    const { scoped } = await scopedAggregate();
+    const response = await POST(request(), { params: Promise.resolve({ id: parentStudy.id }) });
+    expect(response.status).toBe(200);
+    expect(generateFollowupStudy).toHaveBeenCalledWith(parentStudy.config, expect.objectContaining({
+      studyRevision: 2, interviewIds: ['interview-a', 'interview-b'], scope: scoped.scope,
+    }));
+    expect(kvMock.getStudyInterviewsChecked).not.toHaveBeenCalled();
+  });
+
+  it('does not treat a later analysis retry as an immutable transcript change', async () => {
+    const { sources } = await scopedAggregate();
+    sources[0].synthesis = null;
+    const response = await POST(request(), { params: Promise.resolve({ id: parentStudy.id }) });
+    expect(response.status).toBe(200);
+    expect(generateFollowupStudy).toHaveBeenCalledOnce();
+  });
+
+  it('refuses a missing original source before budget and provider use', async () => {
+    await scopedAggregate();
+    kvMock.getInterviewChecked.mockResolvedValue({ status: 'not-found' });
+    const response = await POST(request(), { params: Promise.resolve({ id: parentStudy.id }) });
+    expect(response.status).toBe(409);
+    expect(generateFollowupStudy).not.toHaveBeenCalled();
+    expect(researcherBudgetMock.researcherAiBudgetResponse).not.toHaveBeenCalled();
+  });
+
+  it('refuses a changed original transcript instead of silently reusing its previous findings', async () => {
+    const { sources } = await scopedAggregate();
+    sources[0].transcript[0].content = 'A different source transcript.';
+    const response = await POST(request(), { params: Promise.resolve({ id: parentStudy.id }) });
+    expect(response.status).toBe(409);
+    expect(generateFollowupStudy).not.toHaveBeenCalled();
+    expect(researcherBudgetMock.researcherAiBudgetResponse).not.toHaveBeenCalled();
+  });
+
+  it('refuses historical fixed-provider sources under a different current model', async () => {
+    const { sources } = await scopedAggregate();
+    // These consent commitments are checked independently of the immutable
+    // content hash: no current config may broaden a participant's promise.
+    sources[0].providerCommitment = 'fixed';
+    sources[0].conductedByProvider = 'gemini';
+    sources[0].conductedByModel = 'gemini-original-model';
+    const response = await POST(request(), { params: Promise.resolve({ id: parentStudy.id }) });
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: 'PROVIDER_NOT_DISCLOSED' });
+    expect(generateFollowupStudy).not.toHaveBeenCalled();
+    expect(researcherBudgetMock.researcherAiBudgetResponse).not.toHaveBeenCalled();
+  });
+
+  it('does not downgrade a malformed explicit manifest to legacy current-revision authority', async () => {
+    const { scoped } = await scopedAggregate();
+    kvMock.getStudyAggregateChecked.mockResolvedValue({ status: 'found', aggregate: { ...scoped, studyRevision: parentStudy.revision,
+      scope: { ...scoped.scope, sourceFingerprint: '0'.repeat(64) } } });
+    const response = await POST(request(), { params: Promise.resolve({ id: parentStudy.id }) });
+    expect(response.status).toBe(409);
+    expect(generateFollowupStudy).not.toHaveBeenCalled();
+    expect(researcherBudgetMock.researcherAiBudgetResponse).not.toHaveBeenCalled();
+  });
+
   it.each([undefined, 'Use everyday words.\nAsk one question.'])('inherits the parent manner (%s)', async (interviewerInstructions) => {
     parentStudy.config.interviewerInstructions = interviewerInstructions;
     const response = await POST(request(), { params: Promise.resolve({ id: parentStudy.id }) });
@@ -224,6 +302,17 @@ describe('follow-up synthesis provenance', () => {
 
     expect(response.status).toBe(409);
     expect(generateFollowupStudy).not.toHaveBeenCalled();
+  });
+
+  it('does not accept another study\'s record as legacy aggregate provenance', async () => {
+    kvMock.getStudyInterviewsChecked.mockResolvedValue({ status: 'ok', items: [
+      makeStoredInterview({ id: 'interview-a', studyId: parentStudy.id, studyRevision: 3, synthesis: {} as never }),
+      makeStoredInterview({ id: 'interview-b', studyId: 'another-study', studyRevision: 3, synthesis: {} as never }),
+    ] });
+    const response = await POST(request(), { params: Promise.resolve({ id: parentStudy.id }) });
+    expect(response.status).toBe(409);
+    expect(generateFollowupStudy).not.toHaveBeenCalled();
+    expect(researcherBudgetMock.researcherAiBudgetResponse).not.toHaveBeenCalled();
   });
 
   it('returns 409 with no provider call when no stored aggregate exists', async () => {

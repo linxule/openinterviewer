@@ -138,7 +138,7 @@ describe('authenticated sample-workspace seed', () => {
     expect(response.status).toBe(200);
     expect(kvMock.saveStudy.mock.calls[0][0].config).toMatchObject({
       aiProvider: 'openai',
-      aiModel: 'gpt-5.6-terra',
+      aiModel: 'gpt-6.1-sol',
     });
   });
 });
