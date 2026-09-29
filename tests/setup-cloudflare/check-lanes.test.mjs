@@ -17,7 +17,7 @@ function write(file, text) {
 }
 
 /** A committed copy of check.mjs and its imports, with a built-artifact manifest for HEAD. */
-function checkCheckout(t) {
+function checkCheckout(t, { failDevelopmentAudit = false } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'oi-check-lanes-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const repo = path.join(dir, 'repo');
@@ -41,11 +41,13 @@ function checkCheckout(t) {
     source: { commit, dirty: false },
     artifact: { workerSha256: sha256Tree(path.join(artifact, 'worker')).sha256, assetsSha256: 'fixture' },
   }));
-  // The recording npm: every lane's argv and complete environment, then success.
+  // The recording npm: every lane's argv and complete environment. The audit
+  // fixture can report a development-only finding while production stays clean.
   const log = path.join(dir, 'lanes.ndjson');
   write(path.join(dir, 'record-lane.mjs'), [
     "import { appendFileSync } from 'node:fs';",
     `appendFileSync(${JSON.stringify(log)}, JSON.stringify({ argv: process.argv.slice(2), env: process.env }) + '\\n');`,
+    `if (${JSON.stringify(failDevelopmentAudit)} && process.argv[2] === 'audit' && !process.argv.includes('--omit=dev')) process.exitCode = 1;`,
     '',
   ].join('\n'));
   write(path.join(dir, 'bin', 'npm'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(dir, 'record-lane.mjs'))} "$@"\n`);
@@ -63,6 +65,26 @@ const PLANTED = {
   CLAUDE_CODE_MESSAGING_TOKEN: 'messaging-planted-value-81aa',
   OPENAI_API_KEY: 'sk-planted-provider-value-5c20',
 };
+
+test('a development-only security finding fails the release receipt even when the production audit passes', (t) => {
+  const box = checkCheckout(t, { failDevelopmentAudit: true });
+  const run = spawnSync(process.execPath, ['scripts/cloudflare/check.mjs', '--skip-build', '--only', 'audit-production,audit-toolchain'], {
+    cwd: box.repo,
+    env: {
+      PATH: `${path.join(box.dir, 'bin')}${path.delimiter}${process.env.PATH}`,
+      HOME: box.dir,
+      TMPDIR: os.tmpdir(),
+      GIT_CONFIG_NOSYSTEM: '1',
+    },
+    encoding: 'utf8',
+  });
+  assert.equal(run.status, 1, `${run.stdout}\n${run.stderr}`);
+  const receipt = box.receipt();
+  assert.equal(receipt.status, 'failed');
+  assert.deepEqual(receipt.lanes.map((lane) => [lane.lane, lane.exitCode]), [
+    ['audit-production', 0], ['audit-toolchain', 1],
+  ]);
+});
 
 test('check:cloudflare runs every lane without credential-like variables, names them once, and keeps what lanes need', (t) => {
   const box = checkCheckout(t);
