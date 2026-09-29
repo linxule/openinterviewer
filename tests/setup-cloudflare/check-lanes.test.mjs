@@ -47,7 +47,9 @@ function checkCheckout(t, { failDevelopmentAudit = false } = {}) {
   write(path.join(dir, 'record-lane.mjs'), [
     "import { appendFileSync } from 'node:fs';",
     `appendFileSync(${JSON.stringify(log)}, JSON.stringify({ argv: process.argv.slice(2), env: process.env }) + '\\n');`,
-    `if (${JSON.stringify(failDevelopmentAudit)} && process.argv[2] === 'audit' && !process.argv.includes('--omit=dev')) process.exitCode = 1;`,
+    "const explicitlyIncluded = process.argv.includes('--include=dev');",
+    "const omitted = process.argv.includes('--omit=dev') || process.env.NODE_ENV === 'production' || (process.env.npm_config_omit ?? '').split(/[\\s,]+/).includes('dev');",
+    `if (${JSON.stringify(failDevelopmentAudit)} && process.argv[2] === 'audit' && (explicitlyIncluded || !omitted)) process.exitCode = 1;`,
     '',
   ].join('\n'));
   write(path.join(dir, 'bin', 'npm'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(dir, 'record-lane.mjs'))} "$@"\n`);
@@ -66,25 +68,33 @@ const PLANTED = {
   OPENAI_API_KEY: 'sk-planted-provider-value-5c20',
 };
 
-test('a development-only security finding fails the release receipt even when the production audit passes', (t) => {
-  const box = checkCheckout(t, { failDevelopmentAudit: true });
-  const run = spawnSync(process.execPath, ['scripts/cloudflare/check.mjs', '--skip-build', '--only', 'audit-production,audit-toolchain'], {
-    cwd: box.repo,
-    env: {
-      PATH: `${path.join(box.dir, 'bin')}${path.delimiter}${process.env.PATH}`,
-      HOME: box.dir,
-      TMPDIR: os.tmpdir(),
-      GIT_CONFIG_NOSYSTEM: '1',
-    },
-    encoding: 'utf8',
+for (const [label, ambient] of [
+  ['default environment', {}],
+  ['NODE_ENV=production', { NODE_ENV: 'production' }],
+  ['npm_config_omit=dev', { npm_config_omit: 'dev' }],
+  ['both production and omit settings', { NODE_ENV: 'production', npm_config_omit: 'dev' }],
+]) {
+  test(`a development-only security finding fails the release receipt even when the production audit passes: ${label}`, (t) => {
+    const box = checkCheckout(t, { failDevelopmentAudit: true });
+    const run = spawnSync(process.execPath, ['scripts/cloudflare/check.mjs', '--skip-build', '--only', 'audit-production,audit-toolchain'], {
+      cwd: box.repo,
+      env: {
+        PATH: `${path.join(box.dir, 'bin')}${path.delimiter}${process.env.PATH}`,
+        HOME: box.dir,
+        TMPDIR: os.tmpdir(),
+        GIT_CONFIG_NOSYSTEM: '1',
+        ...ambient,
+      },
+      encoding: 'utf8',
+    });
+    assert.equal(run.status, 1, `${run.stdout}\n${run.stderr}`);
+    const receipt = box.receipt();
+    assert.equal(receipt.status, 'failed');
+    assert.deepEqual(receipt.lanes.map((lane) => [lane.lane, lane.exitCode]), [
+      ['audit-production', 0], ['audit-toolchain', 1],
+    ]);
   });
-  assert.equal(run.status, 1, `${run.stdout}\n${run.stderr}`);
-  const receipt = box.receipt();
-  assert.equal(receipt.status, 'failed');
-  assert.deepEqual(receipt.lanes.map((lane) => [lane.lane, lane.exitCode]), [
-    ['audit-production', 0], ['audit-toolchain', 1],
-  ]);
-});
+}
 
 test('check:cloudflare runs every lane without credential-like variables, names them once, and keeps what lanes need', (t) => {
   const box = checkCheckout(t);
