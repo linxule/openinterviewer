@@ -159,7 +159,7 @@ describe('StudyDetail participant-link management', () => {
     const heading = await screen.findByRole('heading', { name: 'Managed Links Study' });
     expect(heading.closest('.min-h-screen')).toBeNull();
     expect(heading.closest('.min-h-dvh')).toBeNull();
-    expect(screen.getByRole('tablist', { name: 'Study sections' })).toHaveClass('grid-cols-3');
+    expect(screen.getByRole('tablist', { name: 'Study sections' })).toHaveClass('grid-cols-2', 'sm:grid-cols-4');
     expect(screen.getByRole('group', { name: 'Study summary' })).toHaveClass('grid-cols-1', 'sm:grid-cols-3');
 
     fireEvent.click(screen.getByRole('tab', { name: 'Interviews' }));

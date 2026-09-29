@@ -321,6 +321,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ retryable: true, reason: 'unavailable' }, { status: 503 });
     }
 
+    // A consumed create key retains its identifier-only receipt after study
+    // deletion; it must never recreate or return the removed configuration.
+    if (mapping.state === 'deleted') {
+      return NextResponse.json({ code: 'IDEMPOTENCY_KEY_CONSUMED' }, { status: 409 });
+    }
     const storedStudy: StoredStudy = mapping.study;
 
     // Hosted ownership and researcher storage are separate Redis databases.

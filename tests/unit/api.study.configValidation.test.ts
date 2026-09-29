@@ -62,6 +62,28 @@ beforeEach(() => {
 });
 
 describe('study route configuration validation', () => {
+  it('does not require an impact confirmation for an unchanged populated study, but still uses the atomic mutation gate', async () => {
+    const study = makeStoredStudy({ id: 'study-validation', createdAt: 123, interviewCount: 4, revision: 7, config: makeStudyConfig({ id: 'study-validation', createdAt: 123 }) });
+    kvMock.getStudy.mockResolvedValue(study);
+    kvMock.replaceStudyConfigAtomic.mockResolvedValue({ status: 'updated', study });
+    const response = await PUT(request('http://localhost/api/studies/study-validation', 'PUT', { config: { name: study.config.name }, expectedRevision: 7 }), { params: Promise.resolve({ id: 'study-validation' }) });
+    expect(response.status).toBe(200);
+    expect(kvMock.replaceStudyConfigAtomic).toHaveBeenCalledOnce();
+    expect((await response.json()).study.revision).toBe(7);
+  });
+
+  it('refuses a stale reviewed edit before any write, including a confirmed one', async () => {
+    kvMock.getStudy.mockResolvedValue(makeStoredStudy({ id: 'study-validation', revision: 8 }));
+    const response = await PUT(request('http://localhost/api/studies/study-validation', 'PUT', { config: { name: 'Reviewed at revision seven' }, expectedRevision: 7, confirmed: true }), { params: Promise.resolve({ id: 'study-validation' }) });
+    expect(response.status).toBe(409);
+    expect(kvMock.replaceStudyConfigAtomic).not.toHaveBeenCalled();
+  });
+
+  it.each([0, -1, 1.5, '7', null])('rejects invalid reviewed revision %j', async expectedRevision => {
+    const response = await PUT(request('http://localhost/api/studies/study-validation', 'PUT', { config: { name: 'Changed' }, expectedRevision }), { params: Promise.resolve({ id: 'study-validation' }) });
+    expect(response.status).toBe(400);
+    expect(kvMock.replaceStudyConfigAtomic).not.toHaveBeenCalled();
+  });
   it('rejects a canonical study whose selected provider has no request-scoped key', async () => {
     const response = await POST(request(
       'http://localhost/api/studies',

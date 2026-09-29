@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { makeStoredInterview } from '../fixtures/models';
+import { makeStoredInterview, makeStoredStudy, makeStudyConfig } from '../fixtures/models';
 
 const router = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock('next/navigation', () => ({
@@ -13,6 +13,7 @@ const storageMock = vi.hoisted(() => ({
   readStudyInterviews: vi.fn(),
   reconcileStudyOperations: vi.fn(),
   exportAllInterviews: vi.fn(),
+  exportAllInterviewsChecked: vi.fn(),
 }));
 vi.mock('@/services/storageService', async (importOriginal) => {
   const actual = (await importOriginal()) as typeof import('@/services/storageService');
@@ -23,6 +24,7 @@ vi.mock('@/services/storageService', async (importOriginal) => {
     readStudyInterviews: storageMock.readStudyInterviews,
     reconcileStudyOperations: storageMock.reconcileStudyOperations,
     exportAllInterviews: storageMock.exportAllInterviews,
+    exportAllInterviewsChecked: storageMock.exportAllInterviewsChecked,
   };
 });
 
@@ -176,4 +178,21 @@ describe('Dashboard register table', () => {
     fireEvent.keyDown(rowAButton, { key: 'ArrowUp' });
     expect(document.activeElement).toBe(rowAButton);
   });
+  it('exports the selected study rather than silently exporting the whole workspace', async () => {
+    const studyId = 'selected-study';
+    const study = makeStoredStudy({ id: studyId, config: makeStudyConfig({ id: studyId, name: 'Selected study' }) });
+    const interview = makeStoredInterview({ studyId, studyName: 'Selected study' });
+    storageMock.getAllStudies.mockResolvedValue({ studies: [study], outcome: { status: 'ok' } });
+    storageMock.readAllInterviews.mockResolvedValue({ status: 'ok', value: { interviews: [interview], pendingStudies: [] } });
+    storageMock.readStudyInterviews.mockResolvedValue({ status: 'ok', value: [interview] });
+    storageMock.exportAllInterviewsChecked.mockResolvedValue({ status: 'unavailable', error: 'Synthetic export failure', retryable: true });
+    renderDashboard();
+    fireEvent.click(await screen.findByRole('button', { name: 'Export All' }));
+    expect(await screen.findByText('Synthetic export failure')).toBeInTheDocument();
+    expect(storageMock.exportAllInterviewsChecked).toHaveBeenCalledWith(undefined);
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: studyId } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Export selected study' }));
+    expect(storageMock.exportAllInterviewsChecked).toHaveBeenLastCalledWith(studyId);
+  });
+
 });

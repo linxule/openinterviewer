@@ -128,7 +128,7 @@ async function prepare(input: Rpc.PersistInput): Promise<Prepared | null> {
   // The initial generation's frozen inputs are required on this backend.
   if (!isValidFrozen(input.initialAnalysis, interview.studyId, input.expectedStudyRevision)) return null;
 
-  const recordJson = JSON.stringify(interview);
+  const recordJson = JSON.stringify({ ...interview, collectionConfig: input.initialAnalysis.studyConfig });
   const frozenJson = JSON.stringify(input.initialAnalysis);
   const identityBytes = utf8Bytes(interview.id) + utf8Bytes(interview.studyId) + utf8Bytes(input.fingerprint)
     + utf8Bytes(input.identity.participantSessionId ?? '') + utf8Bytes(input.identity.linkId ?? '');
@@ -204,7 +204,9 @@ function decide(ws: WorkspaceContext, prepared: Prepared): Decision {
     logCorruptRecord('persistCompletedInterview');
     return refuse({ status: 'unavailable' });
   }
-  if (!input.allowDisabledLinks && study.config.linksEnabled === false) return refuse({ status: 'links-disabled' });
+  // Durable completions are participant records. Preview never writes, and
+  // an internal caller flag cannot bypass the researcher's access pause.
+  if (study.config.linksEnabled === false) return refuse({ status: 'links-disabled' });
   if (study.revision !== input.expectedStudyRevision) return refuse({ status: 'revision-stale' });
 
   // The object holds the canonical configuration of the verified revision. A
@@ -330,7 +332,8 @@ function write(ws: WorkspaceContext, prepared: Prepared, frozen: FrozenAnalysisI
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
     interview.id,
     interview.studyId,
-    prepared.recordJson,
+    // The write boundary owns the historical protocol snapshot, never the browser.
+    JSON.stringify({ ...interview, collectionConfig: frozen.studyConfig }),
     input.fingerprint,
     interview.createdAt,
     interview.completedAt,

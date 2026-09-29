@@ -45,6 +45,8 @@ import {
   type AnalysisRow,
 } from './projection';
 import { chargeBudgetWindows, isValidCounterList } from './budget';
+import { interviewAnalysisConfig } from '../../src/lib/interviewCollectionContext';
+import { decodeStudyRow, readStudyRow } from './studies';
 
 export const RETRY_RECEIPT_FAMILY = 'analysis-retry';
 
@@ -438,10 +440,10 @@ export async function acceptAnalysisRetry(
     return await ws.storage.transaction(async (): Promise<Protocol.AcceptAnalysisRetryOutcome> => {
       const interview = liveParent(sql, input.interviewId);
       if (!interview || interview.study_id !== input.studyId) return { status: 'not-found' };
-      const study = sql
-        .exec<{ revision: number }>(`SELECT revision FROM studies WHERE id = ?`, input.studyId)
-        .toArray()[0];
-      if (!study) return { status: 'not-found' };
+      const studyRow = readStudyRow(ws, input.studyId);
+      if (!studyRow) return { status: 'not-found' };
+      const study = decodeStudyRow(studyRow);
+      if (!study) return { status: 'unavailable' };
       const state = readInterviewState(sql, interview);
       if (!state) return { status: 'not-found' };
       const currentGeneration = state.active?.generation ?? state.row?.current_generation ?? 0;
@@ -492,8 +494,9 @@ export async function acceptAnalysisRetry(
       if (!commitmentCovers(state.record, input.input.requestedProvider, input.input.requestedModel)) {
         return { status: 'provider-not-disclosed' };
       }
-      const { disclosedTransport: _callerDisclosure, ...acceptedInput } = input.input;
+      const { disclosedTransport: _callerDisclosure, ...callerInput } = input.input;
       void _callerDisclosure;
+      const acceptedInput = { ...callerInput, studyConfig: interviewAnalysisConfig(state.record, study.config) };
       const frozen: Protocol.FrozenAnalysisInput = disclosed
         ? { ...acceptedInput, disclosedTransport: disclosed }
         : acceptedInput;

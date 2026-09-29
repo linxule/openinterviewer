@@ -138,6 +138,29 @@ describe('OpenAIProvider', () => {
   });
 
   it.each([
+    ['gpt-6.1-sol', 'low'],
+    ['gpt-6-sol', 'none'],
+    ['gpt-6-luna', 'none'],
+    ['gpt-5.6-terra', 'none'],
+  ])('%s keeps lower-latency reasoning compatible without sampling overrides', async (model, effort) => {
+    createMock.mockResolvedValue(response(JSON.stringify(interviewJson()), model));
+    const provider = new OpenAIProvider(model, 'sk-test');
+    await provider.generateInterviewResponse(
+      [], makeStudyConfig({ aiProvider: 'openai', aiModel: model, enableReasoning: false }), null,
+      { questionsAsked: [], total: 1, currentPhase: 'background', isComplete: false }, '',
+    );
+
+    expect(createMock).toHaveBeenCalledTimes(1);
+    const body = createMock.mock.calls[0][0];
+    expect(body.model).toBe(model);
+    expect(body.reasoning).toEqual({ effort });
+    expect(body).not.toHaveProperty('temperature');
+    expect(body).not.toHaveProperty('top_p');
+    expect(body).not.toHaveProperty('tools');
+    expect(body.text.format.strict).toBe(true);
+  });
+
+  it.each([
     'What did you mean by the closing } in your example?',
     'How did you use [draft] and an opening { in that note?',
     'You wrote "the } belongs here"; could you explain?',

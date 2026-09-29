@@ -18,7 +18,7 @@ export type { StudyWorkspaceItem };
 
 export type ResearcherStorageOutcome<T> =
   | { status: 'ok'; value: T }
-  | { status: 'pending'; error: string }
+  | { status: 'pending'; error: string; code?: string }
   | { status: 'unavailable'; error: string; retryable: true }
   | { status: 'unauthorized'; error: string }
   | { status: 'not-found'; error: string }
@@ -66,6 +66,7 @@ export type SaveStudyOptions = {
   config: StudyConfig;
   /** When set, this is an edit PUT and must not send Idempotency-Key. */
   updateStudyId?: string;
+  expectedRevision?: number;
   confirmed?: boolean;
   /** Required for create POST. Must be a UUID v4 owned by one create intent. */
   idempotencyKey?: string;
@@ -95,7 +96,7 @@ export async function saveStudy(options: SaveStudyOptions): Promise<SaveStudyRes
       headers,
       body: JSON.stringify(
         isUpdate
-          ? { config: options.config, ...(options.confirmed ? { confirmed: true } : {}) }
+          ? { config: options.config, ...(options.confirmed ? { confirmed: true } : {}), ...(options.expectedRevision !== undefined ? { expectedRevision: options.expectedRevision } : {}) }
           : { config: createConfigPayload(options.config) }
       ),
     }
@@ -144,7 +145,7 @@ export async function saveCompletedInterview(
 export async function getAllInterviews(): Promise<StoredInterview[]> {
   const outcome = await readAllInterviews();
   if (outcome.status === 'ok') return outcome.value.interviews;
-  if (outcome.status === 'pending') throw new StudyOperationPendingError(outcome.error);
+  if (outcome.status === 'pending') throw new StudyOperationPendingError(outcome.error, outcome.code);
   if (outcome.status === 'unavailable') throw new ResearcherStorageUnavailableError(outcome.error);
   logRequestEvent({ event: 'route.failure', errorType: 'UnknownError' });
   return [];
@@ -206,7 +207,7 @@ export async function getInterview(id: string, studyId?: string): Promise<Stored
 export async function exportAllInterviews(): Promise<Blob | null> {
   const outcome = await exportAllInterviewsChecked();
   if (outcome.status === 'ok') return outcome.value;
-  if (outcome.status === 'pending') throw new StudyOperationPendingError(outcome.error);
+  if (outcome.status === 'pending') throw new StudyOperationPendingError(outcome.error, outcome.code);
   if (outcome.status === 'unavailable') throw new ResearcherStorageUnavailableError(outcome.error);
   logRequestEvent({ event: 'route.failure', errorType: 'UnknownError' });
   return null;
@@ -260,9 +261,10 @@ export async function isCompleteZipArchive(archive: Blob): Promise<boolean> {
   return position === directorySize && count === entries;
 }
 
-export async function exportAllInterviewsChecked(): Promise<ResearcherStorageOutcome<Blob>> {
+export async function exportAllInterviewsChecked(studyId?: string): Promise<ResearcherStorageOutcome<Blob>> {
   try {
-    const response = await fetch('/api/interviews/export');
+    const query = studyId ? `?studyId=${encodeURIComponent(studyId)}` : '';
+    const response = await fetch(`/api/interviews/export${query}`);
     if (response.ok) {
       // A streamed export that fails after the headers is not reliably an
       // errored body: the Cloudflare runtime (through OpenNext) can end it as
@@ -301,12 +303,13 @@ export async function exportAllInterviewsChecked(): Promise<ResearcherStorageOut
 }
 
 export class StudyOperationPendingError extends Error {
-  readonly code = 'STUDY_OPERATION_PENDING' as const;
+  readonly code: 'STUDY_OPERATION_PENDING' | 'STUDY_DELETION_PENDING';
   readonly status = 409;
 
-  constructor(message = 'A study operation is already in progress.') {
+  constructor(message = 'A study operation is already in progress.', code?: string) {
     super(message);
     this.name = 'StudyOperationPendingError';
+    this.code = code === 'STUDY_DELETION_PENDING' ? code : 'STUDY_OPERATION_PENDING';
   }
 }
 
@@ -314,8 +317,8 @@ function classifyResearcherStorageFailure(
   response: Response,
   data: { code?: string; error?: string },
 ): ResearcherStorageFailure {
-  if (response.status === 409 && data.code === 'STUDY_OPERATION_PENDING') {
-    return { status: 'pending', error: data.error || 'A study operation is already in progress.' };
+  if (response.status === 409 && (data.code === 'STUDY_OPERATION_PENDING' || data.code === 'STUDY_DELETION_PENDING')) {
+    return { status: 'pending', error: data.error || 'A study operation is already in progress.', ...(data.code === 'STUDY_DELETION_PENDING' ? { code: data.code } : {}) };
   }
   if (response.status === 503) {
     return {
@@ -337,8 +340,8 @@ function classifyResearcherStorageFailure(
 }
 
 function throwIfStudyOperationPending(response: Response, data: { code?: string; error?: string }) {
-  if (response.status === 409 && data.code === 'STUDY_OPERATION_PENDING') {
-    throw new StudyOperationPendingError(data.error);
+  if (response.status === 409 && (data.code === 'STUDY_OPERATION_PENDING' || data.code === 'STUDY_DELETION_PENDING')) {
+    throw new StudyOperationPendingError(data.error, data.code);
   }
 }
 
@@ -480,10 +483,15 @@ export function readStudyAggregate(id: string): Promise<ResearcherStorageOutcome
 }
 
 // Delete study
-export async function deleteStudy(id: string): Promise<StudyDeleteResult> {
+export async function deleteStudy(id: string, confirmation?: {
+  deleteInterviews: true;
+  confirmStudyId: string;
+  expectedRevision: number;
+}): Promise<StudyDeleteResult> {
   try {
-    const response = await fetch(`/api/studies/${id}`, {
-      method: 'DELETE'
+    const response = await fetch(`/api/studies/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      ...(confirmation ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(confirmation) } : {}),
     });
     const data = await response.json().catch(() => ({})) as {
       error?: string;

@@ -5,6 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { testEnv, workspaceStub } from './helpers';
+import { MIGRATIONS } from '../../cloudflare/workspace/schema';
 import {
   analysisRow,
   captureQueue,
@@ -80,7 +81,7 @@ describe('bootstrap metadata after the migrations (ST-09)', () => {
       activated_epoch: testEnv.ANALYSIS_RECOVERY_EPOCH,
       maintenance_state: 'open',
     }]);
-    expect(after.ledger).toEqual([{ version: 1 }]);
+    expect(after.ledger).toEqual(MIGRATIONS.map(migration => ({ version: migration.version })));
   });
 });
 

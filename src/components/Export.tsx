@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useStore } from '@/store';
 import { Button, Coordinate, Icon, Label, Page, Rule, Verbatim } from '@/components/ui';
 import NavigationStatus from '@/components/NavigationStatus';
+import { previewSetupDestination } from '@/lib/previewSetupDestination';
 
 const Export: React.FC = () => {
   const router = useRouter();
@@ -202,7 +203,7 @@ const Export: React.FC = () => {
     resetParticipant();
     setViewMode('researcher');
     setStep('setup');
-    router.push('/setup');
+    router.push(previewSetupDestination(studyConfig?.id));
   };
 
   if (isLeaving) return <NavigationStatus>Opening the next screen…</NavigationStatus>;

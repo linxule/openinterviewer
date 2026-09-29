@@ -190,7 +190,7 @@ describe('consent (ST-03)', () => {
   it('ST-03: consent to a missing study or a superseded revision is refused', async () => {
     const study = await createStudy();
     const consentHash = await sha256Hex('text');
-    await workspaceStub().replaceStudyConfig({ studyId: study.id, expectedRevision: 1, config: study.config, now: T0 });
+    await workspaceStub().replaceStudyConfig({ studyId: study.id, expectedRevision: 1, config: { ...study.config, name: 'Edited collection' }, now: T0 });
     expect(await workspaceStub().recordConsent({
       participantSessionId: crypto.randomUUID(), studyId: study.id, studyRevision: 1, consentHash, now: T0,
     })).toEqual({ status: 'conflict' });

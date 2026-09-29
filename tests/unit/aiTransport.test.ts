@@ -34,6 +34,10 @@ describe('AI transport configuration', () => {
     expect(toGatewayModelId('gemini', 'gemini-3.7-flash')).toBe('google/gemini-3.7-flash');
     expect(toGatewayModelId('claude', 'claude-sonnet-4-5')).toBe('anthropic/claude-sonnet-4.5');
     expect(toGatewayModelId('claude', 'claude-sonnet-5')).toBe('anthropic/claude-sonnet-5');
+    expect(toGatewayModelId('claude', 'claude-sonnet-5-5')).toBe('anthropic/claude-sonnet-5.5');
+    expect(toGatewayModelId('openai', 'gpt-6.1-sol')).toBe('openai/gpt-6.1-sol');
+    expect(toGatewayModelId('openai', 'gpt-6-sol')).toBe('openai/gpt-6-sol');
+    expect(toGatewayModelId('openai', 'gpt-6-luna')).toBe('openai/gpt-6-luna');
     expect(toGatewayModelId('openai', 'gpt-5.6-terra')).toBe('openai/gpt-5.6-terra');
     expect(gatewayRouteForProvider('gemini')).toBe('google');
     expect(gatewayRouteForProvider('claude')).toBe('anthropic');

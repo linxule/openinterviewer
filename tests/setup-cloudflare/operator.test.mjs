@@ -53,6 +53,7 @@ const ROW_COUNTS = {
   budget_windows: 0,
   budget_members: 5,
   deletion_fences: 0,
+  exploration_answers: 0,
 };
 
 function syntheticRow(family, index, watermark) {
@@ -68,6 +69,22 @@ function syntheticRow(family, index, watermark) {
       updated_at: 1_800_000_000_000,
     };
   }
+  if (family.name === 'exploration_answers') {
+    const answer = {
+      id: `notebook-answer-${index}`, studyId: 'studies-id-000', question: 'Which concern does the interview support?',
+      scope: { studyId: 'studies-id-000', selection: {},
+        sources: [{ interviewId: 'interviews-id-000', studyRevision: 1, contentHash: 'a'.repeat(64) }],
+        totalSaved: 7, selectedCount: 1, excludedCount: 6, unknownProfileCount: 0, pendingAnalysisCount: 0,
+        sourceFingerprint: 'b'.repeat(64) },
+      createdAt: 1_800_000_000_000, updatedAt: 1_800_000_000_001, status: 'complete',
+      requestFingerprint: 'c'.repeat(64), promptVersion: 1,
+      result: { answer: 'A synthetic finding.', findings: [{ heading: 'Recorded concern', interpretation: 'A synthetic interpretation.',
+        supporting: [{ quote: `${CONTENT_MARKER} — 研究`, turnIndex: 2, interviewId: 'interviews-id-000' }], challenging: [], uncertain: [] }], limitations: [] },
+      execution: { provider: 'openai', requestedModel: 'gpt-fixture', model: 'gpt-fixture-served', aiTransport: 'cloudflare-gateway' },
+    };
+    return { id: answer.id, study_id: answer.studyId, record_json: JSON.stringify(answer),
+      request_fingerprint: answer.requestFingerprint, created_at: answer.createdAt, updated_at: answer.updatedAt, status: answer.status };
+  }
   const row = {};
   for (const column of family.columns) {
     row[column.name] = column.type === 'integer'
@@ -77,10 +94,10 @@ function syntheticRow(family, index, watermark) {
   return row;
 }
 
-function workspaceRows(watermark) {
+function workspaceRows(watermark, rowCounts = ROW_COUNTS) {
   const rows = {};
   for (const family of format.BACKUP_FAMILIES) {
-    rows[family.name] = Array.from({ length: ROW_COUNTS[family.name] }, (_, index) => syntheticRow(family, index, watermark));
+    rows[family.name] = Array.from({ length: rowCounts[family.name] }, (_, index) => syntheticRow(family, index, watermark));
   }
   return rows;
 }
@@ -147,7 +164,11 @@ async function fakeInstallation(t, overrides = {}) {
     adminPassword: PASSWORD,
     importCalls: [],
     imported: new Map(),
+    importedRows: new Map(),
+    importManifest: null,
     finalized: null,
+    schemaVersion: 2,
+    rowCounts: ROW_COUNTS,
     faults: {},
     ...overrides,
   };
@@ -208,10 +229,10 @@ async function fakeInstallation(t, overrides = {}) {
       return send(response, 200, {
         status: 'ok',
         workspaceId: WORKSPACE_ID,
-        schemaVersion: 1,
+        schemaVersion: state.schemaVersion,
         maintenance: state.maintenance,
         epoch: { activated: state.activatedEpoch, configuredMatches: true },
-        counts: { ...ROW_COUNTS },
+        counts: { ...state.rowCounts },
         jobs: { pending: 0, claimed: 0, started: 0, recoveryRequired: 1, oldestActiveAgeMs: null },
         alarm: { scheduledAt: null },
       });
@@ -226,7 +247,7 @@ async function fakeInstallation(t, overrides = {}) {
         return send(response, 409, { error: 'changed', code: 'WATERMARK_CHANGED' });
       }
       const family = url.searchParams.get('family');
-      const rows = workspaceRows(watermark)[family];
+      const rows = workspaceRows(watermark, state.rowCounts)[family];
       if (!rows) return send(response, 400, { error: 'Unknown backup family.', code: 'INVALID_REQUEST' });
       const offset = Number(url.searchParams.get('cursor') ?? '0');
       const page = rows.slice(offset, offset + state.pageSize);
@@ -239,7 +260,7 @@ async function fakeInstallation(t, overrides = {}) {
         rows: page,
         nextCursor: offset + state.pageSize < rows.length ? String(offset + state.pageSize) : null,
         families: state.families ?? [...format.BACKUP_FAMILY_NAMES],
-        schemaVersion: 1,
+        schemaVersion: state.schemaVersion,
         workspaceId: WORKSPACE_ID,
       });
     }
@@ -259,6 +280,7 @@ async function fakeInstallation(t, overrides = {}) {
       if (request.headers['content-type'] !== 'application/json') return send(response, 415, { code: 'UNSUPPORTED_MEDIA_TYPE' });
       importCount += 1;
       const input = JSON.parse(body);
+      state.importManifest ??= input.manifest;
       state.importCalls.push(input.chunk ? `${input.chunk.family}:${input.chunk.index}` : 'finalize');
       if (state.faults.importFailAt === importCount) {
         return send(response, 500, { error: 'Operator request failed.', code: 'INTERNAL' });
@@ -282,6 +304,7 @@ async function fakeInstallation(t, overrides = {}) {
       const key = `${chunk.family}:${chunk.index}`;
       const duplicate = state.imported.has(key);
       state.imported.set(key, chunk.sha256);
+      state.importedRows.set(key, chunk.rows);
       return send(response, 200, { status: 'accepted', family: chunk.family, index: chunk.index, duplicate });
     }
 
@@ -520,7 +543,10 @@ test('OPS-02 backup export writes private chunk files, a manifest and a completi
     assert.equal(statSync(path.join(out, name)).mode & 0o777, 0o600, name);
   }
   const manifest = JSON.parse(readFileSync(path.join(out, 'manifest.json'), 'utf8')).manifest;
-  assert.equal(manifest.formatVersion, 1);
+  assert.equal(manifest.formatVersion, 2);
+  assert.equal(manifest.schemaVersion, 2);
+  assert.deepEqual(manifest.families.find((family) => family.name === 'exploration_answers'),
+    { name: 'exploration_answers', count: 0, chunks: [] });
   assert.equal(manifest.sourceWorkspaceId, WORKSPACE_ID);
   assert.ok(manifest.families.every((family) => family.chunks.every((chunk) => /^[0-9a-f]{64}$/.test(chunk.sha256))));
 });
@@ -598,6 +624,55 @@ test('OPS-02 import sends every chunk in manifest order, then finalizes with mat
   assert.equal(target.state.importCalls[0], 'workspace_meta:0');
   assert.equal(target.state.importCalls.at(-1), 'finalize');
   assert.deepEqual(target.state.finalized, ROW_COUNTS);
+  assertNoSecretsOrContent(result);
+});
+
+test('OPS-02 notebook artifacts round-trip through CLI backup export and import without logging quotes', async (t) => {
+  const rowCounts = { ...ROW_COUNTS, exploration_answers: 1 };
+  const source = await fakeInstallation(t, { rowCounts });
+  const out = path.join(tempDir(t, 'oi-operator-notebook-'), 'backup');
+  const exported = await runCli(['backup', 'export', '--out', out, '--origin', source.origin]);
+  assert.equal(exported.code, 0, exported.stderr);
+  assert.deepEqual(exported.json.counts, rowCounts);
+  const validation = await format.validateBackupLines(backupLines(out));
+  assert.equal(validation.status, 'valid');
+  assert.deepEqual(validation.counts, rowCounts);
+  assert.equal(validation.manifest.formatVersion, 2);
+  assert.equal(validation.manifest.schemaVersion, 2);
+  const target = await fakeInstallation(t, { maintenance: { state: 'recovery', version: 1 } });
+  const imported = await runCli(['backup', 'import', '--in', out, '--origin', target.origin]);
+  assert.equal(imported.code, 0, imported.stderr);
+  assert.deepEqual(imported.json.counts, rowCounts);
+  const expected = syntheticRow(format.backupFamily('exploration_answers'), 0, validation.manifest.watermark);
+  assert.deepEqual(target.state.importedRows.get('exploration_answers:0'), [expected]);
+  assert.equal(target.state.importCalls.at(-2), 'exploration_answers:0');
+  assert.equal(target.state.importCalls.at(-1), 'finalize');
+  assertNoSecretsOrContent(exported);
+  assertNoSecretsOrContent(imported);
+});
+
+test('OPS-02 a complete notebook-free format1/schema1 backup imports with its original closed family counts', async (t) => {
+  const backup = await exportFixture(t);
+  const manifestFile = path.join(backup, 'manifest.json');
+  const { manifest: current } = JSON.parse(readFileSync(manifestFile, 'utf8'));
+  const manifest = { ...current, formatVersion: 1, schemaVersion: 1,
+    families: current.families.filter((family) => family.name !== 'exploration_answers') };
+  writeFileSync(manifestFile, `${JSON.stringify({ kind: 'manifest', manifest })}\n`);
+  writeFileSync(path.join(backup, 'trailer.json'), `${JSON.stringify({ kind: 'trailer', complete: true,
+    manifestSha256: await format.backupManifestDigest(manifest) })}\n`);
+  const { exploration_answers: _absentNotebook, ...legacyCounts } = ROW_COUNTS;
+  const validation = await format.validateBackupLines(backupLines(backup));
+  assert.equal(validation.status, 'valid');
+  assert.deepEqual(validation.counts, legacyCounts);
+  const target = await fakeInstallation(t, { maintenance: { state: 'recovery', version: 1 } });
+  const result = await runCli(['backup', 'import', '--in', backup, '--origin', target.origin]);
+  assert.equal(result.code, 0, result.stderr);
+  assert.deepEqual(result.json.counts, legacyCounts);
+  assert.deepEqual(target.state.finalized, legacyCounts);
+  assert.equal(target.state.importManifest.formatVersion, 1);
+  assert.equal(target.state.importManifest.schemaVersion, 1);
+  assert.equal(Object.hasOwn(target.state.importManifest.counts, 'exploration_answers'), false);
+  assert.equal(target.state.importCalls.some((call) => call.startsWith('exploration_answers:')), false);
   assertNoSecretsOrContent(result);
 });
 

@@ -172,6 +172,24 @@ beforeEach(() => {
 });
 
 describe('hosted study deletion operation saga', () => {
+  it('passes confirmed populated deletion through owner-first begin and BYOS mutation before platform finalization', async () => {
+    const confirmed = new Request(request.url, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deleteInterviews: true, confirmStudyId: DELETE_STUDY_ID, expectedRevision: 3 }) });
+    const response = await DELETE(confirmed, routeContext);
+    expect(response.status).toBe(200);
+    expect(kvMock.deleteStudy).toHaveBeenCalledWith(DELETE_STUDY_ID, {}, `delete:${DELETE_STUDY_ID}:1`, { deleteInterviews: true, expectedRevision: 3 });
+    expect(kvMock.getStudy).not.toHaveBeenCalled();
+    expect(platformMock.beginDeleteStudyOperationV2.mock.invocationCallOrder[0]).toBeLessThan(kvMock.deleteStudy.mock.invocationCallOrder[0]);
+    expect(platformMock.resolveStudyOperationV2).toHaveBeenCalledWith(expect.objectContaining({ resolution: 'delete-complete' }));
+  });
+
+  it('rolls back a confirmed deletion when its reviewed revision is stale, without claiming deletion', async () => {
+    kvMock.deleteStudy.mockResolvedValue({ status: 'conflict', success: false, error: 'Study revision changed' });
+    const confirmed = new Request(request.url, { method: 'DELETE', body: JSON.stringify({ deleteInterviews: true, confirmStudyId: DELETE_STUDY_ID, expectedRevision: 3 }) });
+    const response = await DELETE(confirmed, routeContext);
+    expect(response.status).toBe(409);
+    expect(platformMock.resolveStudyOperationV2).toHaveBeenCalledWith(expect.objectContaining({ resolution: 'delete-rollback' }));
+    expect(await response.json()).not.toHaveProperty('success', true);
+  });
   it('loads the storage binding, begins v2, then mutates BYOS, then resolve/publish', async () => {
     const response = await DELETE(request, routeContext);
 

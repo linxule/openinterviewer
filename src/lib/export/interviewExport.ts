@@ -8,11 +8,13 @@
 // compare the two archives entry by entry.
 
 import type { StoredAggregateSynthesis, StoredInterview } from '@/types';
+import type { ExplorationAnswer } from '@/lib/exploration/types';
 import { csvCell } from '@/lib/csv';
 import { analysisStatus } from '@/lib/analysisState';
 import { createZipStream, type ZipStreamLimits } from './zipStream';
 
 export const AGGREGATES_DIRECTORY = 'aggregates/';
+export const EXPLORATIONS_DIRECTORY = 'explorations/';
 export const SUMMARY_CSV_NAME = 'summary.csv';
 export const SUMMARY_CSV_HEADER = 'Interview ID,Study,Date,Duration (min),Messages,Themes,Key Insight,Analysis';
 
@@ -32,7 +34,8 @@ export function interviewTranscriptMarkdown(interview: StoredInterview): string 
     lines.push(`## Participant Profile`);
     interview.participantProfile.fields.forEach(f => {
       const value = f.status === 'extracted' ? f.value : `(${f.status})`;
-      lines.push(`- **${f.fieldId}**: ${value}`);
+      const originalLabel = interview.collectionConfig?.profileSchema.find(field => field.id === f.fieldId)?.label;
+      lines.push(`- **${originalLabel ?? f.fieldId}**: ${value}${interview.collectionConfig ? '' : ' (historical field definition unavailable)'}`);
     });
     if (interview.participantProfile.rawContext) {
       lines.push(``);
@@ -99,6 +102,14 @@ export function aggregateJson(aggregate: StoredAggregateSynthesis): string {
   return JSON.stringify(aggregate, null, 2);
 }
 
+export function explorationEntryName(answer: ExplorationAnswer): string {
+  return `${EXPLORATIONS_DIRECTORY}${answer.studyId}/${answer.id}.json`;
+}
+
+export function explorationJson(answer: ExplorationAnswer): string {
+  return JSON.stringify(answer, null, 2);
+}
+
 export function summaryCsvRow(interview: StoredInterview): string {
   const duration = Math.round((interview.completedAt - interview.createdAt) / 1000 / 60);
   const themes = interview.synthesis?.themes.length || 0;
@@ -115,6 +126,7 @@ export function summaryCsvRow(interview: StoredInterview): string {
 export type InterviewExportPage = {
   interviews: StoredInterview[];
   aggregates: StoredAggregateSynthesis[];
+  explorations?: ExplorationAnswer[];
 };
 
 /** Thrown by a page source when the snapshot fence reports a change. */
@@ -151,6 +163,7 @@ export function createInterviewExportStream(input: InterviewExportStreamInput): 
   const run = async () => {
     const csvLines = [SUMMARY_CSV_HEADER];
     const seenAggregates = new Set<string>();
+    const seenExplorations = new Set<string>();
     let position = 0;
     for await (const page of input.pages) {
       for (const interview of page.interviews) {
@@ -165,6 +178,13 @@ export function createInterviewExportStream(input: InterviewExportStreamInput): 
         if (seenAggregates.has(aggregate.studyId)) throw new TypeError('duplicate aggregate in export');
         seenAggregates.add(aggregate.studyId);
         await zip.addFile(aggregateEntryName(aggregate.studyId), aggregateJson(aggregate));
+      }
+      for (const answer of page.explorations ?? []) {
+        const entryName = explorationEntryName(answer);
+        if (seenExplorations.size === 0) await zip.addDirectory(EXPLORATIONS_DIRECTORY);
+        if (seenExplorations.has(entryName)) throw new TypeError('duplicate exploration in export');
+        seenExplorations.add(entryName);
+        await zip.addFile(entryName, explorationJson(answer));
       }
     }
     await zip.addFile(SUMMARY_CSV_NAME, csvLines.join('\n'));

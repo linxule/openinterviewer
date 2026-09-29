@@ -72,6 +72,7 @@ export type StudyMutationBody = {
   config?: unknown;
   confirmed?: boolean;
   linksEnabled?: boolean;
+  expectedRevision?: number;
 };
 
 export type StudyMutationBodyResult =
@@ -302,7 +303,7 @@ export async function readStudyMutationBody(
 
   const allowed = operation === 'create'
     ? new Set(['config'])
-    : new Set(['config', 'confirmed', 'linksEnabled']);
+    : new Set(['config', 'confirmed', 'linksEnabled', 'expectedRevision']);
   if (!hasOnlyFields(parsed.value, allowed)) {
     return { ok: false, status: 400, error: 'Invalid request body fields' };
   }
@@ -315,6 +316,10 @@ export async function readStudyMutationBody(
   if (parsed.value.linksEnabled !== undefined && typeof parsed.value.linksEnabled !== 'boolean') {
     return { ok: false, status: 400, error: 'Invalid participant link status' };
   }
+  if (parsed.value.expectedRevision !== undefined
+    && (!Number.isSafeInteger(parsed.value.expectedRevision) || (parsed.value.expectedRevision as number) < 1)) {
+    return { ok: false, status: 400, error: 'Invalid expected study revision' };
+  }
 
   return {
     ok: true,
@@ -322,6 +327,7 @@ export async function readStudyMutationBody(
       config: parsed.value.config,
       confirmed: parsed.value.confirmed as boolean | undefined,
       linksEnabled: parsed.value.linksEnabled as boolean | undefined,
+      expectedRevision: parsed.value.expectedRevision as number | undefined,
     },
   };
 }

@@ -111,6 +111,117 @@ beforeEach(() => {
 });
 
 describe('aggregate synthesis revision provenance', () => {
+  it('explicitly aggregates historical revisions and persists its original source manifest', async () => {
+    const study = makeStoredStudy({ id: 'study-history', revision: 4 });
+    study.config.id = study.id;
+    kvMock.getStudy.mockResolvedValue(study);
+    kvMock.getStudyInterviewsChecked.mockResolvedValue({ status: 'ok', items: [
+      makeStoredInterview({ id: 'historical-b', studyId: study.id, studyRevision: 2, synthesis }),
+      makeStoredInterview({ id: 'historical-a', studyId: study.id, studyRevision: 2, synthesis }),
+      makeStoredInterview({ id: 'current', studyId: study.id, studyRevision: 4, synthesis: null }),
+    ] });
+
+    const response = await POST(new Request('http://localhost/api/synthesis/aggregate', {
+      method: 'POST', body: JSON.stringify({ studyId: study.id, selection: { revisions: [2] } }),
+    }));
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.synthesis).toMatchObject({
+      studyRevision: 4, interviewIds: ['historical-a', 'historical-b'],
+      scope: { studyId: study.id, selection: { revisions: [2] }, totalSaved: 3, selectedCount: 2, excludedCount: 1,
+        sources: [
+          { interviewId: 'historical-a', studyRevision: 2, contentHash: expect.any(String) },
+          { interviewId: 'historical-b', studyRevision: 2, contentHash: expect.any(String) },
+        ], sourceFingerprint: expect.any(String) },
+    });
+    expect(kvMock.saveStudyAggregate.mock.calls[0][0].scope).toEqual(body.synthesis.scope);
+    expect(synthesizeAggregate).toHaveBeenCalledWith(study.config, [synthesis, synthesis], 2);
+  });
+
+  it('refuses an explicit corpus with pending analysis instead of silently shrinking the selection', async () => {
+    const study = makeStoredStudy({ id: 'study-pending', revision: 3 });
+    study.config.id = study.id;
+    kvMock.getStudy.mockResolvedValue(study);
+    kvMock.getStudyInterviewsChecked.mockResolvedValue({ status: 'ok', items: [
+      makeStoredInterview({ id: 'a', studyId: study.id, studyRevision: 2, synthesis }),
+      makeStoredInterview({ id: 'b', studyId: study.id, studyRevision: 3, synthesis }),
+      makeStoredInterview({ id: 'pending', studyId: study.id, studyRevision: 2, synthesis: null }),
+      makeStoredInterview({ id: 'failed-with-old-summary', studyId: study.id, studyRevision: 2, synthesis,
+        analysis: { status: 'failed', attempts: 1, lastAttemptAt: 1, failureKind: 'provider' } }),
+    ] });
+
+    const response = await POST(new Request('http://localhost/api/synthesis/aggregate', {
+      method: 'POST', body: JSON.stringify({ studyId: study.id, selection: {} }),
+    }));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: 'DATASET_ANALYSIS_REQUIRED', selectedInterviewCount: 4, unanalyzedInterviewCount: 2 });
+    expect(researcherBudgetMock.researcherAiBudgetResponse).not.toHaveBeenCalled();
+    expect(synthesizeAggregate).not.toHaveBeenCalled();
+    expect(kvMock.saveStudyAggregate).not.toHaveBeenCalled();
+  });
+
+  it('enforces the original fixed provider commitment for every selected historical source before budget', async () => {
+    const study = makeStoredStudy({ id: 'study-fixed', revision: 3 });
+    study.config.id = study.id;
+    kvMock.getStudy.mockResolvedValue(study);
+    kvMock.getStudyInterviewsChecked.mockResolvedValue({ status: 'ok', items: [
+      makeStoredInterview({ id: 'a', studyId: study.id, studyRevision: 2, synthesis, providerCommitment: 'fixed', conductedByProvider: 'openai', conductedByModel: 'gpt-5.6-terra' }),
+      makeStoredInterview({ id: 'b', studyId: study.id, studyRevision: 2, synthesis }),
+    ] });
+
+    const response = await POST(new Request('http://localhost/api/synthesis/aggregate', {
+      method: 'POST', body: JSON.stringify({ studyId: study.id, selection: { revisions: [2] } }),
+    }));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: 'PROVIDER_NOT_DISCLOSED' });
+    expect(researcherBudgetMock.researcherAiBudgetResponse).not.toHaveBeenCalled();
+    expect(synthesizeAggregate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a fabricated selected interview before paying the provider', async () => {
+    const study = makeStoredStudy({ id: 'study-selection', revision: 2 });
+    study.config.id = study.id;
+    kvMock.getStudy.mockResolvedValue(study);
+    kvMock.getStudyInterviewsChecked.mockResolvedValue({ status: 'ok', items: [
+      makeStoredInterview({ id: 'a', studyId: study.id, studyRevision: 2, synthesis }),
+      makeStoredInterview({ id: 'b', studyId: study.id, studyRevision: 2, synthesis }),
+    ] });
+    const response = await POST(new Request('http://localhost/api/synthesis/aggregate', {
+      method: 'POST', body: JSON.stringify({ studyId: study.id, selection: { interviewIds: ['a', 'other-study-record'] } }),
+    }));
+    expect(response.status).toBe(400);
+    expect(synthesizeAggregate).not.toHaveBeenCalled();
+    expect(researcherBudgetMock.researcherAiBudgetResponse).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when a legacy study-scoped collection contains another study\'s record', async () => {
+    const study = makeStoredStudy({ id: 'study-collection', revision: 2 });
+    study.config.id = study.id;
+    kvMock.getStudy.mockResolvedValue(study);
+    kvMock.getStudyInterviewsChecked.mockResolvedValue({ status: 'ok', items: [
+      makeStoredInterview({ id: 'a', studyId: study.id, studyRevision: 2, synthesis }),
+      makeStoredInterview({ id: 'b', studyId: 'another-study', studyRevision: 2, synthesis }),
+    ] });
+    const response = await POST(new Request('http://localhost/api/synthesis/aggregate', {
+      method: 'POST', body: JSON.stringify({ studyId: study.id }),
+    }));
+    expect(response.status).toBe(503);
+    expect(synthesizeAggregate).not.toHaveBeenCalled();
+    expect(researcherBudgetMock.researcherAiBudgetResponse).not.toHaveBeenCalled();
+  });
+
+  it('refuses a malformed dataset predicate rather than falling back to the legacy scope', async () => {
+    const response = await POST(new Request('http://localhost/api/synthesis/aggregate', {
+      method: 'POST', body: JSON.stringify({ studyId: 'study-selection', selection: { filters: [{ fieldId: 'age', operator: 'guess', value: 'young' }] } }),
+    }));
+    expect(response.status).toBe(400);
+    expect(contextMock.getAuthorizedResearcherStudyContext).not.toHaveBeenCalled();
+    expect(synthesizeAggregate).not.toHaveBeenCalled();
+  });
+
   it('uses only synthesized interviews from the current study revision', async () => {
     const study = makeStoredStudy({ id: 'study-aggregate', revision: 4 });
     study.config.id = study.id;

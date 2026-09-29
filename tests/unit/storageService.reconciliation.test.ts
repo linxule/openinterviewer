@@ -8,13 +8,33 @@ import {
   reconcileStudyOperations,
   ResearcherStorageUnavailableError,
   StudyOperationPendingError,
+  saveStudy,
 } from '@/services/storageService';
+import { makeStudyConfig } from '../fixtures/models';
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
 describe('hosted study operation client contract', () => {
+  it('forwards populated deletion confirmation, retaining a body-free empty-only legacy request', async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ success: true }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await deleteStudy('study-a');
+    expect(fetchMock.mock.calls[0]).toEqual(['/api/studies/study-a', { method: 'DELETE' }]);
+    const confirmation = { deleteInterviews: true as const, confirmStudyId: 'study-a', expectedRevision: 3 };
+    await deleteStudy('study-a', confirmation);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual(confirmation);
+    expect(fetchMock.mock.calls[1][1].headers).toEqual({ 'Content-Type': 'application/json' });
+  });
+
+  it('forwards the revision actually reviewed with a configuration edit', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: 'The study changed.' }), { status: 409 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await saveStudy({ config: makeStudyConfig(), updateStudyId: 'study-a', expectedRevision: 3, confirmed: true });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ expectedRevision: 3, confirmed: true });
+    expect(fetchMock.mock.calls[0][1].headers).not.toHaveProperty('Idempotency-Key');
+  });
   it('does not report a 202 delete as completed', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       message: 'Study deletion is already awaiting reconciliation.',

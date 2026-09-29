@@ -1,3 +1,4 @@
+import type { ExplorationProviderInput, ExplorationProviderPayload } from '../exploration/types';
 import { GoogleGenAI } from '@google/genai';
 import {
   AIProvider,
@@ -10,6 +11,8 @@ import {
 import type { EffectiveTransport, ProviderEndpoint } from './endpoint';
 import {
   buildAggregateSynthesisPrompt,
+  buildExplorationPrompt,
+  explorationSystemPrompt,
   buildGreetingPrompt,
   buildSynthesisPrompt,
 } from '../prompts';
@@ -33,6 +36,7 @@ import {
 } from '../providerErrors';
 import {
   validateAggregateSynthesisPayload,
+  validateExplorationPayload,
   validateFollowupStudy,
   validateInterviewResponse,
   validateSynthesisResult,
@@ -40,6 +44,7 @@ import {
 } from '../providerValidation';
 import {
   aggregateSynthesisResponseSchema,
+  explorationResponseSchema,
   followupStudyResponseSchema,
   interviewResponseSchema,
   synthesisResponseSchema,
@@ -48,6 +53,7 @@ import {
 import {
   buildFollowupPrompt,
   execution,
+  explorationPolicy,
   formatInterviewHistory,
   GREETING_DEADLINE_MS,
   INTERVIEW_DEADLINE_MS,
@@ -73,11 +79,13 @@ export function getGeminiInteractionThinkingLevel(
 // keywords (maxItems confirmed by live bisect 2026-09-05 on gemini-3.8-flash)
 // keywords with a 400 (`Request contains an invalid argument`), even though
 // they are valid JSON Schema and accepted by every other provider adapter.
-// All three bounds are re-enforced server-side by src/lib/providerValidation.ts,
+// All bounds are re-enforced server-side by src/lib/providerValidation.ts,
 // so stripping them from the WIRE schema Gemini sees loses no safety — only
 // this adapter's outbound request is affected; the shared schemas in
 // src/lib/providerSchemas.ts stay strict for every other provider.
-const GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS = ['maxLength', 'minimum', 'minItems', 'maxItems'] as const;
+// Strip maximum alongside minimum for exploration's positional bounds rather
+// than depending on a provider-specific range-keyword subset.
+const GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS = ['maxLength', 'minimum', 'maximum', 'minItems', 'maxItems'] as const;
 
 export function toGeminiResponseSchema(schema: ProviderJsonSchema): ProviderJsonSchema {
   function strip(value: unknown): unknown {
@@ -138,6 +146,7 @@ export class GeminiProvider implements AIProvider {
     systemInstruction?: string;
     schema?: ProviderJsonSchema;
     enableReasoning?: boolean;
+    maxOutputTokens?: number;
     deadlineMs: number;
     operation: string;
     policy?: ProviderExecutionPolicy;
@@ -162,8 +171,11 @@ export class GeminiProvider implements AIProvider {
                 },
               }
             : {}),
-          ...(thinkingLevel
-            ? { generation_config: { thinking_level: thinkingLevel } }
+          ...(thinkingLevel || options.maxOutputTokens !== undefined
+            ? { generation_config: {
+                ...(thinkingLevel ? { thinking_level: thinkingLevel } : {}),
+                ...(options.maxOutputTokens !== undefined ? { max_output_tokens: options.maxOutputTokens } : {}),
+              } }
             : {}),
         }, {
           timeout: options.deadlineMs,
@@ -257,6 +269,27 @@ export class GeminiProvider implements AIProvider {
       'aggregate-synthesis',
       validateAggregateSynthesisPayload,
     );
+    return providerResult(value, execution('gemini', requestedModel, response.model, undefined, this.transport));
+  }
+
+  async exploreStudy(
+    input: ExplorationProviderInput,
+    policy?: ProviderExecutionPolicy,
+  ): Promise<ProviderResult<ExplorationProviderPayload>> {
+    const attemptPolicy = explorationPolicy(policy);
+    const requestedModel = resolveSynthesisModel(input.studyConfig);
+    const response = await this.createInteraction({
+      model: requestedModel,
+      input: buildExplorationPrompt(input),
+      systemInstruction: explorationSystemPrompt,
+      schema: explorationResponseSchema,
+      enableReasoning: input.studyConfig.enableReasoning ?? true,
+      maxOutputTokens: 12_000,
+      deadlineMs: attemptPolicy.deadlineMs,
+      operation: 'exploration',
+      policy: attemptPolicy,
+    });
+    const value = this.parseStructured(response.output_text, 'exploration', validateExplorationPayload);
     return providerResult(value, execution('gemini', requestedModel, response.model, undefined, this.transport));
   }
 

@@ -9,15 +9,13 @@
 // - Synthetic study and transcript only. Output: provider, requested model,
 //   served model, routed provider, and a failure class. Never the synthesis
 //   body, never a raw response, never a key.
-// - One adapter invocation. The SDKs' own retry defaults are not overridden
-//   here (Anthropic and OpenAI SDKs retry up to 2 times on transient
-//   failures, so a single invocation may be up to 3 HTTP requests). Output
-//   caps are whatever the adapter's synthesis call sets: 8192 tokens for
-//   Claude, OpenAI, and OpenRouter; the Gemini adapter sets no explicit cap.
+// - Exactly one HTTP attempt per test: explicit single-attempt execution
+//   disables SDK retries. SMOKE_EXPLORATION=1 adds one separate exploration
+//   call, so that opt-in requires authorization for two paid calls in total.
 // - On failure the original error is never rethrown: see smokeFailure.ts.
 //
 // Usage (one provider, one credential):
-//   SMOKE_PROVIDER=openai OPENAI_API_KEY="$(op read 'op://…')" \
+//   SMOKE_PROVIDER=openai OPENAI_API_KEY=<injected-in-environment> \
 //     npx vitest run --config vitest.smoke.config.mts
 // Optional: SMOKE_MODEL to override the provider's default model.
 
@@ -32,6 +30,7 @@ import {
   type BehaviorData,
   type InterviewMessage,
   type StudyConfig,
+  type StoredInterview,
 } from '@/types';
 
 const selected = process.env.SMOKE_PROVIDER?.trim() ?? '';
@@ -111,7 +110,9 @@ describe.skipIf(!provider)('live provider provenance smoke', () => {
     const adapter = getInterviewProvider(study, {});
 
     try {
-      const result = await adapter.synthesizeInterview(TRANSCRIPT, study, BEHAVIOR, null);
+      const result = await adapter.synthesizeInterview(TRANSCRIPT, study, BEHAVIOR, null, {
+        kind: 'queued-synthesis', deadlineMs: 120_000,
+      });
       const { execution } = result;
       console.log(JSON.stringify({
         smoke: 'provider-provenance',
@@ -131,6 +132,48 @@ describe.skipIf(!provider)('live provider provenance smoke', () => {
       // detect; do not retry, bring the class back.
       const failure = classifySmokeFailure(error);
       console.log(JSON.stringify({ smoke: 'provider-provenance', provider, requestedModel: model, failure }));
+      throw sanitizedSmokeError(failure);
+    }
+  });
+
+  it.skipIf(process.env.SMOKE_EXPLORATION !== '1')(`${provider ?? '(none)'}: exploreStudy returns a served model`, async () => {
+    if (!provider) return;
+    process.env.AI_TRANSPORT = 'direct';
+    process.env.DEPLOYMENT_MODE = 'standalone';
+    const keyEnv = KEY_ENV[provider];
+    if (!process.env[keyEnv]?.trim()) throw new Error(`${keyEnv} is not set; inject only this provider's credential`);
+    for (const [other, env] of Object.entries(KEY_ENV)) {
+      if (other !== provider && process.env[env]?.trim()) {
+        throw new Error(`${env} is also set; run with exactly one provider credential`);
+      }
+    }
+    const model = process.env.SMOKE_MODEL?.trim() || DEFAULT_MODEL[provider];
+    const study = syntheticStudy(provider, model);
+    const interview: StoredInterview = {
+      id: 'smoke-interview', studyId: study.id, studyName: study.name,
+      participantProfile: { id: 'synthetic-person', fields: [], rawContext: '', timestamp: study.createdAt },
+      transcript: TRANSCRIPT, synthesis: null, behaviorData: BEHAVIOR,
+      createdAt: study.createdAt, completedAt: 1_700_000_040_000,
+      status: 'completed', studyRevision: 1, collectionConfig: study,
+    };
+    try {
+      const result = await getInterviewProvider(study, {}).exploreStudy({
+        question: 'What replacement triggers does this participant describe? Cite the interview and explain the limits of this one-person dataset.',
+        studyConfig: study, interviews: [interview],
+      }, { kind: 'exploration', deadlineMs: 120_000 });
+      const { execution } = result;
+      console.log(JSON.stringify({
+        smoke: 'study-exploration', provider: execution.provider,
+        requestedModel: execution.requestedModel, servedModel: execution.model,
+        ...(execution.routedProvider ? { routedProvider: execution.routedProvider } : {}),
+        findings: result.value.findings.length,
+      }));
+      expect(execution.provider).toBe(provider);
+      expect(execution.requestedModel).toBe(model);
+      expect(execution.model.trim().length).toBeGreaterThan(0);
+    } catch (error) {
+      const failure = classifySmokeFailure(error);
+      console.log(JSON.stringify({ smoke: 'study-exploration', provider, requestedModel: model, failure }));
       throw sanitizedSmokeError(failure);
     }
   });

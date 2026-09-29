@@ -26,7 +26,10 @@ vi.mock('@/store', () => ({
 const routerMock = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock('next/navigation', () => ({
   useRouter: () => routerMock,
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => {
+    const config = storeMock.state.studyConfig as { id?: string } | null;
+    return new URLSearchParams(config?.id && !config.id.startsWith('study-') ? `prefill=edit&studyId=${config.id}` : '');
+  },
 }));
 
 import StudySetup from '@/components/StudySetup';
@@ -47,10 +50,15 @@ const SECTION_IDS = [
 ];
 
 beforeEach(() => {
+  sessionStorage.clear();
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
     const path = new URL(url, 'http://localhost').pathname;
     if (path === '/api/auth') {
       return { ok: true, status: 200, json: async () => ({ authenticated: false }) };
+    }
+    if (path.startsWith('/api/studies/')) {
+      const config = storeMock.state.studyConfig as { id: string };
+      return { ok: true, status: 200, json: async () => ({ study: { id: config.id, config, revision: 1 } }) };
     }
     return { ok: false, status: 404, json: async () => ({ error: 'not found' }) };
   }));
@@ -71,7 +79,7 @@ afterEach(() => {
 });
 
 describe('StudySetup document reskin', () => {
-  it('renders a non-switching section index whose links resolve to sections that are all mounted at once', () => {
+  it('renders a non-switching section index whose links resolve to sections that are all mounted at once', async () => {
     const { container } = render(<StudySetup />);
 
     const nav = screen.getByRole('navigation', { name: 'Study sections' });
@@ -85,7 +93,7 @@ describe('StudySetup document reskin', () => {
     }
   });
 
-  it('carries no decorative icons', () => {
+  it('carries no decorative icons', async () => {
     // §6's rule is "no decorative icons", not "no icons": M8.1 puts a
     // functional Icon in four remove/dismiss controls. Assert the rule
     // itself — every svg is inside a button, aria-hidden, unlabeled, and no
@@ -119,8 +127,9 @@ describe('StudySetup document reskin', () => {
     expect(removeTopic.querySelectorAll('svg')).toHaveLength(1);
   });
 
-  it('never applies reading measure to profile-field or question register rows', () => {
+  it('never applies reading measure to profile-field or question register rows', async () => {
     render(<StudySetup />);
+    await waitFor(() => expect(screen.queryByText('Loading this study…')).not.toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /Current Role/ }));
     const fieldRow = screen.getByPlaceholderText('Field label (e.g., Current Role)');
@@ -154,9 +163,10 @@ describe('StudySetup document mode (F1: read-mode for saved studies)', () => {
     });
   }
 
-  it('exposes all ten sections in the index, and each behind its own Edit control that reveals its fields independently', () => {
+  it('exposes all ten sections in the index, and each behind its own Edit control that reveals its fields independently', async () => {
     seedSavedStudy();
     render(<StudySetup />);
+    await waitFor(() => expect(screen.queryByText('Loading this study…')).not.toBeInTheDocument());
 
     const nav = screen.getByRole('navigation', { name: 'Study sections' });
     const links = within(nav).getAllByRole('link');
@@ -183,9 +193,10 @@ describe('StudySetup document mode (F1: read-mode for saved studies)', () => {
     expect(screen.queryByPlaceholderText('e.g., AI Adoption in Healthcare')).not.toBeInTheDocument();
   });
 
-  it('does not dirty the draft when opening a section', () => {
+  it('does not dirty the draft when opening a section', async () => {
     seedSavedStudy();
     render(<StudySetup />);
+    await waitFor(() => expect(screen.queryByText('Loading this study…')).not.toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit Study Details' }));
 
@@ -193,9 +204,10 @@ describe('StudySetup document mode (F1: read-mode for saved studies)', () => {
     expect(screen.getByRole('button', { name: 'Saved' })).toBeDisabled();
   });
 
-  it('gives core-question read rows measure and profile-field read rows none (A2)', () => {
+  it('gives core-question read rows measure and profile-field read rows none (A2)', async () => {
     seedSavedStudy({ coreQuestions: ['First question?', 'Second question?'] });
     render(<StudySetup />);
+    await waitFor(() => expect(screen.queryByText('Loading this study…')).not.toBeInTheDocument());
 
     const questionText = screen.getByText('First question?');
     expect(questionText.className).toMatch(/max-w-measure/);
@@ -217,12 +229,17 @@ describe('StudySetup document mode (F1: read-mode for saved studies)', () => {
         return { ok: true, status: 200, json: async () => ({ authenticated: false }) };
       }
       if (path === `/api/studies/${SAVED_ID}`) {
-        return { ok: true, status: 200, json: async () => ({ study: { revision: 3 } }) };
+        return { ok: true, status: 200, json: async () => ({ study: { id: SAVED_ID, config: storeMock.state.studyConfig, revision: 3 } }) };
       }
-      return { ok: false, status: 404, json: async () => ({ error: 'not found' }) };
+      if (path.startsWith('/api/studies/')) {
+      const config = storeMock.state.studyConfig as { id: string };
+      return { ok: true, status: 200, json: async () => ({ study: { id: config.id, config, revision: 1 } }) };
+    }
+    return { ok: false, status: 404, json: async () => ({ error: 'not found' }) };
     }));
     seedSavedStudy();
     render(<StudySetup />);
+    await waitFor(() => expect(screen.queryByText('Loading this study…')).not.toBeInTheDocument());
 
     const revisionText = await screen.findByText('Study revision 3');
     expect(revisionText.tagName).toBe('SPAN');
@@ -231,7 +248,7 @@ describe('StudySetup document mode (F1: read-mode for saved studies)', () => {
     expect(screen.getByText(/Generate and distribute a new link after a consequential edit\./)).toBeInTheDocument();
   });
 
-  it('omits the revision line on a failed fetch without blocking editing', async () => {
+  it('fails closed when the canonical saved study cannot be loaded', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       const path = new URL(url, 'http://localhost').pathname;
       if (path === '/api/auth') {
@@ -240,20 +257,24 @@ describe('StudySetup document mode (F1: read-mode for saved studies)', () => {
       if (path === `/api/studies/${SAVED_ID}`) {
         return { ok: false, status: 503, json: async () => ({ error: 'unavailable' }) };
       }
-      return { ok: false, status: 404, json: async () => ({ error: 'not found' }) };
+      if (path.startsWith('/api/studies/')) {
+      const config = storeMock.state.studyConfig as { id: string };
+      return { ok: true, status: 200, json: async () => ({ study: { id: config.id, config, revision: 1 } }) };
+    }
+    return { ok: false, status: 404, json: async () => ({ error: 'not found' }) };
     }));
     seedSavedStudy();
     render(<StudySetup />);
 
     // Give the failed fetch a turn to resolve, then confirm no placeholder,
     // no error surfaced, and the form is still fully editable.
-    await waitFor(() => expect(screen.getByText('Revision')).toBeInTheDocument());
+    expect(await screen.findByText('unavailable')).toBeInTheDocument();
     expect(screen.queryByText(/Study revision/)).not.toBeInTheDocument();
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Load Example' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Edit Study Details' })).toBeInTheDocument();
   });
 
-  it('renders no revision block and no Edit control for a new study', () => {
+  it('renders no revision block and no Edit control for a new study', async () => {
     storeMock.seed({
       studyConfig: null,
       setStudyConfig: vi.fn(),
@@ -264,6 +285,7 @@ describe('StudySetup document mode (F1: read-mode for saved studies)', () => {
       resetParticipant: vi.fn(),
     });
     render(<StudySetup />);
+    await waitFor(() => expect(screen.queryByText('Loading this study…')).not.toBeInTheDocument());
 
     expect(screen.queryByText('Revision')).not.toBeInTheDocument();
     expect(screen.queryByText(/Study revision/)).not.toBeInTheDocument();
@@ -301,22 +323,28 @@ describe('StudySetup Thank-You Screen section (slice P §P12.5)', () => {
           }),
         };
       }
-      return { ok: false, status: 404, json: async () => ({ error: 'not found' }) };
+      if (path.startsWith('/api/studies/')) {
+      const config = storeMock.state.studyConfig as { id: string };
+      return { ok: true, status: 200, json: async () => ({ study: { id: config.id, config, revision: 1 } }) };
+    }
+    return { ok: false, status: 404, json: async () => ({ error: 'not found' }) };
     }));
   }
 
-  it('renders its own Edit control, and the read sheet defaults for a blank draft', () => {
+  it('renders its own Edit control, and the read sheet defaults for a blank draft', async () => {
     seedSavedStudy();
     render(<StudySetup />);
+    await waitFor(() => expect(screen.queryByText('Loading this study…')).not.toBeInTheDocument());
 
     expect(screen.getByRole('button', { name: 'Edit Thank-You Screen' })).toBeInTheDocument();
     expect(screen.getByText('What participants will read after they finish')).toBeInTheDocument();
     expect(screen.getByText(/Thank you for taking part\./)).toBeInTheDocument();
   });
 
-  it('"Insert a template" fills the textarea with bracketed text', () => {
+  it('"Insert a template" fills the textarea with bracketed text', async () => {
     seedSavedStudy();
     render(<StudySetup />);
+    await waitFor(() => expect(screen.queryByText('Loading this study…')).not.toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit Thank-You Screen' }));
     fireEvent.click(screen.getByRole('button', { name: 'Insert a template' }));
@@ -329,6 +357,7 @@ describe('StudySetup Thank-You Screen section (slice P §P12.5)', () => {
     stubAuthenticatedFetch();
     seedSavedStudy();
     render(<StudySetup />);
+    await waitFor(() => expect(screen.queryByText('Loading this study…')).not.toBeInTheDocument());
 
     await waitFor(() => expect(screen.queryByText(/Checking configured AI providers/i)).not.toBeInTheDocument());
 
@@ -343,8 +372,9 @@ describe('StudySetup Thank-You Screen section (slice P §P12.5)', () => {
 
 
 describe('StudySetup interviewer manner', () => {
-  it('indexes structure and manner and replaces instructions with editable presets', () => {
+  it('indexes structure and manner and replaces instructions with editable presets', async () => {
     render(<StudySetup />);
+    await waitFor(() => expect(screen.queryByText('Loading this study…')).not.toBeInTheDocument());
     const nav = screen.getByRole('navigation', { name: 'Study sections' });
     expect(within(nav).getByRole('link', { name: 'Interview Structure' })).toHaveAttribute('href', '#interview-structure');
     expect(within(nav).getByRole('link', { name: 'Interviewer Manner' })).toHaveAttribute('href', '#interviewer-manner');
@@ -373,18 +403,20 @@ describe('StudySetup interviewer manner', () => {
     expect(screen.queryByText('Default manner: brief, open, non-leading questions, one at a time.')).not.toBeInTheDocument();
   });
 
-  it('shows the default read sheet for a saved study without instructions', () => {
+  it('shows the default read sheet for a saved study without instructions', async () => {
     storeMock.state.studyConfig = makeStudyConfig({ id: '4e52c093-96b2-4b56-88a9-330d740a42ea' });
     render(<StudySetup />);
+    await waitFor(() => expect(screen.queryByText('Loading this study…')).not.toBeInTheDocument());
     expect(screen.getByText('Your instructions to the interviewer')).toBeInTheDocument();
     expect(screen.getByText('Default manner: brief, open, non-leading questions, one at a time.')).toHaveClass('font-sans', 'text-ink-500');
   });
 
-  it('loads saved manner into the read sheet and dirties the draft only when edited', () => {
+  it('loads saved manner into the read sheet and dirties the draft only when edited', async () => {
     storeMock.state.studyConfig = makeStudyConfig({
       id: '4e52c093-96b2-4b56-88a9-330d740a42ea', interviewerInstructions: 'Use everyday words.',
     });
     render(<StudySetup />);
+    await waitFor(() => expect(screen.queryByText('Loading this study…')).not.toBeInTheDocument());
     expect(screen.getByText('Use everyday words.', { selector: 'p' })).toHaveClass('font-sans');
     expect(screen.queryByLabelText('Instructions to the interviewer')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Edit Interviewer Manner' }));
@@ -397,7 +429,7 @@ describe('StudySetup interviewer manner', () => {
 
 
 describe('interviewer manner draft lifecycle mirrors thankYouText', () => {
-  it('loads, prefills, resets, trims payloads, and omits blank text identically', () => {
+  it('loads, prefills, resets, trims payloads, and omits blank text identically', async () => {
     const { result } = renderHook(() => useStudyDraft(makeStudyConfig({
       thankYouText: 'Initial text.', interviewerInstructions: 'Initial text.',
     })));
@@ -407,7 +439,7 @@ describe('interviewer manner draft lifecycle mirrors thankYouText', () => {
     expect(result.current.interviewerInstructions).toBe('Prefill.');
     expect(result.current.interviewerInstructions).toBe(result.current.thankYouText);
     act(() => result.current.hydratePrefill({ thankYouText: '', interviewerInstructions: '' }));
-    expect(result.current.interviewerInstructions).toBe('Prefill.');
+    expect(result.current.interviewerInstructions).toBe('');
     expect(result.current.isDirty).toBe(false);
     act(() => result.current.syncFromStudyConfig(makeStudyConfig()));
     expect(result.current.interviewerInstructions).toBe('');
@@ -474,7 +506,7 @@ it.each([false, true])('a preview lookup cannot duplicate navigation or reopen a
     }));
     if (path === `/api/studies/${config.id}`) {
       studyReads += 1;
-      if (studyReads === 1) return new Response(JSON.stringify({ study: { config, revision: 1 } }));
+      if (studyReads === 1) return new Response(JSON.stringify({ study: { id: config.id, config, revision: 1 } }));
       return new Promise<Response>((resolve) => { answer = resolve; });
     }
     return new Response('{}', { status: 404 });

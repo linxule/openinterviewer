@@ -93,6 +93,7 @@ Hosted study create/delete is a durable cross-database operation. Preserve the o
 - Cloudflare provider endpoints (explicit per-adapter endpoints, direct or Cloudflare AI Gateway routes with the exact `cf-aig-*` header set, route resolution shared by readiness, the fetch path and the Queue consumer, refused SDK environment overrides, `covers()`): `src/lib/providers/endpoint.ts`
 - Provider result validation/errors: `src/lib/providerValidation.ts`, `src/lib/providerErrors.ts`
 - Evidence citation matching (render-time classification; verdicts never stored): `src/lib/evidence.ts`
+- Explicit study datasets, immutable source manifests, saved question protocol and save-only receipts: `src/lib/exploration/`; API entry points `src/app/api/studies/[id]/{dataset,exploration}`; researcher UI `StudyDatasetSelector.tsx`, `StudyExploration.tsx`
 - Participant and hosted platform limits: `src/lib/rateLimit.ts`, `src/lib/platformAiRateLimit.ts`; the standalone researcher AI budget (`STANDALONE_RESEARCHER_AI_POLICY`, charged before every researcher-initiated provider call): `src/lib/researcherAiBudget.ts`
 - Browser API clients: `src/services/`
 - Session-scoped workflow state: `src/store.ts`, persisted through `src/lib/tolerantSessionStorage.ts` (a failed write leaves the session in memory only)
@@ -117,6 +118,8 @@ On Cloudflare the participant sequence is the same, with analysis queued by the 
 - Completion persistence and study mutation remain atomic and idempotent under retries and concurrency.
 - Editing a study advances its revision and invalidates older participant authority.
 - Synthesis (per-interview synthesis, aggregate synthesis, follow-up generation) uses the study's own configured provider and model — never a fixed override. Synthesis provenance must record the provider and model actually used, which may differ from the requested model when the provider serves a specific dated snapshot.
+- Exploration uses the exact selected raw corpus, never a sampled or summary-only substitute. Check every selected record's original provider commitment and transport before use. Reserve a durable attempt before admission/provider execution; lookup/replay and signed save-only receipts must never make another provider request. Located quotes are not semantic-entailment verdicts.
+- Pausing collection changes access, not configuration revision. Only real configuration changes advance revision. Study deletion fences all late content writes and removes live derived artifacts; hosted operations retain identifier-only recovery authority.
 
 ## Change map and focused gates
 

@@ -34,9 +34,31 @@ const STUDY_ID_PATTERN = /^[A-Za-z0-9_-]{1,120}$/;
 const CONSENT_HASH_PATTERN = /^[a-f0-9]{64}$/;
 
 const RECORD_CONSENT_SCRIPT = `
+local studyRaw = redis.call('GET', KEYS[3])
+if not studyRaw then return '' end
+local payload = string.sub(studyRaw, 1, 9) == 'oi:study:' and string.sub(studyRaw, 10) or studyRaw
+local sok, study = pcall(cjson.decode, payload)
+if not sok or type(study) ~= 'table' or study.id ~= ARGV[3]
+  or (tonumber(study.revision) or 1) ~= tonumber(ARGV[4])
+  or (study.config and study.config.linksEnabled == false) then return '' end
+local guard = redis.call('GET', KEYS[4])
+if guard then
+  if string.sub(guard, 1, 7) ~= 'oi:smg:' then return '' end
+  local ok, mutation = pcall(cjson.decode, string.sub(guard, 8))
+  if not ok or type(mutation) ~= 'table' or mutation.state ~= 'created' then return '' end
+end
 local existing = redis.call('GET', KEYS[1])
-if existing then return existing end
+if existing then
+  local ok, record = pcall(cjson.decode, existing)
+  if ok and type(record) == 'table' and record.studyId == ARGV[3] then
+    redis.call('SADD', KEYS[2], KEYS[1])
+    redis.call('EXPIRE', KEYS[2], ARGV[2])
+  end
+  return existing
+end
 redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
+redis.call('SADD', KEYS[2], KEYS[1])
+redis.call('EXPIRE', KEYS[2], ARGV[2])
 return ARGV[1]
 `;
 
@@ -135,8 +157,9 @@ export async function recordParticipantConsent(
     const stored = parseConsentRecord(
       await client.eval(
         RECORD_CONSENT_SCRIPT,
-        [consentKey(expected.participantSessionId)],
-        [JSON.stringify(consent), String(PARTICIPANT_CONSENT_TTL_SECONDS)]
+        [consentKey(expected.participantSessionId), `study-consent-index:${expected.studyId}`,
+          `study:${expected.studyId}`, `study-mutation-guard:${expected.studyId}`],
+        [JSON.stringify(consent), String(PARTICIPANT_CONSENT_TTL_SECONDS), expected.studyId, String(expected.studyRevision)]
       )
     );
     if (!stored || !matchesBinding(stored, expected)) return { status: 'conflict' };

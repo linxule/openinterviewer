@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { reset } from 'cloudflare:test';
 import { DEMO_INTERVIEWS, DEMO_STUDIES } from '../../src/lib/demoData';
+import type { ExplorationAnswer } from '../../src/lib/exploration/types';
 import { testEnv, workspaceStub } from './helpers';
 import {
   alarmAt,
@@ -118,10 +119,17 @@ describe('seedSampleWorkspace (ST-07)', () => {
 });
 
 describe('clearSampleWorkspace (ST-07, JOB-10)', () => {
-  it('ST-07/JOB-10: clearing cascades the fixture study and interviews, cancels their jobs, fences them and allows a re-seed', async () => {
+  it('ST-07/JOB-10: clearing cascades the fixture study and interviews, removes their frozen jobs, fences them and allows a re-seed', async () => {
     const input = fixtures();
     await workspaceStub().seedSampleWorkspace(input);
     await enrolParticipant(input.studies[0]);
+    const notebook: ExplorationAnswer = {
+      id: 'sample-answer', studyId: STUDY_ID, question: 'Which synthetic concern is present?',
+      scope: { studyId: STUDY_ID, selection: {}, sources: [{ interviewId: input.interviews[0].id, studyRevision: 1, contentHash: 'a'.repeat(64) }],
+        totalSaved: 2, selectedCount: 1, excludedCount: 1, unknownProfileCount: 0, pendingAnalysisCount: 0, sourceFingerprint: 'b'.repeat(64) },
+      status: 'running', requestFingerprint: 'c'.repeat(64), createdAt: T0, updatedAt: T0, promptVersion: 1,
+    };
+    expect((await workspaceStub().reserveExploration({ answer: notebook, keyDigest: 'd'.repeat(64), expectedStudyRevision: 1 })).status).toBe('created');
     expect(await workspaceStub().saveAggregate({
       aggregate: {
         studyId: STUDY_ID, studyRevision: 1, interviewIds: ['interview-demo-one', 'interview-demo-two'], interviewCount: 2,
@@ -150,8 +158,12 @@ describe('clearSampleWorkspace (ST-07, JOB-10)', () => {
     expect(await count('aggregates')).toBe(0);
     expect(await count('participant_links')).toBe(0);
     expect(await count('consents')).toBe(0);
+    expect(await count('exploration_answers')).toBe(0);
+    expect(await workspaceStub().completeExploration({ studyId: STUDY_ID, answerId: notebook.id, requestFingerprint: notebook.requestFingerprint,
+      result: { answer: 'A late synthetic result.', findings: [], limitations: [] },
+      execution: { provider: 'openai', requestedModel: 'gpt-fixture', model: 'gpt-fixture' }, now: T0 + DAY })).toEqual({ status: 'study-not-found' });
     expect(await sql(`SELECT state, next_due_at, terminal_at FROM analysis_jobs WHERE job_id = ?`, jobId))
-      .toEqual([{ state: 'cancelled', next_due_at: null, terminal_at: T0 + DAY }]);
+      .toEqual([]);
     expect(await sql(`SELECT kind, target_id, sample_fixture FROM deletion_fences ORDER BY kind, target_id`)).toEqual([
       { kind: 'interview', target_id: 'interview-demo-one', sample_fixture: 1 },
       { kind: 'interview', target_id: 'interview-demo-two', sample_fixture: 1 },

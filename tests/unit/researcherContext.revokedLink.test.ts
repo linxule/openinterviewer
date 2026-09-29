@@ -34,6 +34,7 @@ const kvMock = vi.hoisted(() => {
   const getStudy = vi.fn();
   return {
     getStudy,
+    getStudyMutationStatus: vi.fn(),
     getStudyChecked: vi.fn(async (id: string) => {
       const study = await getStudy(id);
       return study ? { status: 'found', study } : { status: 'not-found' };
@@ -63,6 +64,7 @@ beforeEach(() => {
   modeMock.isStandaloneMode.mockReturnValue(true);
   modeMock.isHostedMode.mockReturnValue(false);
   kvClientMock.getKVClient.mockReturnValue({} as never);
+  kvMock.getStudyMutationStatus.mockResolvedValue('ready');
   participantLinksMock.getParticipantLinkById.mockResolvedValue({
     status: 'found',
     link: { id: 'a'.repeat(64), studyId: 'study-open', studyRevision: 1, researcherId: null },

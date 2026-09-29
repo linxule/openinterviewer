@@ -795,7 +795,7 @@ describe('/api/demo/seed on Cloudflare (ST-07)', () => {
     const [input] = store.seedSampleWorkspace.mock.calls[0];
     expect(input.studies.map((study: StoredStudy) => study.id)).toEqual(DEMO_STUDIES.map(study => study.id));
     expect(input.interviews.map((interview: StoredInterview) => interview.id)).toEqual(DEMO_INTERVIEWS.map(i => i.id));
-    expect(input.studies[0].config).toMatchObject({ aiProvider: 'claude', aiModel: 'claude-sonnet-5' });
+    expect(input.studies[0].config).toMatchObject({ aiProvider: 'claude', aiModel: 'claude-sonnet-5-5' });
     expect(input.studies[0].config).not.toHaveProperty('enableReasoning');
     expect(DEMO_STUDIES[0].config.aiProvider).toBe('gemini');
   });

@@ -48,6 +48,11 @@ function getSecret(): Uint8Array {
   return requireSecret('SESSION_SECRET');
 }
 
+/** A separately scoped signed researcher artifact, never a session token. */
+export function getResearcherArtifactSigningSecret(): Uint8Array {
+  return getSecret();
+}
+
 // Participant link token signing secret (independent from session secret)
 export function getParticipantSigningSecret(): Uint8Array {
   return requireSecret('PARTICIPANT_TOKEN_SECRET');

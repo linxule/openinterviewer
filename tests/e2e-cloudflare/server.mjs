@@ -20,7 +20,7 @@ import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { scrubCredentials, scrubNotice } from '../../scripts/cloudflare/credential-env.mjs';
-import { AGGREGATE, GREETING, SYNTHESIS } from './fixtureData.mjs';
+import { AGGREGATE, EXPLORATION, GREETING, SYNTHESIS } from './fixtureData.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PORT = Number(process.argv[2] || 3200);
@@ -79,6 +79,7 @@ function parseJson(text) {
 
 function operationOf(body) {
   const properties = body?.text?.format?.schema?.properties ?? {};
+  if ('findings' in properties) return 'exploration';
   if ('commonThemes' in properties) return 'aggregate';
   if ('statedPreferences' in properties) return 'synthesis';
   if ('message' in properties) return 'interview';
@@ -105,7 +106,7 @@ async function openAiResponse(request) {
   }
   const text = operation === 'greeting'
     ? GREETING
-    : JSON.stringify(operation === 'synthesis' ? SYNTHESIS : operation === 'aggregate' ? AGGREGATE : {
+    : JSON.stringify(operation === 'synthesis' ? SYNTHESIS : operation === 'aggregate' ? AGGREGATE : operation === 'exploration' ? EXPLORATION : {
       message: 'Thank you. That completes our conversation.',
       questionAddressed: 0,
       phaseTransition: 'wrap-up',

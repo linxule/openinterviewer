@@ -2,6 +2,7 @@ import { createClient } from 'redis';
 import { test as nextTest, expect } from 'next/experimental/testmode/playwright';
 import type { BrowserContext } from '@playwright/test';
 import { startDisposableRedis } from '../helpers/disposableRedis';
+import { EXPLORATION } from '../e2e-cloudflare/fixtureData.mjs';
 
 export const ANSWER = 'I keep a short project note so I remember why I saved the document.';
 export const GREETING = 'Tell me how you return to a saved research document.';
@@ -31,6 +32,8 @@ type Workflow = {
   unexpected: string[];
   failNextSynthesis: boolean;
   interruptStorageAfterSynthesis: boolean;
+  interruptStorageAfterExploration: boolean;
+  nextProfileUpdates: Array<{ fieldId: string; value: string | null; status: 'extracted' | 'vague' | 'refused' }>;
   storageOffline: boolean;
   participantContext(): Promise<BrowserContext>;
 };
@@ -57,7 +60,7 @@ export const test = nextTest.extend<{ workflow: Workflow }>({
     const contexts: BrowserContext[] = [];
     const workflow: Workflow = {
       calls: [], unexpected: [], failNextSynthesis: false,
-      interruptStorageAfterSynthesis: false, storageOffline: false,
+      interruptStorageAfterSynthesis: false, interruptStorageAfterExploration: false, nextProfileUpdates: [], storageOffline: false,
       async participantContext() {
         // A separate browser context guarantees no researcher cookie or storage.
         // Pass only Next's documented test proxy headers, not application auth.
@@ -114,7 +117,7 @@ export const test = nextTest.extend<{ workflow: Workflow }>({
       const body = await request.json();
       const schema = direct ? body.text?.format?.schema : body.responseFormat?.schema;
       const properties = schema?.properties ?? {};
-      const operation = 'commonThemes' in properties ? 'aggregate' : 'statedPreferences' in properties ? 'synthesis' : 'message' in properties ? 'interview' : 'greeting';
+      const operation = 'findings' in properties ? 'exploration' : 'commonThemes' in properties ? 'aggregate' : 'statedPreferences' in properties ? 'synthesis' : 'message' in properties ? 'interview' : 'greeting';
       const model = direct ? body.model : request.headers.get('ai-language-model-id');
       workflow.calls.push({ transport: direct ? 'direct' : 'gateway', operation, model });
       if (gateway) {
@@ -128,13 +131,17 @@ export const test = nextTest.extend<{ workflow: Workflow }>({
         return Response.json({ error: { message: 'Synthetic unavailable synthesis model', type: 'invalid_request_error' } }, { status: 400 });
       }
       const text = operation === 'greeting' ? GREETING : JSON.stringify(
-        operation === 'synthesis' ? synthesis : operation === 'aggregate' ? aggregate : {
+        operation === 'synthesis' ? synthesis : operation === 'aggregate' ? aggregate : operation === 'exploration' ? EXPLORATION : {
           message: 'Thank you. That completes our conversation.', questionAddressed: 0,
-          phaseTransition: 'wrap-up', profileUpdates: [], shouldConclude: true,
+          phaseTransition: 'wrap-up', profileUpdates: workflow.nextProfileUpdates.splice(0), shouldConclude: true,
         },
       );
       if (operation === 'synthesis' && workflow.interruptStorageAfterSynthesis) {
         workflow.interruptStorageAfterSynthesis = false;
+        workflow.storageOffline = true;
+      }
+      if (operation === 'exploration' && workflow.interruptStorageAfterExploration) {
+        workflow.interruptStorageAfterExploration = false;
         workflow.storageOffline = true;
       }
       if (direct) {

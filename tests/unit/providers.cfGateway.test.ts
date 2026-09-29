@@ -14,7 +14,7 @@ import { getInterviewProvider } from '@/lib/providers';
 import { CF_AIG_HEADER_NAMES, type ProviderRoute } from '@/lib/providers/endpoint';
 import { ProviderFailure } from '@/lib/providerErrors';
 import type { AggregateSynthesisResult, AIProviderType, SynthesisResult } from '@/types';
-import { makeStudyConfig } from '../fixtures/models';
+import { makeStudyConfig, makeStoredInterview } from '../fixtures/models';
 
 const ACCOUNT_ID = '0123456789abcdef0123456789abcdef';
 const GATEWAY_ID = 'oi-example';
@@ -70,6 +70,7 @@ const PAYLOADS = {
     researchImplications: ['Study trade-offs'],
     bottomLine: 'Speed consistently matters.',
   }),
+  exploration: JSON.stringify({ answer: 'Speed matters with exceptions.', findings: [], limitations: ['Small dataset.'] }),
   followup: JSON.stringify({
     name: 'Follow-up: speed',
     researchQuestion: 'When does speed matter?',
@@ -77,11 +78,12 @@ const PAYLOADS = {
   }),
 };
 
-type Captured = { url: string; method: string; headers: Record<string, string> };
+type Captured = { url: string; method: string; headers: Record<string, string>; body: Record<string, unknown> };
 let captured: Captured[] = [];
 let nextText = PAYLOADS.synthesis;
 let nextStatus = 200;
 let nextErrorBody: unknown = null;
+let nextServedModel: string | undefined;
 const saved: Record<string, string | undefined> = {};
 const TOUCHED = ['DEPLOYMENT_TARGET', 'DEPLOYMENT_MODE', 'AI_TRANSPORT', 'ANTHROPIC_CUSTOM_HEADERS', 'OPENAI_CUSTOM_HEADERS'];
 
@@ -93,7 +95,7 @@ function providerOf(url: string): AIProviderType {
 }
 
 function successBody(provider: AIProviderType, text: string): unknown {
-  const served = MODELS[provider].served;
+  const served = nextServedModel ?? MODELS[provider].served;
   switch (provider) {
     case 'openai':
       return {
@@ -150,9 +152,10 @@ beforeEach(() => {
   nextText = PAYLOADS.synthesis;
   nextStatus = 200;
   nextErrorBody = null;
+  nextServedModel = undefined;
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
-    captured.push({ url: request.url, method: request.method, headers: Object.fromEntries(request.headers.entries()) });
+    captured.push({ url: request.url, method: request.method, headers: Object.fromEntries(request.headers.entries()), body: JSON.parse(await request.text()) });
     if (nextStatus !== 200) {
       return new Response(JSON.stringify(nextErrorBody ?? { error: { type: 'api_error', message: 'synthetic' } }), {
         status: nextStatus,
@@ -169,7 +172,7 @@ afterEach(() => {
   for (const name of TOUCHED) delete process.env[name];
 });
 
-function adapter(provider: AIProviderType): AIProvider {
+function adapter(provider: AIProviderType, model = MODELS[provider].requested): AIProvider {
   const keys = {
     anthropicApiKey: provider === 'claude' ? KEYS.claude : null,
     openaiApiKey: provider === 'openai' ? KEYS.openai : null,
@@ -177,7 +180,7 @@ function adapter(provider: AIProviderType): AIProvider {
     openrouterApiKey: provider === 'openrouter' ? KEYS.openrouter : null,
     route: ROUTE,
   };
-  return getInterviewProvider(makeStudyConfig({ aiProvider: provider, aiModel: MODELS[provider].requested }), keys);
+  return getInterviewProvider(makeStudyConfig({ aiProvider: provider, aiModel: model }), keys);
 }
 
 function config(provider: AIProviderType) {
@@ -200,7 +203,7 @@ function aggregateResult(provider: AIProviderType): AggregateSynthesisResult {
   };
 }
 
-type Operation = 'greeting' | 'interview' | 'synthesis' | 'queued-synthesis' | 'aggregate' | 'followup';
+type Operation = 'greeting' | 'interview' | 'synthesis' | 'queued-synthesis' | 'aggregate' | 'followup' | 'exploration';
 
 async function run(provider: AIProviderType, operation: Operation): Promise<ProviderExecution | null> {
   const p = adapter(provider);
@@ -222,6 +225,9 @@ async function run(provider: AIProviderType, operation: Operation): Promise<Prov
     case 'aggregate':
       nextText = PAYLOADS.aggregate;
       return (await p.synthesizeAggregate(config(provider), [SYNTHESIS, SYNTHESIS], 2)).execution;
+    case 'exploration':
+      nextText = PAYLOADS.exploration;
+      return (await p.exploreStudy({ question: 'What matters?', studyConfig: config(provider), interviews: [makeStoredInterview({ transcript: history })] })).execution;
     case 'followup':
       nextText = PAYLOADS.followup;
       return (await p.generateFollowupStudy(config(provider), aggregateResult(provider))).execution;
@@ -265,7 +271,7 @@ function expectGatewayRequest(provider: AIProviderType, request: Captured): void
 }
 
 describe.each(PROVIDERS)('RT-11 %s through Cloudflare AI Gateway', (provider) => {
-  it.each<Operation>(['greeting', 'interview', 'synthesis', 'queued-synthesis', 'aggregate', 'followup'])(
+  it.each<Operation>(['greeting', 'interview', 'synthesis', 'queued-synthesis', 'aggregate', 'followup', 'exploration'])(
     '%s: one request to the native gateway path with the provider key and exactly the six cf-aig headers',
     async (operation) => {
       const execution = await run(provider, operation);
@@ -325,6 +331,36 @@ describe.each(PROVIDERS)('RT-11 %s through Cloudflare AI Gateway', (provider) =>
   });
 });
 
+describe('new native model parameters through Cloudflare AI Gateway', () => {
+  it.each([
+    ['claude', 'claude-sonnet-5-5'],
+    ['openai', 'gpt-6.1-sol'],
+  ] as const)('%s %s serializes compatible parameters with exactly six headers', async (provider, model) => {
+    nextServedModel = `${model}-synthetic-snapshot`;
+    const studyConfig = makeStudyConfig({ aiProvider: provider, aiModel: model, enableReasoning: false });
+    const result = await adapter(provider, model).synthesizeInterview(
+      history, studyConfig, behavior, null, { kind: 'queued-synthesis', deadlineMs: 5_000 },
+    );
+
+    expect(captured).toHaveLength(1);
+    expectGatewayRequest(provider, captured[0]);
+    expect(captured[0].body.model).toBe(model);
+    expect(captured[0].body).not.toHaveProperty('tools');
+    expect(captured[0].body).not.toHaveProperty('tool_choice');
+    expect(captured[0].body).not.toHaveProperty('temperature');
+    expect(captured[0].body).not.toHaveProperty('top_p');
+    if (provider === 'claude') {
+      expect(captured[0].body.thinking).toEqual({ type: 'between_tools' });
+      expect(captured[0].body.output_config).toMatchObject({ format: { type: 'json_schema', schema: { additionalProperties: false } } });
+    } else {
+      expect(captured[0].body.reasoning).toEqual({ effort: 'low' });
+      expect(captured[0].body.store).toBe(false);
+      expect(captured[0].body.text).toMatchObject({ format: { type: 'json_schema', strict: true } });
+    }
+    expect(result.execution).toEqual({ provider, requestedModel: model, model: nextServedModel, aiTransport: 'cloudflare-gateway' });
+  });
+});
+
 describe('RT-11 header set is exact whatever the SDK environment says', () => {
   it.each([
     ['claude', 'ANTHROPIC_CUSTOM_HEADERS'],
@@ -354,7 +390,7 @@ describe('RT-11 the direct route carries no cf-aig header and records no transpo
     // Stainless SDKs capture fetch when constructed, so stub first.
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init);
-      captured.push({ url: request.url, method: request.method, headers: Object.fromEntries(request.headers.entries()) });
+      captured.push({ url: request.url, method: request.method, headers: Object.fromEntries(request.headers.entries()), body: JSON.parse(await request.text()) });
       return Response.json(successBody(provider, nextText));
     }));
     const p = getInterviewProvider(config(provider), keys);
@@ -379,7 +415,7 @@ type FirstFailure = '503' | 'connection';
 function failFirstRequest(failure: FirstFailure, answer: (url: string) => AIProviderType): void {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
-    captured.push({ url: request.url, method: request.method, headers: Object.fromEntries(request.headers.entries()) });
+    captured.push({ url: request.url, method: request.method, headers: Object.fromEntries(request.headers.entries()), body: JSON.parse(await request.text()) });
     if (captured.length === 1) {
       if (failure === 'connection') throw new TypeError('fetch failed');
       return new Response(JSON.stringify({ error: { type: 'overloaded_error', message: 'synthetic' } }), {
@@ -391,7 +427,7 @@ function failFirstRequest(failure: FirstFailure, answer: (url: string) => AIProv
   }));
 }
 
-const ALL_OPERATIONS: Operation[] = ['greeting', 'interview', 'synthesis', 'queued-synthesis', 'aggregate', 'followup'];
+const ALL_OPERATIONS: Operation[] = ['greeting', 'interview', 'synthesis', 'queued-synthesis', 'aggregate', 'followup', 'exploration'];
 
 describe.each(PROVIDERS)('RT-11 %s: no SDK retry on the Cloudflare AI Gateway transport', (provider) => {
   it.each(ALL_OPERATIONS.flatMap((operation) => (['503', 'connection'] as const).map((failure) => [operation, failure] as const)))(
@@ -441,5 +477,22 @@ describe.each(PROVIDERS)('RT-11 control: %s on the direct transport keeps the SD
     );
     await expect(outcome).rejects.toBeInstanceOf(ProviderFailure);
     expect(captured).toHaveLength(1);
+  });
+});
+
+
+describe.each(PROVIDERS)('exploration %s: direct transport still has one paid attempt', (provider) => {
+  it.each(['503', 'connection'] as const)('does not retry a %s failure without an explicit new question', async (failure) => {
+    process.env.AI_TRANSPORT = 'direct';
+    failFirstRequest(failure, () => provider);
+    const p = getInterviewProvider(config(provider), {
+      anthropicApiKey: KEYS.claude, openaiApiKey: KEYS.openai, geminiApiKey: KEYS.gemini, openrouterApiKey: KEYS.openrouter,
+      route: { transport: 'direct' },
+    });
+    nextText = PAYLOADS.exploration;
+    await expect(p.exploreStudy({ question: 'What matters?', studyConfig: config(provider), interviews: [makeStoredInterview({ transcript: history })] })).rejects.toBeInstanceOf(ProviderFailure);
+    expect(captured).toHaveLength(1);
+    expect(captured[0].url).not.toContain('gateway.ai.cloudflare.com');
+    expect(Object.keys(captured[0].headers).filter((name) => name.startsWith('cf-aig-'))).toEqual([]);
   });
 });

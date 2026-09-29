@@ -5,6 +5,18 @@ export const ANSWER = 'I keep a short project note so I remember why I saved the
 export const GREETING = 'Tell me how you return to a saved research document.';
 export const INSIGHT = 'Project notes preserve the reason for saving.';
 export const UNSAID = 'I never write anything down about a document.';
+export const EXPLORATION_TEXT = 'A provisional context-keeper archetype is supported, but these interviews do not establish three distinct archetypes.';
+export const EXPLORATION = {
+  answer: EXPLORATION_TEXT,
+  findings: [{
+    heading: 'Keeping the reason for saving',
+    interpretation: 'The participant describes retaining context. This is an interpretation of a recorded behavior, not population prevalence.',
+    supporting: [{ interviewIndex: 1, turnIndex: 2, quote: ANSWER }],
+    challenging: [{ interviewIndex: 1, turnIndex: 2, quote: UNSAID }],
+    uncertain: [{ interviewIndex: 1, turnIndex: 1, quote: GREETING }],
+  }],
+  limitations: ['The selected transcripts cannot support claims about participants whose profile values are unknown.'],
+};
 
 export const SYNTHESIS = {
   statedPreferences: ['A short project note'],

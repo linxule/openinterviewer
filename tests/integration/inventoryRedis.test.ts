@@ -26,6 +26,8 @@ import {
   claimInterviewAnalysis,
   persistCompletedInterviewP1,
   recordInterviewAnalysisFailure,
+  encodeAggregateValue,
+  encodeMutationGuard,
 } from '@/lib/kv';
 import { beginCreateIdempotencyForHash, STANDALONE_SCOPE } from '@/lib/createIdempotency';
 import { isValidUpstashUrl as kvClientIsValidUpstashUrl, storageIdFromRedisUrl } from '@/lib/kvClient';
@@ -33,9 +35,12 @@ import type { PersistRatePlanRow } from '@/lib/rateLimit';
 import { createRedisWorkspaceStore } from '@/lib/storage/redis';
 import type { PersistCompletedInterviewInput, WorkspaceStorePort } from '@/lib/storage/types';
 import type { StoredAggregateSynthesis, StoredInterview, StoredStudy, StudyConfig } from '@/types';
+import type { ExplorationAnswer } from '@/lib/exploration/types';
+import { immutableSourceContentHash } from '@/lib/exploration/dataset';
 import { startDisposableRedis, type DisposableRedis } from '../helpers/disposableRedis';
 import {
   ANALYSIS_CLAIM_LEASE_MS,
+  EXPLORATION_ATTEMPT_DEADLINE_MS,
   createUpstashRestExecutor,
   EXIT_REFUSED,
   InventoryError,
@@ -70,6 +75,9 @@ const BODY_MARKERS = {
   synthesis: 'SYNTHMARK-bottom-line-2a6b',
   aggregate: 'AGGMARK-bottom-line-e8d4',
   foreign: 'FOREIGNMARK-other-app-value-19fe',
+  notebookQuestion: 'NOTEBOOKQUESTIONMARK-why-this-pattern-498d',
+  notebookAnswer: 'NOTEBOOKANSWERMARK-supported-interpretation-939c',
+  notebookQuote: 'NOTEBOOKQUOTEMARK-participant-excerpt-09be',
 };
 for (const marker of Object.values(BODY_MARKERS)) secrets.add(marker);
 
@@ -111,6 +119,7 @@ let owned: DisposableRedis | undefined;
 let port: RedisPort;
 let store: WorkspaceStorePort;
 let raw: RawClient;
+const createDigests = new Map<string, string>();
 
 function hex64(): string {
   return randomBytes(32).toString('hex');
@@ -145,6 +154,7 @@ async function createStudy(): Promise<StoredStudy> {
   const outcome = await store.createStudy({ idempotencyKeyDigest: digest, fingerprint: hex64(), candidate: candidateStudy() });
   if (outcome.status !== 'created') throw new Error(`createStudy: ${outcome.status}`);
   secrets.add(outcome.study.id);
+  createDigests.set(outcome.study.id, digest);
   return outcome.study;
 }
 
@@ -215,6 +225,28 @@ async function persistInterview(studyId: string, linkId: string | null): Promise
   return interview;
 }
 
+async function notebookAnswer(studyId: string, interview: StoredInterview, createdAt = Date.now()): Promise<ExplorationAnswer> {
+  const id = randomUUID();
+  const fingerprint = hex64();
+  const contentHash = await immutableSourceContentHash(interview);
+  for (const value of [id, fingerprint, contentHash]) secrets.add(value);
+  return {
+    id, studyId, question: BODY_MARKERS.notebookQuestion, createdAt, updatedAt: createdAt,
+    status: 'running', requestFingerprint: fingerprint, promptVersion: 1,
+    scope: {
+      studyId, selection: {}, sources: [{ interviewId: interview.id, studyRevision: interview.studyRevision ?? null, contentHash }],
+      totalSaved: 1, selectedCount: 1, excludedCount: 0, unknownProfileCount: 0,
+      pendingAnalysisCount: 0, sourceFingerprint: fingerprint,
+    },
+  };
+}
+
+async function reserveNotebook(answer: ExplorationAnswer): Promise<void> {
+  const keyDigest = hex64();
+  secrets.add(keyDigest);
+  expect((await store.exploration!.reserve({ answer, keyDigest, expectedStudyRevision: 1 })).status).toBe('created');
+}
+
 async function claim(interviewId: string, at = Date.now()): Promise<string> {
   const claimed = await claimInterviewAnalysis(interviewId, port, at);
   if (claimed.status !== 'claimed') throw new Error(`claimInterviewAnalysis: ${claimed.status}`);
@@ -279,6 +311,7 @@ function upstashShim(options: {
   override?: (command: string[]) => { error: string } | null;
   replies?: string[];
   fail?: (commands: string[][]) => number | null;
+  client?: { sendCommand(command: readonly string[]): Promise<unknown> };
 }): typeof fetch {
   return (async (input: string | URL | Request, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -305,7 +338,7 @@ function upstashShim(options: {
         continue;
       }
       try {
-        results.push({ result: await raw.sendCommand(command) });
+        results.push({ result: await (options.client ?? raw).sendCommand(command) });
       } catch (error) {
         results.push({ error: error instanceof Error ? error.message : String(error) });
       }
@@ -358,6 +391,7 @@ const seeded = {
   studyA: '',
   runningClaimedAt: 0,
   stuckClaimedAt: 0,
+  notebookCreatedAt: 0,
 };
 
 beforeAll(async () => {
@@ -402,6 +436,32 @@ beforeAll(async () => {
   expect((await recordInterviewAnalysisFailure(failed.id, await claim(failed.id), 'provider', port)).status).toBe('written');
   expect(await store.saveAggregate(aggregateFor(await currentStudy(a.id), [complete.id]))).toBe('saved');
 
+  // Current notebook families are written through the production adapter. Keep
+  // question/answer/quote/hash markers in the fixture so report and wire privacy
+  // assertions cover the new research content, not just the old interview data.
+  const completedAnswer = await notebookAnswer(a.id, complete);
+  await reserveNotebook(completedAnswer);
+  const completedNotebook = await store.exploration!.complete({
+    studyId: a.id, answerId: completedAnswer.id, requestFingerprint: completedAnswer.requestFingerprint,
+    result: {
+      answer: BODY_MARKERS.notebookAnswer,
+      findings: [{ heading: 'Pattern', interpretation: 'Synthetic interpretation',
+        supporting: [{ interviewId: complete.id, turnIndex: 2, quote: BODY_MARKERS.notebookQuote }], challenging: [], uncertain: [] }],
+      limitations: ['Synthetic corpus.'],
+    },
+    execution: { provider: 'gemini', requestedModel: MODEL, model: MODEL }, now: Date.now() + 1,
+  });
+  expect(completedNotebook.status).toBe('saved');
+  const runningAnswer = await notebookAnswer(a.id, complete);
+  seeded.notebookCreatedAt = runningAnswer.createdAt;
+  await reserveNotebook(runningAnswer);
+  const recoveryAnswer = await notebookAnswer(a.id, complete);
+  await reserveNotebook(recoveryAnswer);
+  expect((await store.exploration!.fail({
+    studyId: a.id, answerId: recoveryAnswer.id, requestFingerprint: recoveryAnswer.requestFingerprint,
+    status: 'recovery-required', failureKind: 'timeout', now: Date.now() + 1,
+  })).status).toBe('saved');
+
   const unfinishedSession = randomUUID();
   const aNow = await currentStudy(a.id);
   const unfinished = interviewFor(aNow, unfinishedSession, linkA);
@@ -412,15 +472,25 @@ beforeAll(async () => {
   }, port);
   expect(p1.status).toBe('started');
 
-  // Study B: created, linked, deleted while empty; its link stays, and an aggregate
-  // saved afterwards (a recorded Redis residual) points at the missing study.
+  // Study B: historical pre-release orphan fixtures. Current protected writes
+  // must refuse resurrection; only this owned raw Redis client seeds old state.
   const b = await createStudy();
-  await createLink(b);
+  const linkB = await createLink(b);
+  const linkBBody = await raw.get(`participant-link:${linkB}`);
+  const mappingBKey = `create-idemp:${createDigests.get(b.id)!}`;
+  const mappingBBody = await raw.get(mappingBKey);
   expect((await store.deleteStudy({ studyId: b.id, now: Date.now() })).status).toBe('deleted');
-  expect(await store.saveAggregate(aggregateFor(b, [`session-${randomUUID()}`]))).toBe('saved');
+  const legacyOrphanAggregate = aggregateFor(b, [`session-${randomUUID()}`]);
+  expect(await store.saveAggregate(legacyOrphanAggregate)).toBe('study-not-found');
+  expect(linkBBody).not.toBeNull();
+  expect(mappingBBody).not.toBeNull();
+  await raw.set(`participant-link:${linkB}`, linkBBody!);
+  await raw.sAdd('participant-link-index:none', linkB);
+  await raw.set(mappingBKey, mappingBBody!, { EX: 604_800 });
+  await raw.set(`study-aggregate:${b.id}`, encodeAggregateValue(legacyOrphanAggregate));
 
   // Study D: a link, one interview, a config edit (the link's revision is now
-  // superseded), then a refused populated delete that leaves its in-flight guard.
+  // superseded), plus a historical leaked guard from the old refused deletion.
   const d = await createStudy();
   const linkD = await createLink(d);
   await persistInterview(d.id, linkD);
@@ -429,6 +499,10 @@ beforeAll(async () => {
     studyId: d.id, expectedRevision: dNow.revision, config: { ...dNow.config, description: 'Edited.' }, now: Date.now(),
   })).status).toBe('updated');
   expect((await store.deleteStudy({ studyId: d.id, now: Date.now() })).status).toBe('conflict');
+  const liveGuard = await raw.get(`study-mutation-guard:${d.id}`);
+  expect(liveGuard).toContain('created');
+  await raw.set(`study-mutation-guard:${d.id}`, encodeMutationGuard({ version: 2, studyId: d.id,
+    kind: 'delete', generation: 1, state: 'in-flight', markerId: `delete:${d.id}:0` }));
 
   // A create whose idempotency mapping was reserved but never completed.
   const pendingHash = hex64();
@@ -445,15 +519,31 @@ beforeAll(async () => {
   secrets.add(sample.id);
   const retiredStudyId = randomUUID();
   secrets.add(retiredStudyId);
+  const retiredInterview = legacySampleInterview(`sample-${randomUUID()}`, retiredStudyId, false);
   const seededSample = await store.seedSampleWorkspace({
     studies: [sample],
     interviews: [
       legacySampleInterview(`sample-${randomUUID()}`, sample.id, true),
-      legacySampleInterview(`sample-${randomUUID()}`, retiredStudyId, false),
+      retiredInterview,
     ],
     now: Date.now(),
   });
   expect(seededSample).toEqual({ status: 'seeded', studiesSeeded: 1, interviewsSeeded: 2 });
+
+  // A historical orphan notebook cannot be reserved through current protected
+  // writes; seed only this legacy state through the owned disposable raw client.
+  const orphanReservation = await notebookAnswer(retiredStudyId, retiredInterview);
+  const orphanNotebook = { ...orphanReservation, status: 'complete' as const,
+    result: { answer: BODY_MARKERS.notebookAnswer, findings: [], limitations: [] },
+    execution: { provider: 'gemini' as const, requestedModel: MODEL, model: MODEL } };
+  const orphanDigest = hex64();
+  secrets.add(orphanDigest);
+  expect((await store.exploration!.reserve({ answer: orphanReservation, keyDigest: orphanDigest, expectedStudyRevision: 1 })).status).toBe('study-not-found');
+  await raw.set(`study-exploration:${retiredStudyId}:${orphanNotebook.id}`, `oi:exploration:${JSON.stringify(orphanNotebook)}`);
+  await raw.sAdd(`study-exploration-index:${retiredStudyId}`, orphanNotebook.id);
+  await raw.zAdd(`study-exploration-order:${retiredStudyId}`, { score: orphanNotebook.createdAt, value: orphanNotebook.id });
+  await raw.hSet(`study-exploration-keys:${retiredStudyId}`, orphanDigest,
+    `oi:exploration-key:${JSON.stringify({ id: orphanNotebook.id, fingerprint: orphanNotebook.requestFingerprint })}`);
 
   // A participant admission counter keyed by a session identifier.
   const admissionSession = randomUUID();
@@ -499,12 +589,12 @@ describe('OPS-04: read-only Redis inventory (scripts/cloudflare/inventory-redis.
     // Only read commands reached the server, including those run inside the script.
     const allowed = new Set([
       'ping', 'dbsize', 'scan', 'type', 'pttl', 'strlen', 'scard', 'zcard', 'hlen', 'llen', 'memory|usage',
-      'eval_ro', 'get', 'exists', 'sismember', 'smembers', 'zrange', 'info', 'config|resetstat',
+      'eval_ro', 'get', 'exists', 'sismember', 'smembers', 'zrange', 'zscore', 'hgetall', 'info', 'config|resetstat',
     ]);
     expect([...stats.keys()].filter((name) => !allowed.has(name))).toEqual([]);
     expect(stats.get('eval_ro')).toBeGreaterThan(0);
     expect(new Set(log.map((command) => command[0]))).toEqual(
-      new Set(['PING', 'DBSIZE', 'SCAN', 'TYPE', 'PTTL', 'STRLEN', 'SCARD', 'ZCARD', 'MEMORY', 'EVAL_RO']),
+      new Set(['PING', 'DBSIZE', 'SCAN', 'TYPE', 'PTTL', 'STRLEN', 'SCARD', 'ZCARD', 'HLEN', 'MEMORY', 'EVAL_RO']),
     );
 
     expect(report.complete).toBe(true);
@@ -532,7 +622,13 @@ describe('OPS-04: read-only Redis inventory (scripts/cloudflare/inventory-redis.
       mutationGuards: count('mutationGuards'),
       participantLinks: count('participantLinks'),
       participantLinkIndexes: count('participantLinkIndexes'),
+      studyLinkIndexes: count('studyLinkIndexes'),
       consents: count('consents'),
+      studyConsentIndexes: count('studyConsentIndexes'),
+      explorationAnswers: count('explorationAnswers'),
+      explorationIndexes: count('explorationIndexes'),
+      explorationOrderIndexes: count('explorationOrderIndexes'),
+      explorationReceipts: count('explorationReceipts'),
       createIdempotency: count('createIdempotency'),
       createIdempotencyIndexes: count('createIdempotencyIndexes'),
       participantRateLimits: count('participantRateLimits'),
@@ -552,7 +648,13 @@ describe('OPS-04: read-only Redis inventory (scripts/cloudflare/inventory-redis.
       mutationGuards: 2, // A created, D's refused delete in flight (B's delete removed its own)
       participantLinks: 4, // open, revoked, B's, D's (the short-lived one expired)
       participantLinkIndexes: 1,
+      studyLinkIndexes: 2,
       consents: 1,
+      studyConsentIndexes: 1,
+      explorationAnswers: 4,
+      explorationIndexes: 2,
+      explorationOrderIndexes: 2,
+      explorationReceipts: 2,
       createIdempotency: 4, // A, B, D created; one pending
       createIdempotencyIndexes: 1,
       participantRateLimits: 1,
@@ -617,6 +719,15 @@ describe('OPS-04: read-only Redis inventory (scripts/cloudflare/inventory-redis.
     expect(report.records.operationReceipts).toMatchObject({ kind: { create: 3, delete: 1 }, resolution: { created: 3, deleted: 1 } });
     expect(report.records.persistGuards).toMatchObject({ projected: 1, version: { v2: 1 }, interviewMissing: 0, notInStudyPersistingSet: 0 });
     expect(report.records.fingerprints).toMatchObject({ projected: 7, encoding: { prefixed: 7 }, interviewMissing: 0 });
+    expect(report.records.explorationAnswers).toMatchObject({
+      projected: 4, encoding: { prefixed: 4, bare: 0, undecodable: 0 }, identityMismatch: 0,
+      study: { present: 3, missing: 1 },
+      status: { complete: 2, running: 1, failed: 0, 'recovery-required': 1, other: 0, absent: 0 },
+      runningDeadlineActive: 1, runningDeadlineExpired: 0, withResult: 2, withExecution: 2,
+      notInStudyIndex: 0, notInOrderIndex: 0, sources: 4, sourcesMissing: 0,
+      sourcesInvalid: 0, sourcesOtherStudy: 0, sourcesUndecodable: 0, sourceChecksOverBound: 0,
+      failureKind: { timeout: 1 },
+    });
 
     expect(report.collections).toMatchObject({
       allStudies: { keys: 1, members: 3, missingTargets: 0 },
@@ -624,6 +735,11 @@ describe('OPS-04: read-only Redis inventory (scripts/cloudflare/inventory-redis.
       studyInterviewIndexes: { keys: 4, members: 8, missingTargets: 0, missingTargetsAlsoInAllInterviews: 0, study: { present: 3, missing: 1 } },
       studyPersistingSets: { keys: 1, members: 1, missingTargets: 0 },
       participantLinkIndexes: { keys: 1, members: 5, missingTargets: 1 },
+      studyLinkIndexes: { keys: 2, members: 4, missingTargets: 1, study: { present: 2 } },
+      studyConsentIndexes: { keys: 1, members: 1, missingTargets: 0, study: { present: 1 } },
+      explorationIndexes: { keys: 2, members: 4, missingTargets: 0, study: { present: 1, missing: 1 } },
+      explorationOrderIndexes: { keys: 2, members: 4, missingTargets: 0, study: { present: 1, missing: 1 } },
+      explorationReceipts: { keys: 2, members: 4, missingTargets: 0, invalidMembers: 0, study: { present: 1, missing: 1 } },
       createIdempotencyIndexes: { keys: 1, members: 4, missingTargets: 0 },
     });
     expect(report.pendingOperations).toEqual({
@@ -634,6 +750,9 @@ describe('OPS-04: read-only Redis inventory (scripts/cloudflare/inventory-redis.
       analysisRunning: 1,
       analysisRunningLeaseExpired: 1,
       analysisPendingAfterAttempt: 0,
+      explorationRunning: 1,
+      explorationRunningDeadlineExpired: 0,
+      explorationRecoveryRequired: 1,
     });
     expect(report.orphans).toEqual({
       interviewsWithoutStudy: 1,
@@ -648,6 +767,15 @@ describe('OPS-04: read-only Redis inventory (scripts/cloudflare/inventory-redis.
       studyPersistingMembersWithoutGuard: 0,
       allStudiesMembersWithoutStudy: 0,
       allInterviewsMembersWithoutInterview: 0,
+      explorationAnswersWithoutStudy: 1,
+      explorationIndexesWithoutStudy: 1,
+      explorationOrderIndexesWithoutStudy: 1,
+      explorationReceiptsWithoutStudy: 1,
+      explorationIndexMembersWithoutAnswer: 0,
+      explorationOrderMembersWithoutAnswer: 0,
+      explorationReceiptMembersWithoutAnswer: 0,
+      studyLinkIndexesWithoutStudy: 0,
+      studyConsentIndexesWithoutStudy: 0,
       invalidStudyReferences: 0,
     });
     expect(report.expiredReferences).toMatchObject({
@@ -655,6 +783,8 @@ describe('OPS-04: read-only Redis inventory (scripts/cloudflare/inventory-redis.
       linksRevoked: 1,
       linksForSupersededStudyRevision: 1,
       linkIndexMembersWithoutLink: 1,
+      studyLinkIndexMembersWithoutLink: 1,
+      studyConsentIndexMembersWithoutConsent: 0,
     });
     // Each operation and orphan once: D's in-flight delete, the unfinished save
     // (its guard and its study-persisting member are one save), the pending
@@ -663,9 +793,9 @@ describe('OPS-04: read-only Redis inventory (scripts/cloudflare/inventory-redis.
     // interview's entry, not another orphan).
     expect(report.summary).toMatchObject({
       hasResearchData: true,
-      pendingOperations: 5,
+      pendingOperations: 7,
       interviewsAwaitingFirstAnalysis: 4,
-      orphanedReferences: 4,
+      orphanedReferences: 5,
       unrecognizedKeys: 1,
     });
 
@@ -686,6 +816,133 @@ describe('OPS-04: read-only Redis inventory (scripts/cloudflare/inventory-redis.
     for (const [name, marker] of Object.entries(BODY_MARKERS).filter(([name]) => name !== 'foreign')) {
       expect(wire.includes(marker), `wire reply carries ${name}`).toBe(false);
     }
+  });
+
+  it('treats a notebook-only orphan database as research data without returning questions, quotes or hashes', async () => {
+    const notebookOnly = await startDisposableRedis();
+    const notebookRaw = createClient({ url: notebookOnly.url, RESP: 2 });
+    await notebookRaw.connect();
+    try {
+      const studyId = randomUUID();
+      const source = legacySampleInterview(`sample-${randomUUID()}`, studyId, false);
+      secrets.add(studyId);
+      const answer = await notebookAnswer(studyId, source);
+      const key = `study-exploration:${studyId}:${answer.id}`;
+      const body = `oi:exploration:${JSON.stringify(answer)}`;
+      await notebookRaw.set(key, body);
+      const replies: string[] = [];
+      const violations: string[] = [];
+      const report = await runInventory(executorFor(upstashShim({ log: [], violations, replies, client: notebookRaw })), { scanCount: 10 });
+      expect(violations).toEqual([]);
+      expect(report.complete).toBe(true);
+      expect(report.summary).toMatchObject({
+        hasResearchData: true, researchRecords: { studies: 0, interviews: 0, aggregates: 0, explorationAnswers: 1 },
+        unrecognizedKeys: 0, orphanedReferences: 1,
+      });
+      expect(report.records.explorationAnswers).toMatchObject({ projected: 1, study: { missing: 1 }, sourcesMissing: 1 });
+      expect(await notebookRaw.get(key)).toBe(body);
+      expectNoSecrets(JSON.stringify(report));
+      // SCAN necessarily returns key names; projection reply bodies must not.
+      for (const marker of Object.values(BODY_MARKERS)) expect(replies.join('\n')).not.toContain(marker);
+      expect(replies.join('\n')).not.toContain(answer.requestFingerprint);
+      expect(replies.join('\n')).not.toContain(answer.scope.sources[0].contentHash);
+    } finally {
+      await notebookRaw.quit();
+      await notebookOnly.close();
+    }
+  });
+
+  it('bounds notebook receipt/index/source checks and reports unverified metadata as incomplete', async () => {
+    const orphanStudy = randomUUID();
+    secrets.add(orphanStudy);
+    const answer = await notebookAnswer(orphanStudy, legacySampleInterview(`sample-${randomUUID()}`, orphanStudy, false));
+    answer.scope.sources = Array.from({ length: 101 }, () => ({ ...answer.scope.sources[0] }));
+    const artifactKey = `study-exploration:${orphanStudy}:${answer.id}`;
+    const indexKey = `study-exploration-index:${orphanStudy}`;
+    const receiptKey = `study-exploration-keys:${orphanStudy}`;
+    const members = Array.from({ length: 501 }, () => randomUUID());
+    const receiptValues: Record<string, string> = {};
+    for (const id of members) {
+      secrets.add(id);
+      const digest = hex64();
+      secrets.add(digest);
+      receiptValues[digest] = `oi:exploration-key:${JSON.stringify({ id, fingerprint: answer.requestFingerprint })}`;
+    }
+    await raw.set(artifactKey, `oi:exploration:${JSON.stringify(answer)}`);
+    await raw.sAdd(indexKey, members);
+    await raw.hSet(receiptKey, receiptValues);
+    try {
+      const before = await snapshot();
+      const replies: string[] = [];
+      const report = await runInventory(executorFor(upstashShim({ log: [], violations: [], replies })), { scanCount: 50 });
+      expect(report.complete).toBe(false);
+      expect(report.incompleteReasons).toEqual(['collections-over-member-bound', 'exploration-sources-over-bound']);
+      expect(report.collections.explorationIndexes).toMatchObject({ skippedOverBound: 1 });
+      expect(report.collections.explorationReceipts).toMatchObject({ skippedOverBound: 1 });
+      expect(report.records.explorationAnswers).toMatchObject({ sourceChecksOverBound: 1 });
+      expect(await snapshot()).toBe(before);
+      expectNoSecrets(JSON.stringify(report));
+      expect(replies.join('\n')).not.toContain(BODY_MARKERS.notebookQuestion);
+    } finally {
+      await raw.del([artifactKey, indexKey, receiptKey]);
+    }
+  });
+
+  it('reports malformed notebook receipts and unexpected notebook key types as incomplete without printing their bodies', async () => {
+    const orphanStudy = randomUUID();
+    secrets.add(orphanStudy);
+    const receiptKey = `study-exploration-keys:${orphanStudy}`;
+    const orderKey = `study-exploration-order:${orphanStudy}`;
+    await raw.hSet(receiptKey, hex64(), BODY_MARKERS.notebookAnswer);
+    await raw.set(orderKey, BODY_MARKERS.notebookQuestion);
+    try {
+      const report = await runInventory(executorFor(upstashShim({ log: [], violations: [] })), { scanCount: 50 });
+      expect(report.complete).toBe(false);
+      expect(report.incompleteReasons).toEqual(['exploration-records-invalid', 'known-family-type-mismatch']);
+      expect(report.collections.explorationReceipts.invalidMembers).toBe(1);
+      expect(report.families.explorationOrderIndexes.typeMismatch).toBe(1);
+      expectNoSecrets(JSON.stringify(report));
+    } finally {
+      await raw.del([receiptKey, orderKey]);
+    }
+  });
+
+  it('counts a missing notebook answer shared by its SET, ordering ZSET and receipt HASH once', async () => {
+    const ghost = randomUUID();
+    const digest = hex64();
+    const fingerprint = hex64();
+    for (const value of [ghost, digest, fingerprint]) secrets.add(value);
+    const index = `study-exploration-index:${seeded.studyA}`;
+    const order = `study-exploration-order:${seeded.studyA}`;
+    const receipts = `study-exploration-keys:${seeded.studyA}`;
+    await raw.sAdd(index, ghost);
+    await raw.zAdd(order, { score: Date.now(), value: ghost });
+    await raw.hSet(receipts, digest, `oi:exploration-key:${JSON.stringify({ id: ghost, fingerprint })}`);
+    try {
+      const report = await runInventory(executorFor(upstashShim({ log: [], violations: [] })), { scanCount: 50 });
+      expect(report.complete).toBe(true);
+      expect(report.orphans).toMatchObject({
+        explorationIndexMembersWithoutAnswer: 1, explorationOrderMembersWithoutAnswer: 1, explorationReceiptMembersWithoutAnswer: 1,
+      });
+      expect(report.collections.explorationOrderIndexes.missingTargetsAlsoInExplorationIndexes).toBe(1);
+      expect(report.collections.explorationReceipts.missingTargetsAlsoInExplorationIndexes).toBe(1);
+      expect(report.summary.orphanedReferences).toBe(6);
+      expectNoSecrets(JSON.stringify(report));
+    } finally {
+      await raw.sRem(index, ghost);
+      await raw.zRem(order, ghost);
+      await raw.hDel(receipts, digest);
+    }
+  });
+
+  it('counts a running notebook attempt as expired exactly at its portable deadline', async () => {
+    const at = async (now: number) => (await runInventory(
+      executorFor(upstashShim({ log: [], violations: [] })), { clock: () => now },
+    )).records.explorationAnswers;
+    expect(await at(seeded.notebookCreatedAt + EXPLORATION_ATTEMPT_DEADLINE_MS - 1))
+      .toMatchObject({ runningDeadlineActive: 1, runningDeadlineExpired: 0 });
+    expect(await at(seeded.notebookCreatedAt + EXPLORATION_ATTEMPT_DEADLINE_MS))
+      .toMatchObject({ runningDeadlineActive: 0, runningDeadlineExpired: 1 });
   });
 
   it('counts a running analysis as expired exactly at the kv.ts lease boundary', async () => {
@@ -717,8 +974,8 @@ describe('OPS-04: read-only Redis inventory (scripts/cloudflare/inventory-redis.
       expect(report.collections.allInterviews).toMatchObject({ missingTargets: 1, skippedOverBound: 0 });
       expect(report.collections.studyInterviewIndexes).toMatchObject({ missingTargets: 1, missingTargetsAlsoInAllInterviews: 1 });
       expect(report.orphans).toMatchObject({ allInterviewsMembersWithoutInterview: 1, studyInterviewIndexMembersWithoutInterview: 1 });
-      expect(report.summary.orphanedReferences).toBe(5);
-      expect(report.summary.pendingOperations).toBe(5);
+      expect(report.summary.orphanedReferences).toBe(6);
+      expect(report.summary.pendingOperations).toBe(7);
       expectNoSecrets(JSON.stringify(report));
     } finally {
       await raw.sendCommand(['SREM', 'all-interviews', ghost]);

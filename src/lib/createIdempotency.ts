@@ -20,17 +20,22 @@ export const STANDALONE_SCOPE = 'standalone';
 
 export type IdempotencyState = 'pending' | 'created' | 'deleted';
 
-export interface CreateIdempotencyRecord {
+interface CreateIdempotencyIdentity {
   version: 2;
   researcherId: string;
   studyId: string;
   createdAt: number;
   updatedAt: number;
   fingerprint: string;
-  state: IdempotencyState;
   operationId: string | null;
-  study: StoredStudy;
 }
+
+export type CreateIdempotencyRecord = CreateIdempotencyIdentity & (
+  | { state: 'pending' | 'created'; study: StoredStudy }
+  // Legacy deleted receipts may still contain a study. Readers discard it;
+  // all new deleted receipts keep only consumed-key authority.
+  | { state: 'deleted'; study: StoredStudy | null }
+);
 
 export type BeginCreateIdempotencyResult =
   | { status: 'started' | 'replay'; record: CreateIdempotencyRecord }
@@ -142,6 +147,12 @@ if obj.state == nextState then
     redis.call('SET', KEYS[1], encoded, 'EX', 604800)
     return {'oi:idemp-replay', encoded}
   end
+  if nextState == 'deleted' and obj.study ~= cjson.null then
+    obj.study = cjson.null
+    local encoded = encode(obj)
+    redis.call('SET', KEYS[1], encoded, 'KEEPTTL')
+    return {'oi:idemp-replay', encoded}
+  end
   return {'oi:idemp-replay', existing}
 end
 
@@ -156,6 +167,7 @@ if nextState == 'pending' then
 end
 
 obj.state = nextState
+if nextState == 'deleted' then obj.study = cjson.null end
 obj.updatedAt = now
 if opId ~= cjson.null then
   obj.operationId = opId
@@ -242,22 +254,22 @@ export function parseCreateIdempotencyRecord(value: unknown): CreateIdempotencyR
   if (payload.operationId !== null && (typeof payload.operationId !== 'string' || payload.operationId.length === 0)) {
     return null;
   }
-  const study = asStoredStudy(payload.study, payload.studyId);
-  if (!study) return null;
-  return {
+  const identity: CreateIdempotencyIdentity = {
     version: 2,
     researcherId: payload.researcherId,
     studyId: payload.studyId,
     createdAt: payload.createdAt as number,
     updatedAt: payload.updatedAt as number,
     fingerprint: payload.fingerprint,
-    state: payload.state,
     operationId: payload.operationId as string | null,
-    study,
   };
+  if (payload.state === 'deleted') return { ...identity, state: 'deleted', study: null };
+  const study = asStoredStudy(payload.study, payload.studyId);
+  if (!study) return null;
+  return { ...identity, state: payload.state, study };
 }
 
-export function mintCreateStudy(config: StudyConfig, now = Date.now(), studyId = randomUUID()): StoredStudy {
+export function mintCreateStudy(config: StudyConfig, now = Date.now(), studyId: string = randomUUID()): StoredStudy {
   const owned: StudyConfig = { ...config, id: studyId, createdAt: now };
   return {
     id: studyId,

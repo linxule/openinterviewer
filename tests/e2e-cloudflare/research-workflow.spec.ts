@@ -6,6 +6,7 @@ import { readFile } from 'node:fs/promises';
 import JSZip from 'jszip';
 import { expect, test, type Page } from '@playwright/test';
 import { AGGREGATE, ANSWER, GREETING, INSIGHT } from './fixtureData.mjs';
+import { deletePopulatedStudy, exploreAndReplay, expectStudyRevision } from '../e2e/release-journey';
 import {
   PROVIDER_FAILURE_COPY,
   RECOVERY_COPY,
@@ -135,13 +136,22 @@ test('participant saves before analysis runs; background analysis completes afte
   // Aggregate synthesis over both analyzed interviews, persisted.
   await page.goto(studyUrl);
   await page.getByRole('tab', { name: 'Overview', exact: true }).click();
-  await page.getByRole('button', { name: 'Analyze All Interviews', exact: true }).click();
+  await page.getByRole('button', { name: 'Analyze selected interviews', exact: true }).click();
   await expect(page.getByText(AGGREGATE.bottomLine, { exact: true })).toBeVisible();
   await expect(page.getByText(/· saved /)).toBeVisible();
   await page.reload();
   await expect(page.getByText(AGGREGATE.bottomLine, { exact: true })).toBeVisible();
   await expect(page.getByText(/· saved /)).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Re-analyze All Interviews', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Re-analyze selected interviews', exact: true })).toBeVisible();
+
+  const savedAnswer = await exploreAndReplay(page, studyId);
+  expect(savedAnswer.scope.selectedCount).toBe(2);
+  expect(savedAnswer.scope.pendingAnalysisCount).toBe(0);
+  expect(await count(request, 'exploration')).toBe(1);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({ path: testInfo.outputPath('cloudflare-study-exploration-desktop.png'), fullPage: true });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await expectNoHorizontalScrollAt375(page, testInfo.outputPath('cloudflare-study-exploration-mobile.png'));
 
   // ST-08 / RT-09: the streamed researcher export is a complete archive.
   // Entries are filtered to this study so a retry in the same server stays exact.
@@ -159,6 +169,7 @@ test('participant saves before analysis runs; background analysis completes afte
   }
   const aggregate = JSON.parse(await zip.file(`aggregates/${studyId}.json`)!.async('string'));
   expect(aggregate).toMatchObject({ studyId, interviewCount: 2, bottomLine: AGGREGATE.bottomLine });
+  expect(JSON.parse(await zip.file(`explorations/${studyId}/${savedAnswer.id}.json`)!.async('string'))).toEqual(savedAnswer);
   const summary = (await zip.file('summary.csv')!.async('string')).split('\n').filter(Boolean);
   expect(summary[0]).toBe('Interview ID,Study,Date,Duration (min),Messages,Themes,Key Insight,Analysis');
   for (const record of records) {
@@ -175,6 +186,44 @@ test('participant saves before analysis runs; background analysis completes afte
   expect(state.calls.filter((call) => call.operation === 'interview')).toHaveLength(2);
   expect(state.calls.filter((call) => call.operation === 'synthesis')).toHaveLength(3);
   expect(state.calls.filter((call) => call.operation === 'aggregate')).toHaveLength(1);
+  expect(state.calls.filter((call) => call.operation === 'exploration')).toHaveLength(1);
+  await page.goto(studyUrl);
+  await deletePopulatedStudy(page, studyId, records.map(record => record.id), {
+    desktop: testInfo.outputPath('cloudflare-study-danger-zone-desktop.png'), mobile: testInfo.outputPath('cloudflare-study-danger-zone-mobile.png'),
+  });
+  const deletedContext = await browser.newContext();
+  const deletedLink = await deletedContext.newPage();
+  await deletedLink.goto(linkPath);
+  await expect(deletedLink.getByRole('heading', { name: 'Unable to Load Interview', exact: true })).toBeVisible();
+  await deletedContext.close();
+});
+
+test('pausing preserves revision and resumes the same link; exploration reads a failed-analysis transcript without retrying its synthesis', async ({ page, browser, request }) => {
+  const { studyUrl, studyId } = await createStudy(page);
+  const linkPath = await generateLink(page);
+  const access = page.getByRole('switch', { name: 'Participant access', exact: true });
+  await access.click();
+  await expect(access).toHaveAttribute('aria-checked', 'false');
+  await expectStudyRevision(page, studyId, 1);
+  const pausedContext = await browser.newContext();
+  const pausedLink = await pausedContext.newPage();
+  await pausedLink.goto(linkPath);
+  await expect(pausedLink.getByRole('heading', { name: 'Unable to Load Interview', exact: true })).toBeVisible();
+  await pausedContext.close();
+  await access.click();
+  await expect(access).toHaveAttribute('aria-checked', 'true');
+  await expectStudyRevision(page, studyId, 1);
+  await control(request, 'fail-next-synthesis');
+  await saveAndClose(await participantCompletes(browser, linkPath));
+  await expect.poll(() => count(request, 'synthesis'), { timeout: 60_000 }).toBe(1);
+  await openInterviewAnalysis(page, studyUrl, 1);
+  await expect(page.getByText('Analysis failed', { exact: true })).toBeVisible({ timeout: 60_000 });
+  await page.goto(studyUrl);
+  const answer = await exploreAndReplay(page, studyId);
+  expect(answer.scope).toMatchObject({ selectedCount: 1, totalSaved: 1, pendingAnalysisCount: 1 });
+  expect(await count(request, 'synthesis')).toBe(1);
+  expect(await count(request, 'exploration')).toBe(1);
+  expect((await fixtureState(request)).refused).toEqual([]);
 });
 
 test('a synthesis 5xx after start needs recovery; one explicit retry makes exactly one more provider request', async ({ page, browser, request }, testInfo) => {
@@ -231,8 +280,8 @@ test('a synthesis 5xx after start needs recovery; one explicit retry makes exact
 });
 
 test('researcher preview never creates research records or jobs', async ({ page, request }) => {
-  const { studyUrl } = await createStudy(page);
-  await page.goto('/setup');
+  const { studyUrl, studyId } = await createStudy(page);
+  await page.goto(`/setup?prefill=edit&studyId=${studyId}`);
   await page.getByRole('button', { name: 'Preview', exact: true }).click();
   await page.getByRole('button', { name: 'I consent — begin the interview' }).click();
   await expect(page.getByText(GREETING, { exact: true })).toBeVisible();

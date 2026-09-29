@@ -32,3 +32,6 @@ export {
   buildAggregateSynthesisPrompt,
   aggregateSynthesisOutputDescription
 } from './synthesis';
+
+// Researcher questions over the original selected interview records
+export { buildExplorationPrompt, explorationSystemPrompt } from './exploration';

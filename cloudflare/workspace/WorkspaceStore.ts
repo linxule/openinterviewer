@@ -21,6 +21,8 @@ import * as scheduler from './scheduler';
 import * as exporter from './exports';
 import * as operator from './operator';
 import * as login from './login';
+import * as exploration from './exploration';
+import type * as E from '../../src/lib/exploration/types';
 import type * as Rpc from './rpcTypes';
 import type { StudyListItem } from '../../src/types';
 
@@ -291,6 +293,36 @@ export class WorkspaceStore extends DurableObject<WorkspaceEnv> {
   }
 
   // ---------- Operator surface (OPS) ----------
+
+  async reserveExploration(input: E.ExplorationReservation): Promise<E.ExplorationReserveOutcome> {
+    if (this.requireInitialized()) return { status: 'held' };
+    return exploration.reserve(this.ws, input);
+  }
+
+  async lookupExploration(input: { studyId: string; keyDigest: string; requestFingerprint: string }): Promise<E.ExplorationLookupOutcome> {
+    if (this.requireInitialized()) return { status: 'unavailable' };
+    return exploration.lookup(this.ws, input);
+  }
+
+  async getExploration(input: { studyId: string; answerId: string }): Promise<E.ExplorationReadOutcome> {
+    if (this.requireInitialized()) return { status: 'unavailable' };
+    return exploration.get(this.ws, input);
+  }
+
+  async listExplorations(input: { studyId: string; maximum: number; pageSize?: number; cursor?: string | null }): Promise<E.ExplorationListOutcome> {
+    if (this.requireInitialized()) return { status: 'unavailable' };
+    return exploration.list(this.ws, input);
+  }
+
+  async completeExploration(input: E.CompleteExplorationInput): Promise<E.ExplorationWriteOutcome> {
+    if (this.requireInitialized()) return { status: 'held' };
+    return exploration.complete(this.ws, input);
+  }
+
+  async failExploration(input: E.FailExplorationInput): Promise<E.ExplorationWriteOutcome> {
+    if (this.requireInitialized()) return { status: 'held' };
+    return exploration.fail(this.ws, input);
+  }
 
   async operatorStatus(): Promise<Rpc.OperatorStatusOutcome> {
     const held = this.requireInitialized();

@@ -269,6 +269,16 @@ The cost is that every pending, claimed or started analysis becomes recovery-req
 
 ## Release classification and application rollback (OPS-03)
 
+Version 5 adds notebook migration 2 with `minReaderVersion: 2`. An upgraded
+workspace is forward-fix: version 4 intentionally fails readiness instead of
+serving incomplete exports, backups or deletions. Backup format 2 includes the
+notebook; the new reader also accepts format-1/schema-1 backups. Preserve and
+verify a pre-upgrade backup in isolated staging before updating. Restoring that
+backup loses intervening collection, and the two versions must never share a
+writable live workspace. Running notebook attempts also count as in-flight
+work during maintenance; recovery activation marks them uncertain, not eligible
+for automatic provider replay.
+
 Classify each release against the deployed commit before deploying it:
 
 | Class | How to recognize it | Rollback procedure |

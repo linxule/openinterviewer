@@ -57,6 +57,7 @@ const LANES = [
   { name: 'redis-crash', cmd: ['npm', 'run', 'test:redis-crash'], env: { REDIS_URL: '' } },
   { name: 'adversarial', cmd: ['npm', 'run', 'test:adversarial'], env: { REDIS_URL: '' } },
   { name: 'redis-inventory', cmd: ['npm', 'run', 'test:inventory:redis'], env: { REDIS_URL: '' } },
+  { name: 'researcher-lifecycle', cmd: ['npm', 'run', 'test:researcher:redis'], env: { REDIS_URL: '' } },
   ...Object.entries(NODE_BUILD_FIXTURES).map(([name, env]) => ({ name, cmd: ['npm', 'run', 'build'], env })),
   { name: 'node-browser', cmd: ['npm', 'run', 'test:e2e'] },
   { name: 'cloudflare-artifact', cmd: ['npm', 'run', 'test:cloudflare:artifact'], needsArtifact: true },

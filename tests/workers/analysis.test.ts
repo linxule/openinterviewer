@@ -196,7 +196,10 @@ describe('acceptAnalysisRetry (JOB-04, API-01)', () => {
     );
     expect(jobs).toHaveLength(1);
     expect(jobs[0]).toMatchObject({ generation: 1, state: 'pending', recovery_epoch: testEnv.ANALYSIS_RECOVERY_EPOCH });
-    expect(JSON.parse(jobs[0].input_json)).toEqual(input.input);
+    expect(JSON.parse(jobs[0].input_json)).toEqual({ ...input.input, studyConfig: {
+      ...input.input.studyConfig, description: '', researchQuestion: 'Original collection research question unavailable (legacy record).',
+      coreQuestions: [], topicAreas: [], profileSchema: [],
+    } });
     expect(await analysisRow(legacy.interviewId)).toMatchObject({ status: 'pending', current_generation: 1, attempts: 0 });
     expect(await mutationSeq()).toBe(before + 1);
 

@@ -60,6 +60,7 @@ const aggregateFixture = {
 };
 
 type FetchOverrides = {
+  getDataset?: () => Response | Promise<Response>;
   getAggregate?: () => Response | Promise<Response>;
   postAggregate?: () => Response | Promise<Response>;
   postFollowup?: (init?: RequestInit) => Response | Promise<Response>;
@@ -75,6 +76,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 function stubFetch(overrides: FetchOverrides = {}) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    if (url.includes('/dataset') && overrides.getDataset) return overrides.getDataset();
     if (url.includes('/api/synthesis/aggregate') && init?.method === 'POST') {
       return overrides.postAggregate
         ? overrides.postAggregate()
@@ -139,11 +141,27 @@ beforeEach(() => {
 async function generateAggregate() {
   renderStudyDetail('study-aggregate');
   await screen.findByRole('heading', { name: 'Aggregate Study' });
-  fireEvent.click(screen.getByRole('button', { name: 'Analyze All Interviews' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Analyze selected interviews' }));
   return screen.findByText('The aggregate bottom line.');
 }
 
 describe('StudyDetail aggregate reading', () => {
+  it('explains an explicit pending-analysis selection before its next interactive control', async () => {
+    const analyzed = { statedPreferences: [], revealedPreferences: [], themes: [], contradictions: [], keyInsights: [], bottomLine: 'Analyzed.' };
+    storageMock.readStudyInterviews.mockResolvedValue(ok(['interview-a', 'interview-b', 'interview-c'].map((id, index) => makeStoredInterview({ id, studyId: 'study-aggregate', studyRevision: 4, synthesis: index < 2 ? analyzed : null }))));
+    const dataset = { manifest: { studyId: 'study-aggregate', selection: {}, sources: ['interview-a', 'interview-b', 'interview-c'].map(interviewId => ({ interviewId, studyRevision: 4, contentHash: 'a'.repeat(64) })), totalSaved: 3, selectedCount: 3, excludedCount: 0, unknownProfileCount: 0, pendingAnalysisCount: 1, sourceFingerprint: 'b'.repeat(64) }, revisions: [{ revision: 4, count: 3, analyzedCount: 2 }], profileFields: [], historicalProfileUnknownCount: 3 };
+    const fetchMock = stubFetch({ getDataset: () => jsonResponse({ dataset }) });
+    renderStudyDetail('study-aggregate');
+    const aggregate = await screen.findByRole('button', { name: 'Analyze selected interviews' });
+    expect(aggregate).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Choose analysis dataset' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply dataset selection' }));
+    const reason = await screen.findByText('All selected interviews need complete individual analyses before generating this overview. 1 selected interview still needs analysis; Explore can read their saved transcripts now.');
+    expect(aggregate).toBeDisabled();
+    expect(aggregate).toHaveAttribute('aria-describedby', reason.id);
+    expect(reason.compareDocumentPosition(screen.getByRole('button', { name: 'Close dataset selection' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(fetchMock.mock.calls.some(([input, init]) => String(input).includes('/api/synthesis/aggregate') && init?.method === 'POST')).toBe(false);
+  });
   it('renders the five headings in document order', async () => {
     await generateAggregate();
 
@@ -203,7 +221,7 @@ describe('StudyDetail aggregate reading', () => {
     expect(footer.textContent).not.toMatch(/receipt/i);
     expect(footer.textContent).not.toMatch(/unsigned/i);
     expect(footer.textContent).not.toMatch(/not saved/);
-    expect(screen.getByRole('button', { name: 'Re-analyze All Interviews' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Re-analyze selected interviews' })).toBeInTheDocument();
   });
 
   it('appends "covers N of M interviews" when a stored aggregate covers fewer than the eligible set', async () => {
@@ -248,7 +266,7 @@ describe('StudyDetail aggregate reading', () => {
     expect(screen.getByText(/^Re-analyze first:/)).toBeInTheDocument();
   });
 
-  it('renders a stored aggregate even with fewer than two interviews, and hides the two-interview prompt', async () => {
+  it('renders a stored aggregate with fewer than two interviews and explains why re-analysis is disabled', async () => {
     storageMock.readStudyInterviews.mockResolvedValue(ok([
       makeStoredInterview({ id: 'interview-a', studyId: 'study-aggregate' }),
     ]));
@@ -261,8 +279,11 @@ describe('StudyDetail aggregate reading', () => {
     renderStudyDetail('study-aggregate');
     await screen.findByText('The aggregate bottom line.');
 
-    // Matches the current copy ('Need at least 2 analyzed interviews ...') and any rewording of it.
-    expect(screen.queryByText(/Need at least 2/)).not.toBeInTheDocument();
+    const reason = screen.getByText('Need at least 2 analyzed interviews in this dataset to generate aggregate analysis.');
+    const reanalyze = screen.getByRole('button', { name: 'Re-analyze selected interviews' });
+    expect(reanalyze).toBeDisabled();
+    expect(reanalyze).toHaveAttribute('aria-describedby', reason.id);
+    expect(reason.compareDocumentPosition(screen.getByRole('button', { name: 'Choose analysis dataset' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('issues a follow-up POST with no body when the aggregate is current', async () => {

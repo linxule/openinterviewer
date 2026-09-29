@@ -6,6 +6,14 @@ import type { RedisPort } from '@/lib/redisPort';
 import type { ResearcherContext } from '@/lib/researcherContext';
 import { createRedisWorkspaceStore } from '@/lib/storage/redis';
 
+function fixtureStore(kvClient: RedisPort, researcherId: string | null) {
+  const store = createRedisWorkspaceStore(kvClient, { researcherId });
+  // Route fixtures with a shape-only client cannot execute the new lifecycle
+  // Lua read. Real Redis adapters keep the production capability untouched.
+  if (typeof kvClient.eval !== 'function') delete store.studyMutationStatus;
+  return store;
+}
+
 export function standaloneTestContext(
   kvClient: RedisPort,
   overrides: Partial<ResearcherContext> = {},
@@ -13,7 +21,7 @@ export function standaloneTestContext(
   return {
     researcherId: null,
     kvClient,
-    store: createRedisWorkspaceStore(kvClient, { researcherId: null }),
+    store: fixtureStore(kvClient, null),
     geminiApiKey: null,
     anthropicApiKey: null,
     openaiApiKey: null,
@@ -30,7 +38,7 @@ export function hostedTestContext(
 ): ResearcherContext {
   return standaloneTestContext(kvClient, {
     researcherId,
-    store: createRedisWorkspaceStore(kvClient, { researcherId }),
+    store: fixtureStore(kvClient, researcherId),
     ...overrides,
   });
 }

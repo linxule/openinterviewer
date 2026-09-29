@@ -6,7 +6,6 @@ import { isPendingStudyStub, StudyWorkspaceItem } from '@/types';
 import {
   deleteStudy,
   getAllStudies,
-  readStudy,
   reconcileStudyOperations,
 } from '@/services/storageService';
 import { Button, Coordinate, Icon, Measure, Notice, Rule } from '@/components/ui';
@@ -107,16 +106,10 @@ export default function StudyList() {
     }
   };
 
-  // The list carries no configurations (ST-08): editing prefills from the full study.
-  const handleEdit = async (id: string) => {
+  // Setup resolves the URL's canonical study, including after a reload.
+  const handleEdit = (id: string) => {
     setMenuOpenId(null);
-    const outcome = await readStudy(id);
-    if (outcome.status !== 'ok') {
-      alert(outcome.error);
-      return;
-    }
-    sessionStorage.setItem('prefillStudyConfig', JSON.stringify(outcome.value.config));
-    router.push(`/setup?prefill=edit&studyId=${id}`);
+    router.push(`/setup?prefill=edit&studyId=${encodeURIComponent(id)}`);
   };
 
   const handleLoadSample = async () => {
@@ -333,6 +326,7 @@ export default function StudyList() {
               {studies.map((study) => {
                 const pending = isPendingStudyStub(study);
                 const name = pending ? 'Study change pending' : study.config.name;
+                const hasCollectedData = !pending && (study.isLocked || study.interviewCount > 0);
                 return (
                   <tr
                     key={study.id}
@@ -370,8 +364,8 @@ export default function StudyList() {
                       {pending ? (
                         <span className="text-error">Reconciliation pending</span>
                       ) : (
-                        <span className={study.isLocked ? 'text-ink-500' : 'text-success'}>
-                          {study.isLocked ? 'Locked' : 'Editable'}
+                        <span className={hasCollectedData ? 'text-ink-500' : 'text-success'}>
+                          {hasCollectedData ? 'Collected data' : 'Editable'}
                         </span>
                       )}
                     </td>
@@ -426,8 +420,26 @@ export default function StudyList() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => handleDelete(study.id)}
-                            disabled={pending || deletingId === study.id || (!pending && study.interviewCount > 0)}
+                            onClick={() => {
+                              setMenuOpenId(null);
+                              router.push(`/setup?prefill=duplicate&studyId=${encodeURIComponent(study.id)}`);
+                            }}
+                            disabled={pending}
+                            className="block w-full px-3 py-2 text-left text-[13px] text-ink-700 hover:bg-paper-2 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            Duplicate as test study
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!pending && study.interviewCount > 0) {
+                                setMenuOpenId(null);
+                                router.push(`/studies/${encodeURIComponent(study.id)}?tab=settings#danger-zone`);
+                              } else {
+                                void handleDelete(study.id);
+                              }
+                            }}
+                            disabled={pending || deletingId === study.id}
                             className="block w-full px-3 py-2 text-left text-[13px] text-error hover:bg-paper-2 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             Delete

@@ -98,6 +98,7 @@ class RecordingRedis {
   async eval(script: string, keys: string[], args: string[]): Promise<unknown> {
     this.calls.push(['eval', script, keys, args]);
     if (script === actualIdemp.BEGIN_CREATE_IDEMPOTENCY_SCRIPT) return ['oi:idemp-started', args[1]];
+    if (script.includes('local resuming =')) return ['oi:deleted'];
     return ['oi:idemp-unavailable'];
   }
 
@@ -279,7 +280,7 @@ describe('createStudy (ST-01)', () => {
 
     const routeBegin = routeRedis.calls[1] as [string, string, string[], string[]];
     const minted = actualIdemp.parseCreateIdempotencyRecord(routeBegin[3][1]);
-    if (!minted) throw new Error('route did not mint a study');
+    if (!minted || minted.state === 'deleted') throw new Error('route did not mint a study');
     const routeFingerprint = routeBegin[3][4];
     expect(routeBegin[3][0]).toBe(digest());
 
@@ -813,35 +814,31 @@ describe('sample workspace (ST-07)', () => {
       asPort(recording),
     );
     expect(result).toEqual({ status: 'cleared', studiesDeleted: 1, interviewsDeleted: 2 });
-    expect(recording.calls).toEqual([
-      ['del', 'study:demo-study-a'],
-      ['srem', 'all-studies', 'demo-study-a'],
-      ['del', 'study-aggregate:demo-study-a'],
-      ['del', 'interview:interview-demo-a'],
-      ['srem', 'study-interviews:demo-study-a', 'interview-demo-a'],
-      ['srem', 'all-interviews', 'interview-demo-a'],
-      ['del', 'interview:interview-demo-b'],
-      ['srem', 'study-interviews:demo-study-a', 'interview-demo-b'],
-      ['srem', 'all-interviews', 'interview-demo-b'],
+    const purge = recording.calls.find(call => call[0] === 'eval');
+    expect(purge?.[2]).toEqual([
+      'study:demo-study-a', 'study-interviews:demo-study-a', 'all-studies',
+      'study-operation-result:delete:demo-study-a:0', 'study-mutation-guard:demo-study-a',
+      'study-persisting:demo-study-a', 'study-aggregate:demo-study-a',
     ]);
+    expect(recording.calls).toContainEqual(['del', 'study-operation-result:delete:demo-study-a:0']);
+    expect(recording.calls).toContainEqual(['del', 'interview:interview-demo-a']);
+    expect(recording.calls).toContainEqual(['del', 'interview-fingerprint:interview-demo-a', 'interview-persisting:interview-demo-a']);
+    expect(recording.calls).toContainEqual(['srem', 'all-interviews', 'interview-demo-b']);
   });
 
   it('ST-07: a clear interrupted after its first write is ambiguous; before any write it is unavailable', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const failing = (failAt: number) => {
-      let count = 0;
-      const step = async () => {
-        count += 1;
-        if (count === failAt) throw new Error('connection reset');
-        return 1;
-      };
-      return asPort({ del: step, srem: step });
-    };
     const input = { studyIds: ['demo-study-a'], interviewIds: ['interview-demo-a'] };
-    expect(await actualKv.clearSampleWorkspaceRecords(input, failing(1))).toEqual({ status: 'unavailable' });
-    expect(await actualKv.clearSampleWorkspaceRecords(input, failing(2))).toEqual({ status: 'ambiguous' });
+    const fault = (commitState: 'zero-write' | 'may-have-committed') => asPort({
+      get: async () => null,
+      eval: async () => { throw new RedisCommitAmbiguousError(commitState); },
+    });
+    expect(await actualKv.clearSampleWorkspaceRecords(input, fault('zero-write'))).toEqual({ status: 'unavailable' });
+    expect(await actualKv.clearSampleWorkspaceRecords(input, fault('may-have-committed'))).toEqual({ status: 'ambiguous' });
     expect(await actualKv.clearSampleWorkspaceRecords(input, asPort({
-      del: async () => { throw new RedisCommitAmbiguousError('may-have-committed'); },
+      get: async () => null,
+      eval: async () => ['oi:deleted'],
+      del: async () => { throw new Error('connection reset after purge'); },
     }))).toEqual({ status: 'ambiguous' });
   });
 

@@ -132,6 +132,10 @@ describe('StudySetup create idempotency', () => {
             body: init?.body ? JSON.parse(String(init.body)) : null,
           });
         }
+        if (method === 'GET') {
+          const config = storeMock.state.studyConfig as { id: string };
+          return jsonResponse(200, { study: { id: config.id, config, revision: 1 } });
+        }
         if (fetchMock.createImpl) return fetchMock.createImpl(init);
         return jsonResponse(fetchMock.createStatus, fetchMock.createBody);
       }
@@ -214,7 +218,9 @@ describe('StudySetup create idempotency', () => {
     expect((fetchMock.posts[0].body as { config: Record<string, unknown> }).config.aiProviderCommitment).toBe('may-change');
   });
 
-  it('restores the same key across remounts of the same create intent', async () => {
+  it('restores the same key across remounts of an uncertain create intent', async () => {
+    fetchMock.createStatus = 202;
+    fetchMock.createBody = { reconciliationPending: true, studyId: STUDY_ID };
     const first = render(<StudySetup />);
     await readyToSave();
     fireEvent.click(screen.getByRole('button', { name: 'Save Study' }));
@@ -274,6 +280,7 @@ describe('StudySetup create idempotency', () => {
   });
 
   it('never sends Idempotency-Key on edit PUT', async () => {
+    searchParamsMock.value = new URLSearchParams(`prefill=edit&studyId=${EDIT_ID}`);
     storeMock.seed({
       ...storeMock.state,
       studyConfig: makeStudyConfig({
@@ -326,6 +333,7 @@ describe('StudySetup create idempotency', () => {
     expect(screen.queryByText('Save Failed')).not.toBeInTheDocument();
 
     fetchMock.createImpl = null;
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save Study' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Save Study' }));
     await waitFor(() => expect(fetchMock.posts).toHaveLength(2));
     expect(fetchMock.posts[0].headers['Idempotency-Key']).toBe(UUID_A);

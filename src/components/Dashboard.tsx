@@ -1,11 +1,11 @@
 'use client';
 
-import { useEffect, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { isPendingStudyStub, StoredInterview, StudyWorkspaceItem } from '@/types';
 import {
   readAllInterviews,
-  exportAllInterviews,
+  exportAllInterviewsChecked,
   readStudyInterviews,
   getAllStudies,
   reconcileStudyOperations,
@@ -25,9 +25,16 @@ export default function Dashboard() {
   const [selectedStudyId, setSelectedStudyId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
+  const [exportFailure, setExportFailure] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [listFailure, setListFailure] = useState<string | null>(null);
   const [operationPending, setOperationPending] = useState(false);
+  const [listWarning, setListWarning] = useState<string | null>(null);
+  const [listPending, setListPending] = useState(false);
+  const requestGeneration = useRef(0);
+  const selectedStudyRef = useRef<string | null>(null);
+  const blockedByOperation = operationPending || listPending;
+  const displayedWarning = listWarning ?? warning;
   const [isReconciling, setIsReconciling] = useState(false);
 
   const selectedStudy = selectedStudyId ? studies.find((study) => study.id === selectedStudyId) : null;
@@ -42,7 +49,8 @@ export default function Dashboard() {
 
   // Load interviews when study filter changes.
   useEffect(() => {
-    loadInterviews(selectedStudyId);
+    void loadInterviews(selectedStudyId);
+    return () => { requestGeneration.current += 1; };
     // loadInterviews is recreated each render; selectedStudyId is the load key.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedStudyId]);
@@ -71,37 +79,51 @@ export default function Dashboard() {
   // a list the server confirmed empty (UI-CF-02).
   const applyListFailure = (failure: ResearcherStorageFailure) => {
     setInterviews([]);
-    if (failure.status === 'pending') setOperationPending(true);
-    else if (failure.status === 'unavailable') setWarning(failure.error);
+    if (failure.status === 'pending') setListPending(true);
+    else if (failure.status === 'unavailable') setListWarning(failure.error);
     else setListFailure(failure.error);
   };
 
   const loadInterviews = async (studyId: string | null) => {
+    const generation = ++requestGeneration.current;
+    const isCurrent = () => generation === requestGeneration.current && studyId === selectedStudyRef.current;
     setLoading(true);
+    setInterviews([]);
     setListFailure(null);
+    setListWarning(null);
+    setListPending(false);
     try {
       const selected = studies.find((study) => study.id === studyId);
       if (selected && isPendingStudyStub(selected)) {
-        setOperationPending(true);
-        setInterviews([]);
+        setListPending(true);
         return;
       }
       if (studyId) {
         const outcome = await readStudyInterviews(studyId);
+        if (!isCurrent()) return;
         if (outcome.status === 'ok') setInterviews(outcome.value);
         else applyListFailure(outcome);
         return;
       }
       const outcome = await readAllInterviews();
+      if (!isCurrent()) return;
       if (outcome.status === 'ok') {
         setInterviews(outcome.value.interviews);
-        if (outcome.value.pendingStudies.length > 0) setOperationPending(true);
+        if (outcome.value.pendingStudies.length > 0) setListPending(true);
         return;
       }
       applyListFailure(outcome);
+    } catch {
+      if (isCurrent()) applyListFailure({ status: 'unavailable', error: 'Interview storage is temporarily unavailable.', retryable: true });
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
+  };
+
+  const selectStudy = (studyId: string | null) => {
+    selectedStudyRef.current = studyId;
+    requestGeneration.current += 1;
+    setSelectedStudyId(studyId);
   };
 
   const runReconciliation = async () => {
@@ -110,28 +132,36 @@ export default function Dashboard() {
     setIsReconciling(false);
     if (result.success && result.stillPending === 0) setOperationPending(false);
     await loadStudies();
-    await loadInterviews(selectedStudyId);
+    await loadInterviews(selectedStudyRef.current);
   };
 
   const handleExportAll = async () => {
     setExporting(true);
+    setExportFailure(null);
     try {
-      const blob = await exportAllInterviews();
-      if (blob) {
+      const studyId = selectedStudyRef.current;
+      const outcome = await exportAllInterviewsChecked(studyId ?? undefined);
+      if (outcome.status === 'ok') {
+        const blob = outcome.value;
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `interviews-export-${Date.now()}.zip`;
+        a.download = `interviews-${studyId ? "study" : "all"}-export-${Date.now()}.zip`;
         a.click();
         URL.revokeObjectURL(url);
+      } else if (outcome.status === 'pending') {
+        setOperationPending(true);
+      } else {
+        setExportFailure(outcome.error);
       }
     } catch (error) {
       if (error instanceof StudyOperationPendingError) {
         setOperationPending(true);
       } else if (error instanceof ResearcherStorageUnavailableError) {
-        setWarning(error.message);
+        setExportFailure(error.message);
       } else {
         console.error('Error exporting:', error);
+        setExportFailure('Interview export could not be completed. Please try again.');
       }
     } finally {
       setExporting(false);
@@ -184,9 +214,9 @@ export default function Dashboard() {
             type="button"
             variant="primary"
             onClick={() => void handleExportAll()}
-            disabled={exporting || operationPending}
+            disabled={exporting || blockedByOperation}
           >
-            Export All
+            {selectedStudyId ? 'Export selected study' : 'Export All'}
           </Button>
         )}
       </div>
@@ -198,7 +228,7 @@ export default function Dashboard() {
           <Field label="Study" htmlFor="dashboard-study-filter">
             <select
               value={selectedStudyId || ''}
-              onChange={(e) => setSelectedStudyId(e.target.value || null)}
+              onChange={(e) => selectStudy(e.target.value || null)}
             >
               <option value="">All Studies</option>
               {studies.map((study) => (
@@ -213,7 +243,7 @@ export default function Dashboard() {
           {selectedStudyId && (
             <button
               type="button"
-              onClick={() => setSelectedStudyId(null)}
+              onClick={() => selectStudy(null)}
               className="text-[13px] text-ink-500 hover:text-ink-900"
             >
               Clear filter
@@ -222,7 +252,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      {operationPending && (
+      {blockedByOperation && (
         <Notice tone="error" eyebrow="Pending reconciliation" role="status" className="mb-6">
           <p className="mt-1 text-[13px] text-ink-700">A study operation is already in progress.</p>
           <Button
@@ -237,9 +267,15 @@ export default function Dashboard() {
         </Notice>
       )}
 
-      {warning && (
+      {displayedWarning && (
         <Notice tone="error" eyebrow="Workspace" className="mb-6">
-          <p className="mt-1 text-[13px] text-ink-700">{warning}</p>
+          <p className="mt-1 text-[13px] text-ink-700">{displayedWarning}</p>
+        </Notice>
+      )}
+
+      {exportFailure && (
+        <Notice tone="error" eyebrow="Export could not be completed" className="mb-6">
+          <p className="mt-1 text-[13px] text-ink-700">{exportFailure}</p>
         </Notice>
       )}
 
@@ -247,7 +283,7 @@ export default function Dashboard() {
         <p className="text-[13px] text-ink-500">Loading interviews…</p>
       ) : interviews.length === 0 ? (
         <Measure>
-          {operationPending ? (
+          {blockedByOperation ? (
             <>
               <h2 className="font-sans text-[18px] font-semibold text-ink-900">Study change pending</h2>
               <p className="mt-2 text-[15px] text-ink-700">
@@ -259,10 +295,10 @@ export default function Dashboard() {
               <h2 className="font-sans text-[18px] font-semibold text-ink-900">Interviews could not be loaded</h2>
               <p className="mt-2 text-[15px] text-ink-700">{listFailure}</p>
             </>
-          ) : warning ? (
+          ) : displayedWarning ? (
             <>
               <h2 className="font-sans text-[18px] font-semibold text-ink-900">Workspace unavailable</h2>
-              <p className="mt-2 text-[15px] text-ink-700">{warning}</p>
+              <p className="mt-2 text-[15px] text-ink-700">{displayedWarning}</p>
             </>
           ) : (
             <>

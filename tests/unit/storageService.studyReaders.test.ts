@@ -62,6 +62,10 @@ describe('readStudyInterviews', () => {
 });
 
 describe('readStudy', () => {
+  it('preserves deletion-pending authority so a reloaded study can resume an already-confirmed purge', async () => {
+    reply({ code: 'STUDY_DELETION_PENDING', error: 'This study is being permanently deleted.' }, 409);
+    await expect(readStudy('study-a')).resolves.toEqual({ status: 'pending', error: 'This study is being permanently deleted.', code: 'STUDY_DELETION_PENDING' });
+  });
   it('returns the study, and not-found only for a 404 or a hosted 403', async () => {
     const study = makeStoredStudy({ id: 'study-a' });
     reply({ study });

@@ -1,6 +1,6 @@
 // GET /api/studies/[id] - Get study details
 // PUT /api/studies/[id] - Update study config (soft lock: warns if has interviews)
-// DELETE /api/studies/[id] - Delete study (fails if has interviews)
+// DELETE /api/studies/[id] - Delete empty study, or explicitly confirmed study data
 // Protected: Requires authenticated session
 
 export const dynamic = 'force-dynamic';
@@ -41,8 +41,32 @@ import { RETRY_AFTER_PENDING } from '@/lib/createIdempotency';
 import { createRequestId, logRequestFailure } from '@/lib/requestLog';
 import { deploymentNotReadyResponse } from '@/lib/runtime/readinessGate';
 import { isDurableWorkspaceStore, type WorkspaceHoldReason, type WorkspaceStorePort } from '@/lib/storage/types';
+import { readBoundedJsonObject } from '@/lib/requestBody';
+import { studyConfigsEqual } from '@/lib/studyConfigEquality';
+import { studyMutationReadiness } from '@/lib/studyMutationReadiness';
 
 const ROUTE = '/api/studies/[id]';
+
+type StudyDeleteConfirmation = { deleteInterviews: true; expectedRevision: number };
+
+async function readDeleteConfirmation(request: Request, studyId: string): Promise<
+  { ok: true; confirmation?: StudyDeleteConfirmation } | { ok: false; response: NextResponse }
+> {
+  // The historic empty DELETE remains an empty-only operation. A body, even
+  // {}, must explicitly identify the destructive operation and its subject.
+  if (request.body === null) return { ok: true };
+  const parsed = await readBoundedJsonObject(request, 1024);
+  if (!parsed.ok) {
+    return { ok: false, response: NextResponse.json({ error: parsed.status === 413 ? 'Deletion confirmation is too large.' : 'Invalid deletion confirmation.' }, { status: parsed.status }) };
+  }
+  const body = parsed.value;
+  if (Object.keys(body).some(key => !['deleteInterviews', 'confirmStudyId', 'expectedRevision'].includes(key))
+    || body.deleteInterviews !== true || body.confirmStudyId !== studyId
+    || !Number.isSafeInteger(body.expectedRevision) || (body.expectedRevision as number) < 1) {
+    return { ok: false, response: NextResponse.json({ error: 'Confirm permanent deletion with this study ID and its current revision.' }, { status: 400 }) };
+  }
+  return { ok: true, confirmation: { deleteInterviews: true, expectedRevision: body.expectedRevision as number } };
+}
 
 // GET /api/studies/[id] - Get single study
 export async function GET(
@@ -100,7 +124,7 @@ export async function PUT(
     if (!parsedBody.ok) {
       return NextResponse.json({ error: parsedBody.error }, { status: parsedBody.status });
     }
-    const { config, confirmed, linksEnabled } = parsedBody.body;
+    const { config, confirmed, linksEnabled, expectedRevision } = parsedBody.body;
     const isLinkOnlyUpdate = typeof linksEnabled === 'boolean' && config === undefined;
 
     const gated = await getAuthorizedResearcherStudyContext(
@@ -138,6 +162,9 @@ export async function PUT(
       );
     }
     const study = loaded.study;
+    if (expectedRevision !== undefined && expectedRevision !== study.revision) {
+      return NextResponse.json({ error: 'The study changed since you loaded it. Reload and review the current settings before saving.' }, { status: 409 });
+    }
 
     // Revocation/restoration is deliberately independent from editable study
     // content and remains available after the first interview.
@@ -187,9 +214,9 @@ export async function PUT(
     }
 
     // Soft lock: warn if study has interviews, allow if user confirms.
-    if (study.interviewCount > 0 && !confirmed) {
+    if (study.interviewCount > 0 && !confirmed && !studyConfigsEqual(study.config, updatedConfig)) {
       return NextResponse.json({
-        warning: `This study has ${study.interviewCount} interview(s). Editing may affect data consistency.`,
+        warning: `Saving these changes advances the collection revision, invalidates current participant links and sessions, and retains ${study.interviewCount} earlier interview(s) as a historical dataset. Select those interviews explicitly for later analysis.`,
         requiresConfirmation: true,
         interviewCount: study.interviewCount
       }, { status: 409 });
@@ -276,6 +303,10 @@ export async function DELETE(
 
     const { id } = await params;
 
+    const parsed = await readDeleteConfirmation(request, id);
+    if (!parsed.ok) return parsed.response;
+    const confirmation = parsed.confirmation;
+
     // No preliminary GET. Hosted begin owns owner/journal/bind before BYOS
     // decrypt. The atomic wrapper owns missing-state, persist-guard, and
     // terminal receipt replay.
@@ -301,6 +332,7 @@ export async function DELETE(
         bindingEpoch: binding.binding.bindingEpoch,
         idempotencyHash: null,
         fingerprint: null,
+        ...confirmation,
       });
       const beginResponse = mapBeginDeleteHttp(begun);
       if (beginResponse) return beginResponse;
@@ -322,7 +354,7 @@ export async function DELETE(
     } else {
       // Standalone (Node Redis and the Cloudflare workspace) deletes through
       // the workspace store.
-      return await deleteStandaloneStudy(id);
+      return await deleteStandaloneStudy(id, confirmation);
     }
 
     const kvAvailable = await isKVAvailable(kvClient);
@@ -343,7 +375,8 @@ export async function DELETE(
     const result = await deleteStudy(
       id,
       kvClient,
-      operationMarker
+      operationMarker,
+      ...(confirmation ? [confirmation] as const : []),
     );
     if (result.status === 'ambiguous') {
       return NextResponse.json({ retryable: true, reason: 'ambiguous' }, { status: 503 });
@@ -433,7 +466,7 @@ export async function DELETE(
  * the Redis store runs the same marker-scoped atomic delete this route used
  * to call directly, after the same ping.
  */
-async function deleteStandaloneStudy(id: string) {
+async function deleteStandaloneStudy(id: string, confirmation?: StudyDeleteConfirmation) {
   const access = await getRequestContext();
   const setupResponse = configurationRequiredResponse(access);
   if (setupResponse) return setupResponse;
@@ -450,12 +483,15 @@ async function deleteStandaloneStudy(id: string) {
     return NextResponse.json({ error: 'Invalid study operation.' }, { status: 503 });
   }
 
-  const result = await store.deleteStudy({ studyId: id, now: Date.now() });
+  const result = await store.deleteStudy({ studyId: id, now: Date.now(), ...confirmation });
   if (result.status === 'held') return heldResponse(result.reason);
   if (result.status === 'ambiguous') {
     return NextResponse.json({ retryable: true, reason: 'ambiguous' }, { status: 503 });
   }
   if (result.status === 'still-pending') {
+    if (confirmation || await studyMutationReadiness(store, id) === 'deleting') {
+      return NextResponse.json({ success: false, reconciliationPending: true, message: 'Study deletion is still in progress. Retry deletion to finish removing the retained data.' }, { status: 202 });
+    }
     return NextResponse.json({ code: 'STUDY_PERSIST_PENDING' }, { status: 409 });
   }
   if (!result.success) {

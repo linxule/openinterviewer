@@ -13,12 +13,14 @@ import { configurationRequiredResponse } from '@/lib/researcherAccess';
 import {
   forEachEligibleAggregateInput,
   MAX_AGGREGATE_INTERVIEWS,
+  MAX_AGGREGATE_INPUT_BYTES,
+  aggregateInputTooLargeBody,
   mapCollectionLoad,
   mapReadinessHold,
   mapStudyLoad,
   PAID_CALL_STATES,
 } from '@/lib/ownedStudies';
-import { AggregateSynthesisResult, StudyConfig } from '@/types';
+import { AggregateSynthesisResult, StoredInterview, StudyConfig } from '@/types';
 import { validateResolvedAggregateSynthesis } from '@/lib/providerValidation';
 import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
 import { researcherAiBudgetResponse } from '@/lib/researcherAiBudget';
@@ -34,6 +36,10 @@ import {
 import { createRequestId, logRequestFailure } from '@/lib/requestLog';
 import { deploymentNotReadyResponse } from '@/lib/runtime/readinessGate';
 import { isDurableWorkspaceStore } from '@/lib/storage/types';
+import { datasetDigest, immutableSourceContentHash } from '@/lib/exploration/dataset';
+import { isDatasetManifest, serializedBytes } from '@/lib/exploration/validation';
+import { commitmentCovers } from '@/lib/providerCommitment';
+import { researcherProviderNotDisclosedResponse } from '@/lib/providerCommitmentResponse';
 
 const ROUTE = '/api/studies/[id]/generate-followup';
 const INTERVIEW_MESSAGES = {
@@ -98,9 +104,12 @@ export async function POST(
     }
     const stored = loadedAggregate.aggregate;
 
-    // Same three refusals as the receipt path enforced, now over a record the
-    // server wrote: revision binding, complete provenance, and shape.
-    if (stored.studyRevision !== parentStudy.revision) {
+    // Legacy aggregates bind the current revision. Explicit scope instead
+    // binds its original immutable source records; a later config edit does
+    // not rewrite that evidence or silently move the aggregate to a new set.
+    if (!Number.isSafeInteger(stored.studyRevision) || stored.studyRevision < 1
+      || stored.studyRevision > parentStudy.revision
+      || (stored.scope === undefined && stored.studyRevision !== parentStudy.revision)) {
       return NextResponse.json(
         { error: 'Synthesis provenance does not match the current study.' },
         { status: 409 },
@@ -120,22 +129,65 @@ export async function POST(
       return NextResponse.json({ error: 'Missing or invalid synthesis data' }, { status: 400 });
     }
     const interviewIds = stored.interviewIds;
+    if (!Array.isArray(interviewIds) || interviewIds.length === 0
+      || interviewIds.length > MAX_AGGREGATE_INTERVIEWS
+      || interviewIds.some(id => typeof id !== 'string')
+      || new Set(interviewIds).size !== interviewIds.length
+      || stored.interviewCount !== interviewIds.length) {
+      return NextResponse.json({ error: 'Synthesis interview provenance is invalid.' }, { status: 409 });
+    }
+    const wanted = new Set(interviewIds);
+    if (providerSynthesis.commonThemes.some(theme => theme.quoteRefs?.some(ref => !ref.interviewId || !wanted.has(ref.interviewId)))) {
+      return NextResponse.json({ error: 'Synthesis citation provenance is invalid.' }, { status: 409 });
+    }
 
     const eligibleIds = new Set<string>();
     // D9 (Cloudflare): the aggregate carries participant quotes, so every
     // source interview's consent must cover the transport of this call.
     const current = currentProviderTransport(gated.context, parentStudy.config.aiProvider);
     if (current.applies && !current.ok) return providerNotConfiguredResponse();
-    const sourceDisclosures: Array<'cloudflare-gateway' | undefined> = [];
-    if (isDurableWorkspaceStore(store)) {
+    const sources: StoredInterview[] = [];
+    if (stored.scope !== undefined) {
+      const scope = stored.scope;
+      if (!isDatasetManifest(scope) || scope.studyId !== parentStudy.id
+        || scope.selectedCount !== interviewIds.length
+        || scope.sources.some((source, index) => source.interviewId !== interviewIds[index])
+        || scope.sourceFingerprint !== await datasetDigest({ studyId: scope.studyId, selection: scope.selection, sources: scope.sources })) {
+        return NextResponse.json({ error: 'Synthesis dataset provenance is invalid.' }, { status: 409 });
+      }
+      let sourceBytes = 0;
+      // Bounded parallel reads of exactly the original IDs, not a freshly
+      // evaluated filter that could include new interviews after generation.
+      for (let offset = 0; offset < scope.sources.length; offset += 20) {
+        const positions = scope.sources.slice(offset, offset + 20);
+        const loaded = await Promise.all(positions.map(source => store.getInterview(source.interviewId)));
+        for (let index = 0; index < loaded.length; index += 1) {
+          const record = loaded[index];
+          if (record.status === 'unavailable') {
+            return NextResponse.json({ error: INTERVIEW_MESSAGES.unavailable, retryable: true }, { status: 503 });
+          }
+          if (record.status !== 'found' || record.interview.studyId !== parentStudy.id) {
+            return NextResponse.json({ error: 'An original analysis source is no longer available. Re-analyze the selected dataset.' }, { status: 409 });
+          }
+          sourceBytes += serializedBytes(record.interview);
+          if (sourceBytes > MAX_AGGREGATE_INPUT_BYTES) return NextResponse.json(aggregateInputTooLargeBody(), { status: 413 });
+          const source = positions[index];
+          if ((record.interview.studyRevision ?? null) !== source.studyRevision
+            || await immutableSourceContentHash(record.interview) !== source.contentHash) {
+            return NextResponse.json({ error: 'An original analysis source has changed. Re-analyze the selected dataset.' }, { status: 409 });
+          }
+          eligibleIds.add(record.interview.id);
+          sources.push(record.interview);
+        }
+      }
+    } else if (isDurableWorkspaceStore(store)) {
       // Only eligibility is needed: page current-revision analyzed interviews,
       // keep ids and stop once every aggregate source has been seen.
-      const wanted = new Set(interviewIds);
       const pass = await forEachEligibleAggregateInput(store, parentStudy, page => {
         for (const interview of page) {
           if (wanted.has(interview.id) && !eligibleIds.has(interview.id)) {
             eligibleIds.add(interview.id);
-            sourceDisclosures.push(...participantDisclosures([interview]));
+            sources.push(interview);
           }
         }
         return eligibleIds.size < wanted.size;
@@ -157,19 +209,26 @@ export async function POST(
         return NextResponse.json(interviewsMapped.body, { status: interviewsMapped.status });
       }
       for (const interview of interviewsMapped.items) {
-        if (interview.studyRevision === parentStudy.revision && interview.synthesis) eligibleIds.add(interview.id);
+        if (interview.studyId === parentStudy.id && interview.studyRevision === parentStudy.revision
+          && interview.synthesis && wanted.has(interview.id)) {
+          eligibleIds.add(interview.id);
+          sources.push(interview);
+        }
       }
     }
-    if (new Set(interviewIds).size !== interviewIds.length || interviewIds.some(id => !eligibleIds.has(id))) {
+    if (interviewIds.some(id => !eligibleIds.has(id))) {
       return NextResponse.json({ error: 'Synthesis interview provenance is invalid.' }, { status: 409 });
     }
+    if (sources.some(interview => !commitmentCovers(interview, parentStudy.config.aiProvider, parentStudy.config.aiModel))) {
+      return researcherProviderNotDisclosedResponse();
+    }
     if (current.applies && current.ok) {
-      const uncovered = uncoveredCount(sourceDisclosures, current.transport);
+      const uncovered = uncoveredCount(participantDisclosures(sources), current.transport);
       if (uncovered > 0) return researcherTransportNotDisclosedResponse(uncovered);
     }
     const synthesis: AggregateSynthesisResult = {
       studyId: parentStudy.id,
-      studyRevision: parentStudy.revision,
+      studyRevision: stored.studyRevision,
       interviewIds,
       interviewCount: interviewIds.length,
       aiProvider: signedProvenance.aiProvider,
@@ -181,6 +240,7 @@ export async function POST(
         ? stored.generatedAt
         : Date.now(),
       ...providerSynthesis,
+      ...(stored.scope ? { scope: stored.scope } : {}),
     };
 
     const platformLimited = await hostedAiRateLimitResponse(
@@ -230,6 +290,7 @@ export async function POST(
       researcherContact: parentStudy.config.researcherContact,
       aiProvider: parentStudy.config.aiProvider,
       aiModel: parentStudy.config.aiModel,
+      aiProviderCommitment: parentStudy.config.aiProviderCommitment,
       enableReasoning: parentStudy.config.enableReasoning,
       parentStudyId: parentStudy.id,
       parentStudyName: parentStudy.config.name,

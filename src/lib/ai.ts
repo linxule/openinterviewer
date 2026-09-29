@@ -15,6 +15,7 @@ import {
   AIProviderType,
 } from '@/types';
 import type { FollowupStudy } from './providerValidation';
+import type { ExplorationProviderInput, ExplorationProviderPayload } from './exploration/types';
 
 // Re-export prompts from centralized location
 // See src/lib/prompts/ for customization
@@ -31,11 +32,13 @@ export {
  * `queued-synthesis` is the durable Cloudflare analysis policy (JOB-09): one
  * outbound HTTP request with SDK retries disabled per call, no fallback or
  * repair request, and an explicit deadline no longer than the synthesis
- * deadline.
+ * deadline. `exploration` applies the same single-attempt boundary to study
+ * questions; an adapter may not repair or retry an invalid generated answer.
  */
 export type ProviderExecutionPolicy =
   | { kind: 'default' }
-  | { kind: 'queued-synthesis'; deadlineMs: number };
+  | { kind: 'queued-synthesis'; deadlineMs: number }
+  | { kind: 'exploration'; deadlineMs: number };
 
 export const DEFAULT_EXECUTION_POLICY: ProviderExecutionPolicy = { kind: 'default' };
 
@@ -65,6 +68,11 @@ export interface AIProvider {
     interviewCount: number
   ): Promise<ProviderResult<AggregateSynthesisProviderPayload>>;
 
+  exploreStudy(
+    input: ExplorationProviderInput,
+    policy?: ProviderExecutionPolicy
+  ): Promise<ProviderResult<ExplorationProviderPayload>>;
+
   generateFollowupStudy(
     parentConfig: StudyConfig,
     synthesis: AggregateSynthesisResult
@@ -89,6 +97,7 @@ export {
   interviewResponseSchema,
   synthesisResponseSchema,
   aggregateSynthesisResponseSchema,
+  explorationResponseSchema,
   followupStudyResponseSchema,
 } from './providerSchemas';
 

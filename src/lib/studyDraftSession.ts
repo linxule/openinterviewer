@@ -17,19 +17,22 @@ export type PersistedCreateIdempotency = {
   key: string;
 };
 
-const canUseSessionStorage = () =>
-  typeof window !== 'undefined' && typeof sessionStorage !== 'undefined';
+const canUseSessionStorage = () => {
+  try { return typeof window !== 'undefined' && typeof sessionStorage !== 'undefined'; } catch { return false; }
+};
 
 export function readAuthorityEpoch(): number {
   if (!canUseSessionStorage()) return 0;
-  const raw = sessionStorage.getItem(AUTH_EPOCH_STORAGE);
-  const value = raw == null ? 0 : Number(raw);
-  return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+  try {
+    const raw = sessionStorage.getItem(AUTH_EPOCH_STORAGE);
+    const value = raw == null ? 0 : Number(raw);
+    return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+  } catch { return 0; }
 }
 
 export function writeAuthorityEpoch(epoch: number) {
   if (!canUseSessionStorage()) return;
-  sessionStorage.setItem(AUTH_EPOCH_STORAGE, String(epoch));
+  try { sessionStorage.setItem(AUTH_EPOCH_STORAGE, String(epoch)); } catch { /* retain the in-memory epoch */ }
 }
 
 function readPersistedCreateIdempotency(): PersistedCreateIdempotency | null {
@@ -53,17 +56,25 @@ function readPersistedCreateIdempotency(): PersistedCreateIdempotency | null {
 
 export function persistCreateIdempotency(state: PersistedCreateIdempotency) {
   if (!canUseSessionStorage()) return;
-  sessionStorage.setItem(IDEM_STATE_STORAGE, JSON.stringify(state));
+  try { sessionStorage.setItem(IDEM_STATE_STORAGE, JSON.stringify(state)); } catch { /* retain the in-memory receipt */ }
+}
+
+/** A confirmed create is finished. A later New Study must get a new receipt. */
+export function releaseCreateIdempotency(intentKey: string, authorityEpoch: number, key: string) {
+  const stored = readPersistedCreateIdempotency();
+  if (stored?.intentKey !== intentKey || stored.authorityEpoch !== authorityEpoch || stored.key !== key) return;
+  try { sessionStorage.removeItem(IDEM_STATE_STORAGE); } catch { /* in-memory intent still completes */ }
 }
 
 export function setupIntentKey(prefill: string | null, studyId: string | null, parentId: string | null): string {
   if (prefill === 'edit' && studyId) return `edit:${studyId}`;
+  if (prefill === 'duplicate' && studyId) return `duplicate:${studyId}`;
   if (prefill === 'followup') return parentId ? `followup:${parentId}` : 'followup';
   return 'create';
 }
 
 export function isCreateIntentKey(intentKey: string): boolean {
-  return intentKey === 'create' || intentKey.startsWith('followup');
+  return intentKey === 'create' || intentKey.startsWith('followup') || intentKey.startsWith('duplicate:');
 }
 
 export function adoptCreateIdempotencyKey(intentKey: string, authorityEpoch: number): string {

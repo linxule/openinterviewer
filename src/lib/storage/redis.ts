@@ -9,9 +9,7 @@
 //  - link creation and completion do not re-check link/consent/study at the
 //    write boundary; routes keep performing those checks first;
 //  - save admission checks (P1) and charges (Finish) in separate scripts;
-//  - aggregate save does not refuse a deleted study;
 //  - sample seed is a non-atomic sequence of writes;
-//  - a refused populated delete leaves its in-flight guard behind;
 //  - the standalone create-idempotency index is lifetime-bounded.
 //
 // A hosted store (researcherId set) refuses study create/delete (cross-database
@@ -28,6 +26,7 @@ import {
   getInterviewChecked,
   getStudyAggregateChecked,
   getStudyChecked,
+  getStudyMutationStatus,
   getStudyInterviewsChecked,
   isKVAvailable,
   persistCompletedInterview,
@@ -74,6 +73,7 @@ import type {
   WorkspaceStorePort,
 } from './types';
 import { RESEARCHER_AI_KEY_PREFIX } from './types';
+import { createRedisExplorationStore } from './redisExploration';
 
 export type RedisWorkspaceStoreOptions = {
   /** Hosted researcher id; null in standalone. */
@@ -135,7 +135,7 @@ async function createStandaloneStudy(client: RedisPort, input: CreateStudyInput)
 
   const mapping = begun.record;
   const replayed = begun.status === 'replay';
-  if (replayed && mapping.state === 'deleted') return { status: 'key-consumed' };
+  if (mapping.state === 'deleted') return { status: 'key-consumed' };
   if (replayed && mapping.state === 'created') {
     return { status: 'created', study: mapping.study, replayed: true };
   }
@@ -173,6 +173,8 @@ export function createRedisWorkspaceStore(client: RedisPort, options: RedisWorks
 
   return {
     backend: 'redis',
+    // Hosted stores receive the authorized researcher's BYOS client here.
+    exploration: createRedisExplorationStore(client),
 
     async readiness() {
       return (await isKVAvailable(client))
@@ -181,6 +183,7 @@ export function createRedisWorkspaceStore(client: RedisPort, options: RedisWorks
     },
 
     getStudy: (studyId) => getStudyChecked(studyId, client),
+    studyMutationStatus: (studyId) => getStudyMutationStatus(studyId, client),
     async listStudies<V extends StudyListView>(maximum: number, { view }: { view: V }) {
       const loaded = await getAllStudiesChecked(client, maximum);
       if (view === 'full' || loaded.status !== 'ok') return loaded as CollectionLoadResult<StudyListEntry<V>>;
@@ -203,7 +206,12 @@ export function createRedisWorkspaceStore(client: RedisPort, options: RedisWorks
     async deleteStudy(input) {
       standaloneOnly('deleteStudy');
       const marker = studyOperationMarkerId(`delete:${input.studyId}`, 0);
-      return deleteStudy(input.studyId, client, marker ?? undefined);
+      return input.deleteInterviews === undefined && input.expectedRevision === undefined
+        ? deleteStudy(input.studyId, client, marker ?? undefined)
+        : deleteStudy(input.studyId, client, marker ?? undefined, {
+          deleteInterviews: input.deleteInterviews,
+          expectedRevision: input.expectedRevision,
+        });
     },
 
     async createParticipantLink(input): Promise<CreateLinkOutcome> {

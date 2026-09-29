@@ -38,7 +38,7 @@ Record the following outside the repository, before any other step:
 
 - **Read commands only.** It sends only `PING`, `DBSIZE`, `SCAN`, `TYPE`, `PTTL`, `STRLEN`, `SCARD`, `ZCARD`, `HLEN`, `LLEN`, `MEMORY USAGE`, and `EVAL_RO` of one fixed projection script. It refuses anything else before any network request.
 - **Bodies stay on the server.** Record bodies are read only there, by that script, which returns booleans, counts, enumerated states and timestamps.
-- **No identifying output.** The report holds no key names, identifiers, transcripts, link codes or credentials.
+- **No identifying output.** The report holds no key names, identifiers, hashes, questions, quotes, transcripts, link codes or credentials.
 
 Run it only with authorization. Use an interactive terminal (hidden prompts), or pipe the credentials from a secret manager so that they never reach a file, an argument or the shell history:
 
@@ -52,7 +52,7 @@ op inject -i ~/secure/inventory.tpl.json | npm run --silent inventory:redis > <d
 - `--max-keys` and `--max-seconds` (defaults 50,000 keys and 300 s) bound the scan.
 - Exit codes:
   - `0`: a complete report.
-  - `3`: an incomplete report, with the reasons in `incompleteReasons`: `key-budget`, `time-budget`, `scan-interrupted`, `field-projection-unavailable`, `records-not-projected`, `collections-over-member-bound` or `command-errors`.
+  - `3`: an incomplete report, with the reasons in `incompleteReasons`: `key-budget`, `time-budget`, `scan-interrupted`, `field-projection-unavailable`, `records-not-projected`, `collections-over-member-bound`, `exploration-sources-over-bound`, `exploration-records-invalid`, `known-family-type-mismatch` or `command-errors`.
   - `2`: refused, for example `Upstash refused the token`.
   - `1`: failed.
 - If Upstash refuses `EVAL_RO` with the Read Only token, the report falls back to counts and sizes and is marked `field-projection-unavailable`. A rerun with the Standard token still sends read commands only. Unverified: whether Upstash accepts `EVAL_RO` and `MEMORY USAGE` with a Read Only token.
@@ -60,10 +60,12 @@ op inject -i ~/secure/inventory.tpl.json | npm run --silent inventory:redis > <d
 
 Record these fields as the input to §3:
 
-- `summary`: `totalKeys`, `researchRecords` (studies, interviews, participant links, aggregates, consents), `hasResearchData`, `pendingOperations`, `interviewsAwaitingFirstAnalysis`, `orphanedReferences`, `unrecognizedKeys`;
+- `summary`: `totalKeys`, `researchRecords` (studies, interviews, participant links, aggregates, consents, exploration answers), `hasResearchData`, `pendingOperations`, `interviewsAwaitingFirstAnalysis`, `orphanedReferences`, `unrecognizedKeys`. Notebook records and their receipts/indices prevent an empty-data classification even when their study is absent;
 - the `pendingOperations`, `orphans` and `expiredReferences` breakdowns. Their counters overlap, and the two summary totals count each item once. An unfinished save appears both as `interviewPersistsUnfinished` and as `studyPersistingMembers`, and counts once in `summary.pendingOperations`. `summary.orphanedReferences` counts a study's interview index whose study is missing through its entries, not also as `studyInterviewIndexesWithoutStudy`; an entry that names a live interview belonging to another, existing study (a misfiled entry) is not counted in the summary at all, so always record `orphans.studyInterviewIndexesWithoutStudy` as well. A missing interview listed both in `all-interviews` and in its study's index counts once in `summary.orphanedReferences` when `all-interviews` was checked member by member; `collections.studyInterviewIndexes.missingTargetsAlsoInAllInterviews` says how many there were;
 - the `families` table: `count`, `ttl` (`persistent`, `expiring`), `bytes` and `members` for each key family. §6 compares it;
 - `records.interviews.analysis.importMapping`: how the importer would map each interview's analysis state (IMPLEMENTATION.md §7, F7);
+- `records.explorationAnswers`: notebook status, attempt-deadline, source-reference and timestamp distributions. Questions, answers, quotes, source hashes and provider result bodies are never returned. Source checks stop at 100 per answer; notebook SET/ZSET/HASH member checks stop at 500 per study. Oversized or malformed notebook metadata makes the report incomplete;
+- `collections.studyLinkIndexes`, `studyConsentIndexes`, `explorationIndexes`, `explorationOrderIndexes` and `explorationReceipts`: current study-scoped cleanup/index families, alongside legacy global indices. Missing notebook targets shared by the primary index, ordering index and receipt hash count once in the orphan summary. Missing-study index containers remain in the breakdown rather than being counted again as research-record orphans;
 - `target.storageId`: a digest of the database origin, used to confirm that later runs read the same database.
 
 Keys the application does not own are counted as `unrecognized`, with a lowercase namespace label only. The test is `tests/integration/inventoryRedis.test.ts`: `npm run test:inventory:redis`, also the `redis-inventory` lane of `npm run check:cloudflare`. Like the other Redis lanes, it needs a local `redis-server` or Docker.
@@ -139,8 +141,8 @@ The new credentials never go back into Vercel. The operator keeps them in the pa
    Equality is too strict, because keys with an expiry disappear between the two runs without any write: consents after 4 hours, participant links created with an expiry (`expiresAt`), rate-limit windows, and the 7-day study-operation receipts and create-idempotency records. Require instead that nothing grew, and that every decrease is explained by expiry:
    - `summary.totalKeys` and `scan.dbsizeAfter` are not greater than in the reference.
    - For every entry of `families`, `count` and `ttl.expiring` are not greater, and `ttl.persistent` is equal. A key without an expiry cannot appear or disappear without a write, so any decrease comes from keys that had an expiry.
-   - Every family with no expiring keys in the reference (`ttl.expiring` 0) is unchanged: `count`, `bytes.total` and `members.total` are all equal. In the standalone layout these include `studies`, `interviews`, `aggregates`, `allStudiesIndex`, `allInterviewsIndex` and `studyInterviewIndexes`, so a late study create or interview save shows here, and so does an edit that changes an existing record's size. An edit that keeps the size is invisible to the inventory; checks 3 and 4 cover the write path itself.
-   - `summary.researchRecords` follows from the above: `studies`, `interviews` and `aggregates` are equal, while `participantLinks` and `consents` may only have fallen.
+   - Every family with no expiring keys in the reference (`ttl.expiring` 0) is unchanged: `count`, `bytes.total` and `members.total` are all equal. In the standalone layout these include `studies`, `interviews`, `aggregates`, `allStudiesIndex`, `allInterviewsIndex`, `studyInterviewIndexes` and the `explorationAnswers`, `explorationIndexes`, `explorationOrderIndexes` and `explorationReceipts` notebook families. A late study create, interview save or notebook answer therefore shows here, and so does an edit that changes an existing string record's size. Same-size edits and same-cardinality receipt/index changes remain invisible; checks 3 and 4 cover the write path itself.
+   - `summary.researchRecords` follows from the above: `studies`, `interviews`, `aggregates` and `explorationAnswers` are equal, while `participantLinks` and `consents` may only have fallen.
 
    Any other difference is a write after the reset: treat it as a failed barrier. The converse does not hold: in a family with expiring keys, a late create offset by an expiry in the same family, or a rewrite of an expiring key, leaves every count unchanged, and a same-size edit is invisible everywhere. This check only catches writes the counts can show; checks 3 and 4 are the barrier's real proof.
 
@@ -168,7 +170,7 @@ Preconditions:
 3. **Fence it** (§6), with every verification passing. Keep the reference inventory with the decision record. The old database is not modified or deleted.
 4. **Switch.**
    1. Reopen the destination only now: `maintenance open --expected-state frozen --expected-version <v>`.
-   2. Run the controlled end-to-end acceptance on the production origin: sign in, create a clearly named acceptance study, generate a link, consent, interview and save, wait for the background analysis to complete, then export. This makes the paid calls named in §1. A study that holds interviews cannot be deleted, so keep the acceptance study clearly labelled.
+   2. Run the controlled end-to-end acceptance on the production origin: sign in, create a clearly named acceptance study, generate a link, consent, interview and save, wait for the background analysis to complete, then export. This makes the paid calls named in §1. Keep the acceptance study clearly labelled; deleting populated studies now requires the explicit double-confirmed data-deletion path, including their interviews and notebook answers.
    3. Give researchers the new origin. Sessions do not migrate: researchers sign in again and create new studies and links.
 5. **Observe.**
    - Readiness: `setup:cloudflare verify`, or `verify --config` for a CI-owned installation.
@@ -185,7 +187,7 @@ Preconditions:
 Not executable yet: it requires an Upstash-to-Cloudflare importer, which is not built. The package README asks for one only if the authorized inventory finds data to retain. The importer's contract:
 
 - **Input.** The fenced Upstash database, through the new Read Only token, with read commands only.
-- **Output.** An operational backup directory in format v1 (`src/lib/backup/format.ts`) that `npm run operator:cloudflare -- backup import` validates and imports unchanged.
+- **Output.** An operational backup directory in current format v2 (`src/lib/backup/format.ts`) that `npm run operator:cloudflare -- backup import` validates and imports unchanged. The legacy format v1 is notebook-free and cannot represent a current workspace that contains exploration answers.
   - The manifest and its `workspace_meta` row carry a source workspace id (`ws_` followed by 32 hex characters).
   - The row carries a valid activated epoch that differs from the destination's; the import refuses otherwise.
   - The destination keeps its own identity.
@@ -194,6 +196,7 @@ Not executable yet: it requires an Upstash-to-Cloudflare importer, which is not 
   - Redis-specific guards, indexes and unfinished operations (the inventory's `pendingOperations`) are resolved, not copied as jobs.
   - Expiry times are preserved, never renewed.
   - Link and consent records stay bound to their study revision.
+  - Saved notebook questions, answers, immutable dataset scope, evidence references, execution provenance and attempt states are preserved as research data. Redis receipt/index families are translated to the destination's own replay and indexing contract, not silently omitted; unresolved/orphaned notebook records require an explicit disposition in the report.
   - Every exclusion is counted in the importer's report.
 - **Tests.** Synthetic Upstash data covering every family the inventory reports, and the staging rehearsal (§4).
 

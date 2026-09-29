@@ -58,7 +58,7 @@ describe('persistCompletedInterview commit (ST-02, JOB-01, JOB-05)', () => {
       `SELECT record_json, fingerprint, link_id, study_revision FROM interviews WHERE id = ?`,
       input.interview.id,
     );
-    expect(stored.record_json).toBe(JSON.stringify(input.interview));
+    expect(stored.record_json).toBe(JSON.stringify({ ...input.interview, collectionConfig: study.config }));
     expect(stored.fingerprint).toBe(input.fingerprint);
     expect(stored.link_id).toBe(participant.linkId);
     expect(stored.study_revision).toBe(1);
@@ -94,6 +94,7 @@ describe('persistCompletedInterview commit (ST-02, JOB-01, JOB-05)', () => {
       status: 'found',
       interview: {
         ...input.interview,
+        collectionConfig: study.config,
         synthesis: null,
         analysis: { status: 'pending', attempts: 0, lastAttemptAt: T0, generation: 1 },
       },
@@ -140,7 +141,7 @@ describe('persistCompletedInterview commit (ST-02, JOB-01, JOB-05)', () => {
       `SELECT fingerprint, record_json FROM interviews WHERE id = ?`,
       first.interview.id,
     );
-    expect(stored).toEqual([{ fingerprint: winner.fingerprint, record_json: JSON.stringify(winner.interview) }]);
+    expect(stored).toEqual([{ fingerprint: winner.fingerprint, record_json: JSON.stringify({ ...winner.interview, collectionConfig: study.config }) }]);
     expect(await count('analysis_jobs')).toBe(1);
     expect((await currentStudy(study.id)).interviewCount).toBe(1);
   });
@@ -233,7 +234,7 @@ describe('write-boundary authority (ST-03)', () => {
 
     expect(await workspaceStub().persistCompletedInterview(input)).toEqual({ status: 'links-disabled' });
     expect(await workspaceStub().persistCompletedInterview({ ...input, allowDisabledLinks: true }))
-      .toEqual({ status: 'revision-stale' });
+      .toEqual({ status: 'links-disabled' });
     expect(await writesFor(input.interview.id)).toEqual(NONE);
   });
 
@@ -319,7 +320,7 @@ describe('write-boundary authority (ST-03)', () => {
     await workspaceStub().revokeParticipantLink({ studyId: study.id, linkId: participant.linkId, now: T0 });
     expect(await workspaceStub().persistCompletedInterview(input)).toEqual({ status: 'link-inactive' });
 
-    await workspaceStub().replaceStudyConfig({ studyId: study.id, expectedRevision: 1, config: study.config, now: T0 });
+    await workspaceStub().replaceStudyConfig({ studyId: study.id, expectedRevision: 1, config: { ...study.config, name: 'Edited after collection' }, now: T0 });
     expect(await workspaceStub().persistCompletedInterview(input)).toEqual({ status: 'revision-stale' });
 
     expect(await writesFor(input.interview.id)).toEqual({ interviews: 1, analysis: 1, jobs: 1, members: 0 });
@@ -747,10 +748,11 @@ describe('record round trip and limits (ST-08)', () => {
     expect((await workspaceStub().persistCompletedInterview(input)).status).toBe('created');
 
     const [row] = await sql<{ record_json: string }>(`SELECT record_json FROM interviews WHERE id = ?`, interview.id);
-    expect(row.record_json).toBe(JSON.stringify(interview));
+    expect(row.record_json).toBe(JSON.stringify({ ...interview, collectionConfig: study.config }));
 
     const expected = {
       ...interview,
+      collectionConfig: study.config,
       synthesis: null,
       analysis: { status: 'pending', attempts: 0, lastAttemptAt: T0, generation: 1 },
     };
@@ -791,7 +793,7 @@ describe('record round trip and limits (ST-08)', () => {
       `SELECT LENGTH(CAST(record_json AS BLOB)) AS bytes FROM interviews WHERE id = ?`,
       interview.id,
     );
-    expect(row.bytes).toBe(recordBytes);
+    expect(row.bytes).toBe(encoder.encode(JSON.stringify({ ...interview, collectionConfig: study.config })).byteLength);
   });
 
   it('ST-08: a record above the measured row ceiling is refused before any write', async () => {

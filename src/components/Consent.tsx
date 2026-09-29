@@ -8,6 +8,7 @@ import { buildParticipantOrPreviewHeaders } from '@/services/participantHeaders'
 import { Button, Disclosure, Label, Verbatim } from '@/components/ui';
 import NavigationStatus from '@/components/NavigationStatus';
 import NoSessionNotice from '@/components/NoSessionNotice';
+import { previewSetupDestination } from '@/lib/previewSetupDestination';
 
 const Consent: React.FC = () => {
   const router = useRouter();
@@ -81,7 +82,7 @@ const Consent: React.FC = () => {
     if (isSubmitting || isOpening || isReturning) return;
     setIsReturning(true);
     setStep('setup');
-    router.push('/setup');
+    router.push(viewMode === 'preview' ? previewSetupDestination(studyConfig?.id) : '/setup');
   };
 
   if (isReturning) return <NavigationStatus>Returning to study setup…</NavigationStatus>;

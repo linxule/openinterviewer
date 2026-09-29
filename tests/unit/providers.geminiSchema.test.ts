@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { toGeminiResponseSchema } from '@/lib/providers/gemini';
 import {
   aggregateSynthesisResponseSchema,
+  explorationResponseSchema,
   followupStudyResponseSchema,
   interviewResponseSchema,
   synthesisResponseSchema,
@@ -14,12 +15,13 @@ import {
 // JSON Schema keywords with a 400. They are re-enforced server-side by
 // src/lib/providerValidation.ts, so stripping them from the Gemini-bound wire
 // schema loses no safety. See src/lib/providers/gemini.ts.
-const REJECTED_KEYWORDS = ['maxLength', 'minimum', 'minItems', 'maxItems'] as const;
+const REJECTED_KEYWORDS = ['maxLength', 'minimum', 'maximum', 'minItems', 'maxItems'] as const;
 
 const SCHEMAS: Record<string, ProviderJsonSchema> = {
   interviewResponseSchema,
   synthesisResponseSchema,
   aggregateSynthesisResponseSchema,
+  explorationResponseSchema,
   followupStudyResponseSchema,
 };
 
@@ -136,6 +138,7 @@ describe('toGeminiResponseSchema', () => {
     const keys = new Set<string>();
     collectKeys(synthesisResponseSchema, keys);
     collectKeys(aggregateSynthesisResponseSchema, keys);
+    collectKeys(explorationResponseSchema, keys);
     collectKeys(followupStudyResponseSchema, keys);
     for (const rejected of REJECTED_KEYWORDS) {
       expect(keys.has(rejected)).toBe(true);

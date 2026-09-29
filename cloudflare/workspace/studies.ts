@@ -7,9 +7,11 @@ import type * as Port from '../../src/lib/storage/types';
 import { toStudyListItem, type StoredStudy, type StudyConfig, type StudyListItem } from '../../src/types';
 import { logRequestEvent, logRequestFailure } from '../../src/lib/requestLog';
 import { HEX64, MAX_STUDY_REVISION } from '../../src/lib/wire/types';
+import { studyConfigEqual } from '../../src/lib/studyConfigEquality';
 import type * as Rpc from './rpcTypes';
 import {
   bumpMutationSeq,
+  armAlarmNoLaterThan,
   DELETION_FENCE_TTL_MS,
   gate,
   RECEIPT_TTL_MS,
@@ -435,6 +437,7 @@ function mutateStudy(
   studyId: string,
   now: number,
   change: (study: StoredStudy) => { config: StudyConfig } | Port.StudyMutationOutcome,
+  advancesRevision = true,
 ): Port.StudyMutationOutcome {
   return ws.storage.transactionSync((): Port.StudyMutationOutcome => {
     const checked = gate(ws, 'researcher-mutation');
@@ -448,7 +451,8 @@ function mutateStudy(
     }
     const changed = change(study);
     if ('status' in changed) return changed;
-    const revision = study.revision + 1;
+    if (studyConfigEqual(study.config, changed.config)) return { status: 'updated', study };
+    const revision = study.revision + (advancesRevision ? 1 : 0);
     if (!isRevision(revision)) return { status: 'unavailable' };
     const configJson = JSON.stringify(changed.config);
     if (utf8Bytes(configJson) > MAX_ROW_BYTES) return { status: 'unavailable' };
@@ -481,16 +485,22 @@ export async function replaceStudyConfig(
     ) {
       return { status: 'unavailable' };
     }
-    return mutateStudy(ws, 'replaceStudyConfig', input.studyId, input.now, (study) =>
-      study.revision !== input.expectedRevision ? { status: 'conflict' } : { config: input.config },
-    );
+    return mutateStudy(ws, 'replaceStudyConfig', input.studyId, input.now, (study) => {
+      if (study.revision !== input.expectedRevision) return { status: 'conflict' };
+      // Access changes do not advance protocol revision. A config edit based
+      // on an earlier read must not undo a pause/resume that committed since.
+      const config = { ...input.config };
+      if (study.config.linksEnabled === undefined) delete config.linksEnabled;
+      else config.linksEnabled = study.config.linksEnabled;
+      return { config };
+    });
   } catch (error) {
     logStorageFailure('replaceStudyConfig', error);
     return { status: 'unavailable' };
   }
 }
 
-/** Toggling links advances the revision, so existing links and sessions lapse. */
+/** Access pause is reversible; it does not change the collection protocol. */
 export async function setStudyLinksEnabled(
   ws: WorkspaceContext,
   input: Rpc.SetLinksEnabledInput,
@@ -506,7 +516,7 @@ export async function setStudyLinksEnabled(
     }
     return mutateStudy(ws, 'setStudyLinksEnabled', input.studyId, input.now, (study) => ({
       config: { ...study.config, linksEnabled: input.enabled },
-    }));
+    }), false);
   } catch (error) {
     logStorageFailure('setStudyLinksEnabled', error);
     return { status: 'unavailable' };
@@ -517,37 +527,63 @@ export async function setStudyLinksEnabled(
 
 export async function deleteStudy(ws: WorkspaceContext, input: Rpc.DeleteStudyInput): Promise<Port.DeleteStudyOutcome> {
   try {
-    if (typeof input?.studyId !== 'string' || !STUDY_ID.test(input.studyId) || !isSafeTime(input.now)) {
+    if (typeof input?.studyId !== 'string' || !STUDY_ID.test(input.studyId) || !isSafeTime(input.now)
+      || (input.deleteInterviews !== undefined && typeof input.deleteInterviews !== 'boolean')
+      || (input.expectedRevision !== undefined && !isRevision(input.expectedRevision))) {
       return { status: 'unavailable', success: false, error: 'Failed to delete study' };
     }
     const { studyId, now } = input;
-    return ws.storage.transactionSync((): Port.DeleteStudyOutcome => {
+    return await ws.storage.transaction(async (): Promise<Port.DeleteStudyOutcome> => {
       const checked = gate(ws, 'researcher-mutation');
       if (!checked.ok) return { status: 'held', reason: checked.reason, success: false };
+      const row = readStudyRow(ws, studyId);
+      if (!row) return { status: 'deleted', success: true };
+      const study = decodeStudyRow(row);
+      if (!study) return { status: 'unavailable', success: false, error: 'Failed to delete study' };
+      if (input.expectedRevision !== undefined && study.revision !== input.expectedRevision) {
+        return { status: 'conflict', success: false, error: 'Study changed since deletion was confirmed' };
+      }
       // Unlike the Redis script, a refused delete writes nothing, so it can
       // never leave a guard that blocks later saves or edits.
       const interviews = ws.sql
         .exec<{ n: number }>(`SELECT COUNT(*) AS n FROM interviews WHERE study_id = ?`, studyId)
         .one().n;
-      if (interviews > 0) {
+      if (interviews > 0 && input.deleteInterviews !== true) {
         return { status: 'conflict', success: false, error: 'Cannot delete study with existing interviews' };
       }
-      // Deleting an unknown id succeeds, as it does on Redis.
-      if (!readStudyRow(ws, studyId)) return { status: 'deleted', success: true };
-
-      // With no interviews there are no analysis jobs to cancel: jobs belong
-      // to interviews, and populated deletion is refused above.
+      // Set-based SQL deletes keep populated work bounded by the object rather
+      // than assembling every transcript in memory. Parent absence plus fences
+      // prevents queue deliveries, receipt replays and late results resurrecting it.
+      ws.sql.exec(
+        `INSERT INTO deletion_fences (kind, target_id, deleted_at, expires_at, sample_fixture)
+         SELECT 'interview', id, ?, ?, 0 FROM interviews WHERE study_id = ?
+         ON CONFLICT (kind, target_id) DO UPDATE SET
+           deleted_at = excluded.deleted_at, expires_at = excluded.expires_at, sample_fixture = 0`,
+        now, now + DELETION_FENCE_TTL_MS, studyId,
+      );
+      ws.sql.exec(`UPDATE idempotency_receipts SET disposition = 'deleted', result_json = NULL
+        WHERE (operation_family = 'analysis-retry' AND target_id IN (SELECT id FROM interviews WHERE study_id = ?))
+           OR (operation_family = 'exploration' AND target_id = ?)`, studyId, studyId);
+      ws.sql.exec(`UPDATE idempotency_receipts SET expires_at = ? WHERE operation_family = 'exploration' AND target_id = ?`, now + RECEIPT_TTL_MS, studyId);
+      ws.sql.exec(`DELETE FROM budget_members WHERE member IN (SELECT id FROM interviews WHERE study_id = ?)`, studyId);
+      ws.sql.exec(`DELETE FROM analysis_jobs WHERE interview_id IN (SELECT id FROM interviews WHERE study_id = ?)`, studyId);
+      ws.sql.exec(`DELETE FROM analysis WHERE interview_id IN (SELECT id FROM interviews WHERE study_id = ?)`, studyId);
+      ws.sql.exec(`DELETE FROM interviews WHERE study_id = ?`, studyId);
+      ws.sql.exec(`DELETE FROM exploration_answers WHERE study_id = ?`, studyId);
       ws.sql.exec(`DELETE FROM studies WHERE id = ?`, studyId);
       ws.sql.exec(`DELETE FROM aggregates WHERE study_id = ?`, studyId);
       ws.sql.exec(`DELETE FROM participant_links WHERE study_id = ?`, studyId);
       ws.sql.exec(`DELETE FROM consents WHERE study_id = ?`, studyId);
       writeFence(ws, 'study', studyId, now, false);
       ws.sql.exec(
-        `UPDATE idempotency_receipts SET disposition = 'deleted' WHERE operation_family = ? AND target_id = ?`,
+        `UPDATE idempotency_receipts SET disposition = 'deleted', result_json = NULL WHERE operation_family = ? AND target_id = ?`,
         STUDY_CREATE_FAMILY,
         studyId,
       );
       bumpMutationSeq(ws.sql, now);
+      // Keep cleanup scheduled even when deleting the last pending job. Any
+      // earlier alarm can safely wake once and re-evaluate the remaining work.
+      await armAlarmNoLaterThan(ws.storage, now + RECEIPT_TTL_MS);
       return { status: 'deleted', success: true };
     });
   } catch (error) {

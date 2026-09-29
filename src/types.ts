@@ -75,6 +75,7 @@ export const GEMINI_MODELS: AIModelOption[] = [
 
 // Available Claude models
 export const CLAUDE_MODELS: AIModelOption[] = [
+  { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', desc: 'Latest balanced capability and speed' },
   { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5', desc: 'Optimized for speed' },
   { id: 'claude-sonnet-5', label: 'Claude Sonnet 5', desc: 'Balanced capability and speed' },
   { id: 'claude-opus-5', label: 'Claude Opus 5', desc: 'Highest capability' },
@@ -85,9 +86,12 @@ export const CLAUDE_MODELS: AIModelOption[] = [
 
 // Available OpenAI Responses API models
 export const OPENAI_MODELS: AIModelOption[] = [
+  { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol', desc: 'Latest balanced quality and cost' },
+  { id: 'gpt-6-sol', label: 'GPT-6 Sol', desc: 'Balanced capability and cost' },
+  { id: 'gpt-6-luna', label: 'GPT-6 Luna', desc: 'Lowest-cost option; validate on your study' },
   { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', desc: 'Cost-efficient' },
   { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', desc: 'Balanced capability and speed' },
-  { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', desc: 'Highest capability' },
+  { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', desc: 'Previous-generation high-capability option' },
 ];
 
 // Curated OpenRouter models. A bounded provider/model slug can also be entered
@@ -103,8 +107,8 @@ export const OPENROUTER_MODELS: AIModelOption[] = [
 
 // Default models for each provider
 export const DEFAULT_GEMINI_MODEL = 'gemini-3.8-flash';
-export const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-5';
-export const DEFAULT_OPENAI_MODEL = 'gpt-5.6-terra';
+export const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-5-5';
+export const DEFAULT_OPENAI_MODEL = 'gpt-6.1-sol';
 export const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-5.6-terra';
 
 // Link expiration options
@@ -321,6 +325,8 @@ export interface StoredInterview {
   completedAt: number;
   status: 'in_progress' | 'completed';
   studyRevision?: number;
+  /** Server-owned collection protocol snapshot; absent on legacy records. */
+  collectionConfig?: StudyConfig;
   consentHash?: string;
   consentAcceptedAt?: number;
 
@@ -516,6 +522,8 @@ export interface AggregateSynthesisResult {
   studyRevision: number;
   interviewIds: string[];
   interviewCount: number;
+  /** Server-owned immutable corpus for an explicitly selected aggregate. */
+  scope?: import('@/lib/exploration/types').DatasetManifest;
   aiProvider: AIProviderType;
   aiModel: string;
   requestedAiModel?: string;
@@ -547,7 +555,7 @@ export type StoredAggregateSynthesis =
 /** What an AIProvider returns for an aggregate: ids are not resolved yet. */
 export type AggregateSynthesisProviderPayload = Omit<
   AggregateSynthesisResult,
-  | 'studyId' | 'studyRevision' | 'interviewIds' | 'interviewCount'
+  | 'studyId' | 'studyRevision' | 'interviewIds' | 'interviewCount' | 'scope'
   | 'aiProvider' | 'aiModel' | 'requestedAiModel' | 'routedProvider' | 'aiTransport'
   | 'generatedAt' | 'commonThemes'
 > & { commonThemes: AggregateThemeClaim[] };

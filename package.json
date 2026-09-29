@@ -1,6 +1,6 @@
 {
   "name": "openinterviewer",
-  "version": "4.2.0",
+  "version": "5.0.0",
   "description": "Open-source platform for adaptive, AI-assisted qualitative interviews.",
   "private": true,
   "license": "MIT",
@@ -33,6 +33,7 @@
     "test:cloudflare": "vitest run --config vitest.workers.config.mts",
     "test:contract:redis": "vitest run --config vitest.integration.config.mts tests/integration/workspaceStore.redis.contract.test.ts tests/integration/signInBudget.redis.test.ts",
     "test:inventory:redis": "vitest run --config vitest.integration.config.mts tests/integration/inventoryRedis.test.ts",
+    "test:researcher:redis": "vitest run --config vitest.integration.config.mts tests/integration/redis.researcherControl.test.ts tests/integration/hosted.studyDelete.cleanup.test.ts tests/integration/redis.partialDeleteExport.test.ts",
     "typegen:cloudflare": "wrangler types --strict-vars=false cloudflare/worker-configuration.d.ts",
     "build:cloudflare": "node scripts/cloudflare/build.mjs",
     "test:cloudflare:artifact": "vitest run --config vitest.artifact.config.mts",

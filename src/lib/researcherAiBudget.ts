@@ -49,6 +49,10 @@ export const STANDALONE_RESEARCHER_AI_POLICY: Record<ResearcherAiOperation, { se
     session: { maximum: 20, windowSeconds: 3_600 },
     researcher: { maximum: 100, windowSeconds: 86_400 },
   },
+  exploration: {
+    session: { maximum: 20, windowSeconds: 3_600 },
+    researcher: { maximum: 100, windowSeconds: 86_400 },
+  },
   followup: {
     session: { maximum: 20, windowSeconds: 3_600 },
     researcher: { maximum: 100, windowSeconds: 86_400 },

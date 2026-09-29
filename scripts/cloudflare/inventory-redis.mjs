@@ -18,8 +18,8 @@
 // - Record bodies never leave the server. Identity/version/status fields are read by
 //   PROJECTION_SCRIPT under EVAL_RO, which Redis runs read-only; it returns booleans,
 //   counts, enumerated states and timestamps only.
-// - The report prints no key names, identifiers, bodies, transcripts, link codes,
-//   session identifiers or credentials: counts, sizes, distributions and error classes.
+// - The report prints no key names, identifiers, hashes, questions, quotes, bodies,
+//   transcripts, link codes, session identifiers or credentials.
 // - The scan is bounded by a key and a time budget; truncation is reported and the
 //   report is then marked incomplete (exit 3).
 //
@@ -42,6 +42,10 @@ export const DEFAULT_LIMITS = Object.freeze({ maxKeys: 50_000, maxSeconds: 300, 
 const HARD_LIMITS = Object.freeze({ maxKeys: 1_000_000, maxSeconds: 3_600, scanCountMin: 10, scanCountMax: 1_000 });
 /** Same lease as kv.ts ANALYSIS_CLAIM_LEASE_MS (the inventory test keeps them equal). */
 export const ANALYSIS_CLAIM_LEASE_MS = 180_000;
+/** Same notebook deadline and caps as src/lib/exploration/types.ts. */
+export const EXPLORATION_ATTEMPT_DEADLINE_MS = 120_000;
+const MAX_CHECKED_EXPLORATION_MEMBERS = 500;
+const MAX_CHECKED_EXPLORATION_SOURCES = 100;
 /** Collections larger than this are counted but not member-checked (reported). */
 const MAX_CHECKED_MEMBERS = 10_000;
 /** Keys per EVAL_RO call: keeps each server-side script short. */
@@ -151,12 +155,12 @@ local function revision_current(ref, rev, recorded)
   return recorded == rev
 end
 -- alsoIn: another index; dangling members also listed there are counted as missingAlsoListed.
-local function collection(r, key, kind, target, alsoIn)
+local function collection(r, key, kind, target, alsoIn, bound)
   local n
   if kind == 'zset' then n = rcall('ZCARD', key) else n = rcall('SCARD', key) end
   if type(n) ~= 'number' then r.wrongType = true return end
   r.members = n
-  if n > maxMembers then r.skipped = true return end
+  if n > (bound or maxMembers) then r.skipped = true return end
   local list
   if kind == 'zset' then list = rcall('ZRANGE', key, 0, -1) else list = rcall('SMEMBERS', key) end
   if type(list) ~= 'table' then r.skipped = true return end
@@ -174,10 +178,11 @@ end
 local TAGS = {
   study = 'oi:study:', interview = 'oi:interview:', link = 'oi:link:', aggregate = 'oi:aggregate:',
   consent = '', idempotency = 'oi:idemp:', receipt = 'oi:receipt:', ['mutation-guard'] = 'oi:smg:',
-  ['persist-guard'] = 'oi:pguard:', fingerprint = 'oi:fp:'
+  ['persist-guard'] = 'oi:pguard:', fingerprint = 'oi:fp:', exploration = 'oi:exploration:'
 }
 local ANALYSIS = { pending = true, running = true, complete = true, failed = true }
 local FAILURE = { provider = true, ['invalid-output'] = true, ['too-large'] = true, timeout = true, storage = true }
+local EXPLORATION = { running = true, complete = true, failed = true, ['recovery-required'] = true }
 
 local out = {}
 for i, key in ipairs(KEYS) do
@@ -286,6 +291,54 @@ for i, key in ipairs(KEYS) do
       r.study = ref
       r.revisionCurrent = revision_current(ref, rev, obj.studyRevision)
     end
+  elseif family == 'exploration' then
+    local studyId, answerId = string.match(suffix, '^([A-Za-z0-9_-]+):([A-Za-z0-9_-]+)$')
+    r.study = study_ref(studyId)
+    if obj then
+      r.idOk = safe_id(studyId) and safe_id(answerId) and obj.studyId == studyId and obj.id == answerId
+      r.status = enum(obj.status, EXPLORATION)
+      r.createdAt = num(obj.createdAt)
+      r.updatedAt = num(obj.updatedAt)
+      r.result = type(obj.result) == 'table'
+      r.execution = type(obj.execution) == 'table'
+      if obj.status == 'running' then
+        local startedAt = num(obj.createdAt)
+        r.deadlineExpired = startedAt == nil or nowMs - startedAt >= ${EXPLORATION_ATTEMPT_DEADLINE_MS}
+      end
+      if obj.failureKind ~= nil then r.failureKind = enum(obj.failureKind, FAILURE) end
+      if safe_id(studyId) and safe_id(answerId) then
+        r.indexed = ismember('study-exploration-index:' .. studyId, answerId)
+        r.ordered = type(rcall('ZSCORE', 'study-exploration-order:' .. studyId, answerId)) == 'string'
+      end
+      local scope = obj.scope
+      if type(scope) ~= 'table' or scope.studyId ~= studyId or type(scope.sources) ~= 'table' then
+        r.scopeInvalid = true
+      else
+        r.sources = #scope.sources
+        if r.sources > ${MAX_CHECKED_EXPLORATION_SOURCES} then
+          r.sourcesSkipped = true
+        else
+          local missing, invalid, undecodable, otherStudy = 0, 0, 0, 0
+          for _, source in ipairs(scope.sources) do
+            if type(source) ~= 'table' or not safe_id(source.interviewId) then
+              invalid = invalid + 1
+            else
+              local sourceRaw = rcall('GET', 'interview:' .. source.interviewId)
+              if sourceRaw == false or sourceRaw == nil then
+                if exists('interview:' .. source.interviewId) then undecodable = undecodable + 1
+                else missing = missing + 1 end
+              else
+                local interview = decode(sourceRaw, 'oi:interview:')
+                if not interview or interview.id ~= source.interviewId then undecodable = undecodable + 1
+                elseif interview.studyId ~= studyId then otherStudy = otherStudy + 1 end
+              end
+            end
+          end
+          r.sourcesMissing, r.sourcesInvalid = missing, invalid
+          r.sourcesUndecodable, r.sourcesOtherStudy = undecodable, otherStudy
+        end
+      end
+    end
   elseif family == 'idempotency' then
     if obj then
       r.version = version(obj)
@@ -326,6 +379,45 @@ for i, key in ipairs(KEYS) do
     collection(r, key, 'set', 'interview:')
   elseif family == 'link-index' then
     collection(r, key, 'set', 'participant-link:')
+  elseif family == 'study-link-index' then
+    collection(r, key, 'set', 'participant-link:')
+    r.study = study_ref(suffix)
+  elseif family == 'study-consent-index' then
+    collection(r, key, 'set', '')
+    r.study = study_ref(suffix)
+  elseif family == 'exploration-index' or family == 'exploration-order' then
+    collection(r, key, family == 'exploration-order' and 'zset' or 'set',
+      'study-exploration:' .. suffix .. ':',
+      family == 'exploration-order' and 'study-exploration-index:' .. suffix or nil,
+      ${MAX_CHECKED_EXPLORATION_MEMBERS})
+    r.study = study_ref(suffix)
+  elseif family == 'exploration-receipts' then
+    r.study = study_ref(suffix)
+    local n = rcall('HLEN', key)
+    if type(n) ~= 'number' then r.wrongType = true
+    else
+      r.members = n
+      if n > ${MAX_CHECKED_EXPLORATION_MEMBERS} then r.skipped = true
+      else
+        local entries = rcall('HGETALL', key)
+        if type(entries) ~= 'table' then r.skipped = true
+        else
+          local missing, alsoListed, invalid = 0, 0, 0
+          for position = 2, #entries, 2 do
+            local mapping = decode(entries[position], 'oi:exploration-key:')
+            if not mapping or not safe_id(mapping.id) then invalid = invalid + 1
+            elseif not exists('study-exploration:' .. suffix .. ':' .. mapping.id) then
+              missing = missing + 1
+              if ismember('study-exploration-index:' .. suffix, mapping.id)
+                or type(rcall('ZSCORE', 'study-exploration-order:' .. suffix, mapping.id)) == 'string' then
+                alsoListed = alsoListed + 1
+              end
+            end
+          end
+          r.missing, r.missingAlsoListed, r.invalidMembers = missing, alsoListed, invalid
+        end
+      end
+    end
   elseif family == 'idempotency-index' then
     collection(r, key, 'zset', 'create-idemp:')
   else
@@ -357,7 +449,13 @@ export const FAMILIES = [
   { name: 'mutationGuards', prefixes: ['study-mutation-guard:'], type: 'string', projection: 'mutation-guard' },
   { name: 'participantLinks', prefixes: ['participant-link:'], type: 'string', projection: 'link' },
   { name: 'participantLinkIndexes', prefixes: ['participant-link-index:', 'participant-links:'], type: 'set', projection: 'link-index' },
+  { name: 'studyLinkIndexes', prefixes: ['study-link-index:'], type: 'set', projection: 'study-link-index' },
   { name: 'consents', prefixes: ['participant-consent:'], type: 'string', projection: 'consent' },
+  { name: 'studyConsentIndexes', prefixes: ['study-consent-index:'], type: 'set', projection: 'study-consent-index' },
+  { name: 'explorationAnswers', prefixes: ['study-exploration:'], type: 'string', projection: 'exploration' },
+  { name: 'explorationIndexes', prefixes: ['study-exploration-index:'], type: 'set', projection: 'exploration-index' },
+  { name: 'explorationOrderIndexes', prefixes: ['study-exploration-order:'], type: 'zset', projection: 'exploration-order' },
+  { name: 'explorationReceipts', prefixes: ['study-exploration-keys:'], type: 'hash', projection: 'exploration-receipts' },
   { name: 'createIdempotency', prefixes: ['create-idemp:'], type: 'string', projection: 'idempotency' },
   { name: 'createIdempotencyIndexes', prefixes: ['create-idemp-index:'], type: 'zset', projection: 'idempotency-index' },
   { name: 'participantRateLimits', prefixes: ['rate-limit:'], type: 'string', projection: null },
@@ -592,6 +690,15 @@ function emptyRecords() {
       revisionStale: 0, withReceiptMember: 0,
     },
     consents: { projected: 0, encoding: encodingCounter(), version: {}, study: studyRefCounter(), revisionStale: 0 },
+    explorationAnswers: {
+      projected: 0, encoding: encodingCounter(), identityMismatch: 0, study: studyRefCounter(),
+      status: { running: 0, complete: 0, failed: 0, 'recovery-required': 0, other: 0, absent: 0 },
+      runningDeadlineActive: 0, runningDeadlineExpired: 0, failureKind: {},
+      withResult: 0, withExecution: 0, notInStudyIndex: 0, notInOrderIndex: 0,
+      scopeInvalid: 0, sources: 0, sourcesMissing: 0, sourcesInvalid: 0,
+      sourcesUndecodable: 0, sourcesOtherStudy: 0, sourceChecksOverBound: 0,
+      createdAt: emptyRange(), updatedAt: emptyRange(),
+    },
     createIdempotency: {
       projected: 0, encoding: encodingCounter(), version: {},
       state: { pending: 0, created: 0, deleted: 0, other: 0, absent: 0 },
@@ -626,6 +733,11 @@ function emptyCollections() {
     studyInterviewIndexes: { ...collectionStats(), missingTargetsAlsoInAllInterviews: 0 },
     studyPersistingSets: collectionStats(),
     participantLinkIndexes: collectionStats(),
+    studyLinkIndexes: collectionStats(),
+    studyConsentIndexes: collectionStats(),
+    explorationIndexes: collectionStats(),
+    explorationOrderIndexes: { ...collectionStats(), missingTargetsAlsoInExplorationIndexes: 0 },
+    explorationReceipts: { ...collectionStats(), invalidMembers: 0, missingTargetsAlsoInExplorationIndexes: 0 },
     createIdempotencyIndexes: collectionStats(),
   };
 }
@@ -636,6 +748,11 @@ const COLLECTION_BY_PROJECTION = {
   'study-index': 'studyInterviewIndexes',
   'persisting-set': 'studyPersistingSets',
   'link-index': 'participantLinkIndexes',
+  'study-link-index': 'studyLinkIndexes',
+  'study-consent-index': 'studyConsentIndexes',
+  'exploration-index': 'explorationIndexes',
+  'exploration-order': 'explorationOrderIndexes',
+  'exploration-receipts': 'explorationReceipts',
   'idempotency-index': 'createIdempotencyIndexes',
 };
 
@@ -809,6 +926,10 @@ export async function runInventory(executor, options = {}) {
       if (typeof f.missingAlsoListed === 'number' && 'missingTargetsAlsoInAllInterviews' in c) {
         c.missingTargetsAlsoInAllInterviews += f.missingAlsoListed;
       }
+      if (typeof f.missingAlsoListed === 'number' && 'missingTargetsAlsoInExplorationIndexes' in c) {
+        c.missingTargetsAlsoInExplorationIndexes += f.missingAlsoListed;
+      }
+      if (typeof f.invalidMembers === 'number' && 'invalidMembers' in c) c.invalidMembers += f.invalidMembers;
       if (f.study !== undefined) incStudyRef(c.study, f.study);
       return;
     }
@@ -911,6 +1032,32 @@ export async function runInventory(executor, options = {}) {
         incVersion(s.version, f.version);
         incStudyRef(s.study, f.study);
         if (f.revisionCurrent === false) s.revisionStale += 1;
+        break;
+      }
+      case 'exploration': {
+        const s = records.explorationAnswers;
+        s.projected += 1;
+        inc(s.encoding, f.enc);
+        incStudyRef(s.study, f.study);
+        if (f.enc === 'undecodable') break;
+        if (f.idOk === false) s.identityMismatch += 1;
+        inc(s.status, f.status);
+        if (f.status === 'running') {
+          if (f.deadlineExpired) s.runningDeadlineExpired += 1;
+          else s.runningDeadlineActive += 1;
+        }
+        if (f.failureKind !== undefined) inc(s.failureKind, f.failureKind);
+        if (f.result) s.withResult += 1;
+        if (f.execution) s.withExecution += 1;
+        if (f.indexed === false) s.notInStudyIndex += 1;
+        if (f.ordered === false) s.notInOrderIndex += 1;
+        if (f.scopeInvalid) s.scopeInvalid += 1;
+        if (f.sourcesSkipped) s.sourceChecksOverBound += 1;
+        for (const field of ['sources', 'sourcesMissing', 'sourcesInvalid', 'sourcesUndecodable', 'sourcesOtherStudy']) {
+          if (typeof f[field] === 'number') s[/** @type {'sources'} */ (field)] += f[field];
+        }
+        widen(s.createdAt, f.createdAt);
+        widen(s.updatedAt, f.updatedAt);
         break;
       }
       case 'idempotency': {
@@ -1160,6 +1307,9 @@ function buildReport(input) {
     analysisRunning: interviews.analysis.runningLeaseActive,
     analysisRunningLeaseExpired: interviews.analysis.runningLeaseExpired,
     analysisPendingAfterAttempt: interviews.analysis.pendingAfterAttempt,
+    explorationRunning: records.explorationAnswers.runningDeadlineActive,
+    explorationRunningDeadlineExpired: records.explorationAnswers.runningDeadlineExpired,
+    explorationRecoveryRequired: records.explorationAnswers.status['recovery-required'],
   };
   const orphans = {
     interviewsWithoutStudy: interviews.study.missing,
@@ -1174,8 +1324,20 @@ function buildReport(input) {
     studyPersistingMembersWithoutGuard: collections.studyPersistingSets.missingTargets,
     allStudiesMembersWithoutStudy: collections.allStudies.missingTargets,
     allInterviewsMembersWithoutInterview: collections.allInterviews.missingTargets,
+    explorationAnswersWithoutStudy: records.explorationAnswers.study.missing,
+    explorationIndexesWithoutStudy: collections.explorationIndexes.study.missing,
+    explorationOrderIndexesWithoutStudy: collections.explorationOrderIndexes.study.missing,
+    explorationReceiptsWithoutStudy: collections.explorationReceipts.study.missing,
+    explorationIndexMembersWithoutAnswer: collections.explorationIndexes.missingTargets,
+    explorationOrderMembersWithoutAnswer: collections.explorationOrderIndexes.missingTargets,
+    explorationReceiptMembersWithoutAnswer: collections.explorationReceipts.missingTargets,
+    studyLinkIndexesWithoutStudy: collections.studyLinkIndexes.study.missing,
+    studyConsentIndexesWithoutStudy: collections.studyConsentIndexes.study.missing,
     invalidStudyReferences: interviews.study['invalid-id'] + records.participantLinks.study['invalid-id']
-      + records.consents.study['invalid-id'] + records.createIdempotency.study['invalid-id'],
+      + records.consents.study['invalid-id'] + records.createIdempotency.study['invalid-id']
+      + records.explorationAnswers.study['invalid-id'] + collections.explorationIndexes.study['invalid-id']
+      + collections.explorationOrderIndexes.study['invalid-id'] + collections.explorationReceipts.study['invalid-id']
+      + collections.studyLinkIndexes.study['invalid-id'] + collections.studyConsentIndexes.study['invalid-id'],
   };
   const expiredReferences = {
     linksExpiredStillStored: records.participantLinks.state.expired,
@@ -1185,6 +1347,8 @@ function buildReport(input) {
     aggregatesForSupersededStudyRevision: records.aggregates.revisionStale,
     linkIndexMembersWithoutLink: collections.participantLinkIndexes.missingTargets,
     createIdempotencyIndexMembersExpired: collections.createIdempotencyIndexes.missingTargets,
+    studyLinkIndexMembersWithoutLink: collections.studyLinkIndexes.missingTargets,
+    studyConsentIndexMembersWithoutConsent: collections.studyConsentIndexes.missingTargets,
   };
 
   const incompleteReasons = [];
@@ -1193,6 +1357,14 @@ function buildReport(input) {
   if (input.unprojected > 0) incompleteReasons.push('records-not-projected');
   const skipped = Object.values(collections).reduce((sum, c) => sum + c.skippedOverBound, 0);
   if (skipped > 0) incompleteReasons.push('collections-over-member-bound');
+  if (records.explorationAnswers.sourceChecksOverBound > 0) incompleteReasons.push('exploration-sources-over-bound');
+  const notebook = records.explorationAnswers;
+  if (notebook.encoding.undecodable + notebook.identityMismatch + notebook.scopeInvalid
+    + notebook.sourcesInvalid + notebook.sourcesUndecodable + notebook.sourcesOtherStudy
+    + notebook.status.other + notebook.status.absent + collections.explorationReceipts.invalidMembers > 0) {
+    incompleteReasons.push('exploration-records-invalid');
+  }
+  if (Object.values(familyTable).some((family) => family.typeMismatch > 0)) incompleteReasons.push('known-family-type-mismatch');
   if (errors.length > 0) incompleteReasons.push('command-errors');
 
   const warnings = [];
@@ -1218,7 +1390,11 @@ function buildReport(input) {
   const pendingOperationsOnce = sum(pendingOperations) - pendingOperations.studyPersistingMembers;
   const allInterviewsChecked = collections.allInterviews.keys > 0 && collections.allInterviews.skippedOverBound === 0;
   const orphansOnce = sum(orphans) - orphans.studyInterviewIndexesWithoutStudy
-    - (allInterviewsChecked ? collections.studyInterviewIndexes.missingTargetsAlsoInAllInterviews : 0);
+    - orphans.explorationIndexesWithoutStudy - orphans.explorationOrderIndexesWithoutStudy - orphans.explorationReceiptsWithoutStudy
+    - orphans.studyLinkIndexesWithoutStudy - orphans.studyConsentIndexesWithoutStudy
+    - (allInterviewsChecked ? collections.studyInterviewIndexes.missingTargetsAlsoInAllInterviews : 0)
+    - collections.explorationOrderIndexes.missingTargetsAlsoInExplorationIndexes
+    - collections.explorationReceipts.missingTargetsAlsoInExplorationIndexes;
 
   const research = {
     studies: familyTable.studies.count,
@@ -1226,6 +1402,7 @@ function buildReport(input) {
     participantLinks: familyTable.participantLinks.count,
     aggregates: familyTable.aggregates.count,
     consents: familyTable.consents.count,
+    explorationAnswers: familyTable.explorationAnswers.count,
   };
   return {
     format: REPORT_FORMAT,
@@ -1237,7 +1414,8 @@ function buildReport(input) {
     summary: {
       totalKeys: scan.keysSeen - scan.vanishedDuringScan,
       researchRecords: research,
-      hasResearchData: research.studies + research.interviews + research.aggregates > 0,
+      hasResearchData: research.studies + research.interviews + research.aggregates + research.explorationAnswers
+        + familyTable.explorationIndexes.count + familyTable.explorationOrderIndexes.count + familyTable.explorationReceipts.count > 0,
       pendingOperations: pendingOperationsOnce,
       interviewsAwaitingFirstAnalysis: interviews.analysis.importMapping.notScheduled,
       orphanedReferences: orphansOnce,

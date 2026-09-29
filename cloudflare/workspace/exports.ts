@@ -42,6 +42,9 @@ import { logRequestEvent } from '../../src/lib/requestLog';
 import type * as Rpc from './rpcTypes';
 import { gate, type WorkspaceContext, type WorkspaceMeta } from './context';
 import { CorruptRecordError, projectInterview, type AnalysisRow } from './projection';
+import type { ExplorationAnswer } from '../../src/lib/exploration/types';
+import { isDatasetManifest, isExplorationAnswer } from '../../src/lib/exploration/validation';
+import { STUDY_ID } from './studies';
 
 /** Upper bounds on caller-supplied page parameters. */
 export const EXPORT_MAX_PAGE_SIZE = 200;
@@ -78,14 +81,17 @@ type CapturedInterview = {
 type CapturedAggregate = { studyId: string; bytes: number; sha256: string };
 
 type ExportSnapshot = {
-  v: 1;
+  v: 2;
   sequence: number;
+  studyId?: string;
   capturedAt: number;
   interviews: CapturedInterview[];
   aggregates: CapturedAggregate[];
+  explorations: Array<{ id: string; studyId: string; bytes: number; sha256: string }>;
 };
 
-type Cursor = { phase: 'interviews'; createdAt: number; id: string } | { phase: 'aggregates'; position: number };
+type Cursor = { phase: 'interviews'; createdAt: number; id: string }
+  | { phase: 'aggregates'; position: number } | { phase: 'explorations'; position: number };
 
 function parseCursor(raw: string | null): Cursor | null | 'invalid' {
   if (raw === null) return null;
@@ -100,8 +106,8 @@ function parseCursor(raw: string | null): Cursor | null | 'invalid' {
   if (parsed.length === 3 && parsed[0] === 'i' && Number.isSafeInteger(parsed[1]) && typeof parsed[2] === 'string' && parsed[2].length > 0) {
     return { phase: 'interviews', createdAt: parsed[1] as number, id: parsed[2] };
   }
-  if (parsed.length === 2 && parsed[0] === 'a' && Number.isSafeInteger(parsed[1]) && (parsed[1] as number) >= 0) {
-    return { phase: 'aggregates', position: parsed[1] as number };
+  if (parsed.length === 2 && (parsed[0] === 'a' || parsed[0] === 'e') && Number.isSafeInteger(parsed[1]) && (parsed[1] as number) >= 0) {
+    return { phase: parsed[0] === 'a' ? 'aggregates' : 'explorations', position: parsed[1] as number };
   }
   return 'invalid';
 }
@@ -123,6 +129,7 @@ export function decodeAggregateJson(raw: string, studyId: string): StoredAggrega
   if (rec.studyId !== studyId) return null;
   if ('_receipt' in rec) return null;
   if (!Number.isSafeInteger(rec.studyRevision) || (rec.studyRevision as number) < 0) return null;
+  if (rec.scope !== undefined && (!isDatasetManifest(rec.scope) || rec.scope.studyId !== studyId)) return null;
   if (!Number.isSafeInteger(rec.savedAt) || !Number.isSafeInteger(rec.generatedAt)) return null;
   if (!Array.isArray(rec.interviewIds) || rec.interviewIds.length === 0) return null;
   if (rec.interviewIds.some((id) => typeof id !== 'string' || id.length === 0 || id.length > 200)) return null;
@@ -159,15 +166,23 @@ type CaptureRow = {
   a_study_revision: number | null;
 };
 
-function interviewCount(sql: SqlStorage): number {
-  return sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM interviews`).one().n;
+function interviewCount(sql: SqlStorage, studyId?: string): number {
+  return sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM interviews${studyId ? ' WHERE study_id = ?' : ''}`, ...(studyId ? [studyId] : [])).one().n;
+}
+
+function explorationCount(sql: SqlStorage, studyId?: string): number {
+  return sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM exploration_answers${studyId ? ' WHERE study_id = ?' : ''}`, ...(studyId ? [studyId] : [])).one().n;
+}
+
+function validScope(studyId: unknown): boolean {
+  return studyId === undefined || (typeof studyId === 'string' && STUDY_ID.test(studyId));
 }
 
 /**
  * The export state at the current sequence. Callers read the count (and
  * refuse over-ceiling exports) first, in the same synchronous section.
  */
-function captureSnapshot(sql: SqlStorage, sequence: number): ExportSnapshot {
+function captureSnapshot(sql: SqlStorage, sequence: number, studyId?: string): ExportSnapshot {
   const rows = sql
     .exec<CaptureRow>(
       `SELECT i.id, i.study_id, i.created_at, i.fingerprint,
@@ -175,7 +190,8 @@ function captureSnapshot(sql: SqlStorage, sequence: number): ExportSnapshot {
               a.attempts AS a_attempts, a.last_attempt_at AS a_last_attempt_at, a.failure_kind AS a_failure_kind,
               a.recovery_required AS a_recovery_required, a.study_revision AS a_study_revision
          FROM interviews i LEFT JOIN analysis a ON a.interview_id = i.id
-        ORDER BY i.created_at DESC, i.id DESC`,
+         ${studyId ? 'WHERE i.study_id = ?' : ''}
+        ORDER BY i.created_at DESC, i.id DESC`, ...(studyId ? [studyId] : []),
     )
     .toArray();
   const interviews: CapturedInterview[] = [];
@@ -214,7 +230,16 @@ function captureSnapshot(sql: SqlStorage, sequence: number): ExportSnapshot {
     }
     aggregates.push({ studyId, bytes: new TextEncoder().encode(stored).byteLength, sha256: sha256Hex(stored) });
   }
-  return { v: 1, sequence, capturedAt: Date.now(), interviews, aggregates };
+  const explorations: ExportSnapshot['explorations'] = [];
+  for (const row of sql.exec<{ id: string; study_id: string; record_json: string }>(
+    `SELECT id, study_id, record_json FROM exploration_answers ${studyId ? 'WHERE study_id = ?' : ''} ORDER BY created_at DESC, id DESC`,
+    ...(studyId ? [studyId] : []),
+  )) {
+    const decoded: unknown = JSON.parse(row.record_json);
+    if (!isExplorationAnswer(decoded) || decoded.id !== row.id || decoded.studyId !== row.study_id) throw new CorruptRecordError('record');
+    explorations.push({ id: row.id, studyId: row.study_id, bytes: new TextEncoder().encode(row.record_json).byteLength, sha256: sha256Hex(row.record_json) });
+  }
+  return { v: 2, sequence, ...(studyId ? { studyId } : {}), capturedAt: Date.now(), interviews, aggregates, explorations };
 }
 
 function readAggregateRow(sql: SqlStorage, studyId: string): string | null {
@@ -226,18 +251,20 @@ function readAggregateRow(sql: SqlStorage, studyId: string): string | null {
 
 // ---------- Snapshot storage ----------
 
-function snapshotKey(sequence: number): string {
-  return `${EXPORT_SNAPSHOT_PREFIX}${sequence}`;
+function snapshotKey(sequence: number, studyId?: string): string {
+  return `${EXPORT_SNAPSHOT_PREFIX}${sequence}${studyId ? `:study:${studyId}` : ''}`;
 }
 
-function isSnapshot(value: unknown, sequence: number): value is ExportSnapshot {
+function isSnapshot(value: unknown, sequence: number, studyId?: string): value is ExportSnapshot {
   if (!value || typeof value !== 'object') return false;
   const snapshot = value as Partial<ExportSnapshot>;
-  return snapshot.v === 1
+  return snapshot.v === 2
     && snapshot.sequence === sequence
+    && snapshot.studyId === studyId
     && typeof snapshot.capturedAt === 'number'
     && Array.isArray(snapshot.interviews)
-    && Array.isArray(snapshot.aggregates);
+    && Array.isArray(snapshot.aggregates)
+    && Array.isArray(snapshot.explorations);
 }
 
 /** Discard expired snapshots and keep at most EXPORT_SNAPSHOT_LIMIT - 1 others. */
@@ -254,7 +281,7 @@ function pruneSnapshots(storage: DurableObjectStorage, now: number): void {
 
 function storeSnapshot(storage: DurableObjectStorage, snapshot: ExportSnapshot): void {
   pruneSnapshots(storage, snapshot.capturedAt);
-  storage.kv.put(snapshotKey(snapshot.sequence), snapshot);
+  storage.kv.put(snapshotKey(snapshot.sequence, snapshot.studyId), snapshot);
 }
 
 type Loaded = { status: 'ok'; snapshot: ExportSnapshot } | { status: 'changed' } | { status: 'unavailable' };
@@ -263,14 +290,14 @@ type Loaded = { status: 'ok'; snapshot: ExportSnapshot } | { status: 'changed' }
  * The snapshot for `sequence`: stored, or recaptured when the workspace is
  * still at that sequence (the identical state). Synchronous.
  */
-function loadSnapshot(ws: WorkspaceContext, meta: WorkspaceMeta, sequence: number): Loaded {
-  const stored = ws.storage.kv.get(snapshotKey(sequence));
-  if (isSnapshot(stored, sequence) && Date.now() - stored.capturedAt <= EXPORT_SNAPSHOT_TTL_MS) {
+function loadSnapshot(ws: WorkspaceContext, meta: WorkspaceMeta, sequence: number, studyId?: string): Loaded {
+  const stored = ws.storage.kv.get(snapshotKey(sequence, studyId));
+  if (isSnapshot(stored, sequence, studyId) && Date.now() - stored.capturedAt <= EXPORT_SNAPSHOT_TTL_MS) {
     return { status: 'ok', snapshot: stored };
   }
   if (meta.mutationSeq !== sequence) return { status: 'changed' };
-  if (interviewCount(ws.sql) > EXPORT_MAX_INTERVIEWS) return { status: 'unavailable' };
-  const snapshot = captureSnapshot(ws.sql, sequence);
+  if (interviewCount(ws.sql, studyId) > EXPORT_MAX_INTERVIEWS || explorationCount(ws.sql, studyId) > 500) return { status: 'unavailable' };
+  const snapshot = captureSnapshot(ws.sql, sequence, studyId);
   storeSnapshot(ws.storage, snapshot);
   return { status: 'ok', snapshot };
 }
@@ -347,7 +374,11 @@ function capturedRow(sql: SqlStorage, captured: CapturedInterview): AnalysisRow 
 }
 
 function afterInterviews(snapshot: ExportSnapshot): string | null {
-  return snapshot.aggregates.length > 0 ? JSON.stringify(['a', 0]) : null;
+  return snapshot.aggregates.length > 0 ? JSON.stringify(['a', 0]) : afterAggregates(snapshot);
+}
+
+function afterAggregates(snapshot: ExportSnapshot): string | null {
+  return snapshot.explorations.length > 0 ? JSON.stringify(['e', 0]) : null;
 }
 
 // ---------- Pages ----------
@@ -410,24 +441,51 @@ function readAggregatePage(
     status: 'ok',
     interviews: [],
     aggregates,
-    nextCursor: next < slots.length ? JSON.stringify(['a', next]) : null,
+    nextCursor: next < slots.length ? JSON.stringify(['a', next]) : afterAggregates(snapshot),
   };
 }
 
 // ---------- RPCs ----------
 
+function liveExploration(sql: SqlStorage, captured: ExportSnapshot['explorations'][number]): string | null {
+  const row = sql.exec<{ study_id: string; record_json: string }>(`SELECT study_id, record_json FROM exploration_answers WHERE id = ?`, captured.id).toArray()[0];
+  return row && row.study_id === captured.studyId && sha256Hex(row.record_json) === captured.sha256 ? row.record_json : null;
+}
+
+function readExplorationPage(sql: SqlStorage, snapshot: ExportSnapshot, position: number, pageSize: number, maxPageBytes: number): Rpc.ExportPageOutcome {
+  const explorations: ExplorationAnswer[] = [];
+  let bytes = 0;
+  let next = position;
+  for (const captured of snapshot.explorations.slice(position, position + pageSize)) {
+    if (explorations.length > 0 && bytes + captured.bytes + PROJECTION_OVERHEAD_BYTES > maxPageBytes) break;
+    const raw = liveExploration(sql, captured);
+    if (raw === null) return { status: 'changed' };
+    const decoded: unknown = JSON.parse(raw);
+    if (!isExplorationAnswer(decoded)) return { status: 'unavailable' };
+    explorations.push(decoded);
+    bytes += captured.bytes + PROJECTION_OVERHEAD_BYTES;
+    next += 1;
+  }
+  return { status: 'ok', interviews: [], aggregates: [], explorations,
+    nextCursor: next < snapshot.explorations.length ? JSON.stringify(['e', next]) : null };
+}
+
 export async function beginExport(ws: WorkspaceContext, input: Rpc.BeginExportInput): Promise<Rpc.BeginExportOutcome> {
   try {
     const checked = gate(ws, 'read');
     if (!checked.ok) return { status: 'unavailable' };
-    if (!isBoundedInteger(input?.maximum, 1, EXPORT_MAX_INTERVIEWS)) return { status: 'unavailable' };
-    const count = interviewCount(ws.sql);
-    if (count === 0) return { status: 'empty' };
+    if (!isBoundedInteger(input?.maximum, 1, EXPORT_MAX_INTERVIEWS) || !validScope(input.studyId)) return { status: 'unavailable' };
+    const count = interviewCount(ws.sql, input.studyId);
+    const notebooks = explorationCount(ws.sql, input.studyId);
+    if (count === 0 && notebooks === 0) return { status: 'empty' };
     if (count > input.maximum) return { status: 'too-large', count, maximum: input.maximum };
+    if (notebooks > 500) return { status: 'too-large', count: notebooks, maximum: 500 };
     const sequence = checked.meta.mutationSeq;
-    const snapshot = captureSnapshot(ws.sql, sequence);
+    const snapshot = captureSnapshot(ws.sql, sequence, input.studyId);
     storeSnapshot(ws.storage, snapshot);
-    return { status: 'ok', sequence, count, studyIds: snapshot.aggregates.map((aggregate) => aggregate.studyId) };
+    return { status: 'ok', sequence, count, studyIds: [...new Set([
+      ...snapshot.aggregates.map(aggregate => aggregate.studyId), ...snapshot.explorations.map(answer => answer.studyId),
+    ])] };
   } catch {
     return { status: 'unavailable' };
   }
@@ -441,17 +499,22 @@ export async function readExportPage(ws: WorkspaceContext, input: Rpc.ExportPage
       !isBoundedInteger(input?.sequence, 0, Number.MAX_SAFE_INTEGER)
       || !isBoundedInteger(input.pageSize, 1, EXPORT_MAX_PAGE_SIZE)
       || !isBoundedInteger(input.maxPageBytes, 1, EXPORT_MAX_PAGE_BYTES)
+      || !validScope(input.studyId)
     ) {
       return { status: 'unavailable' };
     }
     const cursor = parseCursor(input.cursor);
     if (cursor === 'invalid') return { status: 'unavailable' };
-    const loaded = loadSnapshot(ws, checked.meta, input.sequence);
+    const loaded = loadSnapshot(ws, checked.meta, input.sequence, input.studyId);
     if (loaded.status !== 'ok') return loaded;
     const { snapshot } = loaded;
     if (cursor?.phase === 'aggregates') {
       if (cursor.position > snapshot.aggregates.length) return { status: 'unavailable' };
       return readAggregatePage(ws.sql, snapshot, cursor.position, input.pageSize, input.maxPageBytes);
+    }
+    if (cursor?.phase === 'explorations') {
+      if (cursor.position > snapshot.explorations.length) return { status: 'unavailable' };
+      return readExplorationPage(ws.sql, snapshot, cursor.position, input.pageSize, input.maxPageBytes);
     }
     let start = 0;
     if (cursor) {
@@ -474,12 +537,13 @@ export async function verifyExportSequence(ws: WorkspaceContext, input: Rpc.Expo
   try {
     const checked = gate(ws, 'read');
     if (!checked.ok) return { status: 'unavailable' };
-    if (!isBoundedInteger(input?.sequence, 0, Number.MAX_SAFE_INTEGER)) return { status: 'unavailable' };
-    const loaded = loadSnapshot(ws, checked.meta, input.sequence);
+    if (!isBoundedInteger(input?.sequence, 0, Number.MAX_SAFE_INTEGER) || !validScope(input.studyId)) return { status: 'unavailable' };
+    const loaded = loadSnapshot(ws, checked.meta, input.sequence, input.studyId);
     if (loaded.status !== 'ok') return loaded;
     const { snapshot } = loaded;
     if (snapshot.interviews.some((captured) => liveInterview(ws.sql, captured) === null)) return { status: 'changed' };
     if (snapshot.aggregates.some((captured) => liveAggregate(ws.sql, captured) === null)) return { status: 'changed' };
+    if (snapshot.explorations.some(captured => liveExploration(ws.sql, captured) === null)) return { status: 'changed' };
     return { status: 'unchanged' };
   } catch {
     return { status: 'unavailable' };

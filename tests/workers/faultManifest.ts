@@ -47,6 +47,7 @@ const OPERATOR = 'tests/workers/operator.test.ts';
 const SCHEMA = 'tests/workers/schema.migrations.test.ts';
 const RESEARCHER_ROUTES = 'tests/workers/researcherRoutes.test.ts';
 const RESEARCHER_AI = 'tests/workers/researcherAi.test.ts';
+const RESEARCHER_CONTROL = 'tests/workers/researcherControl.test.ts';
 const RESTART_COMMITTED = 'tests/cloudflare-restart/committed.restart.test.ts';
 const RESTART_LEASE = 'tests/cloudflare-restart/lease.restart.test.ts';
 const RESTART_TRANSACTION = 'tests/cloudflare-restart/transaction.restart.test.ts';
@@ -406,15 +407,16 @@ export const CLOUDFLARE_FAULT_CUTS: ReadonlyArray<CloudflareFaultCut> = [
   },
   {
     id: 'CF-EPOCH-ACTIVATE',
-    code: [`${WS}/operator.ts#activateRecoveryEpoch`, `${WS}/operator.ts#settleRecoveryRequired`, `${STORE}#activateRecoveryEpoch`],
-    cut: 'Activation committed (every restored nonterminal generation recovery-required, the deployment epoch activated, a mutation-sequence bump, an audit row) and its reply was lost.',
-    durableEvidence: 'The activated epoch equals the Worker binding; restored jobs are recovery-required; the `epoch.activate` audit row.',
+    code: [`${WS}/operator.ts#activateRecoveryEpoch`, `${WS}/operator.ts#settleRecoveryRequired`, `${WS}/operator.ts#classifyExplorations`, `${STORE}#activateRecoveryEpoch`],
+    cut: 'Activation committed (every restored nonterminal generation and running notebook attempt recovery-required, the deployment epoch activated, a mutation-sequence bump, an audit row) and its reply was lost.',
+    durableEvidence: 'The activated epoch equals the Worker binding; restored jobs and notebook attempts are recovery-required; the `epoch.activate` audit row.',
     expectedReply: '`activated` with `reconciledJobs`; an unknown outcome is 503.',
     nextAction: 'A replay answers `already-active`; old envelopes, claims and results are stale; the operator resumes work explicitly.',
     coverage: [
       { file: OPERATOR, title: 'JOB-10/OPS-03: activation reconciles every nonterminal generation to recovery-required, then old envelopes, claims and results are rejected' },
       { file: OPERATOR, title: 'JOB-10: activation never re-adopts an epoch this object already superseded, and always advances the watermark' },
       { file: BACKUP, title: 'JOB-10/ST-10: imported nonterminal jobs stay held until activation reconciles them to recovery-required' },
+      { file: RESEARCHER_CONTROL, title: 'recovery activation classifies a restored running reservation as uncertain, never allocates another attempt' },
       { file: OPERATOR_CLI, title: 'JOB-10 recovery activate maps a held workspace to refused (exit 2) and an unknown outcome to exit 1' },
     ],
   },
@@ -437,14 +439,16 @@ export const CLOUDFLARE_FAULT_CUTS: ReadonlyArray<CloudflareFaultCut> = [
   },
   {
     id: 'CF-MAINTENANCE-TRANSITION',
-    code: [`${WS}/operator.ts#transitionMaintenance`, `${WS}/operator.ts#classifyInFlight`, `${WS}/operator.ts#audit`, `${STORE}#transitionMaintenance`],
-    cut: 'A compare-and-set transition committed (state, version + 1, audit, and for frozen the classification of in-flight attempts) and its reply was lost.',
-    durableEvidence: 'The new state and version and its `maintenance.transition` audit row.',
+    code: [`${WS}/operator.ts#transitionMaintenance`, `${WS}/operator.ts#classifyInFlight`, `${WS}/operator.ts#classifyExplorations`, `${WS}/operator.ts#audit`, `${STORE}#transitionMaintenance`],
+    cut: 'A compare-and-set transition committed (state, version + 1, audit, and for frozen the explicit classification of in-flight jobs and notebooks) and its reply was lost, or a write after classification failed.',
+    durableEvidence: 'The new state, version and classification with its `maintenance.transition` audit row commit together; a failed transition preserves all prior state.',
     expectedReply: '`transitioned`; an unknown outcome is 503 and the CLI exits 1 with the current status.',
     nextAction: 'The same request replays as `already`; a stale view gets `conflict` with the current state and never undoes a newer decision.',
     coverage: [
       { file: OPERATOR, title: 'OPS-01: compare-and-set transitions follow the allowed graph, resolve lost replies and audit without content' },
       { file: OPERATOR, title: 'OPS-01: freezing with in-flight attempts requires explicit classification (claimed → pending, started → recovery-required)' },
+      { file: RESEARCHER_CONTROL, title: 'operator freeze refuses running notebooks until explicitly classified, without creating another paid attempt' },
+      { file: RESEARCHER_CONTROL, title: 'a failure after notebook freeze classification rolls back the answer, operator state and audit together' },
       { file: OPERATOR_CLI, title: 'OPS-01 maintenance keeps an unknown outcome or an unrecognized 5xx as exit 1 with the current status' },
     ],
   },
@@ -502,25 +506,28 @@ export const CLOUDFLARE_FAULT_CUTS: ReadonlyArray<CloudflareFaultCut> = [
   {
     id: 'CF-STUDY-EDIT',
     code: [`${WS}/studies.ts#mutateStudy`, `${STORE}#replaceStudyConfig`, `${STORE}#setStudyLinksEnabled`],
-    cut: 'An expected-revision edit or links toggle committed and its reply was lost.',
-    durableEvidence: 'The advanced revision; count and lock preserved.',
+    cut: 'An expected-revision protocol edit or reversible access toggle committed and its reply was lost.',
+    durableEvidence: 'A real protocol edit advances the revision; access toggles and structurally identical saves retain it. Count and lock are preserved, and a stale protocol edit cannot undo current access.',
     expectedReply: '`ambiguous` in the durable client; the route answers 503 `retryable`.',
-    nextAction: 'A replay against the old expected revision is a revision conflict, never a double edit; the researcher refreshes.',
+    nextAction: 'A real edit replay against its old expected revision conflicts; the same access decision or no-op save changes nothing a second time. The researcher refreshes uncertain state.',
     coverage: [
       { file: STUDIES, title: 'ST-03: replaceStudyConfig is an expected-revision compare-and-set that preserves count and lock' },
-      { file: STUDIES, title: 'ST-03: toggling links advances the revision and patches only linksEnabled' },
+      { file: STUDIES, title: 'ST-03: toggling access retains the revision and patches only linksEnabled' },
+      { file: RESEARCHER_CONTROL, title: 'stale protocol edits and no-op saves never undo a concurrent access pause or resume' },
     ],
   },
   {
     id: 'CF-STUDY-DELETE',
     code: [`${WS}/studies.ts#deleteStudy`, `${WS}/studies.ts#writeFence`, `${STORE}#deleteStudy`],
-    cut: 'The delete cascade committed (links, consent, aggregate, jobs cancelled, deletion fences, receipt) and its reply was lost; or a populated delete was refused.',
+    cut: 'The delete cascade committed (interviews, links, consent, aggregate, frozen job inputs and notebook artifacts removed, deletion fences and consumed receipts) and its reply was lost; or an unconfirmed populated delete was refused.',
     durableEvidence: 'Fences for the study and its interviews that outlive restarts; a refused delete leaves nothing behind.',
     expectedReply: '`deleted` (idempotent for an unknown id) or the refusal; a thrown RPC is `ambiguous` and the route answers 503 `retryable`.',
     nextAction: 'A replay reports deleted; late saves, deliveries and results cannot recreate anything.',
     coverage: [
       { file: STUDIES, title: 'ST-07: deletion cascades links, consent and aggregate, fences the id through restart and marks the receipt' },
       { file: STUDIES, title: 'ST-07: a refused populated delete has no side effects, so later edits and saves still succeed' },
+      { file: RESEARCHER_CONTROL, title: 'populated deletion cascades all content, consumes receipts, fences replays and preserves another study' },
+      { file: RESEARCHER_CONTROL, title: 'completion versus populated deletion cannot leave orphaned transcripts or provider inputs' },
       { file: CONSUMER, title: 'JOB-10 acknowledges a queued delivery for a deleted interview without resurrecting it' },
     ],
   },
@@ -577,7 +584,7 @@ export const CLOUDFLARE_FAULT_CUTS: ReadonlyArray<CloudflareFaultCut> = [
   {
     id: 'CF-RESEARCHER-AI-ADMISSION',
     code: [`${WS}/budget.ts#admitResearcherAiRequest`, `${WS}/budget.ts#chargeBudgetWindows`, `${STORE}#admitResearcherAiRequest`],
-    cut: 'A researcher AI budget charge (preview, aggregate or follow-up) committed and its reply was lost, before any provider call.',
+    cut: 'A researcher AI budget charge (preview, aggregate, follow-up or exploration) committed and its reply was lost, before any provider call.',
     durableEvidence: 'The charged session and workspace budget windows.',
     expectedReply: 'A thrown RPC is `unavailable` in the durable client; the route fails closed (503) before any provider call.',
     nextAction: 'A retry is charged again inside the same fixed windows, so researcher-initiated paid calls stay bounded by the window maxima.',
@@ -615,15 +622,42 @@ export const CLOUDFLARE_FAULT_CUTS: ReadonlyArray<CloudflareFaultCut> = [
     ],
   },
   {
+    id: 'CF-NOTEBOOK-RESERVATION',
+    code: [`${WS}/exploration.ts#reserve`, `${STORE}#reserveExploration`],
+    cut: 'A reservation transaction fails after inserting the answer but before its receipt commits, or the reservation commits and its RPC reply is lost.',
+    durableEvidence: 'The running answer, scoped key digest bound to its fingerprint and original answer id, and mutation sequence commit together; a failed transaction leaves none of them.',
+    expectedReply: '`unavailable` on storage failure or a thrown RPC; no provider request is initiated under uncertain reservation authority.',
+    nextAction: 'The same key and fingerprint replays the original attempt after eviction, without a new answer or budget charge. Reused intent conflicts, and deletion consumes the receipt.',
+    coverage: [
+      { file: RESEARCHER_CONTROL, title: 'a notebook receipt write failure rolls back reservation content and permits one same-key retry' },
+      { file: RESEARCHER_CONTROL, title: 'a committed notebook reservation with a lost RPC reply replays after eviction without another attempt or charge' },
+      { file: RESEARCHER_CONTROL, title: 'reservation replay returns its original attempt after refresh/eviction and rejects fingerprint reuse' },
+    ],
+  },
+  {
+    id: 'CF-NOTEBOOK-SETTLEMENT',
+    code: [`${WS}/exploration.ts#complete`, `${WS}/exploration.ts#fail`, `${WS}/exploration.ts#save`, `${STORE}#completeExploration`, `${STORE}#failExploration`],
+    cut: 'A completion or failure settlement writes the notebook answer and then its mutation-sequence update fails, or the whole settlement commits and its RPC reply is lost.',
+    durableEvidence: 'The terminal answer, actual provider execution or failure classification, and mutation sequence commit together; a failed transaction retains the running reservation unchanged.',
+    expectedReply: '`unavailable` on a storage or transport fault. An identical terminal replay is `saved`; altered intent or a conflicting terminal state is `conflict`.',
+    nextAction: 'Retry only the same settlement identity and payload, including save-only recovery of a returned answer, without any provider call. Missing/deleted source studies or interviews refuse late completion.',
+    coverage: [
+      { file: RESEARCHER_CONTROL, title: 'a mutation-sequence failure rolls back both notebook completion and failure settlement' },
+      { file: RESEARCHER_CONTROL, title: 'committed notebook settlements with lost RPC replies replay unchanged without another paid attempt' },
+      { file: RESEARCHER_CONTROL, title: 'save-only recovery persists one answer/provenance and protects it from changed settlement' },
+      { file: RESEARCHER_CONTROL, title: 'populated deletion cascades all content, consumes receipts, fences replays and preserves another study' },
+    ],
+  },
+  {
     id: 'CF-SAMPLE-WORKSPACE',
     code: [`${WS}/sample.ts#seedSampleWorkspace`, `${WS}/sample.ts#clearSampleWorkspace`, `${STORE}#seedSampleWorkspace`, `${STORE}#clearSampleWorkspace`],
     cut: 'A sample seed or clear committed and its reply was lost.',
-    durableEvidence: 'The whole fixture set as legacy records with no job, or its complete removal with jobs cancelled and fences written.',
+    durableEvidence: 'The whole fixture set as legacy records with no job, or its complete removal with frozen jobs and notebooks removed, receipts consumed and fences written.',
     expectedReply: 'A thrown seed RPC is `unavailable` and a thrown clear is `ambiguous` in the durable client; the route answers 503.',
     nextAction: 'A replayed seed refuses the collision and writes nothing; a delayed save or delivery cannot resurrect cleared fixtures.',
     coverage: [
       { file: SAMPLE, title: 'ST-07: seeding refuses any collision and writes nothing when it refuses' },
-      { file: SAMPLE, title: 'ST-07/JOB-10: clearing cascades the fixture study and interviews, cancels their jobs, fences them and allows a re-seed' },
+      { file: SAMPLE, title: 'ST-07/JOB-10: clearing cascades the fixture study and interviews, removes their frozen jobs, fences them and allows a re-seed' },
       { file: SAMPLE, title: 'ST-07: a delayed save into a cleared fixture study cannot resurrect it, even after a re-seed' },
     ],
   },
@@ -720,6 +754,9 @@ export const NON_CUT_SURFACES: Readonly<Record<string, string>> = {
   [`${WS}/reads.ts#readAggregateInputs`]: 'read-only transactionSync',
   [`${WS}/studies.ts#getStudy`]: 'read-only transactionSync',
   [`${WS}/studies.ts#listStudies`]: 'read-only transactionSync',
+  [`${WS}/exploration.ts#lookup`]: 'read-only receipt lookup transactionSync; no allocation or budget charge',
+  [`${WS}/exploration.ts#get`]: 'read-only study-authorized transactionSync',
+  [`${WS}/exploration.ts#list`]: 'read-only bounded keyset-page transactionSync',
   [`${STORE}#getStudy`]: 'read-only RPC',
   [`${STORE}#listStudies`]: 'read-only RPC',
   [`${STORE}#getParticipantLink`]: 'read-only RPC',
@@ -729,5 +766,8 @@ export const NON_CUT_SURFACES: Readonly<Record<string, string>> = {
   [`${STORE}#listInterviews`]: 'read-only RPC',
   [`${STORE}#getAggregate`]: 'read-only RPC',
   [`${STORE}#readAggregateInputs`]: 'read-only RPC',
+  [`${STORE}#lookupExploration`]: 'read-only scoped receipt lookup RPC',
+  [`${STORE}#getExploration`]: 'read-only study-authorized notebook RPC',
+  [`${STORE}#listExplorations`]: 'read-only bounded notebook-page RPC',
   [`${STORE}#operatorStatus`]: 'read-only RPC (reads the alarm, never sets it)',
 };

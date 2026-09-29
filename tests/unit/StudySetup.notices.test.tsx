@@ -43,6 +43,7 @@ function seedStore(overrides: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  sessionStorage.clear();
   searchParamsMock.value = new URLSearchParams();
 });
 

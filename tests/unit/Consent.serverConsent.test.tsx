@@ -37,7 +37,7 @@ describe('Consent server recording', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Returning to study setup');
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(navigation.push).toHaveBeenCalledExactlyOnceWith('/setup');
+    expect(navigation.push).toHaveBeenCalledExactlyOnceWith('/setup?prefill=edit&studyId=study-a');
   });
 
   it('does not reopen an abandoned interview when consent returns after unmount', async () => {

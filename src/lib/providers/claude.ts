@@ -1,3 +1,4 @@
+import type { ExplorationProviderInput, ExplorationProviderPayload } from '../exploration/types';
 import Anthropic from '@anthropic-ai/sdk';
 import {
   AIProvider,
@@ -10,6 +11,8 @@ import {
 import { gatewayFetch, type EffectiveTransport, type ProviderEndpoint } from './endpoint';
 import {
   buildAggregateSynthesisPrompt,
+  buildExplorationPrompt,
+  explorationSystemPrompt,
   buildGreetingPrompt,
   buildSynthesisPrompt,
 } from '../prompts';
@@ -33,6 +36,7 @@ import {
 } from '../providerErrors';
 import {
   validateAggregateSynthesisPayload,
+  validateExplorationPayload,
   validateFollowupStudy,
   validateInterviewResponse,
   validateSynthesisResult,
@@ -40,6 +44,7 @@ import {
 } from '../providerValidation';
 import {
   aggregateSynthesisResponseSchema,
+  explorationResponseSchema,
   followupStudyResponseSchema,
   interviewResponseSchema,
   synthesisResponseSchema,
@@ -48,6 +53,7 @@ import {
 import {
   buildFollowupPrompt,
   execution,
+  explorationPolicy,
   GREETING_DEADLINE_MS,
   INTERVIEW_DEADLINE_MS,
   providerResult,
@@ -117,11 +123,19 @@ function supportsAdaptiveThinking(model: string): boolean {
     || /^claude-(?:sonnet|opus)-4-[678](?:$|-)/.test(model);
 }
 
+function usesBetweenToolsThinking(model: string): boolean {
+  return /^claude-sonnet-5-5(?:$|-)/.test(model);
+}
+
+// SDK 0.127.0 has not yet added Sonnet 5.5's documented wire variant. Keep
+// the extension local to request construction; old models retain their types.
+type ClaudeThinkingConfig = Anthropic.ThinkingConfigParam | { type: 'between_tools' };
+
 export function getClaudeThinkingConfig(
   model: string,
   enableReasoning?: boolean,
-): Anthropic.ThinkingConfigParam | undefined {
-  if (enableReasoning === false) return { type: 'disabled' };
+): ClaudeThinkingConfig | undefined {
+  if (enableReasoning === false) return { type: usesBetweenToolsThinking(model) ? 'between_tools' : 'disabled' };
   if (supportsAdaptiveThinking(model)) return { type: 'adaptive', display: 'omitted' };
   return undefined;
 }
@@ -180,7 +194,7 @@ export class ClaudeProvider implements AIProvider {
           max_tokens: options.maxTokens,
           messages: options.messages,
           ...(options.system ? { system: options.system } : {}),
-          ...(thinking ? { thinking } : {}),
+          ...(thinking ? { thinking: thinking as Anthropic.ThinkingConfigParam } : {}),
           output_config: {
             format: {
               type: 'json_schema',
@@ -300,6 +314,27 @@ export class ClaudeProvider implements AIProvider {
     return providerResult(value, execution('claude', requestedModel, response.model, undefined, this.transport));
   }
 
+  async exploreStudy(
+    input: ExplorationProviderInput,
+    policy?: ProviderExecutionPolicy,
+  ): Promise<ProviderResult<ExplorationProviderPayload>> {
+    const attemptPolicy = explorationPolicy(policy);
+    const requestedModel = resolveSynthesisModel(input.studyConfig);
+    const response = await this.createStructured({
+      model: requestedModel,
+      messages: [{ role: 'user', content: buildExplorationPrompt(input) }],
+      system: explorationSystemPrompt,
+      schema: explorationResponseSchema,
+      enableReasoning: input.studyConfig.enableReasoning ?? true,
+      maxTokens: 12_000,
+      deadlineMs: attemptPolicy.deadlineMs,
+      operation: 'exploration',
+      policy: attemptPolicy,
+    });
+    const value = this.parseStructured(response, 'exploration', validateExplorationPayload);
+    return providerResult(value, execution('claude', requestedModel, response.model, undefined, this.transport));
+  }
+
   async generateFollowupStudy(
     parentConfig: StudyConfig,
     synthesis: AggregateSynthesisResult,
@@ -329,6 +364,7 @@ export class ClaudeProvider implements AIProvider {
   }
 
   private responseText(response: Anthropic.Message): string | undefined {
+    if (response.stop_reason === 'refusal') return undefined;
     return response.content.find((block) => block.type === 'text')?.text;
   }
 

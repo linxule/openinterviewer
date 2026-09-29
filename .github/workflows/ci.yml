@@ -175,6 +175,10 @@ jobs:
         run: npm run test:inventory:redis
         env:
           REDIS_URL: ''
+      - name: Researcher lifecycle, deletion and notebook on real Redis
+        run: npm run test:researcher:redis
+        env:
+          REDIS_URL: ''
 
   adversarial:
     runs-on: ubuntu-latest

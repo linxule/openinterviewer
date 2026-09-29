@@ -71,7 +71,31 @@ describe('researcher retry is allocated only on a covered transport (D9)', () =>
     const seeded = await seedInterview({ provider: 'claude', disclosedTransport: 'cloudflare-gateway' });
     const outcome = await workspaceStub().acceptAnalysisRetry(retryInput(seeded, { transport: 'cloudflare-gateway' }));
     expect(outcome).toMatchObject({ status: 'accepted', body: { generation: 1 } });
-    expect(await latestJobInput(seeded.interviewId)).toEqual(frozenInput(seeded.config, 1, 'cloudflare-gateway'));
+    // Legacy interviews did not record their collection protocol. Covered
+    // transport does not authorize borrowing today's research question.
+    expect(await latestJobInput(seeded.interviewId)).toEqual(frozenInput({
+      ...seeded.config, description: '',
+      researchQuestion: 'Original collection research question unavailable (legacy record).',
+      coreQuestions: [], topicAreas: [], profileSchema: [],
+    }, 1, 'cloudflare-gateway'));
+  });
+
+  it('a covered gateway retry retains original collection meanings while using the currently authorized provider', async () => {
+    const seeded = await seedInterview({ provider: 'claude', disclosedTransport: 'cloudflare-gateway' });
+    const original = { ...seeded.config };
+    await sqlRows(`UPDATE interviews SET record_json = json_set(record_json, '$.collectionConfig', json(?)) WHERE id = ?`,
+      JSON.stringify(original), seeded.interviewId);
+    const current = { ...seeded.config, researchQuestion: 'A different later research question',
+      coreQuestions: ['A later question'], topicAreas: ['later-topic'], aiProvider: 'openai' as const,
+      aiModel: PROVIDER_MODELS.openai.requested, enableReasoning: true };
+    expect(await workspaceStub().replaceStudyConfig({ studyId: seeded.studyId, expectedRevision: 1, config: current, now: Date.now() }))
+      .toMatchObject({ status: 'updated', study: { revision: 2 } });
+    expect(await workspaceStub().acceptAnalysisRetry(retryInput(seeded, {
+      input: frozenInput(current, 2), transport: 'cloudflare-gateway',
+    }))).toMatchObject({ status: 'accepted', body: { generation: 1 } });
+    expect(await latestJobInput(seeded.interviewId)).toEqual(frozenInput({
+      ...original, aiProvider: current.aiProvider, aiModel: current.aiModel, enableReasoning: true,
+    }, 2, 'cloudflare-gateway'));
   });
 
   it('a direct retry is always covered, and still freezes the interview\'s own disclosure', async () => {
