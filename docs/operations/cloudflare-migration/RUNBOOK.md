@@ -2,11 +2,11 @@
 
 Operational procedures for an OpenInterviewer standalone installation on Cloudflare. It implements the contracts in [04 — verification and cutover](04-verification-and-cutover.md) (`OPS-01`..`OPS-04`) and [03 — analysis jobs](03-analysis-jobs.md) (`JOB-10`). Installation and updates are covered by [INSTALLER.md](INSTALLER.md); the routes behind these commands are specified in [IMPLEMENTATION.md §6](IMPLEMENTATION.md#6-operator-surface-ops). The move of an existing Vercel/Upstash deployment to Cloudflare is in [TRANSITION.md](TRANSITION.md).
 
-Status: none of these procedures has run against a real Cloudflare account. The maintenance, backup, import and activation procedures have been exercised locally against synthetic data. Three have been exercised only in part:
+Live evidence is installation- and release-specific, not a guarantee about another account. Maintenance, operational backup, isolated import and activation were exercised remotely for the [v5 rollout](evidence/V5-ROLLOUT-2026-09-30.md). The earlier [live-verification record](evidence/REVIEW-PACKET.md#17-live-verification-staging-and-production-2026-09-24) covers the maintained instance's initial clean-start transition. These boundaries remain:
 
 - **Point-in-time restore.** The restore command's refusals, its route and the object restart are tested locally. The restore itself is not, because local workerd does not implement point-in-time recovery.
 - **CI promotion.** Optional, and not used by the project's maintained instance, which is deployed with the installer. The workflow has been checked only statically. No GitHub Actions run or dispatch has taken place.
-- **Production transition.** This needs production authorization.
+- **Production transition.** The maintained instance completed the clean-start path with the owner's authorization; the owner declined the late-write and post-fence inventory checks recorded in the earlier evidence. The preserve-data path and a transition on another installation remain unverified remotely and need their own authorization.
 
 Each section lists the remote rehearsal that must pass before the procedure is relied on in production.
 
