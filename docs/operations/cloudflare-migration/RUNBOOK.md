@@ -148,7 +148,7 @@ The workspace must be `frozen` or `recovery`. `--out` must be a new or empty dir
 
 The checksum detects corruption; it does not encrypt or authorize. Store the directory with protections suitable for participant data.
 
-Remote rehearsal pending: export from a staging installation with synthetic data.
+Remote evidence: the maintained staging installation exported synthetic schema-1 and schema-2 backups during the [v5 rollout](evidence/V5-ROLLOUT-2026-09-30.md). Rehearse separately before relying on this procedure for another installation.
 
 ## Import into a fresh workspace (OPS-02)
 
@@ -172,7 +172,7 @@ The Worker accepts chunks idempotently by `(family, index)` under one manifest d
 
 After activation, verify with `status`, then `maintenance open --expected-state recovery --expected-version <v>`.
 
-Remote rehearsal pending: import into a fresh staging workspace and compare counts and checksums.
+Remote evidence: the [v5 rollout](evidence/V5-ROLLOUT-2026-09-30.md) imported a synthetic schema-1 backup into a fresh isolated schema-2 staging workspace, activated recovery and compared legacy-family counts and checksums. This does not establish PITR behavior or certify another installation.
 
 
 ## Point-in-time restore (OPS-03)
