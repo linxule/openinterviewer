@@ -60,3 +60,19 @@ Describe:
 - any migration, rollout, privacy, or operational caveat.
 
 Do not include secrets, provider responses containing participant data, or production database output in issues, logs, screenshots, or pull requests.
+
+## Credit and provenance
+
+When a change builds on a contributor's fork, prototype or feedback, name and
+link the contributor and original work in the pull request, release notes and
+[ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md). Distinguish reused code from interaction
+design or product ideas.
+
+When importing code, preserve its authorship and license notices, and retain
+the original commit reference (for example, with `git cherry-pick -x`). For
+genuinely co-authored commits, use the contributor's preferred name and
+GitHub-linked email in a `Co-authored-by` trailer, following
+[GitHub's guidance](https://docs.github.com/en/pull-requests/how-tos/commit-changes/creating-a-commit-with-multiple-authors).
+
+Add missing acknowledgments in a follow-up commit rather than rewriting
+published release history just to add credit.
