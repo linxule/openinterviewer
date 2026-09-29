@@ -253,7 +253,10 @@ describe('researcher study identity and draft lifecycle', () => {
     expect(await screen.findByRole('status')).toHaveTextContent('Saving this version.');
     expect(screen.getByRole('button', { name: 'Discard draft' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Load Example' })).toBeDisabled();
-    // Browser inert prevents these gestures. Also reject already-queued DOM events.
+    expect(screen.getByLabelText('Study Name *')).toBeDisabled();
+    expect(screen.getByLabelText('Instructions to the interviewer')).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Use the Warm preset' })).toBeDisabled();
+    // Native disabled controls prevent gestures; also reject already-queued DOM events.
     fireEvent.change(screen.getByLabelText('Study Name *'), { target: { value: 'Late unsent B' } });
     fireEvent.click(screen.getByRole('button', { name: 'Use the Warm preset' }));
     expect(screen.getByLabelText('Study Name *')).toHaveValue('Submitted version B');
@@ -263,6 +266,7 @@ describe('researcher study identity and draft lifecycle', () => {
     expect(submitted).toMatchObject({ name: 'Submitted version B', interviewerInstructions: 'Submitted manner.' });
     await act(async () => { answer(json({ error: 'Synthetic save failure' }, 500)); });
     expect(await screen.findByText('Synthetic save failure')).toBeInTheDocument();
+    expect(screen.getByLabelText('Study Name *')).toBeEnabled();
     fireEvent.change(screen.getByLabelText('Study Name *'), { target: { value: 'Retry version B' } });
     expect(screen.getByLabelText('Study Name *')).toHaveValue('Retry version B');
     expect(JSON.parse(sessionStorage.getItem(researcherDraftKey('edit', B))!).config.name).toBe('Retry version B');

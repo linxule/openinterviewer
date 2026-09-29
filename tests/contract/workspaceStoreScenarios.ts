@@ -460,12 +460,22 @@ export function defineWorkspaceStoreContract(label: string, harness: WorkspaceSt
         expect(enabled.study.config.linksEnabled).toBe(true);
         expect(expectStatus(await store.getParticipantLinkById({ linkId: link.id, now: Date.now() }), 'found').link)
           .toMatchObject({ id: link.id, studyId: study.id, studyRevision: 1 });
-        expect((await store.persistCompletedInterview(input)).status).toBe('created');
+        // The save handler re-resolves the current canonical config on each
+        // request. Resuming can explicitly store linksEnabled:true without
+        // changing collection revision, so refresh only that server-owned
+        // input; the transcript, session, link and recorded consent stay intact.
+        const resumedInput = { ...input, now: Date.now(),
+          interview: { ...input.interview, collectionConfig: enabled.study.config },
+          initialAnalysis: { ...input.initialAnalysis!, studyConfig: enabled.study.config } };
+        expect((await store.persistCompletedInterview(resumedInput)).status).toBe('created');
+        expect(expectStatus(await store.getInterview(input.interview.id), 'found').interview)
+          .toMatchObject({ studyRevision: 1, consentHash: participant.consent.consentHash,
+            participantLinkId: link.id, collectionConfig: enabled.study.config });
 
         const revised = expectStatus(await store.replaceStudyConfig({ studyId: study.id,
           expectedRevision: 1, config: { ...enabled.study.config, researchQuestion: 'A changed collection protocol?' }, now: Date.now() }), 'updated');
         expect(revised.study.revision).toBe(2);
-        expect((await store.persistCompletedInterview(input)).status).toBe('revision-stale');
+        expect((await store.persistCompletedInterview(resumedInput)).status).toBe('revision-stale');
       });
 
       it('ST-01: deleting an empty study removes it, and deleting again stays deleted', async () => {

@@ -393,7 +393,7 @@ test('new, duplicate and reload-edit intents save distinct canonical studies wit
   await page.reload();
   await page.getByRole('button', { name: 'Edit Study Details', exact: true }).click();
   await expect(page.getByLabel('Study Name *', { exact: true })).toHaveValue('A separate newly created study');
-  await expect(page.getByLabel('Research Question *', { exact: true })).toHaveValue('How is the separate study configured?');
+  await expect(page.getByRole('textbox', { name: 'Research Question *', exact: true })).toHaveValue('How is the separate study configured?');
   await expectStudyRevision(page, newId, 1);
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: testInfo.outputPath('study-edit-desktop.png'), fullPage: true });
@@ -411,18 +411,35 @@ test('new, duplicate and reload-edit intents save distinct canonical studies wit
   const updatePath = `/api/studies/${newId}`;
   await page.route(url => url.pathname === updatePath, async route => {
     if (route.request().method() === 'PUT') await held;
-    await route.continue();
+    // Keep Next testmode's context route, which attaches its proxy headers.
+    // continue() here would bypass that sanctioned interception entirely.
+    await route.fallback();
   });
   const saving = page.waitForRequest(request => new URL(request.url()).pathname === updatePath && request.method() === 'PUT');
+  const savedResponse = page.waitForResponse(response => new URL(response.url()).pathname === updatePath && response.request().method() === 'PUT');
   await page.getByRole('button', { name: 'Update Study', exact: true }).click();
   const submitted = await saving;
   await expect(page.getByRole('status').filter({ hasText: 'Saving this version.' })).toBeVisible();
-  await expect(page.getByLabel('Study Name *', { exact: true }).fill('A later unsaved edit', { timeout: 500 })).rejects.toThrow();
+  const studyName = page.getByRole('textbox', { name: 'Study Name *', exact: true });
+  await expect(studyName).toBeDisabled();
+  // A normal pointer/focus/keyboard path cannot edit the captured version.
+  // fill is checked too, but its automation behavior is not evidence of loss.
+  await expect(studyName.click({ timeout: 500 })).rejects.toThrow();
+  await expect(studyName).not.toBeFocused();
+  await page.keyboard.type('A later unsaved edit');
+  await expect(studyName).toHaveValue('A separate newly created study');
+  await expect(studyName.fill('A later unsaved edit', { timeout: 500 })).rejects.toThrow();
   expect(submitted.postDataJSON().config.name).toBe('A separate newly created study');
-  await expect(page.getByLabel('Study Name *', { exact: true })).toHaveValue('A separate newly created study');
+  await expect(studyName).toHaveValue('A separate newly created study');
   release();
+  const saved = await savedResponse;
+  expect(saved.status()).toBe(200);
+  expect((await saved.json()).study).toMatchObject({ id: newId, revision: 2 });
   await expect(page).toHaveURL(new RegExp(`/studies/${newId}$`));
   await page.unrouteAll({ behavior: 'ignoreErrors' });
   await expectStudyRevision(page, newId, 2);
+  const persisted = await page.evaluate(async ids => Promise.all(ids.map(async id => (await (await fetch(`/api/studies/${id}`)).json()).study)), [newId, originalId]);
+  expect(persisted[0].config).toMatchObject({ id: newId, name: 'A separate newly created study', description: 'The version captured by this save.', researchQuestion: 'How is the separate study configured?' });
+  expect(persisted[1]).toEqual(original);
   expect(workflow.calls).toEqual([]);
 });

@@ -16,6 +16,10 @@ work and previews only an explicitly saved version.
   and discard are explicit and visible. Do not autosave live collection settings.
 - Existing dirty/unsaved preview refusal stays intact. Draft loss on navigation
   is guarded; safe local restoration may use tolerant session storage.
+- While a configuration save is pending, native disabled controls freeze the
+  submitted version and mutation actions. Study text and a separate saving
+  status remain readable; queued edit events are also refused. A failed save
+  restores editing without discarding the retained draft.
 - Dashboard requests are keyed to selection; only the newest request commits
   rows or failure state. A successful empty read is not an outage.
 - Populated StudyList deletion navigates to the selected study's Settings at
@@ -30,6 +34,9 @@ work and previews only an explicitly saved version.
 Save/preview A then create B; stored A then edit B with empty fields; reload edit
 B after prefill consumption; duplicate A without mutating A; independent draft
 restoration/discard; deferred A read after B; failure then confirmed empty read.
+Hold a real update request: pointer, focus, keyboard and fill cannot edit its
+submitted version; the stored draft remains unchanged and a failed save unlocks
+the editor.
 
 ## Gates
 
