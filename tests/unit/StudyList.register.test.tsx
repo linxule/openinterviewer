@@ -120,6 +120,18 @@ describe('StudyList register table', () => {
     expect(sessionStorage.getItem('prefillStudyConfig')).toBeNull();
   });
 
+  it.each([true, false])('calls a populated study Collected data and leaves canonical edit available (legacy flag %s)', async isLocked => {
+    const study = makeStoredStudy({ config: makeStudyConfig({ name: 'Collected study' }), interviewCount: 2, isLocked });
+    storageMock.getAllStudies.mockResolvedValue({ studies: [toStudyListItem(study)], outcome: { status: 'ok' } });
+    render(<StudyList />); await screen.findByRole('table');
+    expect(screen.getByText('Collected data')).toBeInTheDocument();
+    expect(screen.queryByText('Locked')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open actions for Collected study' }));
+    const edit = screen.getByRole('button', { name: 'Edit & Generate Link' });
+    expect(edit).toBeEnabled(); fireEvent.click(edit);
+    expect(router.push).toHaveBeenCalledWith(`/setup?prefill=edit&studyId=${study.id}`);
+  });
+
   it('ST-08: whole studies from a server that ignores ?view=summary still render their question count', async () => {
     const actual = await vi.importActual<typeof import('@/services/storageService')>('@/services/storageService');
     storageMock.getAllStudies.mockImplementation(actual.getAllStudies);

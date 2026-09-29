@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { EvidenceRef, StoredInterview, StoredStudy } from '@/types';
 import type { DatasetDescription, DatasetSelection, ExplorationAnswer, ExplorationFinding } from '@/lib/exploration/types';
-import { MAX_EXPLORATION_QUESTION_CHARS } from '@/lib/exploration/types';
+import { MAX_EXPLORATION_CORPUS_BYTES, MAX_EXPLORATION_QUESTION_CHARS, MAX_EXPLORATION_SELECTED_INTERVIEWS } from '@/lib/exploration/types';
 import { askStudyQuestion, listStudyExplorationsPage, readStudyExploration, saveStudyExploration, type ExplorationSubmission, ExplorationApiError } from '@/services/explorationApi';
 import { getInterview } from '@/services/storageService';
 import { immutableSourceContentHash } from '@/lib/exploration/dataset';
@@ -247,6 +247,7 @@ export function StudyExploration({ study, interviews, disabled, initialSelection
   return <div className="space-y-6">
     <section><h2 className="font-sans text-[22px] font-semibold text-ink-900">Explore this study</h2><p className="mt-2 max-w-measure text-[15px] text-ink-700">Ask new questions of the saved transcripts, including interviews whose individual analysis is pending or failed. Generated answers are interpretation, never additional interview evidence.</p></section>
     <StudyDatasetSelector studyId={study.id} interviews={interviews} initialSelection={selection} disabled={disabled || busy} onApply={(next, description) => { setSelection(next); setDataset(description); onDatasetApply(next, description); }} />
+    <p className="text-[13px] text-ink-500">{`Each question uses the full selected interview context, up to ${MAX_EXPLORATION_SELECTED_INTERVIEWS} interviews and ${MAX_EXPLORATION_CORPUS_BYTES / 1024} KiB. Larger datasets need a narrower selection; nothing is silently sampled.`}</p>
     <section>
       <Field label="Question for these interviews" htmlFor={questionId} hint="One submission starts at most one provider attempt using this study’s configured provider and model."><textarea rows={4} maxLength={MAX_EXPLORATION_QUESTION_CHARS} value={question} onChange={event => setQuestion(event.target.value)} disabled={disabled || busy || !!attempt?.uncertain} className="w-full resize-y" /></Field>
       <details className="mt-2 text-[13px]"><summary className="min-h-11 cursor-pointer py-2 text-action">Question starting points</summary><ul>{SUGGESTIONS.map(suggestion => <li key={suggestion} className="border-t border-ink-300"><Button variant="quiet" className="h-auto text-left" disabled={busy || !!attempt?.uncertain} onClick={() => setQuestion(suggestion)}>{suggestion}</Button></li>)}</ul></details>

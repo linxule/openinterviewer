@@ -145,6 +145,8 @@ export interface ExplorationStorePort {
 
 export const MAX_EXPLORATION_ANSWERS = 500;
 export const MAX_EXPLORATION_SELECTED_INTERVIEWS = 100;
-export const MAX_EXPLORATION_CORPUS_BYTES = 64 * 1024;
+export const MAX_EXPLORATION_CORPUS_BYTES = 256 * 1024;
+/** Corpus plus the current study context, question, continuity and system instructions. */
+export const MAX_EXPLORATION_PROMPT_BYTES = 320 * 1024;
 export const MAX_EXPLORATION_QUESTION_CHARS = 2_000;
 export const EXPLORATION_ATTEMPT_DEADLINE_MS = 120_000;

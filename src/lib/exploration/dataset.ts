@@ -9,6 +9,7 @@ import {
   type RecordedProfileFilter,
 } from './types';
 import { isDatasetSelection, isExplorationId, MAX_DATASET_RETAINED_INTERVIEWS, serializedBytes } from './validation';
+import { explorationCorpus } from './corpus';
 
 export type DatasetBuildResult =
   | { status: 'ok'; description: DatasetDescription; interviews: StoredInterview[] }
@@ -209,15 +210,9 @@ export async function loadStudyDataset(input: {
   }
 }
 
-/** Mirrors the transcript/profile/config supplied to exploration, not prior summaries. */
+/** Counts the exact serialized provider records, including expanded unknown profile labels. */
 export function explorationCorpusBytes(interviews: StoredInterview[]): number {
-  return serializedBytes(interviews.map(interview => ({
-    interviewId: interview.id,
-    studyRevision: interview.studyRevision ?? null,
-    transcript: interview.transcript,
-    participantProfile: interview.participantProfile,
-    collectionConfig: interview.collectionConfig ?? null,
-  })));
+  return serializedBytes(explorationCorpus(interviews));
 }
 
 export function assertExplorationCorpus(interviews: StoredInterview[]):

@@ -17,6 +17,10 @@ answered it, and keep the result without rewriting the participant's record.
   conversational continuity, but generated answers are not evidence.
 - Question and corpus bounds refuse oversize inputs before execution. The first
   implementation uses full selected transcripts, not retrieval or hidden sampling.
+  The corpus cap is 256 KiB of the exact provider-facing interview records, with
+  a separate 320 KiB cap for corpus plus question, continuity, study context and
+  system instructions. At most 100 interviews may be selected; byte limits can
+  refuse fewer. Byte bounds are not a guarantee of every custom model's context.
 - Provider payload is flexible answer text plus findings with supporting,
   challenging and uncertain quote claims, limitations, and no invented prevalence.
   Server resolves model-local interview positions to selected IDs and checks refs.

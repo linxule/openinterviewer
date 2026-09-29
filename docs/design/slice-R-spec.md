@@ -20,6 +20,10 @@ work and previews only an explicitly saved version.
   rows or failure state. A successful empty read is not an outage.
 - Populated StudyList deletion navigates to the selected study's Settings at
   `/studies/<id>?tab=settings#danger-zone`; no direct force-delete call.
+- A study with collected interviews or the legacy `isLocked` flag is labeled
+  "Collected data", not "Locked". Empty studies without that flag remain
+  "Editable". This is status copy, not a new editing restriction or a domain-flag
+  rename; canonical confirmed edits and their revision safeguards remain available.
 
 ## Regressions
 

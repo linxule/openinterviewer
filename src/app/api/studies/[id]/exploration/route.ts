@@ -11,10 +11,11 @@ import { currentProviderTransport, participantDisclosures, uncoveredCount, resea
 import { getResearcherArtifactSigningSecret } from '@/lib/auth';
 import { assertExplorationCorpus, datasetDigest, loadStudyDataset, normalizeDatasetSelection } from '@/lib/exploration/dataset';
 import { resolveExplorationPayload } from '@/lib/exploration/evidence';
+import { explorationPromptBytes } from '@/lib/prompts/exploration';
 import { isDatasetSelection, isExplorationAnswer, isExplorationId, isExplorationQuestion, isProviderExecution } from '@/lib/exploration/validation';
 import { signExplorationReceipt } from '@/lib/exploration/receipt';
 import { explorationContext, explorationJson, recoverInterruptedAnswer, EXPLORATION_ROUTE } from '@/lib/exploration/server';
-import { EXPLORATION_ATTEMPT_DEADLINE_MS, MAX_EXPLORATION_ANSWERS, type CompleteExplorationInput, type ExplorationAnswer } from '@/lib/exploration/types';
+import { EXPLORATION_ATTEMPT_DEADLINE_MS, MAX_EXPLORATION_ANSWERS, MAX_EXPLORATION_PROMPT_BYTES, type CompleteExplorationInput, type ExplorationAnswer } from '@/lib/exploration/types';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 180;
@@ -82,6 +83,8 @@ export async function POST(request: Request, params: Params) {
     const corpus = assertExplorationCorpus(dataset.interviews);
     if (corpus.status === 'empty') return explorationJson({ error: 'Select at least one saved interview.', code: 'EMPTY_DATASET' }, 400);
     if (corpus.status === 'too-large') return explorationJson({ error: 'The selected dataset is too large for one exploration request. Narrow the selection; no interviews have been sampled.', code: 'EXPLORATION_CORPUS_TOO_LARGE', ...corpus }, 413);
+    const providerInput = { question, studyConfig: study.config, interviews: dataset.interviews, ...(previousQuestions ? { previousQuestions } : {}) };
+    if (explorationPromptBytes(providerInput) > MAX_EXPLORATION_PROMPT_BYTES) return explorationJson({ error: 'The complete question and study context are too large for one exploration request. Narrow the selection or shorten the study context; no model request was made.', code: 'EXPLORATION_PROMPT_TOO_LARGE' }, 413);
     const transport = currentProviderTransport(context, study.config.aiProvider);
     if (transport.applies && !transport.ok) return explorationJson({ error: 'The AI transport is not configured.', code: 'PROVIDER_NOT_CONFIGURED' }, 409);
     if (transport.applies && transport.ok) {
@@ -119,7 +122,7 @@ export async function POST(request: Request, params: Params) {
     let completion: CompleteExplorationInput;
     let completed: ExplorationAnswer;
     try {
-      const generated = await provider.exploreStudy({ question, studyConfig: study.config, interviews: dataset.interviews, ...(previousQuestions ? { previousQuestions } : {}) }, { kind: 'exploration', deadlineMs: EXPLORATION_ATTEMPT_DEADLINE_MS });
+      const generated = await provider.exploreStudy(providerInput, { kind: 'exploration', deadlineMs: EXPLORATION_ATTEMPT_DEADLINE_MS });
       const execution = generated.execution;
       if (!isProviderExecution(execution) || !validateProvenance({ aiProvider: execution.provider, aiModel: execution.model, requestedAiModel: execution.requestedModel,
         ...(execution.routedProvider ? { routedProvider: execution.routedProvider } : {}), ...(execution.aiTransport ? { aiTransport: execution.aiTransport } : {}) })) throw new ProviderFailure('invalid-response', 'Invalid exploration provenance');

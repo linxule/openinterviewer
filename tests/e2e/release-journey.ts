@@ -53,8 +53,10 @@ export async function deletePopulatedStudy(page: Page, studyId: string, intervie
   expect(deletions).toEqual([]);
   await page.getByRole('checkbox', { name: 'I understand that this permanently removes the study and all its live research data.', exact: true }).check();
   if (screenshots) {
+    await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({ path: screenshots.desktop, fullPage: true });
     await page.setViewportSize({ width: 375, height: 812 });
+    await page.evaluate(() => window.scrollTo(0, 0));
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.screenshot({ path: screenshots.mobile, fullPage: true });
     await page.setViewportSize({ width: 1280, height: 720 });
@@ -66,12 +68,18 @@ export async function deletePopulatedStudy(page: Page, studyId: string, intervie
   // interview-id read also proves deletion wasn't merely hiding its list row.
   const statuses = await page.evaluate(async paths => Promise.all(paths.map(async path => (await fetch(path, { cache: 'no-store' })).status)), [
     `/api/studies/${studyId}`,
-    `/api/studies/${studyId}/aggregate`,
     `/api/studies/${studyId}/exploration`,
     `/api/interviews/export?studyId=${studyId}`,
     ...interviewIds.map(id => `/api/interviews/${id}?studyId=${studyId}`),
   ]);
   expect(statuses).toEqual(statuses.map(() => 404));
+  // The aggregate read's existing absence contract is 200 + null (including a
+  // study with no aggregate). Assert absence of content, not a new status code.
+  const aggregate = await page.evaluate(async id => {
+    const response = await fetch(`/api/studies/${id}/aggregate`, { cache: 'no-store' });
+    return { status: response.status, body: await response.json() };
+  }, studyId);
+  expect(aggregate).toEqual({ status: 200, body: { aggregate: null } });
 }
 
 export async function expectStudyRevision(page: Page, studyId: string, revision: number): Promise<void> {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { runInDurableObject, evictDurableObject } from 'cloudflare:test';
 import { testEnv, workspaceStub } from './helpers';
+import { MIGRATIONS } from '../../cloudflare/workspace/schema';
 
 describe('WorkspaceStore bootstrap (ST-09)', () => {
   it('migrates a fresh object, adopts the configured identity and epoch, and reports ready', async () => {
@@ -23,7 +24,7 @@ describe('WorkspaceStore bootstrap (ST-09)', () => {
     const rows = await runInDurableObject(stub, (_instance, state) =>
       state.storage.sql.exec('SELECT version FROM schema_migrations ORDER BY version').toArray(),
     );
-    expect(rows).toEqual([{ version: 1 }]);
+    expect(rows).toEqual(MIGRATIONS.map(migration => ({ version: migration.version })));
     expect(await stub.readiness()).toEqual({ status: 'ready', maintenance: 'open' });
   });
 

@@ -232,6 +232,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
   // action must disclose that before it is pressed (UI-CF-04).
   const recoveryInBatch = batchSelection.filter(needsAnalysisRecovery).length;
   const recoveryDisclosureId = useId();
+  const aggregateRequirementId = useId();
   const [isBatchAnalyzing, setIsBatchAnalyzing] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
   const [batchError, setBatchError] = useState<{ message: string; reason: AnalysisBatchStopReason } | null>(null);
@@ -730,6 +731,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
     );
   }
 
+  const hasCollectedData = study.isLocked || study.interviewCount > 0;
   const tabs: { id: TabType; label: string }[] = [
     { id: 'overview', label: 'Overview' },
     { id: 'explore', label: 'Explore' },
@@ -766,8 +768,8 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
             {pendingAnalysisInterviews.length > 0 ? ` · ${pendingAnalysisInterviews.length} awaiting analysis` : ''}
           </span>
           <Coordinate>Created {formatDate(study.createdAt)}</Coordinate>
-          <span className={`font-sans text-[13px] ${study.isLocked ? 'text-ink-500' : 'text-success'}`}>
-            {study.isLocked ? 'Locked' : 'Editable'}
+          <span className={`font-sans text-[13px] ${hasCollectedData ? 'text-ink-500' : 'text-success'}`}>
+            {hasCollectedData ? 'Collected data' : 'Editable'}
           </span>
         </div>
       </div>
@@ -843,6 +845,10 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                 variant="primary"
                 onClick={handleGenerateAggregateSynthesis}
                 disabled={operationPending || isGeneratingAggregate || eligibleInterviewCount < 2 || !!selectedDataset?.manifest.pendingAnalysisCount}
+                aria-describedby={[
+                  ...(eligibleInterviewCount < 2 ? [`${aggregateRequirementId}-minimum`] : []),
+                  ...(selectedDataset?.manifest.pendingAnalysisCount ? [`${aggregateRequirementId}-pending`] : []),
+                ].join(' ') || undefined}
                 className="w-full sm:w-auto"
               >
                 {isGeneratingAggregate
@@ -851,6 +857,8 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
               </Button>
             </div>
 
+            {eligibleInterviewCount < 2 && <p id={`${aggregateRequirementId}-minimum`} className="mt-3 text-[13px] text-ink-500">Need at least 2 analyzed interviews in this dataset to generate aggregate analysis.</p>}
+            {!!selectedDataset?.manifest.pendingAnalysisCount && <p id={`${aggregateRequirementId}-pending`} className="mt-3 text-[13px] text-ink-500">{`All selected interviews need complete individual analyses before generating this overview. ${selectedDataset.manifest.pendingAnalysisCount} selected interview${selectedDataset.manifest.pendingAnalysisCount === 1 ? ' still needs' : 's still need'} analysis; Explore can read their saved transcripts now.`}</p>}
             <p className="mt-3 text-[13px] text-ink-700">{selectedDataset
               ? `${selectedDataset.manifest.selectedCount} interviews are selected; ${selectedDataset.manifest.pendingAnalysisCount} need individual analysis before the overview can use this whole dataset. Exploration can read those pending and failed-analysis transcripts directly.`
               : `${currentRevisionAnalyzedCount} analyzed interviews from current revision ${study.revision} are eligible by default. ${interviews.length} interviews are retained; ${olderInterviewCount} are from other or unrecorded revisions.`}</p>
@@ -904,11 +912,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                     </p>
                   </Notice>
                 )}
-                {eligibleInterviewCount < 2 ? (
-                  <p className="mt-3 text-[13px] text-ink-500">
-                    Need at least 2 analyzed interviews in this dataset to generate aggregate analysis.
-                  </p>
-                ) : !aggregateFailure && (
+                {eligibleInterviewCount >= 2 && !selectedDataset?.manifest.pendingAnalysisCount && !aggregateFailure && (
                   <p className="mt-3 text-[13px] text-ink-500">
                     Analyze the selected, eligible interviews to generate cross-interview insights.
                   </p>

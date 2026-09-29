@@ -148,7 +148,9 @@ test('participant saves before analysis runs; background analysis completes afte
   expect(savedAnswer.scope.selectedCount).toBe(2);
   expect(savedAnswer.scope.pendingAnalysisCount).toBe(0);
   expect(await count(request, 'exploration')).toBe(1);
+  await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: testInfo.outputPath('cloudflare-study-exploration-desktop.png'), fullPage: true });
+  await page.evaluate(() => window.scrollTo(0, 0));
   await expectNoHorizontalScrollAt375(page, testInfo.outputPath('cloudflare-study-exploration-mobile.png'));
 
   // ST-08 / RT-09: the streamed researcher export is a complete archive.

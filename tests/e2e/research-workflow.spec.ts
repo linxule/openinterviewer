@@ -217,8 +217,10 @@ test('researcher creates a study; participants finalize; researcher reads, downl
   expect(answer.scope.selectedCount).toBe(2);
   expect(answer.scope.pendingAnalysisCount).toBe(0);
   expect(workflow.calls.filter(call => call.operation === 'exploration')).toHaveLength(1);
+  await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: testInfo.outputPath('study-exploration-desktop.png'), fullPage: true });
   await page.setViewportSize({ width: 375, height: 812 });
+  await page.evaluate(() => window.scrollTo(0, 0));
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('study-exploration-mobile.png'), fullPage: true });
   await page.setViewportSize({ width: 1280, height: 720 });
@@ -319,8 +321,8 @@ test('pause resumes the same link; historical failed-analysis transcripts and un
 
   await page.goto(studyUrl);
   await page.getByRole('tab', { name: 'Explore', exact: true }).click();
-  await page.getByLabel('Recorded field', { exact: true }).selectOption('experience');
-  await page.getByLabel('Match', { exact: true }).selectOption('number-between');
+  await page.getByRole('combobox', { name: 'Recorded field', exact: true }).selectOption('experience');
+  await page.getByRole('combobox', { name: 'Match', exact: true }).selectOption('number-between');
   await page.getByLabel('Minimum', { exact: true }).fill('3');
   await page.getByLabel('Maximum', { exact: true }).fill('8');
   await page.getByRole('button', { name: 'Add profile filter', exact: true }).click();
@@ -366,7 +368,7 @@ test('new, duplicate and reload-edit intents save distinct canonical studies wit
 
   await page.goto('/studies');
   const sourceRow = page.getByRole('row').filter({ has: page.getByText(original.config.name, { exact: true }) });
-  await sourceRow.getByRole('button', { name: 'Actions', exact: true }).click();
+  await sourceRow.getByRole('button', { name: `Open actions for ${original.config.name}`, exact: true }).click();
   await sourceRow.getByRole('button', { name: 'Duplicate as test study', exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`/setup\\?prefill=duplicate&studyId=${originalId}$`));
   await expect(page.getByLabel('Study Name *', { exact: true })).toHaveValue(`${original.config.name} — test`);
@@ -393,8 +395,10 @@ test('new, duplicate and reload-edit intents save distinct canonical studies wit
   await expect(page.getByLabel('Study Name *', { exact: true })).toHaveValue('A separate newly created study');
   await expect(page.getByLabel('Research Question *', { exact: true })).toHaveValue('How is the separate study configured?');
   await expectStudyRevision(page, newId, 1);
+  await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: testInfo.outputPath('study-edit-desktop.png'), fullPage: true });
   await page.setViewportSize({ width: 375, height: 812 });
+  await page.evaluate(() => window.scrollTo(0, 0));
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('study-edit-mobile.png'), fullPage: true });
   await page.setViewportSize({ width: 1280, height: 720 });

@@ -8,9 +8,8 @@
 // scenarios may share one underlying store.
 //
 // Backend differences are expressed through `harness.capabilities`. Recorded
-// Redis residuals (refused-delete guard, lifetime-bounded create-idempotency
-// index, save-admission overshoot under concurrency, sample clear leaving
-// links) are never asserted here, in either direction.
+// Redis residuals (lifetime-bounded create-idempotency index and save-admission
+// overshoot under concurrency) are never asserted here, in either direction.
 //
 // Completion precedence encoded below (the existing P1 order, which the
 // durable store reproduces): study missing, then links disabled, then study
@@ -438,23 +437,35 @@ export function defineWorkspaceStoreContract(label: string, harness: WorkspaceSt
         expect(current.config).toEqual(study.config);
       });
 
-      it('ST-01: toggling participant links advances the revision each time', async () => {
+      it('ST-01: pause/resume preserve participant authority while real protocol edits advance revision', async () => {
         const store = await harness.createStore();
         const study = await createStudy(store);
+        const { link } = await createLink(store, study);
+        const participant = await consentedParticipant(store, study);
+        const input = completion(study, participant, link.id);
 
         const disabled = expectStatus(
           await store.setStudyLinksEnabled({ studyId: study.id, enabled: false, now: Date.now() }),
           'updated',
         );
-        expect(disabled.study.revision).toBe(2);
+        expect(disabled.study.revision).toBe(1);
         expect(disabled.study.config.linksEnabled).toBe(false);
+        expect((await store.persistCompletedInterview(input)).status).toBe('links-disabled');
 
         const enabled = expectStatus(
           await store.setStudyLinksEnabled({ studyId: study.id, enabled: true, now: Date.now() }),
           'updated',
         );
-        expect(enabled.study.revision).toBe(3);
+        expect(enabled.study.revision).toBe(1);
         expect(enabled.study.config.linksEnabled).toBe(true);
+        expect(expectStatus(await store.getParticipantLinkById({ linkId: link.id, now: Date.now() }), 'found').link)
+          .toMatchObject({ id: link.id, studyId: study.id, studyRevision: 1 });
+        expect((await store.persistCompletedInterview(input)).status).toBe('created');
+
+        const revised = expectStatus(await store.replaceStudyConfig({ studyId: study.id,
+          expectedRevision: 1, config: { ...enabled.study.config, researchQuestion: 'A changed collection protocol?' }, now: Date.now() }), 'updated');
+        expect(revised.study.revision).toBe(2);
+        expect((await store.persistCompletedInterview(input)).status).toBe('revision-stale');
       });
 
       it('ST-01: deleting an empty study removes it, and deleting again stays deleted', async () => {

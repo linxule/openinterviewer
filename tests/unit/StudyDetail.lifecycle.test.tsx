@@ -57,12 +57,24 @@ describe('study-local lifecycle controls', () => {
   it('targets canonical edit and a study-only checked export', async () => {
     storage.exportAllInterviewsChecked.mockResolvedValue({ status: 'too-large', error: 'This study exceeds the archive limit.' });
     renderStudy(); await screen.findByRole('heading', { name: 'Retained research' });
+    expect(screen.getByText('Collected data')).toBeInTheDocument();
+    expect(screen.queryByText('Locked')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('tab', { name: 'Study settings' }));
     fireEvent.click(screen.getByRole('button', { name: 'Edit study' }));
     expect(router.push).toHaveBeenCalledWith(`/setup?prefill=edit&studyId=${study.id}`);
     fireEvent.click(screen.getByRole('button', { name: 'Export this study' }));
     await screen.findByText('This study exceeds the archive limit.');
     expect(storage.exportAllInterviewsChecked).toHaveBeenCalledWith(study.id);
+  });
+
+  it('labels the legacy locked flag as collected data while keeping canonical editing available', async () => {
+    storage.readStudy.mockResolvedValue(ok({ ...study, isLocked: true }));
+    renderStudy(); await screen.findByText('Collected data');
+    expect(screen.queryByText('Locked')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Study settings' }));
+    const edit = screen.getByRole('button', { name: 'Edit study' });
+    expect(edit).toBeEnabled(); fireEvent.click(edit);
+    expect(router.push).toHaveBeenCalledWith(`/setup?prefill=edit&studyId=${study.id}`);
   });
 
   it('names the real default aggregate subset rather than claiming every retained interview', async () => {

@@ -1,4 +1,5 @@
 import type { ExplorationProviderInput } from '../exploration/types';
+import { explorationCorpus } from '../exploration/corpus';
 
 /** Kept separate from source data in every native and Gateway adapter. */
 export const explorationSystemPrompt = `You help a researcher explore selected qualitative interviews.
@@ -44,45 +45,7 @@ Answer in the language of the researcher's question.`;
  * owns admission bounds and refuses oversize corpora rather than truncating.
  */
 export function buildExplorationPrompt(input: ExplorationProviderInput): string {
-  const interviews = input.interviews.map((interview, index) => {
-    const original = interview.collectionConfig;
-    const fields = interview.participantProfile.fields;
-    const definitions = original?.profileSchema ?? [];
-    const profile = definitions.map((definition) => {
-      const field = fields.find((value) => value.fieldId === definition.id);
-      return {
-        fieldId: definition.id,
-        originalLabel: definition.label,
-        originalDefinition: definition.extractionHint,
-        status: field?.status ?? 'pending',
-        value: field?.value ?? null,
-      };
-    });
-    for (const field of fields) {
-      if (definitions.some((definition) => definition.id === field.fieldId)) continue;
-      profile.push({
-        fieldId: field.fieldId,
-        originalLabel: 'UNKNOWN ORIGINAL FIELD DEFINITION',
-        originalDefinition: 'Unknown; do not infer a meaning from the field id or current study schema.',
-        status: field.status,
-        value: field.value,
-      });
-    }
-    return {
-      interviewIndex: index + 1,
-      studyRevision: interview.studyRevision ?? null,
-      originalProtocol: original
-        ? { researchQuestion: original.researchQuestion, coreQuestions: original.coreQuestions, topicAreas: original.topicAreas }
-        : null,
-      originalProfileDefinitionsKnown: Boolean(original),
-      recordedProfile: profile,
-      turns: interview.transcript.map((message, turn) => ({
-        turnIndex: turn + 1,
-        speaker: message.role === 'user' ? 'PARTICIPANT' : message.role === 'ai' ? 'INTERVIEWER' : 'SYSTEM EVENT',
-        content: message.content,
-      })),
-    };
-  });
+  const interviews = explorationCorpus(input.interviews);
   return JSON.stringify({
     currentQuestion: input.question,
     studyContextNotEvidence: {
@@ -93,4 +56,8 @@ export function buildExplorationPrompt(input: ExplorationProviderInput): string 
     selectedInterviewCount: interviews.length,
     interviewRecords: interviews,
   });
+}
+
+export function explorationPromptBytes(input: ExplorationProviderInput): number {
+  return new TextEncoder().encode(explorationSystemPrompt + buildExplorationPrompt(input)).byteLength;
 }

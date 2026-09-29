@@ -6,6 +6,7 @@ import type { ResearcherContext } from '@/lib/researcherContext';
 import type { WorkspaceStorePort } from '@/lib/storage/types';
 import type { RedisPort } from '@/lib/redisPort';
 import type { CompleteExplorationInput, ExplorationAnswer, ExplorationReservation, FailExplorationInput } from '@/lib/exploration/types';
+import { MAX_EXPLORATION_CORPUS_BYTES } from '@/lib/exploration/types';
 import { ProviderFailure, ProviderTimeoutError } from '@/lib/providerErrors';
 
 const authorized = vi.hoisted(() => vi.fn());
@@ -135,6 +136,18 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
 describe('durable exploration request boundary', () => {
+  it('refuses oversized complete context before reserving, budgeting or selecting a provider', async () => {
+    study.config = { ...study.config, researchQuestion: 'Oversized synthetic study context. '.repeat(12_000) };
+    const response = await ask();
+    expect(response.status).toBe(413);
+    expect(await response.json()).toMatchObject({ code: 'EXPLORATION_PROMPT_TOO_LARGE' });
+    expect(reserve).not.toHaveBeenCalled();
+    expect(hostedBudget).not.toHaveBeenCalled();
+    expect(researcherBudget).not.toHaveBeenCalled();
+    expect(getInterviewProvider).not.toHaveBeenCalled();
+    expect(exploreStudy).not.toHaveBeenCalled();
+  });
+
   it('reserves before budgeting/provider, explores old unanalysed raw transcripts, and refreshes the saved artifact', async () => {
     const response = await ask();
     expect(response.status).toBe(200);
@@ -178,7 +191,7 @@ describe('durable exploration request boundary', () => {
 
   it('replays the saved attempt before newly incompatible/oversized sources or unavailable provider configuration', async () => {
     const first = await (await ask()).json();
-    interviews[0].transcript[1].content = 'x'.repeat(65_536);
+    interviews[0].transcript[1].content = 'x'.repeat(MAX_EXPLORATION_CORPUS_BYTES);
     interviews[0].providerCommitment = 'fixed'; interviews[0].conductedByProvider = 'openai'; interviews[0].conductedByModel = 'gpt-5.6-terra';
     getInterviewProvider.mockImplementation(() => { throw new Error('Synthetic missing provider key'); });
     vi.stubEnv('SESSION_SECRET', '');
@@ -294,7 +307,7 @@ describe('preflight fails closed before paid admission', () => {
   });
 
   it('refuses an oversized complete corpus rather than sampling, before charging or reserving', async () => {
-    interviews[0].transcript[1].content = 'x'.repeat(65_536);
+    interviews[0].transcript[1].content = 'x'.repeat(MAX_EXPLORATION_CORPUS_BYTES);
     const response = await ask();
     expect(response.status).toBe(413);
     expect((await response.json()).code).toBe('EXPLORATION_CORPUS_TOO_LARGE');
@@ -308,7 +321,7 @@ describe('preflight fails closed before paid admission', () => {
   });
 
   it('describes an oversized selection so it can be narrowed without starting an attempt', async () => {
-    interviews[0].transcript[1].content = 'x'.repeat(65_536);
+    interviews[0].transcript[1].content = 'x'.repeat(MAX_EXPLORATION_CORPUS_BYTES);
     const response = await describeDataset(new Request('http://localhost', { method: 'POST', body: JSON.stringify({ selection: {} }) }), params());
     expect(response.status).toBe(200);
     expect((await response.json()).dataset.manifest.selectedCount).toBe(1);

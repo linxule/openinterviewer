@@ -326,6 +326,7 @@ export default function StudyList() {
               {studies.map((study) => {
                 const pending = isPendingStudyStub(study);
                 const name = pending ? 'Study change pending' : study.config.name;
+                const hasCollectedData = !pending && (study.isLocked || study.interviewCount > 0);
                 return (
                   <tr
                     key={study.id}
@@ -363,8 +364,8 @@ export default function StudyList() {
                       {pending ? (
                         <span className="text-error">Reconciliation pending</span>
                       ) : (
-                        <span className={study.isLocked ? 'text-ink-500' : 'text-success'}>
-                          {study.isLocked ? 'Locked' : 'Editable'}
+                        <span className={hasCollectedData ? 'text-ink-500' : 'text-success'}>
+                          {hasCollectedData ? 'Collected data' : 'Editable'}
                         </span>
                       )}
                     </td>

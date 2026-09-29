@@ -2,7 +2,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { makeStoredInterview, makeStudyConfig } from '../fixtures/models';
 import type { StoredInterview } from '@/types';
-import { assertExplorationCorpus, buildDatasetDescription, immutableSourceContentHash, loadStudyDataset, matchRecordedProfileFilter } from '@/lib/exploration/dataset';
+import { assertExplorationCorpus, buildDatasetDescription, explorationCorpusBytes, immutableSourceContentHash, loadStudyDataset, matchRecordedProfileFilter } from '@/lib/exploration/dataset';
+import { buildExplorationPrompt } from '@/lib/prompts/exploration';
+import { MAX_EXPLORATION_CORPUS_BYTES } from '@/lib/exploration/types';
 
 const config = makeStudyConfig({ id: 'study-a', createdAt: 1, profileSchema: [
   { id: 'age', label: 'Age in years', extractionHint: 'Recorded age in years', required: false },
@@ -103,9 +105,36 @@ describe('explicit exploration dataset', () => {
     const large = Array.from({ length: 101 }, (_, index) => record(`record-${index}`, '29'));
     expect((await buildDatasetDescription(config.id, large)).status).toBe('ok');
     expect(assertExplorationCorpus(large)).toMatchObject({ status: 'too-large', reason: 'interviews', actual: 101 });
-    const long = { ...record('long', '29'), transcript: [{ id: 't-1', role: 'user' as const, content: '汉'.repeat(25_000), timestamp: 1 }] };
+    const long = { ...record('long', '29'), transcript: [{ id: 't-1', role: 'user' as const, content: '汉'.repeat(Math.floor(MAX_EXPLORATION_CORPUS_BYTES / 3) + 1), timestamp: 1 }] };
     expect(assertExplorationCorpus([long])).toMatchObject({ status: 'too-large', reason: 'bytes' });
     expect(assertExplorationCorpus([])).toEqual({ status: 'empty' });
+  });
+
+  it('admits a whole small study and counts the exact rendered UTF-8 corpus, not unused stored metadata', () => {
+    const interviews = Array.from({ length: 20 }, (_, index) => ({ ...record(`interview-${index}`, '29'),
+      collectionConfig: { ...config, consentText: 'Not supplied as evidence. '.repeat(4_000) },
+      transcript: Array.from({ length: 20 }, (_, turn) => ({ id: `turn-${turn}`, role: 'user' as const,
+        content: 'Synthetic recorded experience with its full context. '.repeat(6), timestamp: turn + 0.5 })),
+    }));
+    const rendered = JSON.parse(buildExplorationPrompt({ question: 'Compare these records', studyConfig: config, interviews }));
+    const exactBytes = new TextEncoder().encode(JSON.stringify(rendered.interviewRecords)).byteLength;
+    expect(exactBytes).toBeGreaterThan(64 * 1024);
+    expect(exactBytes).toBeLessThan(MAX_EXPLORATION_CORPUS_BYTES);
+    expect(explorationCorpusBytes(interviews)).toBe(exactBytes);
+    expect(assertExplorationCorpus(interviews)).toEqual({ status: 'ok', bytes: exactBytes });
+    expect(rendered.interviewRecords).toHaveLength(20);
+    expect(rendered.interviewRecords[19].turns).toHaveLength(20);
+  });
+
+  it('includes unknown original profile-definition expansion and JSON escaping in byte admission', () => {
+    const legacy = { ...record('legacy', '29'), collectionConfig: undefined,
+      participantProfile: { ...record('legacy', '29').participantProfile,
+        fields: Array.from({ length: 20 }, (_, index) => ({ fieldId: `old-${index}`, value: '汉\n"quoted"', status: 'extracted' as const })),
+      },
+    };
+    const rendered = JSON.parse(buildExplorationPrompt({ question: 'Read historical data', studyConfig: config, interviews: [legacy] }));
+    expect(explorationCorpusBytes([legacy])).toBe(new TextEncoder().encode(JSON.stringify(rendered.interviewRecords)).byteLength);
+    expect(rendered.interviewRecords[0].recordedProfile[0].originalLabel).toBe('UNKNOWN ORIGINAL FIELD DEFINITION');
   });
 
   it('uses only a bounded study-scoped portable read and propagates oversize/storage failures', async () => {
