@@ -2,10 +2,10 @@
 
 This runbook moves a standalone Node/Vercel deployment, whose research records live in one Upstash Redis database, to a Cloudflare standalone installation. It implements `OPS-04` and the old-writer part of `OPS-01` in [04 — verification and cutover](04-verification-and-cutover.md). The package [README](README.md) asks for both a clean-start and a preserve-data runbook; both are here. The Cloudflare side uses [INSTALLER.md](INSTALLER.md) and [RUNBOOK.md](RUNBOOK.md).
 
-Status: prepared, not executed.
+The maintained instance executed the clean-start path on 24 September 2026; see [the live-verification record](evidence/REVIEW-PACKET.md#17-live-verification-staging-and-production-2026-09-24), including the checks the owner declined. That is evidence for one installation, not remote certification of the preserve-data path or another account.
 
 - Every step that reads or changes production data or resources needs explicit authorization for that step. This covers the inventory, the drain, the credential reset, the installation and the switch.
-- The clean-start path can run on the code in this branch.
+- The clean-start path is supported by the current installer.
 - The preserve-data path needs an Upstash importer that has not been built.
 - The inventory tool is tested only against a local disposable `redis-server`, not against Upstash.
 

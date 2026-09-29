@@ -65,6 +65,11 @@
     "tailwind-merge": "^2.6.1",
     "zustand": "^5.0.15"
   },
+  "overrides": {
+    "miniflare": {
+      "undici": "7.29.1"
+    }
+  },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.2.3",
     "@opennextjs/cloudflare": "1.20.6",

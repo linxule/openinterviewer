@@ -319,7 +319,13 @@ Both defects are present in v3.0.0 (the same adapter code); the mocked suites co
 
 **Follow-ups.** The installer has no admin-password rotation (a first production password was exposed in a chat transcript before launch and was rotated by `wrangler secret put` followed by a checked `update`); the CI promotion for the maintained instance is not configured (production is installer-owned for now); issue #52.
 
+## 18. Version 5 rollout (30 September 2026, Europe/Paris)
+
+The [dated v5 rollout record](V5-ROLLOUT-2026-09-30.md) adds live operational backup/import/activation evidence, bounded GPT-6.1 Sol and Claude Sonnet 5.5 gateway acceptance, notebook export and deletion checks, and the staging-first production upgrade. It distinguishes these completed gates from the remaining PITR and long-idle alarm drills. It does not retrospectively certify every item in the original requirement map.
+
 ## Appendix A. Requirement-to-evidence map
+
+This is the original audit matrix. For subsequent remote evidence and its limits, read sections 17 and 18 above; a historical `remote-gate` label here does not mean that none of its subchecks has since run.
 
 Status: `met-local` implemented and proven by local tests; `remote-gate` implemented, acceptance needs a live account, provider or production data; `deviation` implemented differently or not delivered, recorded in DEVIATIONS.md; `partial` acceptance evidence still incomplete locally.
 
