@@ -499,6 +499,14 @@ tests/                   Unit, integration, Workers, artifact and browser regres
 wrangler.jsonc           Cloudflare Worker template (installations are generated from it)
 ```
 
+## Acknowledgments
+
+Thank you to [@8888oukaouka-spec](https://github.com/8888oukaouka-spec) for the
+[openinterviewerver02 fork](https://github.com/8888oukaouka-spec/openinterviewerver02),
+its study-deletion prototype and historical-analysis change, and the research
+workflow proposal that helped shape v5's evidence exploration. See
+[ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md) for the contributions and source commits.
+
 ## License
 
 MIT
