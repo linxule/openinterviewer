@@ -1,6 +1,12 @@
 # Claude implementation handoff
 
-Paste the assignment below into Claude while working in `/Users/xulelin/Documents/Apps/openinterviewer`.
+Historical assignment from 23 September 2026. The implementation and maintained
+rollout have since been completed for the recorded scope. Do not paste this as
+a fresh instruction to rebuild or reprovision the installation. Start with the
+[30 September status and remaining-work list](evidence/V5-STATUS-2026-09-30.md),
+then inspect current source and evidence before assigning a bounded follow-up.
+
+The original assignment is retained below for traceability.
 
 ---
 

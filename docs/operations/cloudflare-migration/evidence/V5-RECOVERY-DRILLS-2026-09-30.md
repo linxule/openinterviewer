@@ -6,6 +6,11 @@ Observed on 30 September 2026 (Europe/Paris; UTC timestamps span 29–30 Septemb
 
 Only the previously provisioned, isolated synthetic restore installation was changed. It served the checked `fde1bbaef1f73b1e3e8409e59e78967b7373238f` v5.0.0 artifact, schema 2, with a separate Worker, Durable Object and analysis Queue. Its initial corpus contained 18 synthetic studies and 15 synthetic interviews, with no active jobs. Production and maintained staging were not mutated.
 
+The initial corpus was imported from the maintainer's own 24 September staging
+acceptance tests, not from production or another user's installation. Its 15
+historical jobs were eight complete and seven failed. These ordinary-workflow
+synthetic records are distinct from the designated Load Sample seed.
+
 Delivery on **that installation's analysis Queue only** was paused and the pause read back before saving one small synthetic participant transcript through the real link exchange, consent and save handlers. Greeting, interview-turn, preview, synthesis, exploration and retry endpoints were not called. A large transcript is not a spending guard: queued execution passes it to the provider. Paused delivery was the guard until verified recovery reconciliation made the job non-executable.
 
 Credentials stayed in process memory and request headers; neither credentials nor raw tail output were persisted. Protected operational backups contain only this synthetic installation's data and remain outside Git. The tail receipt retains event types, timestamps, outcomes and allowlisted content-free application events.

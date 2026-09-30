@@ -321,7 +321,7 @@ Both defects are present in v3.0.0 (the same adapter code); the mocked suites co
 
 ## 18. Version 5 rollout (30 September 2026, Europe/Paris)
 
-The [dated v5 rollout record](V5-ROLLOUT-2026-09-30.md) adds live operational backup/import/activation evidence, bounded GPT-6.1 Sol and Claude Sonnet 5.5 gateway acceptance, notebook export and deletion checks, and the staging-first production upgrade. It distinguishes these completed gates from the remaining PITR and long-idle alarm drills. It does not retrospectively certify every item in the original requirement map.
+The [dated v5 rollout record](V5-ROLLOUT-2026-09-30.md) adds live operational backup/import/activation evidence, bounded GPT-6.1 Sol and Claude Sonnet 5.5 gateway acceptance, notebook export and deletion checks, and the staging-first production upgrade. PITR and long-idle alarm drills were not part of that original rollout; the subsequent results and remaining limits are in section 19 and the [dated status](V5-STATUS-2026-09-30.md). This does not retrospectively certify every item in the original requirement map.
 
 ## 19. Isolated v5 recovery drills (30 September 2026)
 
