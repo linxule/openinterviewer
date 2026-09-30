@@ -4,7 +4,7 @@ Operational procedures for an OpenInterviewer standalone installation on Cloudfl
 
 Live evidence is installation- and release-specific, not a guarantee about another account. Maintenance, operational backup, isolated import and activation were exercised remotely for the [v5 rollout](evidence/V5-ROLLOUT-2026-09-30.md). The earlier [live-verification record](evidence/REVIEW-PACKET.md#17-live-verification-staging-and-production-2026-09-24) covers the maintained instance's initial clean-start transition. These boundaries remain:
 
-- **Point-in-time restore.** The restore command's refusals, its route and the object restart are tested locally. The restore itself is not, because local workerd does not implement point-in-time recovery.
+- **Point-in-time restore and unattended alarms.** The [isolated v5 recovery drills](evidence/V5-RECOVERY-DRILLS-2026-09-30.md) exercised real timestamp resolution, repeat resolution, restore, undo, epoch activation, stale Queue rejection and watchdog redispatch after 286 seconds without object-directed requests. Isolate eviction was not directly observed; claimed/started provider attempts, late results and lost restore replies were not rehearsed remotely. Local workerd still does not implement PITR.
 - **CI promotion.** Optional, and not used by the project's maintained instance, which is deployed with the installer. The workflow has been checked only statically. No GitHub Actions run or dispatch has taken place.
 - **Production transition.** The maintained instance completed the clean-start path with the owner's authorization; the owner declined the late-write and post-fence inventory checks recorded in the earlier evidence. The preserve-data path and a transition on another installation remain unverified remotely and need their own authorization.
 
@@ -121,6 +121,19 @@ npm run operator:cloudflare -- maintenance frozen --expected-state draining --ex
 npm run operator:cloudflare -- maintenance open --expected-state frozen --expected-version <v> --origin …
 ```
 
+## Unattended alarm rehearsal without provider calls
+
+Use an authorized isolated synthetic installation, never production. [Queue pause](https://developers.cloudflare.com/queues/configuration/pause-purge/) is the spending guard; transcript size is not. A paused Queue still accepts and retains messages.
+
+1. Pause delivery on **only its analysis Queue** with `node_modules/.bin/wrangler queues pause-delivery <queue>` and confirm `settings.delivery_paused: true` through the Cloudflare API. Establish the target's identity, matching epoch and zero active jobs.
+2. Open the workspace. Through existing handlers, create a tiny synthetic study, participant link and consent, then save a small transcript. Retain the drill-owned study ID and the **server-returned** interview ID. Do not invoke greeting, interview, preview, synthesis, exploration or retry endpoints.
+3. Observe initial dispatch and the approximately five-second housekeeping alarm. Capture final operator status: pending job, no claimed/started jobs, and scheduled alarm timestamp **T**.
+4. Stop **all object-directed requests**, including browser polling and sign-in. Keep platform tail subscribed, without persisting raw request metadata. Wait for a successful alarm event whose `event.scheduledTime` matches **T** before making another request. Analysis-status polling can repair a missing alarm and invalidates this proof; operator status is write-free.
+5. With fresh state/version comparisons, transition `open → draining → frozen`. Export operational backup and inspect only the drill job: pending/sent, `dispatch_attempts >= 2`, `started_at: null`. Operator status does not expose dispatch counters.
+6. Keep delivery paused. Reopen, delete **only** the drill-owned study with its current revision, and verify its study/interview/job are absent. Return to the intended held state, then `node_modules/.bin/wrangler queues resume-delivery <queue>` and confirm the pause is cleared. Do not resume with an executable pending job. An integrated PITR drill may instead resume after verified activation reconciles it to recovery-required; `already-active` alone is not reconciliation evidence.
+
+Record the actual quiet interval and final Queue/workspace state. This proves alarm-driven redispatch after inactivity, not directly observed isolate eviction. The [dated remote evidence](evidence/V5-RECOVERY-DRILLS-2026-09-30.md) used the integrated recovery variant and retained the isolated infrastructure.
+
 ## Operational backup (OPS-02)
 
 Researcher ZIP exports are a product feature, not a backup. The operational backup covers every authoritative table (studies, immutable interviews and fingerprints, analysis and jobs, aggregates, participant link digests, consents, unexpired receipts and budgets, deletion fences, workspace metadata). It contains no secrets, since none are stored in the workspace. The sign-in budget and the operator audit log are per-installation state and are not backed up.
@@ -185,14 +198,16 @@ Durable Object point-in-time recovery returns the workspace object's SQLite stor
 
 Cloudflare documents point-in-time recovery only as these [storage methods](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/), not as a wrangler command. A restore rewinds every table in the object, including sign-in attempts and the operator audit log. It does not rewind Queue deliveries, provider calls or the Worker's secrets.
 
+**A timestamp is approximate.** `getBookmarkForTime` resolves approximately the requested time, not an exact transaction checkpoint. In the [remote v5 drill](evidence/V5-RECOVERY-DRILLS-2026-09-30.md), a target after a successful save resolved to storage before that save. Verify the intended studies/interviews/job states after restore, before activation; do not infer them from `--at`. Keep both returned bookmarks. Undo by bookmark restored the recorded pre-restore export exactly in that drill.
+
 | Part | Evidence |
 | --- | --- |
 | Refusals before any point-in-time call; reply before restart | Local: `tests/workers/operator.test.ts` › `point-in-time restore entry point (OPS-03)`, with the two storage methods stubbed |
 | Route authority and outcomes | Local: `tests/unit/api.operator.routes.test.ts` › `OPS-03 POST /api/operator/recovery/restore` |
 | CLI parsing, request bodies and exit codes | Local: `tests/setup-cloudflare/operator.test.mjs` › `OPS-03 recovery restore …` |
 | Epoch-mismatch hold, activation and reconciliation | Local: `tests/workers/operator.test.ts` › `recovery-epoch activation (JOB-10, OPS-03)` |
-| The platform resolving a time, restoring storage and reopening the object on it; undo | **Remote only.** Local workerd refuses both calls: it does not implement point-in-time recovery |
-| `wrangler secret put` and `wrangler rollback` around the epoch secret | **Remote only.** Read from the wrangler 4.136.3 source and the Cloudflare documentation, not run |
+| The platform resolving a time, restoring storage and reopening the object on it; undo | [Isolated v5 remote drill](evidence/V5-RECOVERY-DRILLS-2026-09-30.md): both returned bookmarks, repeat-time resolution, two exact-checksum undos and restored pending-job fencing. Local workerd still refuses PITR |
+| `wrangler secret put` and `wrangler rollback` around the epoch secret | Epoch rotation, mismatch hold and checked-installer redeploy exercised in the [isolated v5 drill](evidence/V5-RECOVERY-DRILLS-2026-09-30.md). **Rollback was not run**; its behavior remains source/documentation-derived |
 
 ### Procedure
 

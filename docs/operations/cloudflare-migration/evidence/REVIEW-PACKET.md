@@ -323,9 +323,13 @@ Both defects are present in v3.0.0 (the same adapter code); the mocked suites co
 
 The [dated v5 rollout record](V5-ROLLOUT-2026-09-30.md) adds live operational backup/import/activation evidence, bounded GPT-6.1 Sol and Claude Sonnet 5.5 gateway acceptance, notebook export and deletion checks, and the staging-first production upgrade. It distinguishes these completed gates from the remaining PITR and long-idle alarm drills. It does not retrospectively certify every item in the original requirement map.
 
+## 19. Isolated v5 recovery drills (30 September 2026)
+
+The [dated recovery record](V5-RECOVERY-DRILLS-2026-09-30.md) adds unattended watchdog redispatch after 286 seconds without object-directed requests, real PITR timestamp resolution and repeat resolution, two exact-checksum undos, epoch-mismatch write/alarm holds, pending-job reconciliation, stale Queue rejection and a checked-installer redeploy. No provider calls or production mutations were made. Timestamp recovery proved approximate; the runbook now requires inspecting restored records rather than assuming the requested time identifies an exact transaction. Isolate eviction, late provider results, claimed/started paid attempts and lost replies were not directly rehearsed remotely.
+
 ## Appendix A. Requirement-to-evidence map
 
-This is the original audit matrix. For subsequent remote evidence and its limits, read sections 17 and 18 above; a historical `remote-gate` label here does not mean that none of its subchecks has since run.
+This is the original audit matrix. For subsequent remote evidence and its limits, read sections 17–19 above; a historical `remote-gate` label here does not mean that none of its subchecks has since run.
 
 Status: `met-local` implemented and proven by local tests; `remote-gate` implemented, acceptance needs a live account, provider or production data; `deviation` implemented differently or not delivered, recorded in DEVIATIONS.md; `partial` acceptance evidence still incomplete locally.
 
