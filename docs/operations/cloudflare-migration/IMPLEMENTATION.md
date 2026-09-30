@@ -1,6 +1,6 @@
 # Cloudflare migration: implementation design
 
-Status: implementation record for branch `feat/cloudflare-standalone`. This document records how the specification package in this directory is realized in code, which decisions the specification left open, and every deliberate deviation. The specifications remain the behavioral contract; where this document is more precise it records an implementation decision, not a change of requirement. Evidence lives in [`evidence/`](evidence/).
+Status: implementation record, originally developed on branch `feat/cloudflare-standalone` and subsequently released. This document records how the specification package in this directory is realized in code, which decisions the specification left open, and every deliberate deviation. The specifications remain the behavioral contract; where this document is more precise it records an implementation decision, not a change of requirement. Evidence lives in [`evidence/`](evidence/); the [dated v5 status](evidence/V5-STATUS-2026-09-30.md) separates release observations from remaining verification.
 
 ## 1. Module map and dependency direction
 
@@ -24,8 +24,11 @@ src/lib/storage/            backend-neutral domain boundary
                             list, else 413)
   resolve.ts                one factory choosing the store from resolved capabilities
   analysisProtocol.ts       job states, message envelope, public projection, constants (portable)
-src/lib/backup/format.ts    operational backup format v1: families, chunk/manifest/trailer records, validator
+src/lib/backup/format.ts    operational backup format v2, including notebooks; accepts legacy v1/schema-1:
+                            families, chunk/manifest/trailer records, validator
                             (portable; the operator CLI loads it too)
+src/lib/exploration/        exact dataset/source manifest, durable attempt and signed save-only receipt protocol
+cloudflare/workspace/exploration.ts   transactional notebook reservation, settlement and keyset pagination
 src/lib/export/             researcher ZIP export: entry builders shared by both targets (interviewExport.ts)
                             and the streaming ZIP writer (zipStream.ts)
 src/app/api/interviews/export/route.ts
@@ -124,7 +127,7 @@ Port operations keep the existing result unions and HTTP mappings. Composite ope
 
 ### Durable Object schema (logical)
 
-`workspace_meta` (singleton), `schema_migrations`, `studies`, `interviews`, `analysis`, `analysis_jobs`, `aggregates`, `participant_links`, `consents`, `idempotency_receipts`, `budget_windows`, `budget_members`, `deletion_fences`, `operator_audit`, `login_attempts`. All timestamps are integer epoch ms; JSON columns store the exact text written; SQL uses bound parameters only. `operator_audit` and `login_attempts` are per-object operational state: they are not backup families and do not advance the research mutation sequence. Export snapshots and the Queue consumer-contact marker live in the object's synchronous KV storage, outside SQL and backups.
+`workspace_meta` (singleton), `schema_migrations`, `studies`, `interviews`, `analysis`, `analysis_jobs`, `aggregates`, `exploration_answers`, `participant_links`, `consents`, `idempotency_receipts`, `budget_windows`, `budget_members`, `deletion_fences`, `operator_audit`, `login_attempts`. All timestamps are integer epoch ms; JSON columns store the exact text written; SQL uses bound parameters only. `operator_audit` and `login_attempts` are per-object operational state: they are not backup families and do not advance the research mutation sequence. Export snapshots and the Queue consumer-contact marker live in the object's synchronous KV storage, outside SQL and backups.
 
 ### Migrations (ST-09)
 

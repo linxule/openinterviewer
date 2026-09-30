@@ -1,5 +1,10 @@
 # Cloudflare migration plan review — 23 September 2026
 
+Historical design review. Its findings fed the implementation; “unimplemented”
+below describes the review date. Use the [30 September status and remaining-work
+list](cloudflare-migration/evidence/V5-STATUS-2026-09-30.md) for later results and
+unverified limits.
+
 Verdict: keep the proposed architecture and begin with the bounded runtime prototype when implementation is authorized. The review found seven missing contracts in the plan. They are now specified in the [revised plan](2026-09-23-cloudflare-migration-plan.md), but remain unimplemented and untested. Following Xule's acceptance, the [Claude implementation package](cloudflare-migration/README.md) owns the full specification; this document records the earlier review and its reasoning.
 
 Three independent agents reviewed architecture/scope, durable analysis jobs, and deployment/operations. The lead checked the findings against source and current official documentation. This is a design review of source baseline `4d3076528681862cda21d0b2c80d1ae2ce9faeda`; it makes no finding about an existing Cloudflare deployment. No application changes, tests, credentials, provider calls, account access, or deployment occurred.

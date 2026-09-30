@@ -1,8 +1,8 @@
 # Cloudflare migration: implementation plan and specification
 
-Status: ready for implementation handoff, 23 September 2026. Application baseline: `4d3076528681862cda21d0b2c80d1ae2ce9faeda`. No implementation or deployment has been performed for this specification.
+Status: implementation and maintained Cloudflare rollout completed for the recorded scope; see the [30 September 2026 status and remaining-work list](evidence/V5-STATUS-2026-09-30.md). This is not certification of every remote acceptance case. Use [INSTALLER.md](INSTALLER.md) and [RUNBOOK.md](RUNBOOK.md) for operations, [IMPLEMENTATION.md](IMPLEMENTATION.md) for the code design, and [DEVIATIONS.md](evidence/DEVIATIONS.md) for binding amendments and limits.
 
-Xule accepted the reviewed recommendations and will have Claude implement them; Codex will review the result and advise on subsequent strategy. This package turns the earlier [architecture plan](../2026-09-23-cloudflare-migration-plan.md) and [independent critique](../2026-09-23-cloudflare-plan-review.md) into build contracts. These specifications take precedence over the earlier plan where they make a decision more precise. Repository `AGENTS.md` and existing security/product invariants continue to apply.
+The original specification and implementation assignment below were prepared on 23 September 2026 against application baseline `4d3076528681862cda21d0b2c80d1ae2ce9faeda`; no implementation or deployment had occurred at that handoff. They are retained as design history, not a new assignment or a current deployment report. This package turns the earlier [architecture plan](../2026-09-23-cloudflare-migration-plan.md) and [independent critique](../2026-09-23-cloudflare-plan-review.md) into build contracts. These specifications take precedence over the earlier plan where they make a decision more precise; later recorded amendments apply. Repository `AGENTS.md` and existing security/product invariants continue to apply.
 
 ## Intended result
 
@@ -19,7 +19,7 @@ The migration preserves the current Next.js application and design system. It in
 | [03 — Analysis jobs](03-analysis-jobs.md) | Outbox/alarm/Queue protocol, paid-call boundaries, HTTP/client contract and recovery |
 | [Researcher UI slice](../../design/slice-cloudflare-analysis-spec.md) | User-visible queued/running/failure states, copy and accessibility |
 | [04 — Verification and cutover](04-verification-and-cutover.md) | Test matrix, evidence, release gating, backup/restore, production transition and rollback |
-| [Claude handoff](CLAUDE-HANDOFF.md) | Paste-ready implementation assignment and review-return format |
+| [Claude handoff](CLAUDE-HANDOFF.md) | Historical implementation assignment and review-return format; do not restart completed work |
 
 Requirements use stable prefixes: `RT`, `SETUP`, `ST`, `JOB`, `API`, `UI-CF`, `VERIFY`, and `OPS`. Tests should cite the relevant requirement in their title or nearby description. An implementation report must link each acceptance requirement to evidence or explicitly mark it unverified; repeating this checklist is not evidence.
 
@@ -84,6 +84,8 @@ Completing only the save/analyze path is insufficient. Use this inventory to clo
 Search for direct Redis access in routes and shared libraries after integration. A static import can be legitimate for the retained adapter; a successful browser test with no Redis requests is stronger evidence than a renamed client. Include sample-data cleanup, create-idempotency resolution, rate limits and health checks in this audit.
 
 ## Decisions that remain operational
+
+This section records decisions pending at the original handoff. The maintained installation subsequently chose a clean start, Cloudflare AI Gateway and installer-owned deployment; its cutover and explicitly unrun checks are recorded in [REVIEW-PACKET section 17](evidence/REVIEW-PACKET.md#17-live-verification-staging-and-production-2026-09-24). For remaining work, use the [dated status](evidence/V5-STATUS-2026-09-30.md), not this historical checklist. Other installations must make their own account, origin, data-disposition and retention decisions.
 
 Local work proceeds with synthetic fixtures. Before live provisioning/cutover, record the selected Cloudflare account, hostname, desired storage jurisdiction, backup destination/retention, resource naming, existing usage headroom, provider smoke budget, and whether old participant links need continuity. EU DO placement is the proposed default, not a claim that all processing stays in the EU.
 

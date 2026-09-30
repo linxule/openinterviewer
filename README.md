@@ -10,6 +10,11 @@ admin-password rotation, and the [v4.0.0 notes](docs/releases/v4.0.0.md) for the
 target, the Cloudflare AI Gateway transport, and provider fixes that also affect v3.0.0.
 The [v3.0.0 notes](docs/releases/v3.0.0.md) cover save-first completion and deferred analysis.
 
+For the maintained Cloudflare installation's dated rollout evidence and remaining
+follow-ups, see the [30 September release status](docs/operations/cloudflare-migration/evidence/V5-STATUS-2026-09-30.md).
+It separates completed work, unverified limits and optional deployment paths;
+use the runtime checks below for current health.
+
 Contributing or working with a coding agent? Start with [`CONTRIBUTING.md`](CONTRIBUTING.md) and the repository map in [`AGENTS.md`](AGENTS.md).
 
 There are four deliberately different ways to use it:
@@ -49,7 +54,7 @@ The demo:
 
 Every response, follow-up, and insight is pre-written and visibly labeled as synthetic. The demo is useful for understanding the participant-to-researcher workflow, not model quality, latency, or provider availability.
 
-The authenticated researcher workspace also offers **Load Sample**, which writes a synthetic study and interviews to that researcher's configured Upstash database so dashboard and aggregate-analysis screens can be explored. It is storage-backed sample data and does not power the public `/demo`. Loading or clearing the sample makes no AI call; generating new aggregate or follow-up analysis uses the configured provider and may count against its quota.
+The authenticated researcher workspace also offers **Load Sample**, which writes a synthetic study and interviews to the researcher's configured store (a Cloudflare workspace or a Node/Vercel Upstash database) so dashboard and aggregate-analysis screens can be explored. It is storage-backed sample data and does not power the public `/demo`. Loading or clearing the sample makes no AI call; generating new aggregate or follow-up analysis uses the configured provider and may count against its quota. **Clear Sample** removes the designated sample fixture, not arbitrary synthetic studies created through ordinary interview workflows.
 
 ## 2. Use a hosted researcher account
 

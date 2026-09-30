@@ -1,5 +1,11 @@
 # Cloudflare migration plan — 23 September 2026
 
+Historical planning record. Implementation, Cloudflare AI Gateway support and
+the maintained rollout followed this plan; see the [30 September status and
+remaining-work list](cloudflare-migration/evidence/V5-STATUS-2026-09-30.md).
+The dated decisions and proposed matrix below describe the original planning
+stage, not the current support matrix or an instruction to repeat cutover.
+
 Status: reviewed architecture, accepted for implementation specification. The [complete Claude implementation package](cloudflare-migration/README.md) now owns the detailed build contracts and takes precedence where it refines this overview. No application changes, installs, credentials, database reads, provisioning, purchases, or deployment performed in this planning work. Source baseline: `4d3076528681862cda21d0b2c80d1ae2ce9faeda`.
 
 ## Outcome and scope
