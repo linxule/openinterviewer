@@ -10,6 +10,8 @@ import {
   selectedStudyIdFromParticipantBody,
 } from '@/lib/researcherContext';
 import { readBoundedJsonObject } from '@/lib/requestBody';
+import { consentTextFor } from '@/lib/i18n/languages';
+import { participantLanguageFromBody } from '@/lib/i18n/participantLanguage';
 import { createRequestId, logRequestFailure } from '@/lib/requestLog';
 import { deploymentNotReadyResponse } from '@/lib/runtime/readinessGate';
 import {
@@ -55,6 +57,8 @@ export async function POST(request: Request) {
         isAdmin: true,
       });
       if (!canonical.ok) return canonical.response;
+      const previewLanguage = participantLanguageFromBody(canonical.study.config, parsedBody.value);
+      if (!previewLanguage.ok) return previewLanguage.response;
       return NextResponse.json({
         success: true,
         preview: true,
@@ -74,6 +78,11 @@ export async function POST(request: Request) {
         { status: 403 }
       );
     }
+
+    // The language the participant read the consent in. Its text is the one
+    // hashed, so every later request names the same language or is refused.
+    const chosen = participantLanguageFromBody(study.config, parsedBody.value);
+    if (!chosen.ok) return chosen.response;
 
     // Cloudflare (D9): the page states where responses are sent, and the
     // browser echoes the transport it rendered. Consent is recorded only for
@@ -105,7 +114,7 @@ export async function POST(request: Request) {
       // final source of study identity or revision.
       studyId: study.id,
       studyRevision: study.revision ?? 1,
-      consentText: study.config.consentText || '',
+      consentText: consentTextFor(study.config, chosen.language),
       ...disclosure,
       now: Date.now(),
     });

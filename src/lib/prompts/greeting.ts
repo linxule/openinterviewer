@@ -16,7 +16,7 @@
  */
 
 import { StudyConfig } from '@/types';
-import { buildInterviewerMannerBlock } from './interview';
+import { buildInterviewerMannerBlock, buildLanguageBlock } from './interview';
 
 export const GREETING_QUESTION_CRAFT = 'Keep it brief and plain. Do not praise or evaluate. Ask one open question.';
 
@@ -50,5 +50,5 @@ ${GREETING_OPENING} that:
 
 ${GREETING_QUESTION_CRAFT} ${GREETING_PROFILE}
 
-${buildInterviewerMannerBlock(studyConfig, GREETING_MANNER_PRECEDENCE)}`;
+${buildLanguageBlock(studyConfig)}${buildInterviewerMannerBlock(studyConfig, GREETING_MANNER_PRECEDENCE)}`;
 };

@@ -1,15 +1,14 @@
 import { BRACKETED_PLACEHOLDER } from './consentText';
+import type { InterviewLanguage } from './i18n/languages';
+import { messagesFor } from './i18n/messages';
 
 /**
  * What a participant reads when the researcher wrote nothing: complete prose,
  * interpolated from the study, containing no placeholder — `defaultConsentText`'s
  * rule, for `defaultConsentText`'s reason.
  */
-export function defaultThankYouText(studyName: string): string {
-  return [
-    'Thank you for taking part.',
-    `Your responses will be used in the study "${studyName.trim()}".`,
-  ].join('\n\n');
+export function defaultThankYouText(studyName: string, language: InterviewLanguage = 'en'): string {
+  return messagesFor(language).defaults.thankYouText(studyName);
 }
 
 /**

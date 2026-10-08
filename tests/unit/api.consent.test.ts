@@ -90,6 +90,34 @@ describe('POST /api/consent', () => {
     );
   });
 
+  it('records the consent text of the language the participant read, and refuses one the study does not offer', async () => {
+    const multilingual = makeStoredStudy({ id: 'study-a', revision: 3 });
+    multilingual.config = {
+      ...multilingual.config,
+      consentText: 'Canonical consent text.',
+      interviewLanguages: ['en', 'fr'],
+      consentTextTranslations: { fr: 'Texte de consentement.' },
+    };
+    contextMock.getParticipantRequestContext.mockResolvedValue({
+      valid: true,
+      context: standaloneTestContext({} as RedisPort),
+      studyId: 'study-a',
+      study: multilingual,
+      studyRevision: 3,
+      participantSessionId: 'participant-session-a',
+      isAdmin: false,
+    });
+    expect((await POST(request({ studyId: 'study-a', language: 'fr' }))).status).toBe(200);
+    expect(consentMock.recordParticipantConsent).toHaveBeenLastCalledWith(
+      expect.objectContaining({ consentText: 'Texte de consentement.' }),
+      {},
+    );
+    const refused = await POST(request({ studyId: 'study-a', language: 'ja' }));
+    expect(refused.status).toBe(400);
+    expect((await refused.json()).code).toBe('LANGUAGE_NOT_OFFERED');
+    expect(consentMock.recordParticipantConsent).toHaveBeenCalledTimes(1);
+  });
+
   it('fails closed with a retryable 503 when consent storage is unavailable', async () => {
     consentMock.recordParticipantConsent.mockResolvedValue({ status: 'unavailable' });
 

@@ -1,3 +1,5 @@
+import type { InterviewLanguage } from '@/lib/i18n/languages';
+
 // OpenInterviewer domain types
 
 // ============================================
@@ -162,6 +164,17 @@ export interface StudyConfig {
    * and greeting prompts. Absent means the QUESTION CRAFT defaults alone.
    */
   interviewerInstructions?: string;
+  /**
+   * Optional. The languages participants may choose, in the researcher's
+   * order; the first is the default and uses `consentText`/`thankYouText`.
+   * Absent: the study runs in English with no language instruction, as
+   * before (lib/i18n/languages.ts).
+   */
+  interviewLanguages?: InterviewLanguage[];
+  /** Consent text for every language after the first. Required for each. */
+  consentTextTranslations?: Partial<Record<InterviewLanguage, string>>;
+  /** Optional thank-you text for languages after the first. */
+  thankYouTextTranslations?: Partial<Record<InterviewLanguage, string>>;
   createdAt: number;
   // Follow-up study lineage
   parentStudyId?: string;         // ID of parent study if this is a follow-up
@@ -376,6 +389,12 @@ export interface StoredInterview {
   providerCommitment?: ProviderCommitment;
   /** Researcher instructions in force at save time; never back-filled. */
   conductedWithInstructions?: string;
+  /**
+   * The language the participant chose, for a study with a language setting.
+   * Bound by the consent hash: it is the language whose consent text the
+   * participant accepted. Absent on records of studies without the setting.
+   */
+  interviewLanguage?: InterviewLanguage;
 
   /**
    * Absent on every record written before Slice P. Read it through

@@ -8,6 +8,8 @@ import { Verbatim } from '@/components/ui';
 import type { AITransport } from '@/lib/aiTransport';
 import { leaveLinkPage } from '@/lib/participantLinkHandover';
 import { participantLinkCode } from '@/lib/participantLinkPath';
+import { browserMessages } from '@/lib/i18n/useParticipantLanguage';
+import { messagesFor } from '@/lib/i18n/messages';
 
 /** The exchange's transport; anything but the three known values (including none) is null. */
 function participantTransport(value: unknown): AITransport | null {
@@ -37,15 +39,20 @@ export default function ParticipantPage() {
   const beginParticipantSession = useStore((state) => state.beginParticipantSession);
 
   const [error, setError] = useState<string | null>(null);
+  // No study yet, so the browser's language when it is one the app offers;
+  // chosen after mount so the server and first client render agree.
+  const [copy, setCopy] = useState(() => messagesFor('en').link);
+  useEffect(() => { setCopy(browserMessages().link); }, []);
 
   // Resolve the opaque link code and establish a cookie-backed participant session.
   useEffect(() => {
     let cancelled = false;
     setError(null);
     const linkCode = participantLinkCode(window.location.pathname);
+    const text = browserMessages().link;
     const loadStudyFromLink = async () => {
       if (!linkCode) {
-        setError('No participant link code provided');
+        setError(text.noCode);
         return;
       }
 
@@ -57,7 +64,7 @@ export default function ParticipantPage() {
         if (cancelled) return;
 
         if (!result.valid || !result.data) {
-          setError('Invalid or expired link');
+          setError(text.invalid);
           return;
         }
 
@@ -67,14 +74,14 @@ export default function ParticipantPage() {
           aiTransport?: unknown;
         };
         if (!resolvedLink.sessionHandle) {
-          setError('The participant session could not be established');
+          setError(text.noSession);
           return;
         }
         // The consent page discloses this transport, so an unknown value is a
         // load error rather than a guess.
         const aiTransport = participantTransport(resolvedLink.aiTransport);
         if (!aiTransport) {
-          setError('This study could not confirm how your responses are sent');
+          setError(text.transportUnknown);
           return;
         }
         beginParticipantSession(
@@ -87,7 +94,7 @@ export default function ParticipantPage() {
       } catch (err) {
         if (cancelled) return;
         console.error('Error loading study from participant link:', err);
-        setError('Failed to load study configuration');
+        setError(text.loadFailed);
       }
     };
 
@@ -100,11 +107,11 @@ export default function ParticipantPage() {
       <main className="flex min-h-dvh items-center justify-center bg-paper-0 px-4 py-12">
         <div className="w-full max-w-measure">
           <Verbatim as="h1" className="text-[28px] font-normal leading-[36px] text-ink-900">
-            Unable to Load Interview
+            {copy.unableTitle}
           </Verbatim>
           <p className="mt-4 font-sans text-[15px] text-ink-700">{error}</p>
           <p className="mt-2 font-sans text-[13px] text-ink-500">
-            Please check that you have the correct link or contact the researcher.
+            {copy.checkLink}
           </p>
         </div>
       </main>
@@ -114,7 +121,7 @@ export default function ParticipantPage() {
   return (
     <main className="flex min-h-dvh items-center justify-center bg-paper-0 px-4 py-12">
       <div className="w-full max-w-measure">
-        <p role="status" className="font-sans text-[15px] text-ink-500">Loading interview...</p>
+        <p role="status" className="font-sans text-[15px] text-ink-500">{copy.loading}</p>
       </div>
     </main>
   );

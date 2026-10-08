@@ -17,6 +17,7 @@ import {
   ProfileField
 } from './types';
 import type { AITransport } from './lib/aiTransport';
+import { isInterviewLanguage, type InterviewLanguage } from './lib/i18n/languages';
 import { tolerantStorage } from './lib/tolerantSessionStorage';
 
 // Example Study: "The Adaptive Self"
@@ -117,6 +118,13 @@ interface ResearchState {
   // Non-secret tab selector for the matching HttpOnly participant cookie.
   participantSessionHandle: string | null;
 
+  /**
+   * The language the participant chose (or consented in). Null until chosen:
+   * the consent page then offers the study language matching the browser.
+   */
+  participantLanguage: InterviewLanguage | null;
+  setParticipantLanguage: (language: InterviewLanguage) => void;
+
   // Actions - Navigation
   setStep: (step: AppStep) => void;
   setViewMode: (mode: ViewMode) => void;
@@ -197,6 +205,8 @@ export const useStore = create<ResearchState>()(
       streamingMessage: null,
       isAiThinking: false,
       participantSessionHandle: null,
+      participantLanguage: null,
+      setParticipantLanguage: (participantLanguage) => set({ participantLanguage }),
 
       setStep: (step) => set((state) => ({
         previousStep: state.currentStep,
@@ -327,6 +337,7 @@ export const useStore = create<ResearchState>()(
       beginParticipantSession: (config, sessionHandle = null, aiTransport = 'direct') => set({
         studyConfig: config,
         participantSessionHandle: sessionHandle,
+        participantLanguage: null,
         aiTransport,
         viewMode: 'participant',
         currentStep: 'consent',
@@ -359,11 +370,13 @@ export const useStore = create<ResearchState>()(
         contextEntries: [],
         streamingMessage: null,
         isAiThinking: false,
-        participantSessionHandle: null
+        participantSessionHandle: null,
+        participantLanguage: null
       }),
 
       resetParticipant: () => set((state) => ({
         participantSessionHandle: null,
+        participantLanguage: null,
         participantProfile: null,
         consentGiven: false,
         consentTimestamp: null,
@@ -390,6 +403,7 @@ export const useStore = create<ResearchState>()(
         const cleanState = { ...(persistedState as Record<string, unknown>) };
         delete cleanState.participantToken;
         cleanState.aiTransport = migratedTransport(cleanState.aiTransport, version);
+        if (!isInterviewLanguage(cleanState.participantLanguage)) cleanState.participantLanguage = null;
         return cleanState as unknown as ResearchState;
       },
       partialize: (state) => ({
@@ -405,7 +419,8 @@ export const useStore = create<ResearchState>()(
         synthesis: state.synthesis,
         contextEntries: state.contextEntries,
         currentStep: state.currentStep,
-        participantSessionHandle: state.participantSessionHandle
+        participantSessionHandle: state.participantSessionHandle,
+        participantLanguage: state.participantLanguage
       })
     }
   )
