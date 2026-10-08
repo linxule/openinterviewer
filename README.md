@@ -2,7 +2,7 @@
 
 OpenInterviewer is an open-source platform for adaptive, AI-assisted qualitative interviews. Researchers configure a study, share an opaque participant link, and review transcripts and synthesis in a dashboard.
 
-See the [v5.0.1 notes](docs/releases/v5.0.1.md) for the Next.js 16.3.8 security update, and the [v5.0.0 release notes](docs/releases/v5.0.0.md) for saved study exploration, explicit datasets,
+See the [v5.1.0 release notes](docs/releases/v5.1.0.md) for interview languages, voice input and Markdown transcript export, the [v5.0.1 notes](docs/releases/v5.0.1.md) for the Next.js 16.3.8 security update, and the [v5.0.0 release notes](docs/releases/v5.0.0.md) for saved study exploration, explicit datasets,
 study deletion and workflow controls. The [v4.2.0 release notes](docs/releases/v4.2.0.md) cover the per-study choice of what participants are told
 about the AI provider, researcher AI budgets and sign-in limits, the [v4.1.1 notes](docs/releases/v4.1.1.md) for
 self-hosted fonts and dependency updates, the [v4.1.0 notes](docs/releases/v4.1.0.md) for participant-session and link-privacy fixes and
