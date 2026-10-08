@@ -65,7 +65,7 @@ export const ko: Messages = {
       mayChange: '연구자는 나중에 다른 AI 제공업체나 모델로 응답을 분석할 수 있습니다.',
     },
     voice: {
-      installation: '마이크를 사용하면 녹음이 이 연구를 호스팅하는 Cloudflare로 전송되어 Cloudflare Workers AI가 텍스트로 변환합니다. 녹음은 저장되지 않으며, 보내기 전에 텍스트를 수정할 수 있습니다.',
+      installation: '마이크를 사용하면 녹음이 Cloudflare로 전송되어 Cloudflare Workers AI가 텍스트로 변환합니다. 이 연구는 녹음을 보관하지 않으며, 보내기 전에 텍스트를 수정할 수 있습니다.',
       browser: '마이크를 사용하면 브라우저의 음성 서비스가 말을 텍스트로 변환합니다. Chrome에서는 Google, Safari에서는 Apple이 각자의 약관에 따라 처리합니다. 보내기 전에 텍스트를 수정할 수 있습니다.',
     },
   },
@@ -105,6 +105,8 @@ export const ko: Messages = {
       denied: '마이크 접근이 차단되었습니다. 브라우저에서 허용하시거나 응답을 입력해 주세요.',
       failed: '녹음을 텍스트로 변환할 수 없습니다. 다시 시도하시거나 응답을 입력해 주세요.',
       unsupported: '이 브라우저에서는 음성 입력을 사용할 수 없습니다. 응답을 입력해 주세요.',
+      limited: '짧은 시간에 많은 응답을 녹음하셨습니다. 잠시 후 다시 시도하시거나 응답을 입력해 주세요.',
+      unavailable: '지금은 음성 입력을 사용할 수 없습니다. 응답을 입력해 주세요.',
     },
   },
   finish: {

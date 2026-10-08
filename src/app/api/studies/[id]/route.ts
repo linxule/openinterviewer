@@ -199,6 +199,9 @@ export async function PUT(
       return NextResponse.json({ error: validatedConfig.error }, { status: 400 });
     }
     const updatedConfig = validatedConfig.config;
+    if (isHostedMode() && updatedConfig.voiceInput === 'installation') {
+      return NextResponse.json({ error: 'Voice transcription by the installation is not offered on the hosted service.' }, { status: 400 });
+    }
     let missingProvider;
     try {
       missingProvider = missingProviderCredential(context, updatedConfig);

@@ -92,7 +92,7 @@ describe('participant voice input', () => {
 
 describe('consent notice for voice input', () => {
   it.each([
-    ['installation', /recording is sent to Cloudflare, which hosts this study, to be turned into text by Cloudflare Workers AI/],
+    ['installation', /recording is sent to Cloudflare to be turned into text by Cloudflare Workers AI/],
     ['browser', /in Chrome this is Google, in Safari Apple/],
   ] as const)('names who turns speech into text: %s', (mode, text) => {
     useStore.setState(useStore.getInitialState(), true);

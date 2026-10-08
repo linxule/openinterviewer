@@ -16,7 +16,7 @@ const OPTIONS: { value: VoiceInputMode; label: string; detail: string }[] = [
   {
     value: 'installation',
     label: 'Transcribed by this installation (Cloudflare Workers AI)',
-    detail: 'Recordings of up to one minute go to Cloudflare, which already hosts the study, and are turned into text by Whisper. Recordings are not stored. Works in current browsers on phones and computers. Cloudflare bills about $0.0005 per audio minute after a free daily allowance.',
+    detail: 'Recordings of up to one minute go to Cloudflare, which already hosts the study, and are turned into text by Whisper. OpenInterviewer does not keep them; Cloudflare's terms rule out training on them but state no retention period. Works in current browsers on phones and computers. Cloudflare bills about $0.0005 per audio minute after a free daily allowance.',
   },
   {
     value: 'browser',

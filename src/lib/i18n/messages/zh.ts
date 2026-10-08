@@ -65,8 +65,8 @@ export const zh: Messages = {
       mayChange: '研究人员之后可能会使用其他 AI 服务商或模型分析您的回答。',
     },
     voice: {
-      installation: '如果您使用麦克风，您的录音将发送至托管本研究的 Cloudflare，由 Cloudflare Workers AI 转换为文字。录音不会被保存，发送前您可以编辑文字。',
-      browser: '如果您使用麦克风，您的浏览器自带的语音服务会将语音转换为文字：在 Chrome 中由 Google 提供，在 Safari 中由 Apple 提供，并适用其各自的条款。发送前您可以编辑文字。',
+      installation: '如果您使用麦克风，您的录音将发送至 Cloudflare，由 Cloudflare Workers AI 转换为文字。本研究不会保留录音，发送前您可以编辑文字。',
+      browser: '如果您使用麦克风，您的浏览器的语音服务会将语音转换为文字：在 Chrome 中由 Google 提供，在 Safari 中由 Apple 提供，并适用其各自的条款。发送前您可以编辑文字。',
     },
   },
   interview: {
@@ -105,6 +105,8 @@ export const zh: Messages = {
       denied: '麦克风权限被阻止。请在浏览器中允许，或直接输入您的回答。',
       failed: '无法将您的录音转换为文字。请重试，或直接输入您的回答。',
       unsupported: '此浏览器不支持语音输入。请直接输入您的回答。',
+      limited: '您在短时间内录制了较多回答。请稍候再试，或直接输入您的回答。',
+      unavailable: '语音输入暂时不可用。请直接输入您的回答。',
     },
   },
   finish: {

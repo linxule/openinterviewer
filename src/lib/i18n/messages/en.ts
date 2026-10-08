@@ -94,6 +94,8 @@ export interface Messages {
       denied: string;
       failed: string;
       unsupported: string;
+      limited: string;
+      unavailable: string;
     };
   };
   finish: {
@@ -182,7 +184,7 @@ export const en: Messages = {
       mayChange: 'The researcher may later analyze your responses with a different AI provider or model.',
     },
     voice: {
-      installation: 'If you use the microphone, your recording is sent to Cloudflare, which hosts this study, to be turned into text by Cloudflare Workers AI. The recording is not stored, and you can edit the text before sending it.',
+      installation: 'If you use the microphone, your recording is sent to Cloudflare to be turned into text by Cloudflare Workers AI. This study does not keep the recording, and you can edit the text before sending it.',
       browser: 'If you use the microphone, your browser\'s speech service turns your speech into text: in Chrome this is Google, in Safari Apple, under their own terms. You can edit the text before sending it.',
     },
   },
@@ -222,6 +224,8 @@ export const en: Messages = {
       denied: 'Microphone access was blocked. Allow it in your browser, or type your answer.',
       failed: 'Your recording could not be turned into text. Please try again or type your answer.',
       unsupported: 'Voice input does not work in this browser. Please type your answer.',
+      limited: 'You have recorded many answers in a short time. Please wait a little, or type your answer.',
+      unavailable: 'Voice input is not available right now. Please type your answer.',
     },
   },
   finish: {

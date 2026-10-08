@@ -17,7 +17,7 @@ export type VoiceState =
   | { kind: 'recording'; seconds: number }
   | { kind: 'listening' }
   | { kind: 'transcribing' }
-  | { kind: 'error'; reason: 'denied' | 'failed' | 'unsupported' };
+  | { kind: 'error'; reason: 'denied' | 'failed' | 'unsupported' | 'limited' | 'unavailable' };
 
 /** Regional tags the browsers' speech services expect. */
 const SPEECH_TAGS: Record<InterviewLanguage, string> = {
@@ -102,7 +102,8 @@ export function useVoiceInput(options: {
       const data = await response.json().catch(() => ({})) as { text?: unknown };
       if (!mounted.current) return;
       if (!response.ok || typeof data.text !== 'string') {
-        setState({ kind: 'error', reason: 'failed' });
+        // A limit or an outage is not a failed recording: say which.
+        setState({ kind: 'error', reason: response.status === 429 ? 'limited' : response.status === 503 ? 'unavailable' : 'failed' });
         return;
       }
       if (data.text.trim()) onTextRef.current(data.text.trim());

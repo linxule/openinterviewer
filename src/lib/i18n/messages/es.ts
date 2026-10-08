@@ -65,7 +65,7 @@ export const es: Messages = {
       mayChange: 'La persona responsable del estudio puede analizar más adelante tus respuestas con otro proveedor o modelo de IA.',
     },
     voice: {
-      installation: 'Si usas el micrófono, tu grabación se envía a Cloudflare, que aloja este estudio, para que Cloudflare Workers AI la convierta en texto. La grabación no se guarda y puedes editar el texto antes de enviarlo.',
+      installation: 'Si usas el micrófono, tu grabación se envía a Cloudflare para que Cloudflare Workers AI la convierta en texto. Este estudio no guarda la grabación y puedes editar el texto antes de enviarlo.',
       browser: 'Si usas el micrófono, el servicio de voz de tu navegador convierte tu voz en texto: en Chrome lo hace Google y en Safari, Apple, según sus propias condiciones. Puedes editar el texto antes de enviarlo.',
     },
   },
@@ -105,6 +105,8 @@ export const es: Messages = {
       denied: 'Se ha bloqueado el acceso al micrófono. Permítelo en tu navegador o escribe tu respuesta.',
       failed: 'No se ha podido convertir tu grabación en texto. Inténtalo de nuevo o escribe tu respuesta.',
       unsupported: 'La entrada de voz no funciona en este navegador. Escribe tu respuesta.',
+      limited: 'Has grabado muchas respuestas en poco tiempo. Espera un poco o escribe tu respuesta.',
+      unavailable: 'La entrada de voz no está disponible en este momento. Escribe tu respuesta.',
     },
   },
   finish: {
