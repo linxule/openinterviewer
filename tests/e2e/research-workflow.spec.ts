@@ -231,6 +231,10 @@ test('researcher creates a study; participants finalize; researcher reads, downl
   const exportedAnswer = JSON.parse(await zip.file(`explorations/${studyId}/${answer.id}.json`)!.async('string'));
   expect(exportedAnswer).toEqual(answer);
   expect(JSON.parse(await zip.file(`aggregates/${studyId}.json`)!.async('string')).interviewCount).toBe(2);
+  const transcripts = await downloadText(page, 'Export transcripts (.md)');
+  expect(transcripts.match(/^## Interview \d+$/gm)).toHaveLength(2);
+  expect(transcripts).toContain(`> ${ANSWER}`);
+  expect(transcripts.trimEnd().endsWith('<!-- openinterviewer-export complete: 2 interviews -->')).toBe(true);
   await deletePopulatedStudy(page, studyId, answer.scope.sources.map(source => source.interviewId), {
     desktop: testInfo.outputPath('study-danger-zone-desktop.png'), mobile: testInfo.outputPath('study-danger-zone-mobile.png'),
   });

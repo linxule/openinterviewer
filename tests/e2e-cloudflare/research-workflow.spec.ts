@@ -188,6 +188,14 @@ test('participant saves before analysis runs; background analysis completes afte
   expect(state.calls.filter((call) => call.operation === 'aggregate')).toHaveLength(1);
   expect(state.calls.filter((call) => call.operation === 'exploration')).toHaveLength(1);
   await page.goto(studyUrl);
+  // The streamed one-file transcripts download ends with its closing marker.
+  await page.getByRole('tab', { name: 'Study settings', exact: true }).click();
+  const transcriptsDownloaded = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export transcripts (.md)', exact: true }).click();
+  const transcripts = await readFile((await (await transcriptsDownloaded).path())!, 'utf8');
+  expect(transcripts.match(/^## Interview \d+$/gm)).toHaveLength(2);
+  expect(transcripts).toContain(`> ${ANSWER}`);
+  expect(transcripts.trimEnd().endsWith('<!-- openinterviewer-export complete: 2 interviews -->')).toBe(true);
   await deletePopulatedStudy(page, studyId, records.map(record => record.id), {
     desktop: testInfo.outputPath('cloudflare-study-danger-zone-desktop.png'), mobile: testInfo.outputPath('cloudflare-study-danger-zone-mobile.png'),
   });
