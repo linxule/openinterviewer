@@ -533,6 +533,43 @@ describe('/api/studies/[id] on Cloudflare (ST-01, ST-03)', () => {
   });
 });
 
+describe('DELETE body on Cloudflare (OpenNext gives a bodyless DELETE an empty stream)', () => {
+  const STUDY_ID = '11111111-1111-4111-8111-111111111111';
+  const params = { params: Promise.resolve({ id: STUDY_ID }) };
+  const emptyStream = () => new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } });
+  const streamed = (body: ReadableStream<Uint8Array>) =>
+    new Request('http://localhost', { method: 'DELETE', body, duplex: 'half' } as RequestInit);
+
+  it('an empty body is the empty-only delete, exactly like no body', async () => {
+    store.readiness.mockResolvedValue(ready());
+    store.deleteStudy.mockResolvedValueOnce({ status: 'deleted', success: true });
+    const response = await deleteStudy(streamed(emptyStream()), params);
+    expect(response.status).toBe(200);
+    expect(store.deleteStudy).toHaveBeenCalledWith({ studyId: STUDY_ID, now: expect.any(Number) });
+  });
+
+  it('a non-empty body must still be a complete confirmation; {} and junk are refused before any delete', async () => {
+    store.readiness.mockResolvedValue(ready());
+    for (const body of ['{}', 'not json', '[]']) {
+      const response = await deleteStudy(new Request('http://localhost', { method: 'DELETE', body }), params);
+      expect(response.status).toBe(400);
+    }
+    const tooLarge = await deleteStudy(new Request('http://localhost', { method: 'DELETE', body: 'x'.repeat(2048) }), params);
+    expect(tooLarge.status).toBe(413);
+    expect(store.deleteStudy).not.toHaveBeenCalled();
+  });
+
+  it('a streamed confirmation still reaches the store', async () => {
+    store.readiness.mockResolvedValue(ready());
+    store.deleteStudy.mockResolvedValueOnce({ status: 'deleted', success: true });
+    const bytes = new TextEncoder().encode(JSON.stringify({ deleteInterviews: true, confirmStudyId: STUDY_ID, expectedRevision: 3 }));
+    const body = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes); controller.close(); } });
+    const response = await deleteStudy(streamed(body), params);
+    expect(response.status).toBe(200);
+    expect(store.deleteStudy).toHaveBeenCalledWith({ studyId: STUDY_ID, now: expect.any(Number), deleteInterviews: true, expectedRevision: 3 });
+  });
+});
+
 describe('aggregate read and aggregate synthesis on Cloudflare (RT-09, ST-08)', () => {
   const aggregateRequest = (studyId: string) =>
     jsonRequest('http://localhost/api/synthesis/aggregate', 'POST', { studyId });

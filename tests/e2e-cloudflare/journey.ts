@@ -53,10 +53,10 @@ export async function signIn(page: Page): Promise<void> {
   await expect(page).toHaveURL(/\/studies$/);
 }
 
-export async function createStudy(page: Page): Promise<{ studyUrl: string; studyId: string }> {
+export async function createStudy(page: Page, name = 'Cloudflare workflow study'): Promise<{ studyUrl: string; studyId: string }> {
   await signIn(page);
   await page.goto('/setup');
-  await page.getByLabel('Study Name *', { exact: true }).fill('Cloudflare workflow study');
+  await page.getByLabel('Study Name *', { exact: true }).fill(name);
   await page.getByLabel('Research Question *', { exact: true }).fill('How do people resume research?');
   await page.getByPlaceholder('Question 1...', { exact: true }).fill('How do you return to a saved document?');
   await page.getByRole('radio', { name: /OpenAI/ }).check();

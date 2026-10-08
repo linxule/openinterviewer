@@ -93,3 +93,13 @@ export async function readBoundedBytes(request: Request, maximumBytes: number): 
     return { ok: false, status: 400 };
   }
 }
+
+/** A JSON object decoded from bytes (as Request.text() decodes), or null for anything else. */
+export function jsonObjectFrom(bytes: Uint8Array): Record<string, unknown> | null {
+  try {
+    const value: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}

@@ -333,6 +333,19 @@ const InterviewChat: React.FC = () => {
     return phaseLabels[questionProgress.currentPhase];
   };
 
+  const showVoice = voice.enabled && voice.supported;
+  const sendButton = (
+    <Button
+      type="button"
+      variant="primary"
+      onClick={() => handleSend()}
+      disabled={!input.trim() || isAiThinking || voiceBusy}
+      className="min-h-11 w-full sm:w-auto"
+    >
+      {m.send}
+    </Button>
+  );
+
   return (
     <div className="min-h-dvh bg-paper-0">
       {/* Running head */}
@@ -412,7 +425,9 @@ const InterviewChat: React.FC = () => {
                   )}
                 </div>
               )}
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:gap-3">
+              {/* With a microphone the answer box keeps the full width and the two
+                  buttons sit below it; otherwise Send sits beside the box. */}
+              <div className={showVoice ? 'space-y-2' : 'flex flex-col gap-2 sm:flex-row sm:items-end sm:gap-3'}>
                 <div className="flex-1">
                   <label htmlFor="interview-response" className="sr-only">
                     {m.responseLabel}
@@ -430,27 +445,21 @@ const InterviewChat: React.FC = () => {
                   />
                 </div>
 
-                {voice.enabled && voice.supported && (
-                  <Button
-                    type="button"
-                    variant="quiet"
-                    onClick={voice.toggle}
-                    disabled={isAiThinking || voice.state.kind === 'transcribing'}
-                    aria-pressed={voice.state.kind === 'recording' || voice.state.kind === 'listening'}
-                    className="min-h-11 w-full sm:w-auto"
-                  >
-                    {voice.state.kind === 'recording' || voice.state.kind === 'listening' ? m.voice.stop : m.voice.start}
-                  </Button>
-                )}
-                <Button
-                  type="button"
-                  variant="primary"
-                  onClick={() => handleSend()}
-                  disabled={!input.trim() || isAiThinking || voiceBusy}
-                  className="min-h-11 w-full sm:w-auto"
-                >
-                  {m.send}
-                </Button>
+                {showVoice ? (
+                  <div className="flex flex-col gap-2 sm:flex-row sm:justify-between sm:gap-3">
+                    <Button
+                      type="button"
+                      variant="quiet"
+                      onClick={voice.toggle}
+                      disabled={isAiThinking || voice.state.kind === 'transcribing'}
+                      aria-pressed={voice.state.kind === 'recording' || voice.state.kind === 'listening'}
+                      className="min-h-11 w-full sm:w-auto"
+                    >
+                      {voice.state.kind === 'recording' || voice.state.kind === 'listening' ? m.voice.stop : m.voice.start}
+                    </Button>
+                    {sendButton}
+                  </div>
+                ) : sendButton}
               </div>
               {voice.enabled && voice.state.kind !== 'idle' && (
                 <p role={voice.state.kind === 'error' ? 'alert' : 'status'} className="text-[13px] leading-[20px] text-ink-700">
