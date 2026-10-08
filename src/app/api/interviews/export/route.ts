@@ -1,4 +1,6 @@
-// GET /api/interviews/export - Export all interviews as ZIP
+// GET /api/interviews/export - Export all interviews as ZIP, or with
+// ?studyId=…&format=markdown one study's transcripts as a single Markdown file
+// (src/lib/export/transcriptsMarkdown.ts).
 // Protected: Requires authenticated session
 //
 // Node (standalone Redis, hosted BYOS): the archive is built in memory with
@@ -25,7 +27,7 @@ import {
   MAX_OWNED_STUDIES,
 } from '@/lib/ownedStudies';
 import JSZip from 'jszip';
-import { StoredInterview, StoredAggregateSynthesis } from '@/types';
+import { StoredInterview, StoredAggregateSynthesis, type StoredStudy } from '@/types';
 import { logRequestFailure } from '@/lib/requestLog';
 import {
   aggregateEntryName,
@@ -43,6 +45,13 @@ import {
   type InterviewExportPage,
 } from '@/lib/export/interviewExport';
 import { ZipLimitError } from '@/lib/export/zipStream';
+import {
+  buildTranscriptsMarkdown,
+  createTranscriptsMarkdownStream,
+  transcriptsContentDisposition,
+  transcriptsMarkdownHeader,
+  TRANSCRIPTS_MARKDOWN_CONTENT_TYPE,
+} from '@/lib/export/transcriptsMarkdown';
 import { isDurableWorkspaceStore, type DurableWorkspaceStorePort, type ExportPage, type WorkspaceStorePort } from '@/lib/storage/types';
 import { MAX_EXPLORATION_ANSWERS, type ExplorationAnswer } from '@/lib/exploration/types';
 import { studyMutationReadiness, STUDY_DELETION_PENDING_CODE, STUDY_DELETION_PENDING_MESSAGE } from '@/lib/studyMutationReadiness';
@@ -268,9 +277,100 @@ async function streamDurableExport(store: DurableWorkspaceStorePort, studyId?: s
   });
 }
 
+// ---------- One study's transcripts as a single Markdown file ----------
+
+const NO_TRANSCRIPTS_MESSAGE = 'This study has no saved interviews to export.';
+
+function markdownResponse(body: BodyInit, study: StoredStudy): Response {
+  return new Response(body, {
+    headers: {
+      'Content-Type': TRANSCRIPTS_MARKDOWN_CONTENT_TYPE,
+      'Content-Disposition': transcriptsContentDisposition(study.config.name, study.id),
+      'Cache-Control': 'no-store',
+    },
+  });
+}
+
+async function* interviewPages(pages: AsyncIterable<InterviewExportPage>): AsyncGenerator<StoredInterview[]> {
+  for await (const page of pages) yield page.interviews;
+}
+
+async function streamDurableMarkdown(store: DurableWorkspaceStorePort, study: StoredStudy): Promise<Response> {
+  const scope = { studyId: study.id };
+  const begun = await store.beginExport({ maximum: MAX_EXPORT_INTERVIEWS, ...scope });
+  if (begun.status === 'empty') {
+    return NextResponse.json({ error: NO_TRANSCRIPTS_MESSAGE }, { status: 404, headers: { 'Cache-Control': 'no-store' } });
+  }
+  if (begun.status === 'too-large') {
+    return NextResponse.json({ error: TOO_LARGE_STUDY_MESSAGE }, { status: 413, headers: { 'Cache-Control': 'no-store' } });
+  }
+  if (begun.status !== 'ok') return exportUnavailableResponse();
+  if (begun.count === 0) {
+    return NextResponse.json({ error: NO_TRANSCRIPTS_MESSAGE }, { status: 404, headers: { 'Cache-Control': 'no-store' } });
+  }
+
+  const sequence = begun.sequence;
+  const first = await store.readExportPage({ sequence, cursor: null, pageSize: EXPORT_PAGE_SIZE, maxPageBytes: EXPORT_PAGE_BYTES, ...scope });
+  if (first.status === 'changed') return exportChangedResponse();
+  if (first.status !== 'ok') return exportUnavailableResponse();
+
+  const maximumPages = begun.count + begun.studyIds.length + MAX_EXPLORATION_ANSWERS + 1;
+  const body = createTranscriptsMarkdownStream({
+    header: transcriptsMarkdownHeader(study, begun.count, new Date()),
+    interviews: interviewPages(remainingExportPages(store, sequence, first, maximumPages, study.id)),
+    beforeFinish: async () => {
+      const verified = await store.verifyExportSequence({ sequence, ...scope });
+      if (verified === 'changed') throw new ExportSnapshotChangedError();
+      if (verified !== 'unchanged') throw new ExportStorageUnavailableError();
+    },
+    onError: (error) => {
+      logRequestFailure({
+        event: 'route.failure',
+        route: '/api/interviews/export',
+        method: 'GET',
+        ...(error instanceof ExportStorageUnavailableError ? { reason: 'unavailable' } : {}),
+      }, error);
+    },
+  });
+  return markdownResponse(body, study);
+}
+
+async function exportStudyMarkdown(studyId: string): Promise<Response> {
+  const gated = await getAuthorizedResearcherStudyContext(studyId, 'read');
+  const denied = configurationRequiredResponse(gated);
+  if (denied) return denied;
+  if (!gated.authorized || !gated.context) {
+    return NextResponse.json({ error: gated.error || 'Unauthorized', retryable: gated.retryable, ...(gated.code ? { code: gated.code } : {}) }, { status: gated.statusCode ?? 401 });
+  }
+  const store = gated.context.store;
+  const mutationRefusal = await exportMutationRefusal(store, [studyId], true);
+  if (mutationRefusal) return mutationRefusal;
+  const study = mapStudyLoad(await store.getStudy(studyId));
+  if (!study.ok) return NextResponse.json(study.body, { status: study.status });
+  if (isDurableWorkspaceStore(store)) return await streamDurableMarkdown(store, study.study);
+  const loaded = mapCollectionLoad(await store.listInterviews({ scope: 'study', studyId, maximum: MAX_EXPORT_INTERVIEWS }), { unavailable: 'Interview storage is temporarily unavailable.', tooLarge: TOO_LARGE_STUDY_MESSAGE });
+  if (!loaded.ok) return NextResponse.json(loaded.body, { status: loaded.status });
+  if (loaded.items.length === 0) return NextResponse.json({ error: NO_TRANSCRIPTS_MESSAGE }, { status: 404 });
+  const markdown = buildTranscriptsMarkdown(study.study, loaded.items, new Date());
+  const refusal = await exportMutationRefusal(store, [studyId]);
+  if (refusal) return refusal;
+  return markdownResponse(markdown, study.study);
+}
+
 export async function GET(request?: Request) {
   try {
-    const studyId = request ? new URL(request.url).searchParams.get('studyId') : null;
+    const searchParams = request ? new URL(request.url).searchParams : null;
+    const studyId = searchParams?.get('studyId') ?? null;
+    const format = searchParams?.get('format') ?? null;
+    if (format !== null && format !== 'zip' && format !== 'markdown') {
+      return NextResponse.json({ error: 'Invalid export format' }, { status: 400 });
+    }
+    if (format === 'markdown') {
+      if (studyId === null || !/^[A-Za-z0-9-]{1,128}$/.test(studyId)) {
+        return NextResponse.json({ error: 'A Markdown export needs one valid study ID' }, { status: 400 });
+      }
+      return await exportStudyMarkdown(studyId);
+    }
     if (studyId !== null) {
       if (!/^[A-Za-z0-9-]{1,128}$/.test(studyId)) {
         return NextResponse.json({ error: 'Invalid study ID' }, { status: 400 });

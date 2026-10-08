@@ -10,6 +10,7 @@ import {
   readStudyInterviews,
   deleteStudy,
   exportAllInterviewsChecked,
+  exportStudyTranscriptsChecked,
   reconcileStudyOperations,
   type ResearcherStorageFailure,
 } from '@/services/storageService';
@@ -145,6 +146,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
   useEffect(() => { if (activeTab === 'explore') setExplorationVisited(true); }, [activeTab]);
   const [lifecycleError, setLifecycleError] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
+  const [isExportingTranscripts, setIsExportingTranscripts] = useState(false);
   const [deleteStep, setDeleteStep] = useState<0 | 1 | 2>(0);
   const [deleteRevision, setDeleteRevision] = useState<number | null>(null);
   const [deleteAcknowledged, setDeleteAcknowledged] = useState(false);
@@ -635,6 +637,18 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
     finally { if (activeStudyId.current === studyId) setIsExporting(false); }
   };
 
+  const handleExportTranscripts = async () => {
+    setIsExportingTranscripts(true); setLifecycleError(null);
+    try {
+      const outcome = await exportStudyTranscriptsChecked(studyId);
+      if (activeStudyId.current !== studyId) return;
+      if (outcome.status !== 'ok') { setLifecycleError(storageFailureCopy(outcome)); return; }
+      const url = URL.createObjectURL(outcome.value.file);
+      const link = document.createElement('a'); link.href = url; link.download = outcome.value.filename; link.click(); URL.revokeObjectURL(url);
+    } catch { if (activeStudyId.current === studyId) setLifecycleError('The transcript export could not be confirmed.'); }
+    finally { if (activeStudyId.current === studyId) setIsExportingTranscripts(false); }
+  };
+
   const handleDeleteStudy = async () => {
     if (isDeleting) return;
     const confirmation = study && deleteRevision !== null ? { deleteInterviews: true as const, confirmStudyId: studyId, expectedRevision: deleteRevision } : undefined;
@@ -1120,6 +1134,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
             <div className="mt-3 flex flex-wrap gap-3">
               <Button variant="primary" disabled={operationPending} onClick={() => router.push(`/setup?prefill=edit&studyId=${encodeURIComponent(studyId)}`)}>Edit study</Button>
               <Button variant="quiet" disabled={operationPending || isExporting} onClick={() => void handleExportStudy()}>{isExporting ? 'Preparing study export…' : 'Export this study'}</Button>
+              <Button variant="quiet" disabled={operationPending || isExportingTranscripts || study.interviewCount === 0} onClick={() => void handleExportTranscripts()} title="All transcripts in one Markdown file, with what each participant was told about the AI">{isExportingTranscripts ? 'Preparing transcripts…' : 'Export transcripts (.md)'}</Button>
             </div>
           </section>
           {lifecycleError && <Notice tone="error" role="status"><p className="text-[13px]">{lifecycleError}</p></Notice>}

@@ -297,6 +297,8 @@ For researchers:
 6. Choose a dataset, run aggregate analysis, or ask questions in **Explore**; export the study or workspace.
 7. Pause and resume collection without replacing links, or delete a study in Settings when its retention period ends.
 
+**Export this study** downloads a ZIP of raw records, transcripts, the aggregate and the notebook. **Export transcripts (.md)** downloads one Markdown file with every saved transcript of the study, for reading or for another analysis tool. Transcript text is quoted exactly as saved, and each interview lists what its participant was told about the AI. If a participant was promised that the study uses only one provider and model, sending the file to a different AI service may break that promise. A download that did not finish is refused rather than saved.
+
 ### Explore this study
 
 **Explore** answers questions against saved transcripts in one study, including interviews whose individual analysis is pending or failed. Select revisions, particular interviews, or recorded profile fields first. Unknown, refused, vague and ambiguous profile values remain unknown; a numeric range accepts only a recorded scalar number, not an inferred age. Original field definitions are preserved for newly saved interviews. Older records without those definitions are visibly unknown, not relabeled with today's schema.

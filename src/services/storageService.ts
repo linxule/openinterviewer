@@ -12,6 +12,7 @@ import {
   toStudyListItem,
 } from '@/types';
 import { logRequestEvent, logRequestFailure } from '@/lib/requestLog';
+import { hasTranscriptsCompleteMarker } from '@/lib/export/transcriptsMarkdown';
 import { buildParticipantOrPreviewHeaders } from '@/services/participantHeaders';
 export { isPendingStudyStub };
 export type { StudyWorkspaceItem };
@@ -299,6 +300,67 @@ export async function exportAllInterviewsChecked(studyId?: string): Promise<Rese
     }
     logRequestFailure({ event: 'route.failure' }, error);
     return { status: 'unavailable', error: 'Interview export is temporarily unavailable.', retryable: true };
+  }
+}
+
+/** The download name from `filename*=UTF-8''…`, else `filename="…"`. */
+export function downloadFilename(contentDisposition: string | null, fallback: string): string {
+  if (!contentDisposition) return fallback;
+  const extended = /filename\*=UTF-8''([^;]+)/i.exec(contentDisposition);
+  if (extended) {
+    try {
+      const decoded = decodeURIComponent(extended[1].trim());
+      if (decoded && !/[\\/]/.test(decoded)) return decoded;
+    } catch {
+      // Fall through to the ASCII name.
+    }
+  }
+  const plain = /filename="([^"]+)"/i.exec(contentDisposition);
+  return plain && !/[\\/]/.test(plain[1]) ? plain[1] : fallback;
+}
+
+/**
+ * One study's transcripts as a single Markdown file. Like the ZIP, a streamed
+ * file can end as a clean 200 after a failure, so it is offered only when it
+ * ends with the closing marker the server writes after its final check.
+ */
+export async function exportStudyTranscriptsChecked(studyId: string): Promise<ResearcherStorageOutcome<{ file: Blob; filename: string }>> {
+  try {
+    const response = await fetch(`/api/interviews/export?studyId=${encodeURIComponent(studyId)}&format=markdown`);
+    if (response.ok) {
+      const text = await response.text();
+      if (!hasTranscriptsCompleteMarker(text)) {
+        logRequestEvent({
+          event: 'route.failure',
+          route: '/api/interviews/export',
+          method: 'GET',
+          errorType: 'IncompleteTranscriptsExport',
+        });
+        return { status: 'unavailable', error: 'The export did not complete. Try the export again.', retryable: true };
+      }
+      return {
+        status: 'ok',
+        value: {
+          file: new Blob([text], { type: 'text/markdown;charset=utf-8' }),
+          filename: downloadFilename(response.headers.get('Content-Disposition'), `study-${studyId}-transcripts.md`),
+        },
+      };
+    }
+    const data = await response.json().catch(() => ({})) as { code?: string; error?: string };
+    if (response.status === 409 && data.code === 'EXPORT_CHANGED') {
+      return {
+        status: 'unavailable',
+        error: data.error || 'The interviews changed while the export was being prepared. Try the export again.',
+        retryable: true,
+      };
+    }
+    return classifyResearcherStorageFailure(response, data);
+  } catch (error) {
+    if (error instanceof StudyOperationPendingError || error instanceof ResearcherStorageUnavailableError) {
+      throw error;
+    }
+    logRequestFailure({ event: 'route.failure' }, error);
+    return { status: 'unavailable', error: 'Transcript export is temporarily unavailable.', retryable: true };
   }
 }
 
