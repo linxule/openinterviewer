@@ -50,7 +50,8 @@ const LANES = [
   { name: 'setup-checker', cmd: ['npm', 'run', 'test:setup'] },
   { name: 'installer', cmd: ['npm', 'run', 'test:setup:cloudflare'] },
   { name: 'audit-production', cmd: ['npm', 'audit', '--omit=dev', '--audit-level=high'] },
-  { name: 'audit-toolchain', cmd: ['npm', 'audit', '--include=dev', '--audit-level=high'] },
+  // High and critical development advisories block, except dated entries in audit-exceptions.json.
+  { name: 'audit-toolchain', cmd: ['node', 'scripts/cloudflare/audit-toolchain.mjs'] },
   { name: 'diff-check', cmd: ['git', 'diff', '--check'] },
   { name: 'workers-runtime', cmd: ['npm', 'run', 'test:cloudflare'] },
   { name: 'worker-import-boundary', cmd: ['node', 'scripts/cloudflare/check-import-boundary.mjs'] },

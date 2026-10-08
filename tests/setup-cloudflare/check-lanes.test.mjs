@@ -21,7 +21,7 @@ function checkCheckout(t, { failDevelopmentAudit = false } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'oi-check-lanes-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const repo = path.join(dir, 'repo');
-  for (const name of ['check.mjs', 'lib.mjs', 'credential-env.mjs']) {
+  for (const name of ['check.mjs', 'lib.mjs', 'credential-env.mjs', 'audit-toolchain.mjs', 'audit-exceptions.json']) {
     mkdirSync(path.join(repo, 'scripts', 'cloudflare'), { recursive: true });
     copyFileSync(path.join(ROOT, 'scripts', 'cloudflare', name), path.join(repo, 'scripts', 'cloudflare', name));
   }

@@ -1,0 +1,12 @@
+{
+  "comment": "Development-toolchain advisories the release check may pass while they stand. Each entry needs a reason and an expiry; an expired entry fails the check. Production (npm audit --omit=dev) has no exceptions.",
+  "exceptions": [
+    {
+      "id": "GHSA-vfj7-8cjw-p6xm",
+      "package": "braces",
+      "reason": "No patched braces release exists (<=3.0.3 is every version). It reaches the toolchain only through tailwindcss 3 (chokidar, micromatch), fast-glob and @next/eslint-plugin-next, which expand this repository's own build and lint patterns, never request input. Remove when braces publishes a fix or Tailwind 4 lands.",
+      "recorded": "2026-10-08",
+      "expires": "2026-11-08"
+    }
+  ]
+}
