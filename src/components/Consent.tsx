@@ -217,6 +217,9 @@ const Consent: React.FC = () => {
           <span className="font-mono">
             {providerDisclosure}
             {providerCommitmentNotice ? <>{' '}{providerCommitmentNotice}</> : null}
+            {studyConfig.voiceInput === 'installation' || studyConfig.voiceInput === 'browser'
+              ? <>{' '}{m.voice[studyConfig.voiceInput]}</>
+              : null}
           </span>{' '}
           {m.controller}
           {studyConfig.researcherContact

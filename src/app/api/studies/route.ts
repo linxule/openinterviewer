@@ -212,6 +212,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: validatedConfig.error }, { status: 400 });
     }
     const serverConfig = validatedConfig.config;
+    if (isHostedMode() && serverConfig.voiceInput === 'installation') {
+      return NextResponse.json({ error: 'Voice transcription by the installation is not offered on the hosted service.' }, { status: 400 });
+    }
 
     // Hosted setup/provider gates read the platform account record only, so
     // they fail closed without touching BYOS ciphers. Standalone keeps its

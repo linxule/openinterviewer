@@ -67,7 +67,8 @@ afterEach(() => {
 
 describe('STANDALONE_RESEARCHER_AI_POLICY (D15)', () => {
   it('covers every hosted AI operation with a session and a workspace scope and no network scope', () => {
-    expect(OPERATIONS.sort()).toEqual(Object.keys(HOSTED_AI_RATE_LIMIT_POLICY).sort());
+    // Voice transcription is standalone-only: the hosted service does not offer it.
+    expect(OPERATIONS.filter((operation) => operation !== 'transcribe').sort()).toEqual(Object.keys(HOSTED_AI_RATE_LIMIT_POLICY).sort());
     for (const operation of OPERATIONS) {
       const policy = STANDALONE_RESEARCHER_AI_POLICY[operation];
       expect(Object.keys(policy).sort()).toEqual(['researcher', 'session']);

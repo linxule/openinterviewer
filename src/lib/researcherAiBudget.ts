@@ -41,6 +41,11 @@ export const STANDALONE_RESEARCHER_AI_POLICY: Record<ResearcherAiOperation, { se
     session: { maximum: 60, windowSeconds: 3_600 },
     researcher: { maximum: 1_000, windowSeconds: 86_400 },
   },
+  // Preview voice clips: a researcher testing the microphone.
+  transcribe: {
+    session: { maximum: 40, windowSeconds: 3_600 },
+    researcher: { maximum: 300, windowSeconds: 86_400 },
+  },
   synthesis: {
     session: { maximum: 10, windowSeconds: 3_600 },
     researcher: { maximum: 100, windowSeconds: 86_400 },

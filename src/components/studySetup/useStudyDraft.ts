@@ -8,6 +8,7 @@ import {
   ProfileField,
   ProviderCommitment,
   StudyConfig,
+  VoiceInputMode,
 } from '@/types';
 import { DEFAULT_PROVIDER_COMMITMENT } from '@/lib/providerCommitment';
 import { DEFAULT_MODEL_BY_PROVIDER } from '@/lib/providerRegistry';
@@ -27,6 +28,7 @@ export interface StudyDraft {
   interviewLanguages: InterviewLanguage[];
   consentTranslations: Partial<Record<InterviewLanguage, string>>;
   thankYouTranslations: Partial<Record<InterviewLanguage, string>>;
+  voiceInput: VoiceInputMode;
 
   savedStudyId: string | null;
   parentStudyInfo: { id: string; name: string } | null;
@@ -49,6 +51,7 @@ export interface StudyDraft {
   makeDefaultLanguage(language: InterviewLanguage): void;        // moves its texts into consentText/thankYouText
   setConsentTranslation(language: InterviewLanguage, value: string): void;
   setThankYouTranslation(language: InterviewLanguage, value: string): void;
+  setVoiceInput(value: VoiceInputMode): void;
   addQuestion(): void; removeQuestion(index: number): void;
   updateQuestion(index: number, value: string): void;
   addTopic(): void; removeTopic(index: number): void;
@@ -114,6 +117,8 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
   const [thankYouTranslations, setThankYouTranslations] = useState<Partial<Record<InterviewLanguage, string>>>(
     { ...(studyConfig?.thankYouTextTranslations ?? {}) }
   );
+  const [voiceInput, setVoiceInputState] = useState<VoiceInputMode>(studyConfig?.voiceInput ?? 'off');
+  const setVoiceInput = (value: VoiceInputMode) => { setVoiceInputState(value); setIsDirty(true); };
 
   const [savedStudyId, setSavedStudyId] = useState<string | null>(studyConfig?.id ?? null);
   const [parentStudyInfo, setParentStudyInfo] = useState<{ id: string; name: string } | null>(null);
@@ -267,6 +272,7 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
     setInterviewLanguages(studyLanguages(config));
     setConsentTranslations({ ...(config.consentTextTranslations ?? {}) });
     setThankYouTranslations({ ...(config.thankYouTextTranslations ?? {}) });
+    setVoiceInputState(config.voiceInput ?? 'off');
   };
 
   const additionalLanguages = interviewLanguages.slice(1);
@@ -309,6 +315,8 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
     linksEnabled: mode === 'update' ? baseConfig?.linksEnabled ?? true : true,
     consentText: consentText.trim() || defaultConsentText(researchQuestion, interviewLanguages[0]),
     ...languageMembers(mode),
+    // 'off' is the legacy behaviour: saved without the field, except to turn it off.
+    ...(voiceInput !== 'off' || (mode === 'update' && baseConfig?.voiceInput !== undefined) ? { voiceInput } : {}),
     createdAt: mode === 'update' ? baseConfig?.createdAt || Date.now() : Date.now(),
     ...(researcherContact.trim() ? { researcherContact: researcherContact.trim() } : {}),
     // Deliberately not defaulted here, unlike consentText one line up: the
@@ -351,7 +359,7 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
     enableReasoning, linkExpiration,
     consentText, researcherContact, thankYouText,
     interviewerInstructions,
-    interviewLanguages, consentTranslations, thankYouTranslations,
+    interviewLanguages, consentTranslations, thankYouTranslations, voiceInput,
 
     savedStudyId, parentStudyInfo, isDirty,
 
@@ -359,7 +367,7 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
     selectProvider, setAiModel, setAiProviderCommitment, setAiBehavior, setEnableReasoning, setLinkExpiration, setConsentText,
     setThankYouText,
     setInterviewerInstructions,
-    toggleInterviewLanguage, makeDefaultLanguage, setConsentTranslation, setThankYouTranslation,
+    toggleInterviewLanguage, makeDefaultLanguage, setConsentTranslation, setThankYouTranslation, setVoiceInput,
     addQuestion, removeQuestion, updateQuestion,
     addTopic, removeTopic, updateTopic,
     addProfileField, removeProfileField, updateProfileField, toggleFieldRequired,

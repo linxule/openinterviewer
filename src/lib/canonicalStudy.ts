@@ -269,7 +269,7 @@ export async function participantStoreAdmission(input: {
   request: Request;
   route: string;
   studyId: string;
-  operation: 'greeting' | 'interview';
+  operation: 'greeting' | 'interview' | 'transcribe';
   store: Pick<WorkspaceStorePort, 'admitParticipantRequest'>;
   authority: Parameters<typeof participantStoreAdmissionResponse>[4];
 }): Promise<NextResponse | null> {

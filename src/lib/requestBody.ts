@@ -74,3 +74,22 @@ export async function readBoundedJsonObject(
     return { ok: false, status: 400 };
   }
 }
+
+export type BoundedBytesResult =
+  | { ok: true; bytes: Uint8Array }
+  | { ok: false; status: 400 | 413 };
+
+/**
+ * A raw body of at most `maximumBytes` (voice clips): 413 when a declared
+ * Content-Length or the bytes actually sent exceed it, 400 when unreadable.
+ */
+export async function readBoundedBytes(request: Request, maximumBytes: number): Promise<BoundedBytesResult> {
+  const declaredLength = Number(request.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) return { ok: false, status: 413 };
+  try {
+    const bytes = await readBodyBytes(request, maximumBytes);
+    return bytes === null ? { ok: false, status: 413 } : { ok: true, bytes };
+  } catch {
+    return { ok: false, status: 400 };
+  }
+}

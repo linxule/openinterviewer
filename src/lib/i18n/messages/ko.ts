@@ -64,6 +64,10 @@ export const ko: Messages = {
       fixed: (model, provider) => `인터뷰와 이후의 응답 분석에는 ${model}(${provider})을(를) 사용하며, 이 연구는 다른 AI 제공업체나 모델로 바꾸지 않습니다.`,
       mayChange: '연구자는 나중에 다른 AI 제공업체나 모델로 응답을 분석할 수 있습니다.',
     },
+    voice: {
+      installation: '마이크를 사용하면 녹음이 Cloudflare로 전송되어 Cloudflare Workers AI가 텍스트로 변환합니다. 이 연구는 녹음을 보관하지 않으며, 보내기 전에 텍스트를 수정할 수 있습니다.',
+      browser: '마이크를 사용하면 브라우저의 음성 서비스가 말을 텍스트로 변환합니다. Chrome에서는 Google, Safari에서는 Apple이 각자의 약관에 따라 처리합니다. 보내기 전에 텍스트를 수정할 수 있습니다.',
+    },
   },
   interview: {
     phases: {
@@ -91,6 +95,19 @@ export const ko: Messages = {
     placeholder: '하고 싶은 만큼 자유롭게 적어 주세요.',
     send: '보내기',
     sendShortcut: '⌘/Ctrl + Enter로 보내기',
+    voice: {
+      start: '음성 입력 시작',
+      stop: '녹음 중지',
+      recording: (elapsed) => `녹음 중 ${elapsed} (최대 1:00)`,
+      listening: '듣는 중…',
+      transcribing: '녹음을 텍스트로 변환하는 중…',
+      review: '보내기 전에 텍스트를 확인해 주세요.',
+      denied: '마이크 접근이 차단되었습니다. 브라우저에서 허용하시거나 응답을 입력해 주세요.',
+      failed: '녹음을 텍스트로 변환할 수 없습니다. 다시 시도하시거나 응답을 입력해 주세요.',
+      unsupported: '이 브라우저에서는 음성 입력을 사용할 수 없습니다. 응답을 입력해 주세요.',
+      limited: '짧은 시간에 많은 응답을 녹음하셨습니다. 잠시 후 다시 시도하시거나 응답을 입력해 주세요.',
+      unavailable: '지금은 음성 입력을 사용할 수 없습니다. 응답을 입력해 주세요.',
+    },
   },
   finish: {
     thankYouTitle: '감사합니다',

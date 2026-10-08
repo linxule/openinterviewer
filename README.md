@@ -2,7 +2,7 @@
 
 OpenInterviewer is an open-source platform for adaptive, AI-assisted qualitative interviews. Researchers configure a study, share an opaque participant link, and review transcripts and synthesis in a dashboard.
 
-See the [v5.0.1 notes](docs/releases/v5.0.1.md) for the Next.js 16.3.8 security update, and the [v5.0.0 release notes](docs/releases/v5.0.0.md) for saved study exploration, explicit datasets,
+See the [v5.1.0 release notes](docs/releases/v5.1.0.md) for interview languages, voice input and Markdown transcript export, the [v5.0.1 notes](docs/releases/v5.0.1.md) for the Next.js 16.3.8 security update, and the [v5.0.0 release notes](docs/releases/v5.0.0.md) for saved study exploration, explicit datasets,
 study deletion and workflow controls. The [v4.2.0 release notes](docs/releases/v4.2.0.md) cover the per-study choice of what participants are told
 about the AI provider, researcher AI budgets and sign-in limits, the [v4.1.1 notes](docs/releases/v4.1.1.md) for
 self-hosted fonts and dependency updates, the [v4.1.0 notes](docs/releases/v4.1.0.md) for participant-session and link-privacy fixes and
@@ -397,6 +397,16 @@ Studies saved before this setting existed keep their old notice, and their inter
 - **Analysis** is written in English, with quotations kept verbatim in the participant's language. Each saved interview records the language it was conducted in.
 - **Translations** of the fixed participant screens and the data notice were drafted with AI assistance and reviewed by three other AI models; they are not certified translations (see `docs/translations/`). Your consent text in each language is your own: have it checked as your ethics process requires.
 - A study saved with only English keeps working exactly as before. A study with a language setting is refused by releases before 5.1 (fail-closed), so do not roll back past 5.1 while one is collecting.
+
+### Voice input
+
+**Voice Input** lets participants speak an answer instead of typing it. The text appears in their answer box to check and edit; nothing is sent until they press Send. The consent notice states who turns speech into text:
+
+- **Transcribed by this installation**: the browser records up to one minute, converts it to 16 kHz WAV and sends it to `/api/transcribe`, which passes it to Cloudflare Workers AI (`@cf/openai/whisper-large-v3-turbo`) once. OpenInterviewer does not store or log the recording or its text. Cloudflare's Workers AI terms say customer content is not used to train models; they do not state a retention period, so the consent line promises only that the study does not keep the recording. Works in current Chrome, Edge, Firefox and Safari, on phones and computers. On Cloudflare the installation's `AI` binding is used directly, never through AI Gateway; on Node set `CLOUDFLARE_WORKERS_AI_ACCOUNT_ID` and `CLOUDFLARE_WORKERS_AI_TOKEN` (an API token with Workers AI permissions). Cloudflare charges about $0.0005 per audio minute after its free daily allowance of 10,000 Neurons (roughly 200 audio minutes). Each request is admitted like an interview turn (40 clips per session per hour; 1,500 per study per day).
+- **The browser's own dictation**: no setup. Chrome sends the audio to Google and Safari to Apple, under their terms; Firefox does not support it. Use it only where your ethics approval allows these processors.
+- **Off** (the default).
+
+Transcription by the installation is not offered on the hosted service, which refuses to save it; browser dictation works there. On-device transcription is being evaluated; the open models available today do not cover all six interview languages.
 
 Changing study configuration advances its revision and invalidates links and participant sessions issued for the previous revision. Generate and distribute a new link after a consequential edit. Pausing/resuming collection and unchanged saves do not advance the revision.
 

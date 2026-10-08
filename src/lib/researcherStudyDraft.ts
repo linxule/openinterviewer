@@ -48,6 +48,7 @@ export function copyStudyConfiguration(config: Partial<StudyConfig>): StudyConfi
     thankYouText: config.thankYouText ?? '',
     interviewerInstructions: config.interviewerInstructions ?? '',
     ...draftLanguageMembers(config),
+    ...(config.voiceInput === 'installation' || config.voiceInput === 'browser' ? { voiceInput: config.voiceInput } : {}),
   };
 }
 

@@ -118,6 +118,14 @@ export type LinkExpirationOption = 'never' | '7days' | '30days' | '90days';
 
 export type ProviderCommitment = 'fixed' | 'may-change';
 
+/**
+ * Participant voice input. 'installation': recordings are transcribed by this
+ * installation's Cloudflare account (Workers AI) and not stored. 'browser':
+ * the browser's own speech service (Google in Chrome, Apple in Safari).
+ * Absent or 'off': no microphone. The consent notice names the processor.
+ */
+export type VoiceInputMode = 'off' | 'installation' | 'browser';
+
 export interface StudyConfig {
   id: string;
   name: string;
@@ -175,6 +183,8 @@ export interface StudyConfig {
   consentTextTranslations?: Partial<Record<InterviewLanguage, string>>;
   /** Optional thank-you text for languages after the first. */
   thankYouTextTranslations?: Partial<Record<InterviewLanguage, string>>;
+  /** Optional; absent means no voice input (see VoiceInputMode). */
+  voiceInput?: VoiceInputMode;
   createdAt: number;
   // Follow-up study lineage
   parentStudyId?: string;         // ID of parent study if this is a follow-up

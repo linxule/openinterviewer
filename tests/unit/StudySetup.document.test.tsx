@@ -45,6 +45,7 @@ const SECTION_IDS = [
   'interview-structure',
   'interviewer-manner',
   'interview-languages',
+  'voice-input',
   'link-settings',
   'consent-text',
   'thank-you-text',
@@ -164,7 +165,7 @@ describe('StudySetup document mode (F1: read-mode for saved studies)', () => {
     });
   }
 
-  it('exposes all eleven sections in the index, and each behind its own Edit control that reveals its fields independently', async () => {
+  it('exposes all twelve sections in the index, and each behind its own Edit control that reveals its fields independently', async () => {
     seedSavedStudy();
     render(<StudySetup />);
     await waitFor(() => expect(screen.queryByText('Loading this study…')).not.toBeInTheDocument());
@@ -178,7 +179,7 @@ describe('StudySetup document mode (F1: read-mode for saved studies)', () => {
 
     for (const label of [
       'Study Details', 'Profile Fields', 'Core Questions', 'Topic Areas',
-      'AI Provider', 'Interview Structure', 'Interviewer Manner', 'Interview Languages', 'Link Settings', 'Consent Text', 'Thank-You Screen',
+      'AI Provider', 'Interview Structure', 'Interviewer Manner', 'Interview Languages', 'Voice Input', 'Link Settings', 'Consent Text', 'Thank-You Screen',
     ]) {
       expect(screen.getByRole('button', { name: `Edit ${label}` })).toBeInTheDocument();
     }
