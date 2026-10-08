@@ -12,7 +12,7 @@ import type { ExplorationAnswer } from '@/lib/exploration/types';
 import { csvCell } from '@/lib/csv';
 import { analysisStatus } from '@/lib/analysisState';
 import { createZipStream, type ZipStreamLimits } from './zipStream';
-import { quoteBlock } from './transcriptsMarkdown';
+import { interviewLanguageLine, quoteBlock } from './transcriptsMarkdown';
 
 export const AGGREGATES_DIRECTORY = 'aggregates/';
 export const EXPLORATIONS_DIRECTORY = 'explorations/';
@@ -27,6 +27,7 @@ export function interviewTranscriptMarkdown(interview: StoredInterview): string 
     `Interview ID: ${interview.id}`,
     `Date: ${new Date(interview.createdAt).toLocaleDateString()}`,
     `Duration: ${Math.round((interview.completedAt - interview.createdAt) / 1000 / 60)} minutes`,
+    ...(interviewLanguageLine(interview) ? [interviewLanguageLine(interview)!] : []),
     ``
   ];
 

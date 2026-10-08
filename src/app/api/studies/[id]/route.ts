@@ -41,7 +41,7 @@ import { RETRY_AFTER_PENDING } from '@/lib/createIdempotency';
 import { createRequestId, logRequestFailure } from '@/lib/requestLog';
 import { deploymentNotReadyResponse } from '@/lib/runtime/readinessGate';
 import { isDurableWorkspaceStore, type WorkspaceHoldReason, type WorkspaceStorePort } from '@/lib/storage/types';
-import { readBoundedJsonObject } from '@/lib/requestBody';
+import { jsonObjectFrom, readBoundedBytes } from '@/lib/requestBody';
 import { studyConfigsEqual } from '@/lib/studyConfigEquality';
 import { studyMutationReadiness } from '@/lib/studyMutationReadiness';
 
@@ -54,12 +54,17 @@ async function readDeleteConfirmation(request: Request, studyId: string): Promis
 > {
   // The historic empty DELETE remains an empty-only operation. A body, even
   // {}, must explicitly identify the destructive operation and its subject.
+  // No bytes is no body: on Cloudflare (OpenNext) a bodyless DELETE arrives
+  // with an empty stream rather than a null body.
   if (request.body === null) return { ok: true };
-  const parsed = await readBoundedJsonObject(request, 1024);
-  if (!parsed.ok) {
-    return { ok: false, response: NextResponse.json({ error: parsed.status === 413 ? 'Deletion confirmation is too large.' : 'Invalid deletion confirmation.' }, { status: parsed.status }) };
+  const raw = await readBoundedBytes(request, 1024);
+  if (raw.ok && raw.bytes.byteLength === 0) return { ok: true };
+  const parsed = raw.ok ? jsonObjectFrom(raw.bytes) : null;
+  if (!parsed) {
+    const tooLarge = !raw.ok && raw.status === 413;
+    return { ok: false, response: NextResponse.json({ error: tooLarge ? 'Deletion confirmation is too large.' : 'Invalid deletion confirmation.' }, { status: tooLarge ? 413 : 400 }) };
   }
-  const body = parsed.value;
+  const body = parsed;
   if (Object.keys(body).some(key => !['deleteInterviews', 'confirmStudyId', 'expectedRevision'].includes(key))
     || body.deleteInterviews !== true || body.confirmStudyId !== studyId
     || !Number.isSafeInteger(body.expectedRevision) || (body.expectedRevision as number) < 1) {

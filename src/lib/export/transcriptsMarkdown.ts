@@ -10,6 +10,7 @@
 
 import type { StoredInterview, StoredStudy, StudyConfig } from '@/types';
 import { PROVIDER_MODELS, PROVIDER_OPTIONS } from '@/lib/providerRegistry';
+import { LANGUAGE_ENGLISH_NAMES, LANGUAGE_NATIVE_NAMES } from '@/lib/i18n/languages';
 
 export const TRANSCRIPTS_MARKDOWN_CONTENT_TYPE = 'text/markdown; charset=utf-8';
 
@@ -73,6 +74,24 @@ export function participantTermsLine(interview: StoredInterview): string {
   return escapeMarkdownInline(`AI interviewer: ${conducted}, ${transport}; ${commitment}.`);
 }
 
+/** The language the participant chose, for interviews of a study that offered languages; else null. */
+export function interviewLanguageLine(interview: StoredInterview): string | null {
+  const language = interview.interviewLanguage;
+  if (!language || !Object.hasOwn(LANGUAGE_ENGLISH_NAMES, language)) return null;
+  const english = LANGUAGE_ENGLISH_NAMES[language];
+  const native = LANGUAGE_NATIVE_NAMES[language];
+  return `Interview language: ${english}${native === english ? '' : ` (${native})`}`;
+}
+
+/** Whether voice input was offered at the revision this interview ran under (not whether it was used). */
+export function voiceInputLine(interview: StoredInterview): string | null {
+  switch (interview.collectionConfig?.voiceInput) {
+    case 'installation': return 'Voice input offered: speech turned into text by Cloudflare Workers AI; the participant could edit the text before sending.';
+    case 'browser': return 'Voice input offered: speech turned into text by the participant\'s browser speech service; the participant could edit the text before sending.';
+    default: return null;
+  }
+}
+
 export function transcriptsMarkdownHeader(study: StoredStudy, count: number, exportedAt: Date): string {
   const config: StudyConfig = study.config;
   const lines = [
@@ -106,6 +125,7 @@ export function transcriptsMarkdownInterview(interview: StoredInterview, positio
     `- Completed: ${isoUtc(interview.completedAt)}`,
     ...(interview.studyRevision !== undefined ? [`- Study revision: ${interview.studyRevision}`] : []),
     `- ${participantTermsLine(interview)}`,
+    ...[interviewLanguageLine(interview), voiceInputLine(interview)].flatMap((line) => (line ? [`- ${escapeMarkdownInline(line)}`] : [])),
     '',
   ];
 

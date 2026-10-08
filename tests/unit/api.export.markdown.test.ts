@@ -8,12 +8,14 @@ import {
   buildTranscriptsMarkdown,
   escapeMarkdownInline,
   hasTranscriptsCompleteMarker,
+  interviewLanguageLine,
   participantTermsLine,
   quoteBlock,
   transcriptsCompleteMarker,
   transcriptsContentDisposition,
 } from '@/lib/export/transcriptsMarkdown';
 import { downloadFilename, exportStudyTranscriptsChecked } from '@/services/storageService';
+import { interviewTranscriptMarkdown } from '@/lib/export/interviewExport';
 
 const access = vi.hoisted(() => ({ getAuthorizedResearcherStudyContext: vi.fn(), getRequestContext: vi.fn(), getHostedResearcherIdentity: vi.fn() }));
 vi.mock('@/lib/researcherContext', () => access);
@@ -82,6 +84,24 @@ describe('transcripts Markdown builder', () => {
     expect(markdown).toContain('- Exported: 2026-10-08T12:00:00Z');
     expect(markdown).toContain('- Started: 2026-10-01T09:00:00Z');
     expect(markdown).toContain('How do people \\*really\\* work?');
+  });
+
+  it('names the language the participant chose and whether voice input was offered; says nothing for studies without them', () => {
+    const chosen = interview({
+      interviewLanguage: 'ja',
+      collectionConfig: { ...study.config, interviewLanguages: ['en', 'ja'], voiceInput: 'installation' },
+    });
+    expect(interviewLanguageLine(chosen)).toBe('Interview language: Japanese (日本語)');
+    expect(interviewLanguageLine(interview({ interviewLanguage: 'en' }))).toBe('Interview language: English');
+    const markdown = buildTranscriptsMarkdown(study, [chosen], exportedAt);
+    expect(markdown).toContain('- Interview language: Japanese (日本語)');
+    expect(markdown).toContain('- Voice input offered: speech turned into text by Cloudflare Workers AI;');
+    expect(interviewTranscriptMarkdown(chosen)).toContain('Interview language: Japanese (日本語)');
+
+    const plain = buildTranscriptsMarkdown(study, [interview()], exportedAt);
+    expect(plain).not.toContain('Interview language');
+    expect(plain).not.toContain('Voice input');
+    expect(interviewTranscriptMarkdown(interview())).not.toContain('Interview language');
   });
 
   it('escapes inline values and keeps blank lines inside quotes', () => {
