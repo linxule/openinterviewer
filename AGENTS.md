@@ -84,6 +84,7 @@ Hosted study create/delete is a durable cross-database operation. Preserve the o
 - Server-recorded consent: `src/lib/participantConsent.ts`
 - Consent coverage of the provider transport (Cloudflare; disclosed transport vs the current route): `src/lib/transportDisclosure.ts`
 - The consent notice's provider commitment (`fixed` or `may-change`) and the retry check that keeps it: `src/lib/providerCommitment.ts`
+- Interview languages and participant text: `src/lib/i18n/` (`languages.ts` is pure and shared with the Durable Object; `messages/en.ts` is the source every translation must match)
 - Canonical study loading: `src/lib/canonicalStudy.ts`
 - Save validation and deferred analysis: `src/lib/interviewSubmission.ts`, `src/lib/interviewAnalysis.ts`, `src/lib/analysisState.ts`
 - Server-generated synthesis provenance: `src/lib/synthesisProvenance.ts`
@@ -107,6 +108,7 @@ On Cloudflare the participant sequence is the same, with analysis queued by the 
 - Participant URLs contain only opaque high-entropy codes. Do not put study configuration or reusable bearer credentials back in URLs or browser storage.
 - The non-secret participant session selector must accompany participant API calls so parallel tabs remain isolated.
 - Consent is a server record bound to participant session, study revision, and consent hash. Client Zustand state alone is not consent authority.
+- In a study with interview languages, the consent hash is of the chosen language's consent text. Greeting, interview and save name that language and are verified against the same hash, so a switched language fails consent; the saved record's `interviewLanguage` must match it (rechecked by the Durable Object completion). A study without the setting sends and records no language.
 - Researcher preview may call the real provider but must not persist or increment study results.
 - Study revision, link status, ownership, consent, rate limits, and storage uncertainty fail closed.
 - Hosted provider resolution must never fall back to platform-owner API keys.

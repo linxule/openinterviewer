@@ -21,6 +21,7 @@ import {
 import { consentMatches, readConsent, resolveLink, sha256Hex } from './participants';
 import { logRequestEvent } from '../../src/lib/requestLog';
 import { isProviderCommitment } from '../../src/lib/providerCommitment';
+import { consentTextFor, hasLanguageSetting, isInterviewLanguage, studyLanguages } from '../../src/lib/i18n/languages';
 import {
   decodeStudyRow,
   INTERVIEW_ID,
@@ -59,6 +60,7 @@ type Prepared = {
   frozen: FrozenAnalysisInput;
   recordJson: string;
   sessionDigest: string;
+  languageConsentHash: string;
 };
 
 function isValidPlanRow(row: unknown): row is PlanRow {
@@ -104,6 +106,7 @@ async function prepare(input: Rpc.PersistInput): Promise<Prepared | null> {
     || (interview.studyRevision !== undefined && !isRevision(interview.studyRevision))
     || (interview.consentTransport !== undefined && interview.consentTransport !== 'cloudflare-gateway')
     || (interview.providerCommitment !== undefined && !isProviderCommitment(interview.providerCommitment))
+    || (interview.interviewLanguage !== undefined && !isInterviewLanguage(interview.interviewLanguage))
   ) {
     return null;
   }
@@ -142,6 +145,12 @@ async function prepare(input: Rpc.PersistInput): Promise<Prepared | null> {
     frozen: input.initialAnalysis,
     recordJson,
     sessionDigest: await sha256Hex(input.consent.participantSessionId),
+    // The consent text of the language the record names, in the frozen
+    // configuration (which decide() requires to equal the stored one).
+    languageConsentHash: await sha256Hex(consentTextFor(
+      input.initialAnalysis.studyConfig,
+      interview.interviewLanguage ?? studyLanguages(input.initialAnalysis.studyConfig)[0],
+    )),
   };
 }
 
@@ -225,6 +234,13 @@ function decide(ws: WorkspaceContext, prepared: Prepared): Decision {
     || (interview.providerCommitment === 'fixed'
       && (typeof study.config.aiProvider !== 'string' || typeof study.config.aiModel !== 'string'
         || interview.conductedByProvider !== study.config.aiProvider || interview.conductedByModel !== study.config.aiModel))
+    // A study with a language setting records one of its languages, and the
+    // record's consent is that language's text; a study without one records none.
+    || (hasLanguageSetting(study.config)
+      ? (interview.interviewLanguage === undefined
+        || !studyLanguages(study.config).includes(interview.interviewLanguage)
+        || interview.consentHash !== prepared.languageConsentHash)
+      : interview.interviewLanguage !== undefined)
   ) {
     logInvalid();
     return refuse({ status: 'unavailable' });

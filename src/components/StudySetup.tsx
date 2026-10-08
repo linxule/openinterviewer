@@ -42,8 +42,9 @@ import { InterviewStyleSection } from '@/components/studySetup/InterviewStyleSec
 import { LinkSettingsSection } from '@/components/studySetup/LinkSettingsSection';
 import { ConsentSection } from '@/components/studySetup/ConsentSection';
 import { ThankYouSection } from '@/components/studySetup/ThankYouSection';
+import { InterviewLanguagesSection } from '@/components/studySetup/InterviewLanguagesSection';
 
-const sectionsForExample = ['study-details', 'profile-fields', 'core-questions', 'topic-areas', 'ai-provider', 'interview-structure', 'interviewer-manner', 'link-settings', 'consent-text', 'thank-you-text'];
+const sectionsForExample = ['study-details', 'profile-fields', 'core-questions', 'topic-areas', 'ai-provider', 'interview-structure', 'interviewer-manner', 'interview-languages', 'link-settings', 'consent-text', 'thank-you-text'];
 
 const StudySetupForm: React.FC = () => {
   const router = useRouter();
@@ -727,6 +728,7 @@ const StudySetupForm: React.FC = () => {
     { id: 'ai-provider', label: 'AI Provider' },
     { id: 'interview-structure', label: 'Interview Structure' },
     { id: 'interviewer-manner', label: 'Interviewer Manner' },
+    { id: 'interview-languages', label: 'Interview Languages' },
     { id: 'link-settings', label: 'Link Settings' },
     { id: 'consent-text', label: 'Consent Text' },
     { id: 'thank-you-text', label: 'Thank-You Screen' },
@@ -929,6 +931,13 @@ const StudySetupForm: React.FC = () => {
             draft={draft}
             editing={isEditing('interviewer-manner')}
             onEdit={() => openSection('interviewer-manner')}
+          />
+          <Rule />
+
+          <InterviewLanguagesSection
+            draft={draft}
+            editing={isEditing('interview-languages')}
+            onEdit={() => openSection('interview-languages')}
           />
           <Rule />
 

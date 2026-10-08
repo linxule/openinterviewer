@@ -12,6 +12,7 @@ import {
 } from '@/types';
 import { logRequestFailure } from '@/lib/requestLog';
 import { buildParticipantOrPreviewHeaders } from '@/services/participantHeaders';
+import type { InterviewLanguage } from '@/lib/i18n/languages';
 
 // Participant authority is a short-lived HttpOnly same-site cookie. Share-link
 // codes and session credentials are never exposed to this JavaScript service.
@@ -44,7 +45,8 @@ export const generateInterviewResponse = async (
   questionProgress: QuestionProgress,
   currentContext: string,
   researcherPreview = false,
-  participantSessionHandle?: string | null
+  participantSessionHandle?: string | null,
+  language?: InterviewLanguage
 ): Promise<AIInterviewResponse> => {
   try {
     const response = await fetch('/api/interview', {
@@ -58,7 +60,8 @@ export const generateInterviewResponse = async (
         studyConfig,
         participantProfile,
         questionProgress,
-        currentContext
+        currentContext,
+        ...(language ? { language } : {})
       })
     });
 
@@ -77,7 +80,8 @@ export const generateInterviewResponse = async (
 export const getInterviewGreeting = async (
   studyConfig: StudyConfig,
   researcherPreview = false,
-  participantSessionHandle?: string | null
+  participantSessionHandle?: string | null,
+  language?: InterviewLanguage
 ): Promise<string> => {
   try {
     const response = await fetch('/api/greeting', {
@@ -86,7 +90,7 @@ export const getInterviewGreeting = async (
         researcherPreview,
         participantSessionHandle,
       }),
-      body: JSON.stringify({ studyConfig })
+      body: JSON.stringify({ studyConfig, ...(language ? { language } : {}) })
     });
 
     if (!response.ok) {

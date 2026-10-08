@@ -32,6 +32,8 @@ import {
 } from '@/lib/transportDisclosure';
 import { StudyConfig } from '@/types';
 import { createRequestId, logRequestFailure } from '@/lib/requestLog';
+import { configForParticipantLanguage, consentTextFor } from '@/lib/i18n/languages';
+import { participantLanguageFromBody } from '@/lib/i18n/participantLanguage';
 
 const ROUTE = '/api/greeting';
 
@@ -81,6 +83,11 @@ export async function POST(request: Request) {
     if (!canonical.ok) {
       return canonical.response;
     }
+    // The participant's language; consent verification below hashes that
+    // language's consent text, so a language they did not consent in fails.
+    const chosen = participantLanguageFromBody(canonical.study.config, body);
+    if (!chosen.ok) return chosen.response;
+    const participantConfig = configForParticipantLanguage(canonical.study.config, chosen.language);
 
     if (!isAdmin) {
       if (!participantSessionId) {
@@ -90,7 +97,7 @@ export async function POST(request: Request) {
         participantSessionId,
         studyId: canonical.study.id,
         studyRevision: canonical.study.revision ?? 1,
-        consentText: canonical.study.config.consentText || '',
+        consentText: consentTextFor(canonical.study.config, chosen.language),
         now: Date.now(),
       });
       if (consent.status === 'unavailable') {
@@ -156,7 +163,7 @@ export async function POST(request: Request) {
     }
 
     try {
-      const greeting = await provider.getInterviewGreeting(canonical.study.config);
+      const greeting = await provider.getInterviewGreeting(participantConfig);
       return NextResponse.json({ greeting });
     } catch (providerError) {
       return providerErrorResponse(providerError);

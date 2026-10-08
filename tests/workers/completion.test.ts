@@ -661,6 +661,39 @@ describe('frozen inputs and integrity (JOB-02, ST-05)', () => {
       .toEqual({ status: 'created' });
   });
 
+  it('a language study records the consented language, bound by that language\'s consent text', async () => {
+    const study = await createStudy({
+      interviewLanguages: ['en', 'ja'],
+      consentTextTranslations: { ja: '日本語の同意文です。' },
+    });
+    const japanese = await enrolParticipant(study, { language: 'ja' });
+    const refusals: Array<Partial<StoredInterview>> = [
+      {},                                  // no language on a language study
+      { interviewLanguage: 'en' },         // a language whose consent text was not the one accepted
+      { interviewLanguage: 'ko' },         // a language the study does not offer
+      { interviewLanguage: 'klingon' as never },
+    ];
+    for (const overrides of refusals) {
+      const outcome = await workspaceStub().persistCompletedInterview(await persistInput(japanese, { interview: interviewRecord(japanese, overrides) }));
+      expect(outcome.status).not.toBe('created');
+    }
+    expect(await count('interviews')).toBe(0);
+    expect(await workspaceStub().persistCompletedInterview(await persistInput(japanese, { interview: interviewRecord(japanese, { interviewLanguage: 'ja' }) })))
+      .toEqual({ status: 'created' });
+
+    const english = await enrolParticipant(study, { language: 'en' });
+    expect(await workspaceStub().persistCompletedInterview(await persistInput(english, { interview: interviewRecord(english, { interviewLanguage: 'en' }) })))
+      .toEqual({ status: 'created' });
+  });
+
+  it('a study without a language setting refuses a record that claims a language', async () => {
+    const study = await createStudy();
+    const participant = await enrolParticipant(study);
+    expect(await workspaceStub().persistCompletedInterview(await persistInput(participant, { interview: interviewRecord(participant, { interviewLanguage: 'en' }) })))
+      .toEqual({ status: 'unavailable' });
+    expect(await workspaceStub().persistCompletedInterview(await persistInput(participant))).toEqual({ status: 'created' });
+  });
+
   it('JOB-02: a study without an explicit provider accepts the caller-resolved installation provider', async () => {
     const study = await createStudy({ aiProvider: undefined });
     const participant = await enrolParticipant(study);

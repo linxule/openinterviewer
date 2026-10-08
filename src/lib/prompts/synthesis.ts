@@ -22,6 +22,20 @@ import {
   BehaviorData,
   SynthesisResult
 } from '@/types';
+import { hasLanguageSetting, studyLanguages } from '@/lib/i18n/languages';
+
+/**
+ * Analysis is written in the researcher's language (English for now); a
+ * multilingual study's participants may have answered in another one. No
+ * line for an English-only study, so its prompts are unchanged.
+ */
+export const ANALYSIS_LANGUAGE_INSTRUCTION = 'ANALYSIS LANGUAGE: Participants may have answered in a language other than English. Write every analysis field in English. Copy quotations exactly as written, in their original language; never translate them.';
+
+export function analysisLanguageBlock(studyConfig: StudyConfig): string {
+  return hasLanguageSetting(studyConfig) && studyLanguages(studyConfig).some((language) => language !== 'en')
+    ? `\n\n${ANALYSIS_LANGUAGE_INSTRUCTION}`
+    : '';
+}
 
 // Aggregate citation catalogue (Slice L). The aggregate model is shown no
 // speech at all today; this catalogue is built from quotes a PREVIOUS
@@ -147,7 +161,7 @@ For each theme, provide 1-3 citations in "evidenceRefs". Each citation has:
 - "turnIndex": the number printed as TURN N beside that participant turn.
 Quote only PARTICIPANT turns. If no single participant turn supports a theme,
 prefer leaving that theme out to citing a turn that does not say it. An empty
-"evidenceRefs" array is honest and acceptable; an inaccurate quote is not.`;
+"evidenceRefs" array is honest and acceptable; an inaccurate quote is not.${analysisLanguageBlock(studyConfig)}`;
 };
 
 /**
@@ -242,7 +256,7 @@ Each citation has:
 Do not write a quote of your own. Do not merge two entries into one. Do not
 adjust wording, spelling, punctuation, or capitalization. If no listed quote
 supports a theme, return an empty "quoteRefs" array — that is honest; an
-invented quote is not.`;
+invented quote is not.${analysisLanguageBlock(studyConfig)}`;
 };
 
 /**

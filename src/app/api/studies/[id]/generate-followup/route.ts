@@ -287,6 +287,8 @@ export async function POST(
       aiBehavior: parentStudy.config.aiBehavior,
       interviewerInstructions: parentStudy.config.interviewerInstructions,
       consentText: parentStudy.config.consentText,
+      interviewLanguages: parentStudy.config.interviewLanguages,
+      consentTextTranslations: parentStudy.config.consentTextTranslations,
       researcherContact: parentStudy.config.researcherContact,
       aiProvider: parentStudy.config.aiProvider,
       aiModel: parentStudy.config.aiModel,

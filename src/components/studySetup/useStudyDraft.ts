@@ -13,6 +13,7 @@ import { DEFAULT_PROVIDER_COMMITMENT } from '@/lib/providerCommitment';
 import { DEFAULT_MODEL_BY_PROVIDER } from '@/lib/providerRegistry';
 import { defaultConsentText } from '@/lib/consentText';
 import { copyStudyConfiguration } from '@/lib/researcherStudyDraft';
+import { studyLanguages, type InterviewLanguage } from '@/lib/i18n/languages';
 
 export interface StudyDraft {
   name: string; description: string; researchQuestion: string;
@@ -22,6 +23,10 @@ export interface StudyDraft {
   enableReasoning: boolean | undefined; linkExpiration: LinkExpirationOption;
   consentText: string; researcherContact: string; thankYouText: string;
   interviewerInstructions: string;
+  /** In order; the first is the default and uses consentText/thankYouText. */
+  interviewLanguages: InterviewLanguage[];
+  consentTranslations: Partial<Record<InterviewLanguage, string>>;
+  thankYouTranslations: Partial<Record<InterviewLanguage, string>>;
 
   savedStudyId: string | null;
   parentStudyInfo: { id: string; name: string } | null;
@@ -40,6 +45,10 @@ export interface StudyDraft {
   setConsentText(value: string): void;
   setThankYouText(value: string): void;
   setInterviewerInstructions(value: string): void;
+  toggleInterviewLanguage(language: InterviewLanguage): void;   // never removes the last one
+  makeDefaultLanguage(language: InterviewLanguage): void;        // moves its texts into consentText/thankYouText
+  setConsentTranslation(language: InterviewLanguage, value: string): void;
+  setThankYouTranslation(language: InterviewLanguage, value: string): void;
   addQuestion(): void; removeQuestion(index: number): void;
   updateQuestion(index: number, value: string): void;
   addTopic(): void; removeTopic(index: number): void;
@@ -96,6 +105,15 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
   const [researcherContact, setResearcherContactState] = useState(studyConfig?.researcherContact ?? '');
   const [thankYouText, setThankYouTextState] = useState(studyConfig?.thankYouText ?? '');
   const [interviewerInstructions, setInterviewerInstructionsState] = useState(studyConfig?.interviewerInstructions ?? '');
+  const [interviewLanguages, setInterviewLanguages] = useState<InterviewLanguage[]>(
+    studyConfig ? studyLanguages(studyConfig) : ['en']
+  );
+  const [consentTranslations, setConsentTranslations] = useState<Partial<Record<InterviewLanguage, string>>>(
+    { ...(studyConfig?.consentTextTranslations ?? {}) }
+  );
+  const [thankYouTranslations, setThankYouTranslations] = useState<Partial<Record<InterviewLanguage, string>>>(
+    { ...(studyConfig?.thankYouTextTranslations ?? {}) }
+  );
 
   const [savedStudyId, setSavedStudyId] = useState<string | null>(studyConfig?.id ?? null);
   const [parentStudyInfo, setParentStudyInfo] = useState<{ id: string; name: string } | null>(null);
@@ -120,6 +138,40 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
   const setConsentText = (value: string) => { setConsentTextState(value); setIsDirty(true); };
   const setThankYouText = (value: string) => { setThankYouTextState(value); setIsDirty(true); };
   const setInterviewerInstructions = (value: string) => { setInterviewerInstructionsState(value); setIsDirty(true); };
+
+  const toggleInterviewLanguage = (language: InterviewLanguage) => {
+    if (interviewLanguages.includes(language)) {
+      if (interviewLanguages.length === 1) return;
+      // Removing the default promotes the next language with its texts.
+      if (interviewLanguages[0] === language) makeDefaultLanguage(interviewLanguages[1]);
+      setInterviewLanguages((current) => current.filter((entry) => entry !== language));
+    } else {
+      setInterviewLanguages((current) => [...current, language]);
+    }
+    setIsDirty(true);
+  };
+  const makeDefaultLanguage = (language: InterviewLanguage) => {
+    const previous = interviewLanguages[0];
+    if (previous === language || !interviewLanguages.includes(language)) return;
+    const nextConsent = { ...consentTranslations, [previous]: consentText };
+    const nextThankYou = { ...thankYouTranslations, [previous]: thankYouText };
+    setConsentTextState(consentTranslations[language] ?? '');
+    setThankYouTextState(thankYouTranslations[language] ?? '');
+    delete nextConsent[language];
+    delete nextThankYou[language];
+    setConsentTranslations(nextConsent);
+    setThankYouTranslations(nextThankYou);
+    setInterviewLanguages((current) => [language, ...current.filter((entry) => entry !== language)]);
+    setIsDirty(true);
+  };
+  const setConsentTranslation = (language: InterviewLanguage, value: string) => {
+    setConsentTranslations((current) => ({ ...current, [language]: value }));
+    setIsDirty(true);
+  };
+  const setThankYouTranslation = (language: InterviewLanguage, value: string) => {
+    setThankYouTranslations((current) => ({ ...current, [language]: value }));
+    setIsDirty(true);
+  };
 
   // Question management
   const addQuestion = () => { setCoreQuestions([...coreQuestions, '']); setIsDirty(true); };
@@ -212,6 +264,32 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
     setResearcherContactState(config.researcherContact ?? '');
     setThankYouTextState(config.thankYouText ?? '');
     setInterviewerInstructionsState(config.interviewerInstructions ?? '');
+    setInterviewLanguages(studyLanguages(config));
+    setConsentTranslations({ ...(config.consentTextTranslations ?? {}) });
+    setThankYouTranslations({ ...(config.thankYouTextTranslations ?? {}) });
+  };
+
+  const additionalLanguages = interviewLanguages.slice(1);
+  // English alone is the legacy behaviour, so it is saved without a setting
+  // (older releases can still read the study); an edit that removes a setting
+  // sends it, and empty maps, explicitly.
+  const languageMembers = (mode: 'create' | 'update'): Partial<StudyConfig> => {
+    const hadSetting = mode === 'update' && baseConfig?.interviewLanguages !== undefined;
+    const englishOnly = interviewLanguages.length === 1 && interviewLanguages[0] === 'en';
+    const consent = Object.fromEntries(additionalLanguages.map((language) => [
+      language,
+      consentTranslations[language]?.trim() || defaultConsentText(researchQuestion, language),
+    ]));
+    const thankYou = Object.fromEntries(additionalLanguages
+      .map((language) => [language, thankYouTranslations[language]?.trim() ?? ''] as const)
+      .filter(([, text]) => text));
+    const hadThankYou = mode === 'update' && baseConfig?.thankYouTextTranslations !== undefined;
+    const hadConsent = mode === 'update' && baseConfig?.consentTextTranslations !== undefined;
+    return {
+      ...(englishOnly && !hadSetting ? {} : { interviewLanguages: [...interviewLanguages] }),
+      ...(additionalLanguages.length > 0 || hadConsent ? { consentTextTranslations: consent } : {}),
+      ...(Object.keys(thankYou).length > 0 || hadThankYou ? { thankYouTextTranslations: thankYou } : {}),
+    };
   };
 
   const buildConfig = (mode: 'create' | 'update'): StudyConfig => ({
@@ -229,7 +307,8 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
     enableReasoning: aiProvider === 'gemini' ? enableReasoning : undefined,
     linkExpiration,
     linksEnabled: mode === 'update' ? baseConfig?.linksEnabled ?? true : true,
-    consentText: consentText.trim() || defaultConsentText(researchQuestion),
+    consentText: consentText.trim() || defaultConsentText(researchQuestion, interviewLanguages[0]),
+    ...languageMembers(mode),
     createdAt: mode === 'update' ? baseConfig?.createdAt || Date.now() : Date.now(),
     ...(researcherContact.trim() ? { researcherContact: researcherContact.trim() } : {}),
     // Deliberately not defaulted here, unlike consentText one line up: the
@@ -256,6 +335,13 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
     ...buildConfig(savedStudyId ? 'update' : 'create'),
     name, consentText, researcherContact, thankYouText, interviewerInstructions,
     coreQuestions, topicAreas, profileSchema,
+    // Raw texts, so an unfinished translation survives a reload; English
+    // alone adds nothing beyond what buildConfig already carries.
+    ...(interviewLanguages.length === 1 && interviewLanguages[0] === 'en' ? {} : {
+      interviewLanguages: [...interviewLanguages],
+      consentTextTranslations: { ...consentTranslations },
+      thankYouTextTranslations: { ...thankYouTranslations },
+    }),
   });
 
   return {
@@ -265,6 +351,7 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
     enableReasoning, linkExpiration,
     consentText, researcherContact, thankYouText,
     interviewerInstructions,
+    interviewLanguages, consentTranslations, thankYouTranslations,
 
     savedStudyId, parentStudyInfo, isDirty,
 
@@ -272,6 +359,7 @@ export function useStudyDraft(studyConfig: StudyConfig | null): StudyDraft {
     selectProvider, setAiModel, setAiProviderCommitment, setAiBehavior, setEnableReasoning, setLinkExpiration, setConsentText,
     setThankYouText,
     setInterviewerInstructions,
+    toggleInterviewLanguage, makeDefaultLanguage, setConsentTranslation, setThankYouTranslation,
     addQuestion, removeQuestion, updateQuestion,
     addTopic, removeTopic, updateTopic,
     addProfileField, removeProfileField, updateProfileField, toggleFieldRequired,

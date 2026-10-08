@@ -9,6 +9,8 @@ import { Button, Disclosure, Label, Verbatim } from '@/components/ui';
 import NavigationStatus from '@/components/NavigationStatus';
 import NoSessionNotice from '@/components/NoSessionNotice';
 import { previewSetupDestination } from '@/lib/previewSetupDestination';
+import { consentTextFor, hasLanguageSetting, LANGUAGE_NATIVE_NAMES, LANGUAGE_TAGS } from '@/lib/i18n/languages';
+import { useParticipantLanguage } from '@/lib/i18n/useParticipantLanguage';
 
 const Consent: React.FC = () => {
   const router = useRouter();
@@ -20,7 +22,12 @@ const Consent: React.FC = () => {
     initializeProfile,
     participantSessionHandle,
     aiTransport,
+    setParticipantLanguage,
   } = useStore();
+  const { language, messages, languages } = useParticipantLanguage();
+  // Only a study with a language setting sends one, so others' requests are unchanged.
+  const hasSetting = studyConfig ? hasLanguageSetting(studyConfig) : false;
+  const m = messages.consent;
   const [isSubmitting, setIsSubmitting] = useState(false);
   // Set once consent is recorded: the button stays unavailable until /interview
   // replaces this page, so a slow route change cannot record consent twice.
@@ -51,17 +58,20 @@ const Consent: React.FC = () => {
           participantSessionHandle,
         }),
         // The transport this page disclosed; the server records consent only
-        // when it is still the one the study uses (Cloudflare, D9).
-        body: JSON.stringify({ studyId: studyConfig.id, disclosedTransport }),
+        // when it is still the one the study uses (Cloudflare, D9). The
+        // language names the consent text read, which the server hashes.
+        body: JSON.stringify({ studyId: studyConfig.id, disclosedTransport, ...(hasSetting ? { language } : {}) }),
       });
       const data = await response.json().catch(() => ({})) as {
         acceptedAt?: number;
         error?: string;
+        code?: string;
       };
       if (!mounted.current) return;
       if (!response.ok || !Number.isSafeInteger(data.acceptedAt) || (data.acceptedAt ?? 0) <= 0) {
-        throw new Error(data.error || 'Consent could not be recorded. Please try again.');
+        throw new Error(consentErrorCopy(response.status, data));
       }
+      if (hasSetting) setParticipantLanguage(language);
 
       // This timestamp is issued by the server. It is display/resume state only;
       // participant API routes independently verify the server-side record.
@@ -72,7 +82,7 @@ const Consent: React.FC = () => {
       router.push('/interview');
     } catch (error) {
       if (!mounted.current) return;
-      setConsentError(error instanceof Error ? error.message : 'Consent could not be recorded. Please try again.');
+      setConsentError(error instanceof Error ? error.message : m.errors.recordFailed);
     } finally {
       if (mounted.current) setIsSubmitting(false);
     }
@@ -85,7 +95,17 @@ const Consent: React.FC = () => {
     router.push(viewMode === 'preview' ? previewSetupDestination(studyConfig?.id) : '/setup');
   };
 
-  if (isReturning) return <NavigationStatus>Returning to study setup…</NavigationStatus>;
+  // Server copy is English; other languages show the matching message by code or status.
+  function consentErrorCopy(status: number, data: { error?: string; code?: string }): string {
+    if (data.code === 'DISCLOSURE_CHANGED') return m.errors.disclosureChanged;
+    if (data.code === 'LANGUAGE_NOT_OFFERED') return m.errors.languageNotOffered;
+    if (language === 'en' && data.error) return data.error;
+    if (status === 503 || status === 429) return m.errors.unavailable;
+    if (status === 401 || status === 403 || status === 409) return m.errors.reopen;
+    return m.errors.recordFailed;
+  }
+
+  if (isReturning) return <NavigationStatus>{m.returning}</NavigationStatus>;
 
   if (!studyConfig) return <NoSessionNotice />;
 
@@ -105,87 +125,108 @@ const Consent: React.FC = () => {
     ? selectedProviderId === 'openrouter'
       // OpenRouter picks the upstream inference provider per request (no
       // pinning), so the promise covers the service and the model only.
-      ? `The interview and any later analysis of your responses use ${selectedModelName} through OpenRouter; the study does not switch them to another AI service or model. OpenRouter may use a different ZDR-compatible upstream provider for each request.`
-      : `The interview and any later analysis of your responses use ${selectedModelName} (${selectedProviderName}); the study does not switch them to another AI provider or model.`
+      ? m.commitment.fixedOpenRouter(selectedModelName!)
+      : m.commitment.fixed(selectedModelName!, selectedProviderName!)
     : studyConfig.aiProviderCommitment === 'may-change'
-    ? 'The researcher may later analyze your responses with a different AI provider or model.'
+    ? m.commitment.mayChange
     : null;
   const providerDisclosure = !disclosedTransport
-    ? 'This page could not confirm how your responses are sent. Reopen the study link before continuing.'
+    ? m.transport.unconfirmed
     : !providerConfigurationReady
-    ? 'The researcher must review and save this study\'s AI provider settings before interviews can begin.'
+    ? m.transport.notReady
     : disclosedTransport === 'cloudflare-gateway'
     ? selectedProviderId === 'openrouter'
-      ? 'Your responses are sent through Cloudflare AI Gateway, a relay operated by Cloudflare (which also hosts this study), to OpenRouter and a ZDR-compatible upstream inference provider selected for that model. The relay is configured not to log or cache your responses. Cloudflare may process them outside the EU.'
-      : `Your responses are sent to ${selectedProviderName} through Cloudflare AI Gateway, a relay operated by Cloudflare, which also hosts this study. The relay is configured not to log or cache your responses and does not send them to any other provider. Cloudflare may process them outside the EU.`
+      ? m.transport.cloudflareGatewayOpenRouter
+      : m.transport.cloudflareGateway(selectedProviderName!)
     : disclosedTransport === 'gateway'
-    ? `Your responses are sent through Vercel AI Gateway to ${selectedProviderName}. Routing is pinned to that provider and model fallback is disabled.`
+    ? m.transport.vercelGateway(selectedProviderName!)
     : selectedProviderId === 'openrouter'
-    ? 'Your responses are sent to OpenRouter and a ZDR-compatible upstream inference provider selected for that model.'
-    : `Your responses are sent to ${selectedProviderName}.`;
+    ? m.transport.directOpenRouter
+    : m.transport.direct(selectedProviderName!);
 
   return (
     <main className="min-h-dvh bg-paper-0 px-4 py-12 sm:px-8 sm:py-20">
       <div className="mx-auto max-w-measure space-y-8">
+        {languages.length > 1 && (
+          <fieldset className="space-y-2 font-sans">
+            <legend className="text-[13px] font-semibold leading-[20px] text-ink-900">{messages.language.label}</legend>
+            <div className="flex flex-wrap gap-2">
+              {languages.map((option) => (
+                <label
+                  key={option}
+                  lang={LANGUAGE_TAGS[option]}
+                  className={`cursor-pointer rounded border px-3 py-1.5 text-[15px] ${option === language ? 'border-ink-900 bg-paper-2 text-ink-900' : 'border-ink-300 text-ink-700 hover:bg-paper-2'}`}
+                >
+                  <input
+                    type="radio"
+                    name="participant-language"
+                    value={option}
+                    checked={option === language}
+                    disabled={isSubmitting || isOpening}
+                    onChange={() => setParticipantLanguage(option)}
+                    className="sr-only"
+                  />
+                  {LANGUAGE_NATIVE_NAMES[option]}
+                </label>
+              ))}
+            </div>
+            <p className="text-[13px] leading-[20px] text-ink-500">{messages.language.hint}</p>
+          </fieldset>
+        )}
+
         <div>
-          <Label>Research consent</Label>
+          <Label>{m.label}</Label>
           <Verbatim as="h1" className="mt-2 text-[28px] font-normal leading-[36px] text-ink-900">
             {studyConfig.name}
           </Verbatim>
         </div>
 
         <Verbatim className="whitespace-pre-wrap text-[17px] leading-[28px] text-ink-700">
-          {studyConfig.consentText}
+          {consentTextFor(studyConfig, language)}
         </Verbatim>
 
         <section className="space-y-4">
           <h2 className="font-sans text-[15px] font-semibold leading-[24px] text-ink-900">
-            Interview Structure
+            {m.structureTitle}
           </h2>
           <ol className="list-decimal space-y-3 pl-5 font-sans text-[15px] leading-[24px]">
             <li>
-              <p className="text-ink-900">Brief background questions</p>
-              <p className="text-[13px] leading-[20px] text-ink-500">Help us understand your context</p>
+              <p className="text-ink-900">{m.background}</p>
+              <p className="text-[13px] leading-[20px] text-ink-500">{m.backgroundHint}</p>
             </li>
             <li>
-              <p className="text-ink-900">
-                {studyConfig.coreQuestions.length} core question{studyConfig.coreQuestions.length !== 1 ? 's' : ''} about your experiences
-              </p>
-              <p className="text-[13px] leading-[20px] text-ink-500">The heart of the interview</p>
+              <p className="text-ink-900">{m.coreQuestions(studyConfig.coreQuestions.length)}</p>
+              <p className="text-[13px] leading-[20px] text-ink-500">{m.coreHint}</p>
             </li>
             <li>
-              <p className="text-ink-900">The AI may ask follow-up questions</p>
-              <p className="text-[13px] leading-[20px] text-ink-500">To better understand your perspective</p>
+              <p className="text-ink-900">{m.followUps}</p>
+              <p className="text-[13px] leading-[20px] text-ink-500">{m.followUpsHint}</p>
             </li>
             <li>
-              <p className="text-ink-900">A final question for your feedback</p>
-              <p className="text-[13px] leading-[20px] text-ink-500">Your thoughts on the interview itself</p>
+              <p className="text-ink-900">{m.feedback}</p>
+              <p className="text-[13px] leading-[20px] text-ink-500">{m.feedbackHint}</p>
             </li>
           </ol>
           <p className="border-t border-ink-300 pt-4 font-sans text-[15px] leading-[24px] text-ink-700">
-            Estimated time: 10-15 minutes
+            {m.estimatedTime}
           </p>
         </section>
 
         <div className="bg-paper-2 p-4 font-sans text-[13px] leading-[20px] text-ink-700">
-          <strong className="text-ink-900">Data notice:</strong>{' '}
+          <strong className="text-ink-900">{m.dataNoticeLabel}</strong>{' '}
           <span className="font-mono">
             {providerDisclosure}
             {providerCommitmentNotice ? <>{' '}{providerCommitmentNotice}</> : null}
           </span>{' '}
-          The researcher is the study&apos;s data controller and controls its storage and retention settings. Do
-          not include information you do not want to share. Contact the researcher for retention, access, and
-          deletion details.
+          {m.controller}
           {studyConfig.researcherContact
-            ? <>{' '}Researcher contact: <span className="font-sans text-ink-900">{studyConfig.researcherContact}</span></>
+            ? <>{' '}{m.researcherContact} <span className="font-sans text-ink-900">{studyConfig.researcherContact}</span></>
             : null}
         </div>
 
         {!providerConfigurationReady && (
           <Disclosure role="alert">
-            {disclosedTransport
-              ? 'This interview is unavailable until the researcher reviews and saves its AI provider settings.'
-              : 'This interview is unavailable until you reopen the study link.'}
+            {disclosedTransport ? m.unavailableSettings : m.unavailableReopen}
           </Disclosure>
         )}
 
@@ -198,7 +239,7 @@ const Consent: React.FC = () => {
         <div className="space-y-3">
           {viewMode !== 'participant' && (
             <Button type="button" variant="quiet" onClick={handleBack} disabled={isSubmitting || isOpening} className="w-full">
-              Back
+              {m.back}
             </Button>
           )}
           <Button
@@ -209,7 +250,7 @@ const Consent: React.FC = () => {
             aria-busy={isSubmitting || isOpening}
             className="w-full"
           >
-            {isOpening ? 'Opening the interview…' : isSubmitting ? 'Recording consent…' : 'I consent — begin the interview'}
+            {isOpening ? m.opening : isSubmitting ? m.recording : m.accept}
           </Button>
         </div>
       </div>

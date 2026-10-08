@@ -11,22 +11,15 @@ import { InterviewMessage, InterviewPhase } from '@/types';
 import ReactMarkdown from 'react-markdown';
 import { Button, Turn } from '@/components/ui';
 import NoSessionNotice from '@/components/NoSessionNotice';
-
-// Phase display labels
-const phaseLabels: Record<InterviewPhase, string> = {
-  'background': 'Getting to know you',
-  'core-questions': 'Core Questions',
-  'exploration': 'Exploring further',
-  'feedback': 'Your feedback',
-  'wrap-up': 'Wrapping up'
-};
+import { useParticipantLanguage } from '@/lib/i18n/useParticipantLanguage';
+import { hasLanguageSetting } from '@/lib/i18n/languages';
 
 // Primitive props keep completed turns from reparsing Markdown when the
 // composer changes or another message arrives.
-const InterviewTurn = React.memo(function InterviewTurn({ role, content }: Pick<InterviewMessage, 'role' | 'content'>) {
+const InterviewTurn = React.memo(function InterviewTurn({ role, content, interviewerLabel, youLabel }: Pick<InterviewMessage, 'role' | 'content'> & { interviewerLabel: string; youLabel: string }) {
   return (
     <Turn speaker={role === 'ai' ? 'interviewer' : 'participant'}>
-      <span className="sr-only">{role === 'ai' ? 'Interviewer:' : 'You:'} </span>
+      <span className="sr-only">{role === 'ai' ? interviewerLabel : youLabel} </span>
       <div className="prose-verbatim">
         <ReactMarkdown>{content}</ReactMarkdown>
       </div>
@@ -55,6 +48,11 @@ const InterviewChat: React.FC = () => {
     participantSessionHandle,
     viewMode
   } = useStore();
+  const { language: shownLanguage, messages } = useParticipantLanguage();
+  // Sent only for a study with a language setting (the consented language).
+  const language = studyConfig && hasLanguageSetting(studyConfig) ? shownLanguage : undefined;
+  const m = messages.interview;
+  const phaseLabels: Record<InterviewPhase, string> = m.phases;
 
   const [input, setInput] = useState('');
   const [showFinishOption, setShowFinishOption] = useState(false);
@@ -143,7 +141,8 @@ const InterviewChat: React.FC = () => {
         const greeting = await getInterviewGreeting(
           studyConfig,
           viewMode === 'preview',
-          participantSessionHandle
+          participantSessionHandle,
+          ...(language ? [language] : [])
         );
         if (!mountedRef.current) return;
 
@@ -158,14 +157,14 @@ const InterviewChat: React.FC = () => {
         console.error('Error initializing interview:', error);
         if (!mountedRef.current) return;
         greetingStartedRef.current = false;
-        setInitError('The interviewer could not start. This is not an AI reply — please try again.');
+        setInitError(m.greetingFailed);
       } finally {
         if (mountedRef.current) setAiThinking(false);
       }
     };
 
     void initialize();
-  }, [studyConfig, interviewHistory.length, participantSessionHandle, viewMode, addMessage, setAiThinking]);
+  }, [studyConfig, interviewHistory.length, participantSessionHandle, viewMode, addMessage, setAiThinking, language, m.greetingFailed]);
 
   const handleSend = async (textOverride?: string) => {
     const text = textOverride || input;
@@ -200,7 +199,8 @@ const InterviewChat: React.FC = () => {
         questionProgress,
         currentContext,
         viewMode === 'preview',
-        participantSessionHandle
+        participantSessionHandle,
+        ...(language ? [language] : [])
       );
 
       if (!mountedRef.current) return;
@@ -245,7 +245,7 @@ const InterviewChat: React.FC = () => {
     } catch (error) {
       console.error('Error generating response:', error);
       if (!mountedRef.current) return;
-      setSendError('The interviewer could not reply. Please try sending again.');
+      setSendError(m.replyFailed);
     } finally {
       if (mountedRef.current) setAiThinking(false);
     }
@@ -273,7 +273,8 @@ const InterviewChat: React.FC = () => {
         const greeting = await getInterviewGreeting(
           studyConfig,
           viewMode === 'preview',
-          participantSessionHandle
+          participantSessionHandle,
+          ...(language ? [language] : [])
         );
         if (!mountedRef.current) return;
         addMessage({
@@ -286,7 +287,7 @@ const InterviewChat: React.FC = () => {
         console.error('Error initializing interview:', error);
         if (!mountedRef.current) return;
         greetingStartedRef.current = false;
-        setInitError('The interviewer could not start. This is not an AI reply — please try again.');
+        setInitError(m.greetingFailed);
       } finally {
         if (mountedRef.current) setAiThinking(false);
       }
@@ -315,7 +316,7 @@ const InterviewChat: React.FC = () => {
       return phaseLabels['background'];
     }
     if (questionProgress.currentPhase === 'core-questions') {
-      return `Question ${Math.min(questionsCompleted + 1, totalQuestions)} of ${totalQuestions}`;
+      return m.questionOf(Math.min(questionsCompleted + 1, totalQuestions), totalQuestions);
     }
     return phaseLabels[questionProgress.currentPhase];
   };
@@ -335,7 +336,7 @@ const InterviewChat: React.FC = () => {
             onClick={handleFinishEarly}
             className="shrink-0 text-[13px] text-ink-500 underline-offset-2 hover:text-ink-700 hover:underline"
           >
-            Finish early
+            {m.finishEarly}
           </button>
         )}
       </header>
@@ -349,7 +350,7 @@ const InterviewChat: React.FC = () => {
         <div role="log" aria-live="polite" className="relative">
           <div className="mx-auto max-w-measure space-y-8 px-4 py-8">
             {interviewHistory.map((msg) => (
-              <InterviewTurn key={msg.id} role={msg.role} content={msg.content} />
+              <InterviewTurn key={msg.id} role={msg.role} content={msg.content} interviewerLabel={m.srInterviewer} youLabel={m.srYou} />
             ))}
 
             {isAiThinking && (
@@ -357,7 +358,7 @@ const InterviewChat: React.FC = () => {
                 <div className="h-[2px] overflow-hidden">
                   <div className="composing-bar h-full bg-ink-300" />
                 </div>
-                <p className="mt-2 text-[13px] text-ink-500">Composing a follow-up…</p>
+                <p className="mt-2 text-[13px] text-ink-500">{m.composing}</p>
               </div>
             )}
           </div>
@@ -368,15 +369,13 @@ const InterviewChat: React.FC = () => {
           <div className="border-t border-ink-300 px-4 py-8 sm:px-6">
             <div className="mx-auto max-w-measure space-y-4">
               <h3 className="font-sans text-[18px] leading-[26px] font-semibold text-ink-900">
-                {viewMode === 'preview' ? 'Preview conversation complete' : 'Interview conversation complete'}
+                {viewMode === 'preview' ? m.completePreviewTitle : m.completeTitle}
               </h3>
               <p className="font-sans text-[15px] leading-[24px] text-ink-700">
-                {viewMode === 'preview'
-                  ? 'Continue to generate the preview analysis. Preview responses will not be added to study data.'
-                  : 'Your responses have not been saved yet. Continue to finalize and save your interview. Keep this tab open until you see confirmation that it is safe to close.'}
+                {viewMode === 'preview' ? m.completePreviewBody : m.completeBody}
               </p>
               <Button type="button" variant="primary" onClick={handleViewAnalysis}>
-                {viewMode === 'preview' ? 'Continue preview' : 'Continue to save interview'}
+                {viewMode === 'preview' ? m.continuePreview : m.continueSave}
               </Button>
             </div>
           </div>
@@ -396,7 +395,7 @@ const InterviewChat: React.FC = () => {
                       disabled={isAiThinking}
                       className="shrink-0 text-paper-1 underline underline-offset-2 hover:opacity-90 disabled:opacity-50"
                     >
-                      Try again
+                      {m.tryAgain}
                     </button>
                   )}
                 </div>
@@ -404,7 +403,7 @@ const InterviewChat: React.FC = () => {
               <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:gap-3">
                 <div className="flex-1">
                   <label htmlFor="interview-response" className="sr-only">
-                    Your response
+                    {m.responseLabel}
                   </label>
                   <textarea
                     ref={textareaRef}
@@ -412,7 +411,7 @@ const InterviewChat: React.FC = () => {
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={handleTextareaKeyDown}
-                    placeholder="Take as much space as you need."
+                    placeholder={m.placeholder}
                     disabled={isAiThinking}
                     rows={3}
                     className="input-verbatim w-full resize-none rounded border border-ink-300 bg-paper-2 px-4 py-3 text-[19px] leading-[31px] text-ink-900 placeholder:text-ink-500 disabled:opacity-50"
@@ -426,10 +425,10 @@ const InterviewChat: React.FC = () => {
                   disabled={!input.trim() || isAiThinking}
                   className="min-h-11 w-full sm:w-auto"
                 >
-                  Send
+                  {m.send}
                 </Button>
               </div>
-              <p className="text-[13px] leading-[20px] text-ink-500 [@media(pointer:coarse)]:hidden">⌘/Ctrl + Enter to send</p>
+              <p className="text-[13px] leading-[20px] text-ink-500 [@media(pointer:coarse)]:hidden">{m.sendShortcut}</p>
             </div>
           </div>
         )}

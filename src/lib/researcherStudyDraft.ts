@@ -1,6 +1,7 @@
 import type { StudyConfig } from '@/types';
 import { DEFAULT_MODEL_BY_PROVIDER } from '@/lib/providerRegistry';
 import { DEFAULT_PROVIDER_COMMITMENT } from '@/lib/providerCommitment';
+import { isInterviewLanguage, type InterviewLanguage } from '@/lib/i18n/languages';
 
 export type StudySetupIntent = 'create' | 'edit' | 'duplicate' | 'followup';
 
@@ -46,6 +47,22 @@ export function copyStudyConfiguration(config: Partial<StudyConfig>): StudyConfi
     researcherContact: config.researcherContact ?? '',
     thankYouText: config.thankYouText ?? '',
     interviewerInstructions: config.interviewerInstructions ?? '',
+    ...draftLanguageMembers(config),
+  };
+}
+
+/** Languages and their texts, keeping only well-formed entries (a draft is untrusted storage). */
+function draftLanguageMembers(config: Partial<StudyConfig>): Partial<StudyConfig> {
+  const languages = Array.isArray(config.interviewLanguages)
+    ? [...new Set(config.interviewLanguages.filter(isInterviewLanguage))]
+    : [];
+  if (languages.length === 0) return {};
+  const texts = (map: unknown) => Object.fromEntries(Object.entries(typeof map === 'object' && map ? map : {})
+    .filter(([language, text]) => languages.includes(language as InterviewLanguage) && typeof text === 'string'));
+  return {
+    interviewLanguages: languages,
+    consentTextTranslations: texts(config.consentTextTranslations),
+    thankYouTextTranslations: texts(config.thankYouTextTranslations),
   };
 }
 

@@ -375,7 +375,7 @@ Instructions steer a model; they do not bind it. The response format is enforced
 
 Two worked examples to paste into Interviewer Manner:
 
-- Language: "Conduct the entire interview in Japanese, using polite (desu/masu) register." Language is an instruction, not a separate setting. It reaches only the interviewer's questions and greeting: consent text is the researcher's own, while the fixed participant chrome (phase sentences, buttons, receipt) and analysis prompts stay in English.
+- Register in a language: "Use polite (desu/masu) register." The language itself is a study setting (**Interview Languages**, below); manner adjusts how the interviewer speaks in it.
 - A short screening study: "Ask two short, open questions per turn. Do not suggest answers or evaluate responses." This overrides the default one-question rule; save and Preview to check the result.
 
 Instructions ride every turn: a long manner costs tokens under hosted quotas. Each interview record snapshots the instructions in force when it was saved, so later study edits do not rewrite its record.
@@ -388,6 +388,15 @@ Each study also sets what participants are told about the AI provider (**AI Prov
 - **The provider or model may change.** The consent notice names the provider and says you may later analyze responses with a different provider or model. Re-analysis uses whatever the study is set to.
 
 Studies saved before this setting existed keep their old notice, and their interviews are not checked, until the study is saved again. Aggregate analysis defaults to the current revision, but an explicit dataset may include earlier revisions. Aggregate analysis, exploration and follow-up generation check each selected interview's provider commitment and transport disclosure before sending content. Follow-up generation preserves the stored aggregate's source scope. Researcher previews do not store research records; if preview analysis fails, **Export transcript** still opens the transcript download.
+
+### Interview languages
+
+**Interview Languages** lists the languages participants may choose: English, Simplified Chinese, French, Japanese, Korean and Spanish. With more than one, the consent page opens with a language choice, preselected from the participant's browser (else the study's default language). The consent page, data notice, interview screens and thank-you screen then use that language, and the interviewer conducts the whole interview in it, asking questions written in another language in the participant's language.
+
+- **Consent text** is written for each language in its section; a blank one is generated from the research question in that language when you save. The participant's consent is recorded against the text they read, and every later request names the same language: a client that switches language is refused.
+- **Analysis** is written in English, with quotations kept verbatim in the participant's language. Each saved interview records the language it was conducted in.
+- **Translations** of the fixed participant screens and the data notice were drafted with AI assistance and reviewed by three other AI models; they are not certified translations (see `docs/translations/`). Your consent text in each language is your own: have it checked as your ethics process requires.
+- A study saved with only English keeps working exactly as before. A study with a language setting is refused by releases before 5.1 (fail-closed), so do not roll back past 5.1 while one is collecting.
 
 Changing study configuration advances its revision and invalidates links and participant sessions issued for the previous revision. Generate and distribute a new link after a consequential edit. Pausing/resuming collection and unchanged saves do not advance the revision.
 

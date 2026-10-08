@@ -14,6 +14,7 @@ import {
 import { logRequestEvent, logRequestFailure } from '@/lib/requestLog';
 import { hasTranscriptsCompleteMarker } from '@/lib/export/transcriptsMarkdown';
 import { buildParticipantOrPreviewHeaders } from '@/services/participantHeaders';
+import type { InterviewLanguage } from '@/lib/i18n/languages';
 export { isPendingStudyStub };
 export type { StudyWorkspaceItem };
 
@@ -115,7 +116,8 @@ export async function saveCompletedInterview(
     participantProfile: StoredInterview['participantProfile'] | null;
   },
   researcherPreview = false,
-  participantSessionHandle?: string | null
+  participantSessionHandle?: string | null,
+  language?: InterviewLanguage
 ): Promise<{ success: boolean; id: string; preview?: boolean }> {
   try {
     const response = await fetch('/api/interviews/save', {
@@ -127,7 +129,10 @@ export async function saveCompletedInterview(
       body: JSON.stringify({
         ...interview,
         completedAt: Date.now(),
-        status: 'completed'
+        status: 'completed',
+        // The language the participant consented in; the server checks it
+        // against the consent record and keeps it on the interview.
+        ...(language ? { language } : {})
       })
     });
 

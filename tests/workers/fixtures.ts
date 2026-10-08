@@ -1,6 +1,7 @@
 // Synthetic builders for WorkspaceStore domain tests. No participant content,
 // credentials or production data: every record here is invented.
 import { expect, vi } from 'vitest';
+import { consentTextFor, type InterviewLanguage } from '../../src/lib/i18n/languages';
 import { runInDurableObject } from 'cloudflare:test';
 import type * as Rpc from '../../cloudflare/workspace/rpcTypes';
 import type { FrozenAnalysisInput } from '../../src/lib/storage/analysisProtocol';
@@ -141,7 +142,7 @@ export type Participant = {
 /** Link plus recorded consent for a fresh participant session at `now`. */
 export async function enrolParticipant(
   study: StoredStudy,
-  options: { now?: number; expiresAt?: number | null; disclosedTransport?: 'cloudflare-gateway' } = {},
+  options: { now?: number; expiresAt?: number | null; disclosedTransport?: 'cloudflare-gateway'; language?: InterviewLanguage } = {},
 ): Promise<Participant> {
   const now = options.now ?? T0;
   const stub = workspaceStub();
@@ -155,7 +156,8 @@ export async function enrolParticipant(
   });
   expect(created.status).toBe('created');
   const sessionId = crypto.randomUUID();
-  const consentHash = await sha256Hex(study.config.consentText);
+  // A participant consents to the text of their language (lib/i18n/languages.ts).
+  const consentHash = await sha256Hex(options.language ? consentTextFor(study.config, options.language) : study.config.consentText);
   const consent = await stub.recordConsent({
     participantSessionId: sessionId,
     studyId: study.id,

@@ -44,6 +44,8 @@ import { hostedAiRateLimitResponse } from '@/lib/platformAiRateLimit';
 import { runInterviewAnalysis } from '@/lib/interviewAnalysis';
 import type { ParticipantConsentRecord } from '@/lib/participantConsent';
 import { readBoundedJsonObject } from '@/lib/requestBody';
+import { consentTextFor, hasLanguageSetting } from '@/lib/i18n/languages';
+import { participantLanguageFromBody } from '@/lib/i18n/participantLanguage';
 import { createRequestId, logRequestEvent, logRequestFailure } from '@/lib/requestLog';
 import { deploymentNotReadyResponse } from '@/lib/runtime/readinessGate';
 import { isDurableWorkspaceStore, type PersistCompletedInterviewInput } from '@/lib/storage/types';
@@ -141,11 +143,19 @@ export async function POST(request: Request) {
     });
     if (!canonical.ok) return canonical.response;
 
+    // The participant's language: its consent text is the one verified, and
+    // a study with a language setting records it on the interview.
+    const chosen = participantLanguageFromBody(canonical.study.config, body);
+    if (!chosen.ok) return chosen.response;
+    const interviewLanguageMember = hasLanguageSetting(canonical.study.config)
+      ? { interviewLanguage: chosen.language }
+      : {};
+
     const consentBinding = {
       participantSessionId: participantSessionId!,
       studyId: canonical.study.id,
       studyRevision: canonical.study.revision ?? 1,
-      consentText: canonical.study.config.consentText || '',
+      consentText: consentTextFor(canonical.study.config, chosen.language),
     };
     let consentRecord: ParticipantConsentRecord | null = null;
     if (!isAdmin) {
@@ -255,6 +265,7 @@ export async function POST(request: Request) {
       ...(canonical.study.config.interviewerInstructions !== undefined
         ? { conductedWithInstructions: canonical.study.config.interviewerInstructions }
         : {}),
+      ...interviewLanguageMember,
       analysis: { status: 'pending', attempts: 0, lastAttemptAt: now },
       participantLinkId: linkId,
     };
@@ -282,6 +293,8 @@ export async function POST(request: Request) {
       ...(canonical.study.config.interviewerInstructions !== undefined
         ? { conductedWithInstructions: canonical.study.config.interviewerInstructions }
         : {}),
+      // Only when present, so a fingerprint without a language is unchanged.
+      ...interviewLanguageMember,
     });
 
     if (persistRepairOnly) {

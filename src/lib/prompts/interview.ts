@@ -19,6 +19,7 @@
  */
 
 import { StudyConfig, ParticipantProfile, QuestionProgress } from '@/types';
+import { hasLanguageSetting, LANGUAGE_ENGLISH_NAMES, LANGUAGE_NATIVE_NAMES, studyLanguages } from '@/lib/i18n/languages';
 
 // Slice Q wording lives in single constants so it can be reviewed and edited directly.
 export const QUESTION_CRAFT = `QUESTION CRAFT:
@@ -41,6 +42,25 @@ export function buildInterviewerMannerBlock(studyConfig: StudyConfig, precedence
   return studyConfig.interviewerInstructions === undefined
     ? ''
     : `${INTERVIEWER_MANNER_HEADER}\n${studyConfig.interviewerInstructions}\n\n${precedence}\n\n`;
+}
+
+/**
+ * The language the interview is conducted in: the first study language, which
+ * for a participant request is the one they chose
+ * (configForParticipantLanguage). No block for a study without the setting,
+ * so its prompts are unchanged.
+ */
+export function buildLanguageBlock(studyConfig: StudyConfig): string {
+  if (!hasLanguageSetting(studyConfig)) return '';
+  const language = studyLanguages(studyConfig)[0];
+  const name = LANGUAGE_ENGLISH_NAMES[language];
+  return `INTERVIEW LANGUAGE: ${name} (${LANGUAGE_NATIVE_NAMES[language]}).
+- Conduct the whole interview in ${name}: every question, follow-up, acknowledgement and closing message.
+- The study's questions, topics and profile field labels, and the example phrases in these instructions, may be written in another language. Ask them naturally in ${name} and keep their meaning.
+- If the participant asks to continue in another language, you may switch to it.
+- When recording profile data, keep the participant's own words. For a field with preset options, record the option exactly as it is written in PROFILE FIELDS.
+
+`;
 }
 
 /**
@@ -151,7 +171,7 @@ INTERVIEW FLOW INSTRUCTIONS:
 
 ${QUESTION_CRAFT}
 
-${buildInterviewerMannerBlock(studyConfig)}OUTPUT CONTRACT:
+${buildLanguageBlock(studyConfig)}${buildInterviewerMannerBlock(studyConfig)}OUTPUT CONTRACT:
 - When a core question is substantially addressed, note its index
 - Extract profile data from user responses when mentioned
 - Signal shouldConclude=true only after feedback phase is complete

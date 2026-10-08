@@ -9,12 +9,13 @@ import { Button, Coordinate, Label, Notice, Page, Rule, Verbatim } from '@/compo
 import { SynthesisReading } from '@/components/SynthesisReading';
 import type { SynthesisResult } from '@/types';
 import { formatConsentTimestamp, formatElapsed, participantTurnCount, transcriptElapsedMs } from '@/lib/receiptFacts';
-import { defaultThankYouText } from '@/lib/thankYouText';
 import NavigationStatus from '@/components/NavigationStatus';
 import NoSessionNotice from '@/components/NoSessionNotice';
+import { thankYouTextFor } from '@/lib/i18n/languages';
+import { useParticipantLanguage } from '@/lib/i18n/useParticipantLanguage';
 
 type CompletionInputs = Pick<ReturnType<typeof useStore.getState>,
-  'studyConfig' | 'participantProfile' | 'interviewHistory' | 'behaviorData' | 'viewMode' | 'participantSessionHandle'
+  'studyConfig' | 'participantProfile' | 'interviewHistory' | 'behaviorData' | 'viewMode' | 'participantSessionHandle' | 'participantLanguage'
 >;
 
 type CompletionAttempt = {
@@ -31,7 +32,8 @@ function sameCompletionInputs(left: CompletionInputs, right: CompletionInputs) {
     && left.interviewHistory === right.interviewHistory
     && left.behaviorData === right.behaviorData
     && left.viewMode === right.viewMode
-    && left.participantSessionHandle === right.participantSessionHandle;
+    && left.participantSessionHandle === right.participantSessionHandle
+    && left.participantLanguage === right.participantLanguage;
 }
 
 const Synthesis: React.FC = () => {
@@ -46,8 +48,11 @@ const Synthesis: React.FC = () => {
     setStep,
     participantSessionHandle,
     viewMode,
-    consentTimestamp
+    consentTimestamp,
+    participantLanguage
   } = useStore();
+  const { language, messages } = useParticipantLanguage();
+  const f = messages.finish;
 
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -86,7 +91,7 @@ const Synthesis: React.FC = () => {
     setOpenNotes((prev) => ({ ...prev, [`${themeIndex}:${refIndex}`]: next }));
 
   const doSave = useCallback(async (attempt: CompletionAttempt) => {
-    const { studyConfig, participantProfile, interviewHistory, behaviorData, viewMode, participantSessionHandle } = attempt.inputs;
+    const { studyConfig, participantProfile, interviewHistory, behaviorData, viewMode, participantSessionHandle, participantLanguage } = attempt.inputs;
     if (!isCurrentAttempt(attempt) || attempt.saving || !studyConfig) return;
 
     attempt.saving = true;
@@ -110,7 +115,7 @@ const Synthesis: React.FC = () => {
         synthesis: viewMode === 'participant' ? null : attempt.result,
         behaviorData,
         createdAt: participantProfile?.timestamp ?? firstMessage.timestamp
-      }, viewMode === 'preview', participantSessionHandle);
+      }, viewMode === 'preview', participantSessionHandle, ...(participantLanguage ? [participantLanguage] : []));
 
       if (isCurrentAttempt(attempt)) {
         setSaveStatus(saveResult.preview ? 'preview' : saveResult.success ? 'saved' : 'failed');
@@ -140,7 +145,7 @@ const Synthesis: React.FC = () => {
 
   useEffect(() => {
     if (leaving.current) return;
-    const inputs = { studyConfig, participantProfile, interviewHistory, behaviorData, viewMode, participantSessionHandle };
+    const inputs = { studyConfig, participantProfile, interviewHistory, behaviorData, viewMode, participantSessionHandle, participantLanguage };
     const previousAttempt = activeAttempt.current;
     if (previousAttempt && sameCompletionInputs(previousAttempt.inputs, inputs)) return;
 
@@ -202,7 +207,7 @@ const Synthesis: React.FC = () => {
     };
 
     void analyzeAndSave();
-  }, [studyConfig, participantProfile, interviewHistory, behaviorData, viewMode, participantSessionHandle,
+  }, [studyConfig, participantProfile, interviewHistory, behaviorData, viewMode, participantSessionHandle, participantLanguage,
     synthesis, setSynthesis, retryTrigger, doSave, isCurrentAttempt]);
 
   const handleBack = () => {
@@ -239,9 +244,9 @@ const Synthesis: React.FC = () => {
     // back to being machine-verifiable facts only (P12.4).
     const receiptFacts: { term: string; value: string }[] = participantState === 'saved'
       ? [
-          { term: 'Turns contributed', value: String(participantTurnCount(interviewHistory)) },
-          ...(elapsedMs === null ? [] : [{ term: 'Elapsed', value: formatElapsed(elapsedMs) }]),
-          ...(consentAccepted === null ? [] : [{ term: 'Consent accepted', value: consentAccepted }]),
+          { term: f.turns, value: String(participantTurnCount(interviewHistory)) },
+          ...(elapsedMs === null ? [] : [{ term: f.elapsed, value: formatElapsed(elapsedMs) }]),
+          ...(consentAccepted === null ? [] : [{ term: f.consentAccepted, value: consentAccepted }]),
         ]
       : [];
 
@@ -256,20 +261,20 @@ const Synthesis: React.FC = () => {
                   thank-you sheet -> the contact line when present -> the
                   receipt <dl>. */}
               <Verbatim as="h1" className="text-[28px] font-normal leading-[36px] text-ink-900">
-                Thank you
+                {f.thankYouTitle}
               </Verbatim>
               <p className="font-sans text-[15px] leading-[24px] text-ink-700" role="status" aria-live="polite">
-                Your responses have been saved. It is now safe to close this tab.
+                {f.saved}
               </p>
               <Verbatim
                 as="div"
                 className="max-w-measure whitespace-pre-wrap text-[19px] leading-[31px] text-ink-700"
               >
-                {studyConfig.thankYouText?.trim() || defaultThankYouText(studyConfig.name)}
+                {thankYouTextFor(studyConfig, language)?.trim() || messages.defaults.thankYouText(studyConfig.name)}
               </Verbatim>
               {studyConfig.researcherContact ? (
                 <p className="font-sans text-[15px] leading-[24px] text-ink-700">
-                  Questions or concerns? Contact:{' '}
+                  {f.contact}{' '}
                   <span className="text-ink-900">{studyConfig.researcherContact}</span>
                 </p>
               ) : null}
@@ -290,29 +295,29 @@ const Synthesis: React.FC = () => {
           ) : participantState === 'save-failed' ? (
             <>
               <Verbatim as="h1" className="text-[28px] font-normal leading-[36px] text-ink-900">
-                We couldn&apos;t save your interview
+                {f.saveFailedTitle}
               </Verbatim>
               <Notice tone="error">
                 <p className="font-sans text-[15px] leading-[24px] text-ink-700" role="alert">
-                  Your responses are still in this tab. Keep it open and retry the save before closing.
+                  {f.saveFailedBody}
                 </p>
               </Notice>
               <div className="flex flex-col gap-3 sm:flex-row">
                 <Button variant="quiet" onClick={handleBack}>
-                  Back to interview
+                  {f.backToInterview}
                 </Button>
                 <Button variant="primary" disabled={isSaving} onClick={handleRetrySave}>
-                  Retry save
+                  {f.retrySave}
                 </Button>
               </div>
             </>
           ) : (
             <>
               <Verbatim as="h1" className="text-[28px] font-normal leading-[36px] text-ink-900">
-                Finalizing your interview
+                {f.finalizingTitle}
               </Verbatim>
               <p className="font-sans text-[15px] leading-[24px] text-ink-700" role="status" aria-live="polite">
-                We are preparing and saving your responses. Keep this tab open until you see confirmation that it is safe to close.
+                {f.finalizingBody}
               </p>
             </>
           )}

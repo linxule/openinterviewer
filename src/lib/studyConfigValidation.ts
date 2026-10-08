@@ -9,6 +9,7 @@ import { isProviderCommitment } from './providerCommitment';
 import { BRACKETED_PLACEHOLDER, THANK_YOU_TEXT_PLACEHOLDER_ERROR } from './thankYouText';
 
 import { MAX_INTERVIEWER_INSTRUCTIONS_LENGTH } from './interviewerManner';
+import { INTERVIEW_LANGUAGES, isInterviewLanguage } from './i18n/languages';
 
 export const STUDY_MUTATION_MAX_BYTES = 128 * 1024;
 
@@ -47,6 +48,9 @@ const STUDY_CONFIG_FIELDS = new Set([
   'researcherContact',
   'thankYouText',
   'interviewerInstructions',
+  'interviewLanguages',
+  'consentTextTranslations',
+  'thankYouTextTranslations',
   'createdAt',
   'parentStudyId',
   'parentStudyName',
@@ -144,6 +148,50 @@ function validateModel(provider: unknown, model: unknown): boolean {
 }
 
 /**
+ * Interview languages (lib/i18n/languages.ts). Optional, so every study saved
+ * before the setting keeps serving participants. With it: one to six distinct
+ * languages; a non-empty consent text for each language after the first (the
+ * first uses `consentText`); optional thank-you text for those languages; and
+ * no translation for a language the study does not offer.
+ */
+function validateInterviewLanguages(value: Record<string, unknown>): { ok: true } | { ok: false; error: string } {
+  const languages = value.interviewLanguages;
+  const consent = value.consentTextTranslations;
+  const thankYou = value.thankYouTextTranslations;
+  if (languages === undefined) {
+    return consent === undefined && thankYou === undefined
+      ? { ok: true }
+      : { ok: false, error: 'Translations need interview languages' };
+  }
+  if (!Array.isArray(languages)
+    || languages.length === 0
+    || languages.length > INTERVIEW_LANGUAGES.length
+    || !languages.every(isInterviewLanguage)
+    || new Set(languages).size !== languages.length) {
+    return { ok: false, error: 'Choose between one and six different interview languages' };
+  }
+  const additional = new Set<string>(languages.slice(1));
+  for (const [map, required, maximum, label] of [
+    [consent, true, MAX_CONSENT_TEXT_LENGTH, 'Consent text'],
+    [thankYou, false, MAX_THANK_YOU_TEXT_LENGTH, 'Thank-you screen'],
+  ] as const) {
+    if (map === undefined) {
+      if (required && additional.size > 0) return { ok: false, error: 'Consent text is required for every interview language' };
+      continue;
+    }
+    if (!isRecord(map)) return { ok: false, error: `${label} translations are invalid` };
+    for (const [language, text] of Object.entries(map)) {
+      if (!additional.has(language)) return { ok: false, error: `${label} translations must match the interview languages` };
+      if (!isBoundedString(text, maximum, true)) return { ok: false, error: `${label} for each language must be ${maximum} characters or fewer` };
+    }
+    if (required && [...additional].some((language) => !Object.prototype.hasOwnProperty.call(map, language))) {
+      return { ok: false, error: 'Consent text is required for every interview language' };
+    }
+  }
+  return { ok: true };
+}
+
+/**
  * Strict runtime validation for a complete canonical StudyConfig. It rejects
  * unknown top-level and nested fields so untrusted JSON cannot be persisted and
  * later interpreted as trusted study configuration.
@@ -221,6 +269,8 @@ export function validateStudyConfig(value: unknown): ValidationResult {
     && !isBoundedString(value.interviewerInstructions, MAX_INTERVIEWER_INSTRUCTIONS_LENGTH, true)) {
     return { ok: false, error: 'Interviewer instructions must be 4000 characters or fewer' };
   }
+  const languages = validateInterviewLanguages(value);
+  if (!languages.ok) return languages;
   if (value.linksEnabled !== undefined && typeof value.linksEnabled !== 'boolean') {
     return { ok: false, error: 'Invalid participant link status' };
   }
@@ -232,6 +282,18 @@ export function validateStudyConfig(value: unknown): ValidationResult {
     return { ok: false, error: 'Invalid AI reasoning setting' };
   }
   return { ok: true, config: value as unknown as StudyConfig };
+}
+
+/** Save-time only, like the checks above: an unfilled placeholder in any translation. */
+function translationPlaceholderRefusal(result: ValidationResult): ValidationResult {
+  if (!result.ok) return result;
+  if (Object.values(result.config.consentTextTranslations ?? {}).some((text) => text !== undefined && CONSENT_TEXT_PLACEHOLDER.test(text))) {
+    return { ok: false, error: CONSENT_TEXT_PLACEHOLDER_ERROR };
+  }
+  if (Object.values(result.config.thankYouTextTranslations ?? {}).some((text) => text !== undefined && BRACKETED_PLACEHOLDER.test(text))) {
+    return { ok: false, error: THANK_YOU_TEXT_PLACEHOLDER_ERROR };
+  }
+  return result;
 }
 
 /** Apply authoritative server identity before validating a create payload. */
@@ -248,7 +310,7 @@ export function validateStudyConfigForCreate(
     && BRACKETED_PLACEHOLDER.test(result.config.thankYouText)) {
     return { ok: false, error: THANK_YOU_TEXT_PLACEHOLDER_ERROR };
   }
-  return result;
+  return translationPlaceholderRefusal(result);
 }
 
 /** Merge a partial edit into canonical state while protecting server-owned fields. */
@@ -276,6 +338,11 @@ export function validateStudyConfigUpdate(
   for (const field of ['interviewerInstructions', 'thankYouText'] as const) {
     if (editable[field] === '') delete merged[field];
   }
+  // An empty map clears a translation set (JSON cannot send undefined).
+  for (const field of ['consentTextTranslations', 'thankYouTextTranslations'] as const) {
+    const sent = editable[field];
+    if (isRecord(sent) && Object.keys(sent).length === 0) delete merged[field];
+  }
   const result = validateStudyConfig(merged);
   if (result.ok && CONSENT_TEXT_PLACEHOLDER.test(result.config.consentText)) {
     return { ok: false, error: CONSENT_TEXT_PLACEHOLDER_ERROR };
@@ -284,7 +351,7 @@ export function validateStudyConfigUpdate(
     && BRACKETED_PLACEHOLDER.test(result.config.thankYouText)) {
     return { ok: false, error: THANK_YOU_TEXT_PLACEHOLDER_ERROR };
   }
-  return result;
+  return translationPlaceholderRefusal(result);
 }
 
 /** Bounded, strict parsing for researcher study create/update request bodies. */
