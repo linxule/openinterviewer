@@ -16,6 +16,7 @@ import { getResearcherByIdChecked, toResearcherProfile } from '@/lib/platformDb'
 import { isGatewayAuthConfigured } from '@/lib/aiTransport';
 import { logRequestFailure } from '@/lib/requestLog';
 import { activeAITransport, isCloudflareTarget, resolveCapabilities } from '@/lib/runtime/capabilities';
+import { voiceTranscriptionAvailable } from '@/lib/transcription/workersAi';
 
 function notConfigured(error?: string) {
   return NextResponse.json(
@@ -47,6 +48,8 @@ async function cloudflareStatus() {
     hasGeminiKey: !!context.geminiApiKey,
     hasOpenAiKey: !!context.openaiApiKey,
     hasOpenRouterKey: !!context.openrouterApiKey,
+    // Workers AI speech-to-text for voice input (the Worker's AI binding).
+    hasVoiceTranscription: voiceTranscriptionAvailable(),
   });
 }
 
@@ -84,6 +87,7 @@ export async function GET() {
         hasGeminiKey: profile.hasGeminiKey,
         hasOpenAiKey: profile.hasOpenAiKey,
         hasOpenRouterKey: profile.hasOpenRouterKey,
+        hasVoiceTranscription: false,
       });
     }
 
@@ -104,6 +108,8 @@ export async function GET() {
       hasGeminiKey: gatewayReady || !!context.geminiApiKey,
       hasOpenAiKey: gatewayReady || !!context.openaiApiKey,
       hasOpenRouterKey: aiTransport === 'direct' && !!context.openrouterApiKey,
+      // Workers AI speech-to-text through its REST API (two optional variables).
+      hasVoiceTranscription: voiceTranscriptionAvailable(),
     };
 
     return NextResponse.json(status);

@@ -64,6 +64,10 @@ export const ja: Messages = {
       fixed: (model, provider) => `インタビューおよびその後の回答の分析には ${model}（${provider}）を使用します。この研究で別の AI プロバイダーやモデルに切り替えることはありません。`,
       mayChange: '研究者は今後、別の AI プロバイダーやモデルを使ってあなたの回答を分析する場合があります。',
     },
+    voice: {
+      installation: 'マイクを使用すると、録音はこの研究をホストしている Cloudflare に送信され、Cloudflare Workers AI によって文字に変換されます。録音は保存されず、送信前に文字を編集できます。',
+      browser: 'マイクを使用すると、ブラウザの音声サービスが音声を文字に変換します。Chrome では Google、Safari では Apple が、それぞれの規約に基づいて処理します。送信前に文字を編集できます。',
+    },
   },
   interview: {
     phases: {
@@ -91,6 +95,17 @@ export const ja: Messages = {
     placeholder: '必要なだけ、自由にお書きください。',
     send: '送信',
     sendShortcut: '⌘/Ctrl + Enter で送信',
+    voice: {
+      start: '音声入力を開始',
+      stop: '録音を停止',
+      recording: (elapsed) => `録音中 ${elapsed}（最長 1:00）`,
+      listening: '聞き取っています…',
+      transcribing: '録音を文字に変換しています…',
+      review: '送信する前に文字をご確認ください。',
+      denied: 'マイクへのアクセスがブロックされました。ブラウザで許可するか、回答を入力してください。',
+      failed: '録音を文字に変換できませんでした。もう一度お試しいただくか、回答を入力してください。',
+      unsupported: 'このブラウザでは音声入力を使用できません。回答を入力してください。',
+    },
   },
   finish: {
     thankYouTitle: 'ありがとうございました',

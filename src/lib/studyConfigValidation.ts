@@ -51,6 +51,7 @@ const STUDY_CONFIG_FIELDS = new Set([
   'interviewLanguages',
   'consentTextTranslations',
   'thankYouTextTranslations',
+  'voiceInput',
   'createdAt',
   'parentStudyId',
   'parentStudyName',
@@ -271,6 +272,9 @@ export function validateStudyConfig(value: unknown): ValidationResult {
   }
   const languages = validateInterviewLanguages(value);
   if (!languages.ok) return languages;
+  if (value.voiceInput !== undefined && !['off', 'installation', 'browser'].includes(value.voiceInput as string)) {
+    return { ok: false, error: 'Invalid voice input setting' };
+  }
   if (value.linksEnabled !== undefined && typeof value.linksEnabled !== 'boolean') {
     return { ok: false, error: 'Invalid participant link status' };
   }

@@ -14,6 +14,7 @@ const MAX_WINDOW_SECONDS = 31 * 24 * 60 * 60;
 const RESEARCHER_AI_OPERATIONS: ReadonlySet<Port.ResearcherAiOperation> = new Set([
   'greeting',
   'interview',
+  'transcribe',
   'synthesis',
   'aggregate',
   'followup',

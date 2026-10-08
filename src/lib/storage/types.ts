@@ -162,7 +162,7 @@ export type VerifyConsentOutcome = VerifyParticipantConsentResult;
 // ---------- Participant admission (greeting/interview budgets) ----------
 
 export type AdmissionInput = {
-  operation: 'greeting' | 'interview';
+  operation: 'greeting' | 'interview' | 'transcribe';
   /** Counters in LIMITS order; keys are salted digests on the durable store. */
   counters: ParticipantRateLimitCounter[];
   now: number;
@@ -179,7 +179,7 @@ export type AdmissionOutcome =
 /** Every researcher AI budget key starts with this; participant keys start with `rate-limit:`. */
 export const RESEARCHER_AI_KEY_PREFIX = 'researcher-ai:';
 
-export type ResearcherAiOperation = 'greeting' | 'interview' | 'synthesis' | 'aggregate' | 'followup' | 'analysis' | 'exploration';
+export type ResearcherAiOperation = 'greeting' | 'interview' | 'transcribe' | 'synthesis' | 'aggregate' | 'followup' | 'analysis' | 'exploration';
 
 /**
  * One researcher budget scope. Keys start with `researcher-ai:` (never a

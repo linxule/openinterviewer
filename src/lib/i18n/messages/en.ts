@@ -61,6 +61,8 @@ export interface Messages {
       fixed: (model: string, provider: string) => string;
       mayChange: string;
     };
+    /** Shown when the study offers voice input; names who turns speech into text. */
+    voice: { installation: string; browser: string };
   };
   interview: {
     phases: Record<InterviewPhase, string>;
@@ -82,6 +84,17 @@ export interface Messages {
     placeholder: string;
     send: string;
     sendShortcut: string;
+    voice: {
+      start: string;
+      stop: string;
+      recording: (elapsed: string) => string;
+      listening: string;
+      transcribing: string;
+      review: string;
+      denied: string;
+      failed: string;
+      unsupported: string;
+    };
   };
   finish: {
     thankYouTitle: string;
@@ -168,6 +181,10 @@ export const en: Messages = {
       fixed: (model, provider) => `The interview and any later analysis of your responses use ${model} (${provider}); the study does not switch them to another AI provider or model.`,
       mayChange: 'The researcher may later analyze your responses with a different AI provider or model.',
     },
+    voice: {
+      installation: 'If you use the microphone, your recording is sent to Cloudflare, which hosts this study, to be turned into text by Cloudflare Workers AI. The recording is not stored, and you can edit the text before sending it.',
+      browser: 'If you use the microphone, your browser\'s speech service turns your speech into text: in Chrome this is Google, in Safari Apple, under their own terms. You can edit the text before sending it.',
+    },
   },
   interview: {
     phases: {
@@ -195,6 +212,17 @@ export const en: Messages = {
     placeholder: 'Take as much space as you need.',
     send: 'Send',
     sendShortcut: '⌘/Ctrl + Enter to send',
+    voice: {
+      start: 'Start voice input',
+      stop: 'Stop recording',
+      recording: (elapsed) => `Recording ${elapsed} (up to 1:00)`,
+      listening: 'Listening…',
+      transcribing: 'Turning your recording into text…',
+      review: 'Check the text before sending.',
+      denied: 'Microphone access was blocked. Allow it in your browser, or type your answer.',
+      failed: 'Your recording could not be turned into text. Please try again or type your answer.',
+      unsupported: 'Voice input does not work in this browser. Please type your answer.',
+    },
   },
   finish: {
     thankYouTitle: 'Thank you',

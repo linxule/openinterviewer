@@ -13,6 +13,7 @@ import { Button, Turn } from '@/components/ui';
 import NoSessionNotice from '@/components/NoSessionNotice';
 import { useParticipantLanguage } from '@/lib/i18n/useParticipantLanguage';
 import { hasLanguageSetting } from '@/lib/i18n/languages';
+import { useVoiceInput } from '@/lib/voice/useVoiceInput';
 
 // Primitive props keep completed turns from reparsing Markdown when the
 // composer changes or another message arrives.
@@ -58,6 +59,17 @@ const InterviewChat: React.FC = () => {
   const [showFinishOption, setShowFinishOption] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
+
+  const voice = useVoiceInput({
+    mode: studyConfig?.voiceInput,
+    language: shownLanguage,
+    studyId: studyConfig?.id,
+    researcherPreview: viewMode === 'preview',
+    participantSessionHandle,
+    // Text is added to the answer box for the participant to check; never sent.
+    onText: (text) => setInput((current) => (current.trimEnd() ? `${current.trimEnd()} ${text}` : text)),
+  });
+  const voiceBusy = voice.state.kind === 'recording' || voice.state.kind === 'listening' || voice.state.kind === 'transcribing';
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -418,16 +430,40 @@ const InterviewChat: React.FC = () => {
                   />
                 </div>
 
+                {voice.enabled && voice.supported && (
+                  <Button
+                    type="button"
+                    variant="quiet"
+                    onClick={voice.toggle}
+                    disabled={isAiThinking || voice.state.kind === 'transcribing'}
+                    aria-pressed={voice.state.kind === 'recording' || voice.state.kind === 'listening'}
+                    className="min-h-11 w-full sm:w-auto"
+                  >
+                    {voice.state.kind === 'recording' || voice.state.kind === 'listening' ? m.voice.stop : m.voice.start}
+                  </Button>
+                )}
                 <Button
                   type="button"
                   variant="primary"
                   onClick={() => handleSend()}
-                  disabled={!input.trim() || isAiThinking}
+                  disabled={!input.trim() || isAiThinking || voiceBusy}
                   className="min-h-11 w-full sm:w-auto"
                 >
                   {m.send}
                 </Button>
               </div>
+              {voice.enabled && voice.state.kind !== 'idle' && (
+                <p role={voice.state.kind === 'error' ? 'alert' : 'status'} className="text-[13px] leading-[20px] text-ink-700">
+                  {voice.state.kind === 'recording'
+                    ? m.voice.recording(`${Math.floor(voice.state.seconds / 60)}:${String(voice.state.seconds % 60).padStart(2, '0')}`)
+                    : voice.state.kind === 'listening' ? m.voice.listening
+                    : voice.state.kind === 'transcribing' ? m.voice.transcribing
+                    : m.voice[voice.state.reason]}
+                </p>
+              )}
+              {voice.enabled && voice.state.kind === 'idle' && input.trim() !== '' && (
+                <p className="text-[13px] leading-[20px] text-ink-500">{m.voice.review}</p>
+              )}
               <p className="text-[13px] leading-[20px] text-ink-500 [@media(pointer:coarse)]:hidden">{m.sendShortcut}</p>
             </div>
           </div>

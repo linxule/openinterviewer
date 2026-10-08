@@ -11,7 +11,7 @@ import {
 } from './runtime/workerInvocation';
 import type { AdmissionOutcome, WorkspaceStorePort } from './storage/types';
 
-type ParticipantOperation = 'greeting' | 'interview' | 'save';
+type ParticipantOperation = 'greeting' | 'interview' | 'transcribe' | 'save';
 
 type ParticipantAuthority = { sessionId?: string; linkId?: string; researcherId?: string | null };
 
@@ -46,6 +46,13 @@ const LIMITS: Record<ParticipantOperation, Limit[]> = {
     { scope: 'link', maximum: 2_000, windowSeconds: 86_400 },
     { scope: 'study', maximum: 5_000, windowSeconds: 86_400 },
     { scope: 'researcher', maximum: 10_000, windowSeconds: 86_400 },
+  ],
+  // One voice clip (at most 60 seconds) per request, transcribed by Workers AI.
+  transcribe: [
+    { scope: 'session', maximum: 40, windowSeconds: 3_600 },
+    { scope: 'client', maximum: 80, windowSeconds: 3_600 },
+    { scope: 'link', maximum: 1_000, windowSeconds: 86_400 },
+    { scope: 'study', maximum: 1_500, windowSeconds: 86_400 },
   ],
   save: [
     { scope: 'session', maximum: 2, windowSeconds: 86_400 },
@@ -348,7 +355,7 @@ export async function participantRateLimitResponse(
 export async function participantStoreAdmissionResponse(
   request: Request,
   studyId: string,
-  operation: 'greeting' | 'interview',
+  operation: 'greeting' | 'interview' | 'transcribe',
   store: Pick<WorkspaceStorePort, 'admitParticipantRequest'>,
   authority: ParticipantAuthority = {},
   now: number = Date.now(),

@@ -53,6 +53,7 @@ describe('GET /api/config/status', () => {
       hasGeminiKey: false,
       hasOpenAiKey: true,
       hasOpenRouterKey: false,
+      hasVoiceTranscription: false,
     });
   });
 
@@ -78,6 +79,7 @@ describe('GET /api/config/status', () => {
       hasGeminiKey: true,
       hasOpenAiKey: false,
       hasOpenRouterKey: true,
+      hasVoiceTranscription: false,
     });
   });
 
@@ -105,6 +107,7 @@ describe('GET /api/config/status', () => {
       hasGeminiKey: true,
       hasOpenAiKey: true,
       hasOpenRouterKey: false,
+      hasVoiceTranscription: false,
     });
   });
 });

@@ -408,7 +408,7 @@ export async function verifyConsent(ws: WorkspaceContext, input: Rpc.ConsentInpu
   }
 }
 
-// ---------- Greeting/interview admission (first-consumption windows) ----------
+// ---------- Greeting/interview/transcribe admission (first-consumption windows) ----------
 
 /**
  * Check every counter, then charge every counter, in one synchronous
@@ -418,7 +418,7 @@ export async function verifyConsent(ws: WorkspaceContext, input: Rpc.ConsentInpu
 export async function admitParticipantRequest(ws: WorkspaceContext, input: Port.AdmissionInput): Promise<Port.AdmissionOutcome> {
   try {
     if (
-      (input?.operation !== 'greeting' && input?.operation !== 'interview')
+      (input?.operation !== 'greeting' && input?.operation !== 'interview' && input?.operation !== 'transcribe')
       || !isValidCounterList(input.counters)
       || !isSafeTime(input.now)
     ) {

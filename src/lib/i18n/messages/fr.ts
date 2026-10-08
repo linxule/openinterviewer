@@ -64,6 +64,10 @@ export const fr: Messages = {
       fixed: (model, provider) => `L’entretien et toute analyse ultérieure de vos réponses utilisent ${model} (${provider}) ; l’étude ne les fait pas passer à un autre fournisseur ou modèle d’IA.`,
       mayChange: 'La personne responsable de l’étude peut analyser ultérieurement vos réponses avec un autre fournisseur ou modèle d’IA.',
     },
+    voice: {
+      installation: 'Si vous utilisez le microphone, votre enregistrement est envoyé à Cloudflare, qui héberge cette étude, pour être transcrit en texte par Cloudflare Workers AI. L’enregistrement n’est pas conservé, et vous pouvez modifier le texte avant de l’envoyer.',
+      browser: 'Si vous utilisez le microphone, le service vocal de votre navigateur transcrit votre voix en texte : Google dans Chrome, Apple dans Safari, selon leurs propres conditions. Vous pouvez modifier le texte avant de l’envoyer.',
+    },
   },
   interview: {
     phases: {
@@ -91,6 +95,17 @@ export const fr: Messages = {
     placeholder: 'Écrivez aussi longuement que vous le souhaitez.',
     send: 'Envoyer',
     sendShortcut: '⌘/Ctrl + Entrée pour envoyer',
+    voice: {
+      start: 'Démarrer la saisie vocale',
+      stop: 'Arrêter l’enregistrement',
+      recording: (elapsed) => `Enregistrement ${elapsed} (1:00 maximum)`,
+      listening: 'Écoute en cours…',
+      transcribing: 'Transcription de votre enregistrement…',
+      review: 'Vérifiez le texte avant de l’envoyer.',
+      denied: 'L’accès au microphone a été bloqué. Autorisez-le dans votre navigateur ou saisissez votre réponse.',
+      failed: 'Votre enregistrement n’a pas pu être transcrit. Veuillez réessayer ou saisir votre réponse.',
+      unsupported: 'La saisie vocale ne fonctionne pas dans ce navigateur. Veuillez saisir votre réponse.',
+    },
   },
   finish: {
     thankYouTitle: 'Merci',

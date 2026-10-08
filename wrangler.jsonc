@@ -60,6 +60,12 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["WorkspaceStore"] }],
 
+  // Workers AI, used only for participant voice input in studies that choose
+  // transcription by this installation (src/lib/transcription/workersAi.ts).
+  // Called directly, never through AI Gateway. Billed by Cloudflare per audio
+  // minute after the account's free daily allowance; unused, it costs nothing.
+  "ai": { "binding": "AI" },
+
   "queues": {
     "producers": [{ "binding": "ANALYSIS_QUEUE", "queue": "openinterviewer-analysis" }],
     "consumers": [

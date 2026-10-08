@@ -12,6 +12,8 @@ export type ConfigStatus = {
   hasGeminiKey: boolean;
   hasOpenAiKey: boolean;
   hasOpenRouterKey: boolean;
+  /** Workers AI speech-to-text is configured (voice input 'installation'). */
+  hasVoiceTranscription?: boolean;
 };
 
 export const PROVIDER_STATUS_FIELD = {

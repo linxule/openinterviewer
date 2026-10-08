@@ -20,6 +20,7 @@ import {
   frozenInput,
   interviewRecord,
   planRow,
+  randomHex64,
   sampleInterview,
   setMaintenance,
   sha256Hex,
@@ -139,6 +140,17 @@ describe('durable client against the real object (ST-01, ST-03, ST-06)', () => {
     const rows = await sql<{ scope_key: string }>(`SELECT scope_key FROM budget_windows`);
     expect(rows).toEqual([{ scope_key: createHmac('sha256', SALT).update(rawKey).digest('hex') }]);
     expect(JSON.stringify(rows)).not.toContain('203.0.113.7');
+  });
+
+  it('voice transcription is admitted as its own operation, with its own windows, and other names stay refused', async () => {
+    const store = realStore();
+    const counters = [{ key: 'rate-limit:transcribe:session:3600:session-a', maximum: 1, windowSeconds: 3_600 }];
+    expect(await store.admitParticipantRequest({ operation: 'transcribe', counters, now: T0 })).toEqual({ status: 'admitted' });
+    expect(await store.admitParticipantRequest({ operation: 'transcribe', counters, now: T0 + 1_000 }))
+      .toMatchObject({ status: 'limited', rejectedIndex: 0 });
+    const stub = workspaceStub();
+    expect(await stub.admitParticipantRequest({ operation: 'save' as never, counters: [{ key: randomHex64(), maximum: 1, windowSeconds: 60 }], now: T0 }))
+      .toEqual({ status: 'unavailable' });
   });
 
   it('JOB-01: completion through the client re-verifies consent from its text and mints the initial job id', async () => {

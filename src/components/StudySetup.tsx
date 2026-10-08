@@ -43,8 +43,9 @@ import { LinkSettingsSection } from '@/components/studySetup/LinkSettingsSection
 import { ConsentSection } from '@/components/studySetup/ConsentSection';
 import { ThankYouSection } from '@/components/studySetup/ThankYouSection';
 import { InterviewLanguagesSection } from '@/components/studySetup/InterviewLanguagesSection';
+import { VoiceInputSection } from '@/components/studySetup/VoiceInputSection';
 
-const sectionsForExample = ['study-details', 'profile-fields', 'core-questions', 'topic-areas', 'ai-provider', 'interview-structure', 'interviewer-manner', 'interview-languages', 'link-settings', 'consent-text', 'thank-you-text'];
+const sectionsForExample = ['study-details', 'profile-fields', 'core-questions', 'topic-areas', 'ai-provider', 'interview-structure', 'interviewer-manner', 'interview-languages', 'voice-input', 'link-settings', 'consent-text', 'thank-you-text'];
 
 const StudySetupForm: React.FC = () => {
   const router = useRouter();
@@ -184,6 +185,7 @@ const StudySetupForm: React.FC = () => {
             // interpret as not configured; malformed present values fail closed.
             hasOpenAiKey: data.hasOpenAiKey === true,
             hasOpenRouterKey: data.hasOpenRouterKey === true,
+            hasVoiceTranscription: data.hasVoiceTranscription === true,
           });
           setAiTransport(data.aiTransport);
         }
@@ -729,6 +731,7 @@ const StudySetupForm: React.FC = () => {
     { id: 'interview-structure', label: 'Interview Structure' },
     { id: 'interviewer-manner', label: 'Interviewer Manner' },
     { id: 'interview-languages', label: 'Interview Languages' },
+    { id: 'voice-input', label: 'Voice Input' },
     { id: 'link-settings', label: 'Link Settings' },
     { id: 'consent-text', label: 'Consent Text' },
     { id: 'thank-you-text', label: 'Thank-You Screen' },
@@ -938,6 +941,15 @@ const StudySetupForm: React.FC = () => {
             draft={draft}
             editing={isEditing('interview-languages')}
             onEdit={() => openSection('interview-languages')}
+          />
+          <Rule />
+
+          <VoiceInputSection
+            draft={draft}
+            editing={isEditing('voice-input')}
+            onEdit={() => openSection('voice-input')}
+            transcriptionAvailable={configStatus?.hasVoiceTranscription === true}
+            hosted={configStatus?.mode === 'hosted'}
           />
           <Rule />
 
