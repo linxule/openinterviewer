@@ -35,8 +35,10 @@ jobs:
           node-version: 24.19.0
           cache: npm
       - run: npm ci
-      - name: Audit application and development-toolchain dependencies
-        run: npm audit --include=dev --audit-level=high
+      - name: Audit application dependencies (no exceptions)
+        run: npm audit --omit=dev --audit-level=high
+      - name: Audit development-toolchain dependencies (dated exceptions only)
+        run: node scripts/cloudflare/audit-toolchain.mjs
       - name: Lint
         run: npm run lint
       - name: Typecheck
