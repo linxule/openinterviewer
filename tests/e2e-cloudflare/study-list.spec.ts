@@ -10,9 +10,10 @@ test.beforeEach(async ({ request }) => {
 });
 
 test('a study without interviews is deleted from the study list', async ({ page }) => {
-  const { studyId } = await createStudy(page);
+  // The artifact's store outlives a test: a unique name finds this study's row.
+  const name = `List delete study ${Date.now()}`;
+  const { studyId } = await createStudy(page, name);
   await page.goto('/studies');
-  const name = 'Cloudflare workflow study';
   await expect(page.getByRole('button', { name: `Open actions for ${name}` })).toBeVisible();
   page.once('dialog', (dialog) => void dialog.accept());
   const deleted = page.waitForResponse((response) =>
