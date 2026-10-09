@@ -977,3 +977,15 @@ test('SETUP-01 the CLI reads .dev.vars and the default wrangler.jsonc and never 
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('ANALYSIS_LANGUAGE is optional; a supported code passes and anything else is an error on both targets', () => {
+  const node = (value) => validateSetup({ mode: 'standalone', production: true, env: { ...validStandaloneEnv(), ANALYSIS_LANGUAGE: value }, nodeVersion: '24.19.0' });
+  assert.equal(node('').ok, true);
+  assert.equal(node('').checks.some((item) => item.code.startsWith('env.ANALYSIS_LANGUAGE')), false);
+  assert.equal(node('zh').checks.some((item) => item.code === 'env.ANALYSIS_LANGUAGE.valid' && item.status === 'pass'), true);
+  const invalid = node('Chinese');
+  assert.equal(invalid.ok, false);
+  assert.equal(invalid.checks.some((item) => item.code === 'env.ANALYSIS_LANGUAGE.invalid' && item.status === 'error'), true);
+  const cloudflare = cloudflareReport({ env: { ...validCloudflareEnv(), ANALYSIS_LANGUAGE: 'de' } });
+  assert.equal(cloudflare.checks.some((item) => item.code === 'env.ANALYSIS_LANGUAGE.invalid'), true);
+});

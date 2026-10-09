@@ -132,6 +132,7 @@ describe('RT-01 GET /api/config/status on Cloudflare', () => {
       hasOpenAiKey: true,
       hasOpenRouterKey: false,
       hasVoiceTranscription: false,
+      analysisLanguage: 'en',
     });
     expect(JSON.stringify(body)).not.toContain(OPENAI_KEY);
   });
@@ -155,6 +156,7 @@ describe('RT-01 GET /api/config/status on Cloudflare', () => {
       hasOpenAiKey: true,
       hasOpenRouterKey: false,
       hasVoiceTranscription: false,
+      analysisLanguage: 'en',
     });
     expect(JSON.stringify(body)).not.toContain('synthetic-ai-gateway-run-token');
   });

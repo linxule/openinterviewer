@@ -100,6 +100,46 @@ describe('setup:cloudflare update and verify', { concurrency: 6 }, () => {
     });
   }
 
+  test('update --analysis-language sets ANALYSIS_LANGUAGE in the receipt and the deployed vars, and en clears it', async (t) => {
+    const sandbox = await installed(t);
+    assert.equal(sandbox.state().deploys.at(-1).vars.ANALYSIS_LANGUAGE, '');
+    assert.equal(Object.hasOwn(sandbox.receipt(), 'analysisLanguage'), false);
+    const secrets = sandbox.state().workers['oi-acme'].secrets;
+    sandbox.newCommit(NEXT_COMMIT);
+
+    const run = await sandbox.run('update', [...UPDATE, '--analysis-language', 'zh']);
+    assert.equal(run.code, 0, run.output);
+    assert.match(run.output, /Analysis language: en -> zh/);
+    assert.equal(sandbox.receipt().analysisLanguage, 'zh');
+    const latest = sandbox.state().deploys.at(-1);
+    assert.equal(latest.vars.ANALYSIS_LANGUAGE, 'zh');
+    assert.deepEqual(sandbox.state().workers['oi-acme'].secrets, secrets);
+    assert.equal(readJsonc(path.join(sandbox.installDir(), 'wrangler.jsonc')).vars.ANALYSIS_LANGUAGE, 'zh');
+
+    // A plain update keeps it; the earlier config is not drift.
+    const again = await sandbox.run('update', UPDATE);
+    assert.equal(again.code, 0, again.output);
+    assert.equal(sandbox.state().deploys.at(-1).vars.ANALYSIS_LANGUAGE, 'zh');
+
+    const back = await sandbox.run('update', [...UPDATE, '--analysis-language', 'en']);
+    assert.equal(back.code, 0, back.output);
+    assert.equal(Object.hasOwn(sandbox.receipt(), 'analysisLanguage'), false);
+    assert.equal(sandbox.state().deploys.at(-1).vars.ANALYSIS_LANGUAGE, '');
+  });
+
+  test('update refuses --analysis-language that is not a supported code, or with an operation that does not deploy', async (t) => {
+    const sandbox = await installed(t);
+    const deploys = sandbox.state().deploys.length;
+    const bad = await sandbox.run('update', [...UPDATE, '--analysis-language', 'de']);
+    assert.equal(bad.code, 2, bad.output);
+    assert.match(bad.stderr, /--analysis-language must be one of en, zh, fr, ja, ko, es/);
+    const withKeyOperation = await sandbox.run('update', [...UPDATE, '--analysis-language', 'ja', '--rotate-admin-password', '--secrets-stdin'], { input: JSON.stringify({ ADMIN_PASSWORD: 'x'.repeat(24) }) });
+    assert.equal(withKeyOperation.code, 2, withKeyOperation.output);
+    assert.match(withKeyOperation.stderr, /--analysis-language changes a var, so it needs a deploy/);
+    assert.equal(sandbox.state().deploys.length, deploys);
+    assert.equal(Object.hasOwn(sandbox.receipt(), 'analysisLanguage'), false);
+  });
+
   test('update requires an explicit existing-install identity', async (t) => {
     const sandbox = await createSandbox(t);
     sandbox.update((state) => {

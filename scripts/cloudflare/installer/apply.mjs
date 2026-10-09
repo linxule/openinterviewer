@@ -27,6 +27,7 @@ import {
   parseProviderList,
   requiredSecretNames,
   validateAiTransport,
+  validateAnalysisLanguage,
   validateJurisdiction,
   validateOrigin,
   validateProvider,
@@ -72,6 +73,7 @@ function checkArguments(ctx, receipt) {
   }
   if (options.provider !== undefined) validateProvider(options.provider);
   if (options['ai-transport'] !== undefined) validateAiTransport(options['ai-transport']);
+  if (options['analysis-language'] !== undefined) validateAnalysisLanguage(options['analysis-language']);
   if (options.jurisdiction !== undefined) validateJurisdiction(options.jurisdiction);
   const origin = options.origin !== undefined ? validateOrigin(options.origin) : null;
   if (!receipt) {
@@ -95,6 +97,12 @@ function checkArguments(ctx, receipt) {
         'Add a key to a completed installation with update --add-provider-key <provider>.',
       ]);
     }
+  }
+  if (options['analysis-language'] !== undefined
+    && validateAnalysisLanguage(options['analysis-language']) !== (receipt.analysisLanguage ?? null)) {
+    throw refuse(`--analysis-language ${options['analysis-language']} differs from the installation's analysis language ${receipt.analysisLanguage ?? 'en'}`, [
+      'Change the analysis language of a completed installation with update --analysis-language <code>.',
+    ]);
   }
   if (options['ai-transport'] && options['ai-transport'] !== receipt.aiTransport) {
     throw refuse(`--ai-transport ${options['ai-transport']} differs from the installation's AI transport ${receipt.aiTransport}`, [
@@ -251,6 +259,7 @@ async function runPhases(ctx, { receipt: initialReceipt, fresh, explicitOrigin }
       aiTransport,
       origin: explicitOrigin ?? '',
       bootstrap: options['import-target'] ? 'recovery' : 'open',
+      analysisLanguage: options['analysis-language'] !== undefined ? validateAnalysisLanguage(options['analysis-language']) : null,
     });
     receipt.epochFingerprint = epochFingerprint(epoch);
     receipt.secrets.epochGeneratedAt = now();

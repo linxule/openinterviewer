@@ -1,5 +1,5 @@
 import { Coordinate } from '@/components/ui';
-import { INTERVIEW_LANGUAGES, LANGUAGE_ENGLISH_NAMES, LANGUAGE_NATIVE_NAMES, LANGUAGE_TAGS } from '@/lib/i18n/languages';
+import { INTERVIEW_LANGUAGES, LANGUAGE_ENGLISH_NAMES, LANGUAGE_NATIVE_NAMES, LANGUAGE_TAGS, type InterviewLanguage } from '@/lib/i18n/languages';
 import { Section } from './Section';
 import type { StudyDraft } from './useStudyDraft';
 
@@ -7,6 +7,9 @@ export interface InterviewLanguagesSectionProps {
   draft: StudyDraft;
   editing: boolean;
   onEdit: () => void;
+  /** The installation's analysis language (ANALYSIS_LANGUAGE). */
+  analysisLanguage?: InterviewLanguage;
+  analysisLanguageInvalid?: boolean;
 }
 
 function languageName(language: (typeof INTERVIEW_LANGUAGES)[number]) {
@@ -15,13 +18,19 @@ function languageName(language: (typeof INTERVIEW_LANGUAGES)[number]) {
     : `${LANGUAGE_ENGLISH_NAMES[language]} · ${LANGUAGE_NATIVE_NAMES[language]}`;
 }
 
-export function InterviewLanguagesSection({ draft, editing, onEdit }: InterviewLanguagesSectionProps) {
+/** Where the analysis language comes from, for the section description. */
+export function analysisLanguageNote(language: InterviewLanguage, invalid: boolean): string {
+  if (invalid) return 'Analysis is written in English: this installation\u2019s ANALYSIS_LANGUAGE is not one of en, zh, fr, ja, ko or es.';
+  return `Analysis is written in ${LANGUAGE_ENGLISH_NAMES[language]} (this installation\u2019s analysis language), with quotations kept in the participant\u2019s language.`;
+}
+
+export function InterviewLanguagesSection({ draft, editing, onEdit, analysisLanguage = 'en', analysisLanguageInvalid = false }: InterviewLanguagesSectionProps) {
   const [primary, ...others] = draft.interviewLanguages;
   return (
     <Section
       id="interview-languages"
       label="Interview Languages"
-      description="Participants choose one of these languages before consent. The consent page, the interviewer and the participant screens then use it. Analysis is written in English, with quotations kept in the participant's language."
+      description={`Participants choose one of these languages before consent. The consent page, the interviewer and the participant screens then use it. ${analysisLanguageNote(analysisLanguage, analysisLanguageInvalid)}`}
       editing={editing}
       onEdit={onEdit}
       read={

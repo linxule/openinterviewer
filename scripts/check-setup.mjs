@@ -62,6 +62,19 @@ export const CLOUDFLARE_SDK_OVERRIDE_NAMES = [
   'OPENROUTER_APP_CATEGORIES',
 ];
 
+const ANALYSIS_LANGUAGES = ['en', 'zh', 'fr', 'ja', 'ko', 'es'];
+
+/** ANALYSIS_LANGUAGE: optional; empty is English, otherwise one of the six interview language codes. */
+function validateAnalysisLanguage(checks, env) {
+  const value = typeof env.ANALYSIS_LANGUAGE === 'string' ? env.ANALYSIS_LANGUAGE.trim() : '';
+  if (value === '') return;
+  if (ANALYSIS_LANGUAGES.includes(value)) {
+    checks.push(check('pass', 'env.ANALYSIS_LANGUAGE.valid', `Analysis is written in ${value}.`));
+  } else {
+    checks.push(check('error', 'env.ANALYSIS_LANGUAGE.invalid', `ANALYSIS_LANGUAGE must be empty (English) or one of ${ANALYSIS_LANGUAGES.join(', ')}; analysis would stay in English.`));
+  }
+}
+
 function check(status, code, message) {
   return { status, code, message };
 }
@@ -575,6 +588,7 @@ function validateCloudflareSetup(checks, env, selectedMode, wrangler, deployment
   if (isPresent(env, 'NEXT_PUBLIC_BASE_URL')) {
     checks.push(check('warn', 'env.NEXT_PUBLIC_BASE_URL.legacy', 'NEXT_PUBLIC_BASE_URL is obsolete; use server-only APP_BASE_URL.'));
   }
+  validateAnalysisLanguage(checks, env);
 
   const aiTransport = isPresent(env, 'AI_TRANSPORT') ? env.AI_TRANSPORT.trim() : 'direct';
   if (aiTransport === 'gateway') {
@@ -788,6 +802,7 @@ export function validateSetup({
   if (isPresent(env, 'NEXT_PUBLIC_BASE_URL')) {
     checks.push(check('warn', 'env.NEXT_PUBLIC_BASE_URL.legacy', 'NEXT_PUBLIC_BASE_URL is obsolete; use server-only APP_BASE_URL.'));
   }
+  validateAnalysisLanguage(checks, env);
 
   if (selectedMode === 'standalone') {
     addRequiredEnv(checks, env, 'ADMIN_PASSWORD', { minLength: 16, maxLoginBodyBytes: MAX_LOGIN_BODY_BYTES });

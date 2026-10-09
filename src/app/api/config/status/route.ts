@@ -17,6 +17,13 @@ import { isGatewayAuthConfigured } from '@/lib/aiTransport';
 import { logRequestFailure } from '@/lib/requestLog';
 import { activeAITransport, isCloudflareTarget, resolveCapabilities } from '@/lib/runtime/capabilities';
 import { voiceTranscriptionAvailable } from '@/lib/transcription/workersAi';
+import { analysisLanguageSetting } from '@/lib/i18n/analysisLanguage';
+
+/** The installation's analysis language; an invalid ANALYSIS_LANGUAGE is reported, and analysis stays in English. */
+function analysisLanguageStatus() {
+  const setting = analysisLanguageSetting();
+  return setting.ok ? { analysisLanguage: setting.language } : { analysisLanguage: 'en', analysisLanguageInvalid: true };
+}
 
 function notConfigured(error?: string) {
   return NextResponse.json(
@@ -50,6 +57,7 @@ async function cloudflareStatus() {
     hasOpenRouterKey: !!context.openrouterApiKey,
     // Workers AI speech-to-text for voice input (the Worker's AI binding).
     hasVoiceTranscription: voiceTranscriptionAvailable(),
+    ...analysisLanguageStatus(),
   });
 }
 
@@ -88,6 +96,7 @@ export async function GET() {
         hasOpenAiKey: profile.hasOpenAiKey,
         hasOpenRouterKey: profile.hasOpenRouterKey,
         hasVoiceTranscription: false,
+        ...analysisLanguageStatus(),
       });
     }
 
@@ -110,6 +119,7 @@ export async function GET() {
       hasOpenRouterKey: aiTransport === 'direct' && !!context.openrouterApiKey,
       // Workers AI speech-to-text through its REST API (two optional variables).
       hasVoiceTranscription: voiceTranscriptionAvailable(),
+      ...analysisLanguageStatus(),
     };
 
     return NextResponse.json(status);

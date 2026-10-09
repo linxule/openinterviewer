@@ -45,7 +45,10 @@
     "WORKSPACE_JURISDICTION": "",
     // Set to "open" (or "recovery" for an import target) only by the installer
     // while it initializes a fresh workspace object; empty afterwards.
-    "WORKSPACE_BOOTSTRAP": ""
+    "WORKSPACE_BOOTSTRAP": "",
+    // The language analysis is written in: en, zh, fr, ja, ko or es; empty is English
+    // (installer: --analysis-language).
+    "ANALYSIS_LANGUAGE": ""
   },
   // Secrets (never in this file): ADMIN_PASSWORD, SESSION_SECRET,
   // PARTICIPANT_TOKEN_SECRET, RATE_LIMIT_SALT, OPERATOR_TOKEN, each bound

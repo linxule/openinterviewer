@@ -15,6 +15,9 @@
 //                               gateway, bind the Run token if unbound; then deploy
 //   --rotate-ai-gateway-token   replace the bound Run token (probed first); no deploy
 //   --rotate-admin-password     replace ADMIN_PASSWORD; no deploy
+//   --analysis-language <code>  with a plain deploy or --change-provider: set
+//                               ANALYSIS_LANGUAGE (en zh fr ja ko es) in the receipt
+//                               and the deployed config
 //   --forget-provider-key <p[,p]> drop non-default providers from providerKeys
 //                               once their keys are observed deleted by hand
 //                               (wrangler secret delete); no upload, no deploy
@@ -36,6 +39,7 @@ import {
   parseProviderList,
   requiredSecretNames,
   validateAiTransport,
+  validateAnalysisLanguage,
   validateJurisdiction,
   validateOrigin,
   validateProvider,
@@ -179,7 +183,8 @@ async function checkDrift(ctx, receipt, wrangler, account, pending, { gatewayApi
       const expected = buildInstallationConfig(ctx.template, receipt, { bootstrap: '', ...side });
       const vars = Object.keys(expected.vars).filter((name) => Object.hasOwn(onDisk.vars ?? {}, name));
       const pick = (identity) => ({ ...identity, vars: Object.fromEntries(vars.map((name) => [name, identity.vars[name]])) });
-      return identityDiff(pick(installationIdentity(expected)), pick(installationIdentity(onDisk)));
+      // ANALYSIS_LANGUAGE is a reading preference that update itself changes (--analysis-language), not identity.
+      return identityDiff(pick(installationIdentity(expected)), pick(installationIdentity(onDisk)), { ignoreVars: ['ANALYSIS_LANGUAGE'] });
     });
     if (!sides.some((diffs) => diffs.length === 0)) {
       for (const diff of sides[0]) drift.push(`installation config ${diff}`);
@@ -572,6 +577,7 @@ export async function updateCommand(ctx) {
   if (options.provider !== undefined) validateProvider(options.provider);
   if (options.jurisdiction !== undefined) validateJurisdiction(options.jurisdiction);
   if (options['ai-transport'] !== undefined) validateAiTransport(options['ai-transport']);
+  const analysisLanguage = options['analysis-language'] !== undefined ? validateAnalysisLanguage(options['analysis-language']) : undefined;
   const operation = selectOperation(options, receipt);
   const pending = assertNoPendingChange(receipt, { finishes: finishes(operation, options) });
 
@@ -619,6 +625,9 @@ export async function updateCommand(ctx) {
   }
   if (operation.kind === 'rotate-ai-gateway-token' && !receipt.aiGateway?.observedAt) {
     requested.push('AI Gateway Run token: this installation has no AI Gateway recorded. Switch to it with --change-ai-transport --ai-transport cloudflare-gateway.');
+  }
+  if (analysisLanguage !== undefined && operation.kind !== 'deploy' && operation.kind !== 'provider') {
+    requested.push('--analysis-language changes a var, so it needs a deploy: run it with a plain update (or --change-provider), not with an operation that does not deploy or switches the transport.');
   }
   if (requested.length > 0) throw refuse(`update refused:\n  - ${requested.join('\n  - ')}`);
 
@@ -673,6 +682,12 @@ export async function updateCommand(ctx) {
     }
     if (newKey && !pending) {
       receipt.pendingChange = { kind: 'provider', from: receipt.provider, to: provider, startedAt: now() };
+      saveReceipt(ctx, receipt);
+    }
+    if (analysisLanguage !== undefined && analysisLanguage !== (receipt.analysisLanguage ?? null)) {
+      ctx.out.step(`Analysis language: ${receipt.analysisLanguage ?? 'en'} -> ${analysisLanguage ?? 'en'} (ANALYSIS_LANGUAGE; applies to analyses written after this deploy)`);
+      if (analysisLanguage) receipt.analysisLanguage = analysisLanguage;
+      else delete receipt.analysisLanguage;
       saveReceipt(ctx, receipt);
     }
     try {

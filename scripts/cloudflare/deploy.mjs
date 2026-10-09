@@ -167,6 +167,14 @@ export function bootstrapProblems(vars = {}, { bootstrap = false } = {}) {
   return [];
 }
 
+/** ANALYSIS_LANGUAGE is empty (English) or one of the interview language codes (src/lib/i18n/analysisLanguage.ts). */
+export function analysisLanguageProblems(vars = {}) {
+  const value = vars.ANALYSIS_LANGUAGE ?? '';
+  return value === '' || ['en', 'zh', 'fr', 'ja', 'ko', 'es'].includes(value)
+    ? []
+    : [`installation var ANALYSIS_LANGUAGE is ${JSON.stringify(value)}; it must be empty (English) or one of en, zh, fr, ja, ko, es`];
+}
+
 /** Every precondition on the installation config itself (no artifact, no git). */
 export function installationConfigProblems(template, install, { bootstrap = false } = {}) {
   const problems = [];
@@ -175,6 +183,7 @@ export function installationConfigProblems(template, install, { bootstrap = fals
   for (const name of missingInstallationVars(install.vars)) problems.push(`installation var ${name} is empty`);
   problems.push(...transportVarProblems(install.vars));
   problems.push(...bootstrapProblems(install.vars, { bootstrap }));
+  problems.push(...analysisLanguageProblems(install.vars));
   return problems;
 }
 

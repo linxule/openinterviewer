@@ -22,17 +22,29 @@ import {
   BehaviorData,
   SynthesisResult
 } from '@/types';
-import { hasLanguageSetting, studyLanguages } from '@/lib/i18n/languages';
+import { hasLanguageSetting, LANGUAGE_ENGLISH_NAMES, studyLanguages, type InterviewLanguage } from '@/lib/i18n/languages';
+import { installationAnalysisLanguage } from '@/lib/i18n/analysisLanguage';
 
 /**
- * Analysis is written in the researcher's language (English for now); a
- * multilingual study's participants may have answered in another one. No
- * line for an English-only study, so its prompts are unchanged.
+ * Analysis is written in the installation's analysis language
+ * (ANALYSIS_LANGUAGE, default English); a multilingual study's participants
+ * may have answered in another one. An English installation adds no line for
+ * an English-only study, so its prompts are unchanged.
  */
 export const ANALYSIS_LANGUAGE_INSTRUCTION = 'ANALYSIS LANGUAGE: Participants may have answered in a language other than English. Write every analysis field in English. Copy quotations exactly as written, in their original language; never translate them.';
 
-export function analysisLanguageBlock(studyConfig: StudyConfig): string {
-  return hasLanguageSetting(studyConfig) && studyLanguages(studyConfig).some((language) => language !== 'en')
+export function analysisLanguageInstruction(language: InterviewLanguage): string {
+  if (language === 'en') return ANALYSIS_LANGUAGE_INSTRUCTION;
+  const name = LANGUAGE_ENGLISH_NAMES[language];
+  return `ANALYSIS LANGUAGE: The researcher reads ${name}. Write every analysis field (themes, preferences, contradictions, insights, findings, implications and summaries) in ${name}, whatever language the participants used. Copy quotations exactly as written, in their original language; never translate them.`;
+}
+
+export function analysisLanguageBlock(
+  studyConfig: StudyConfig,
+  language: InterviewLanguage = installationAnalysisLanguage(),
+): string {
+  if (language !== 'en') return `\n\n${analysisLanguageInstruction(language)}`;
+  return hasLanguageSetting(studyConfig) && studyLanguages(studyConfig).some((entry) => entry !== 'en')
     ? `\n\n${ANALYSIS_LANGUAGE_INSTRUCTION}`
     : '';
 }

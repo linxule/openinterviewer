@@ -2,6 +2,7 @@
 // ProviderSection. Moved verbatim from StudySetup.tsx (C6).
 
 import { AIProviderType } from '@/types';
+import type { InterviewLanguage } from '@/lib/i18n/languages';
 
 export type ConfigStatus = {
   mode: 'hosted' | 'standalone';
@@ -14,6 +15,10 @@ export type ConfigStatus = {
   hasOpenRouterKey: boolean;
   /** Workers AI speech-to-text is configured (voice input 'installation'). */
   hasVoiceTranscription?: boolean;
+  /** The installation's analysis language (ANALYSIS_LANGUAGE); English when unset. */
+  analysisLanguage?: InterviewLanguage;
+  /** ANALYSIS_LANGUAGE is set to something other than the six codes; analysis stays in English. */
+  analysisLanguageInvalid?: boolean;
 };
 
 export const PROVIDER_STATUS_FIELD = {
@@ -21,7 +26,7 @@ export const PROVIDER_STATUS_FIELD = {
   claude: 'hasAnthropicKey',
   openai: 'hasOpenAiKey',
   openrouter: 'hasOpenRouterKey',
-} as const satisfies Record<AIProviderType, keyof Omit<ConfigStatus, 'mode' | 'target' | 'aiTransport'>>;
+} as const satisfies Record<AIProviderType, keyof Omit<ConfigStatus, 'mode' | 'target' | 'aiTransport' | 'analysisLanguage' | 'analysisLanguageInvalid'>>;
 
 export const PROVIDER_ENV_NAME = {
   gemini: 'GEMINI_API_KEY',

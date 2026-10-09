@@ -7,6 +7,7 @@ import path from 'node:path';
 import { parseJsonc } from '../lib.mjs';
 import {
   AI_TRANSPORTS,
+  ANALYSIS_LANGUAGES,
   GATEWAY_TOKEN_SECRET,
   GATEWAY_TRANSPORT,
   InstallerError,
@@ -89,6 +90,9 @@ export function receiptProblem(receipt) {
   if (!keys.includes(receipt.provider)) return `providerKeys ${JSON.stringify(keys)} lacks the default provider ${receipt.provider}`;
   if (!AI_TRANSPORTS.includes(receipt.aiTransport)) return `aiTransport ${JSON.stringify(receipt.aiTransport)} is not supported by this installer`;
   if (!Array.isArray(receipt.secretEvents)) return 'secretEvents is not a list';
+  if (receipt.analysisLanguage !== undefined && (receipt.analysisLanguage === 'en' || !ANALYSIS_LANGUAGES.includes(receipt.analysisLanguage))) {
+    return `analysisLanguage ${JSON.stringify(receipt.analysisLanguage)} is not one of ${ANALYSIS_LANGUAGES.filter((code) => code !== 'en').join(', ')} (English is recorded as absent)`;
+  }
   const gateway = receipt.aiGateway;
   if (gateway !== undefined && gateway !== null) {
     if (typeof gateway !== 'object' || Array.isArray(gateway)) return 'aiGateway is not an object';
@@ -217,7 +221,7 @@ export function writeReceipt(file, receipt, registry) {
   writeAtomic(file, text);
 }
 
-export function newReceipt({ install, environment, accountId, names, workspaceId, jurisdiction, provider, providerKeys, aiTransport = 'direct', origin, bootstrap }) {
+export function newReceipt({ install, environment, accountId, names, workspaceId, jurisdiction, provider, providerKeys, aiTransport = 'direct', origin, bootstrap, analysisLanguage = null }) {
   const now = new Date().toISOString();
   const receipt = {
     formatVersion: RECEIPT_FORMAT_VERSION,
@@ -248,6 +252,8 @@ export function newReceipt({ install, environment, accountId, names, workspaceId
   // Direct receipts keep their pre-gateway shape; a gateway record appears
   // only when an installation first uses the gateway.
   if (aiTransport === GATEWAY_TRANSPORT) receipt.aiGateway = newGatewayRecord(receipt);
+  // English (the default) is recorded as absent, so existing receipts need no rewrite.
+  if (analysisLanguage) receipt.analysisLanguage = analysisLanguage;
   return receipt;
 }
 
@@ -414,6 +420,7 @@ const REQUIRED_TEMPLATE_VARS = [
   'WORKSPACE_ID',
   'WORKSPACE_JURISDICTION',
   'WORKSPACE_BOOTSTRAP',
+  'ANALYSIS_LANGUAGE',
 ];
 
 function templateQueueNames(template) {
@@ -468,6 +475,8 @@ export function buildInstallationConfig(template, receipt, { bootstrap, provider
     WORKSPACE_ID: receipt.workspaceId,
     WORKSPACE_JURISDICTION: JURISDICTIONS[receipt.jurisdiction],
     WORKSPACE_BOOTSTRAP: bootstrap,
+    // Empty is English (the default); otherwise the receipt's analysis language.
+    ANALYSIS_LANGUAGE: receipt.analysisLanguage ?? '',
   };
   config.queues = {
     ...config.queues,

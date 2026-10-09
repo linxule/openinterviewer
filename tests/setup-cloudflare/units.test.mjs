@@ -29,7 +29,9 @@ import {
   writeOperatorTokenFile,
 } from '../../scripts/cloudflare/installer/secrets.mjs';
 import { CLOCK_SKEW_MS, queueOwnership, workerOwnership } from '../../scripts/cloudflare/installer/ownership.mjs';
-import { buildInstallationConfig, configDrift, newReceipt } from '../../scripts/cloudflare/installer/state.mjs';
+import { buildInstallationConfig, configDrift, newReceipt, receiptProblem } from '../../scripts/cloudflare/installer/state.mjs';
+import { validateAnalysisLanguage } from '../../scripts/cloudflare/installer/model.mjs';
+import { analysisLanguageProblems } from '../../scripts/cloudflare/deploy.mjs';
 import { parseWranglerTable } from '../../scripts/cloudflare/installer/tools.mjs';
 import { evaluateProbe } from '../../scripts/cloudflare/installer/verify.mjs';
 import { realConfigDrift } from './fixtures/deploy-config-drift.mjs';
@@ -146,6 +148,25 @@ test('generated installation configs pass the real deploy.mjs configDrift()', ()
   }
   const none = buildInstallationConfig(template, receiptFor('acme', 'production', { jurisdiction: 'none' }), { bootstrap: '' });
   assert.equal(none.vars.WORKSPACE_JURISDICTION, '');
+});
+
+test('the analysis language reaches the installation config, empty for English, and the receipt check refuses anything else', () => {
+  const english = buildInstallationConfig(template, receiptFor('acme', 'production'), { bootstrap: '' });
+  assert.equal(english.vars.ANALYSIS_LANGUAGE, '');
+  const chinese = buildInstallationConfig(template, { ...receiptFor('acme', 'production'), analysisLanguage: 'zh' }, { bootstrap: '' });
+  assert.equal(chinese.vars.ANALYSIS_LANGUAGE, 'zh');
+  assert.deepEqual(realConfigDrift(template, chinese), []);
+  const formatTwo = { ...receiptFor('acme', 'production'), providerKeys: ['gemini'], aiTransport: 'direct', secretEvents: [] };
+  assert.equal(receiptProblem(formatTwo), null);
+  assert.equal(receiptProblem({ ...formatTwo, analysisLanguage: 'zh' }), null);
+  assert.match(receiptProblem({ ...formatTwo, analysisLanguage: 'en' }), /English is recorded as absent/);
+  assert.match(receiptProblem({ ...formatTwo, analysisLanguage: 'de' }), /analysisLanguage "de"/);
+  assert.equal(validateAnalysisLanguage('en'), null);
+  assert.equal(validateAnalysisLanguage('ko'), 'ko');
+  assert.throws(() => validateAnalysisLanguage('zh-CN'), /must be one of/);
+  assert.deepEqual(analysisLanguageProblems({ ANALYSIS_LANGUAGE: '' }), []);
+  assert.deepEqual(analysisLanguageProblems({ ANALYSIS_LANGUAGE: 'fr' }), []);
+  assert.match(analysisLanguageProblems({ ANALYSIS_LANGUAGE: 'French' })[0], /ANALYSIS_LANGUAGE is "French"/);
 });
 
 test('the installer copy of configDrift() agrees with deploy.mjs', () => {
