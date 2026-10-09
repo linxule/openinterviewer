@@ -169,7 +169,7 @@ export function bootstrapProblems(vars = {}, { bootstrap = false } = {}) {
 
 /** ANALYSIS_LANGUAGE is empty (English) or one of the interview language codes (src/lib/i18n/analysisLanguage.ts). */
 export function analysisLanguageProblems(vars = {}) {
-  const value = vars.ANALYSIS_LANGUAGE ?? '';
+  const value = typeof vars.ANALYSIS_LANGUAGE === 'string' ? vars.ANALYSIS_LANGUAGE.trim() : (vars.ANALYSIS_LANGUAGE ?? '');
   return value === '' || ['en', 'zh', 'fr', 'ja', 'ko', 'es'].includes(value)
     ? []
     : [`installation var ANALYSIS_LANGUAGE is ${JSON.stringify(value)}; it must be empty (English) or one of en, zh, fr, ja, ko, es`];

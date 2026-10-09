@@ -10,6 +10,7 @@ import {
 } from '../../src/lib/storage/analysisProtocol';
 import { TRANSPORT_RETRY_DELAY_SECONDS } from '../../cloudflare/analysis/consumer';
 import { testEnv, workspaceStub } from './helpers';
+import { WORKER_INVOCATION_ACCESSOR } from '../../src/lib/runtime/workerInvocation';
 import {
   analysisRow,
   captureConsole,
@@ -76,6 +77,27 @@ describe('end-to-end durable analysis (JOB-01/02/05)', () => {
     expect(await jobRow(job.jobId)).toMatchObject({ state: 'complete', next_due_at: null });
     expect(await workspaceStub().readAnalysisStatus({ studyId: job.studyId, interviewId: job.interviewId }))
       .toEqual({ status: 'ok', body: { status: 'complete', generation: 1 } });
+  });
+
+  it('the consumer writes analysis in the installation language from its invocation env (ANALYSIS_LANGUAGE)', async () => {
+    // cloudflare/worker.ts runs the queue handler inside the invocation store; process.env is not filled there.
+    const runtime = globalThis as unknown as Record<symbol, unknown>;
+    const job = await seedJob({ provider: 'claude' });
+    const provider = installProviderFixture({ kind: 'success' });
+    runtime[WORKER_INVOCATION_ACCESSOR] = () => ({ env: { ...testEnv, ANALYSIS_LANGUAGE: 'zh' }, identity: null, source: 'queue' });
+    try {
+      const result = await deliver([job.message]);
+      expect(result.explicitAcks).toHaveLength(1);
+    } finally {
+      delete runtime[WORKER_INVOCATION_ACCESSOR];
+    }
+    expect(provider.requests).toHaveLength(1);
+    expect(JSON.stringify(provider.requests[0].body)).toContain('in Simplified Chinese (Mandarin), whatever language the participants used');
+
+    const english = await seedJob({ provider: 'claude' });
+    const second = installProviderFixture({ kind: 'success' });
+    await deliver([english.message]);
+    expect(JSON.stringify(second.requests[0].body)).not.toContain('ANALYSIS LANGUAGE');
   });
 
   it('JOB-02 executes the frozen provider, model and revision after the study is edited before claim', async () => {

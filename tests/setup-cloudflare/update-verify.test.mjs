@@ -443,9 +443,21 @@ describe('setup:cloudflare update and verify', { concurrency: 6 }, () => {
     assert.match(result.config.diffs.join('\n'), /queue consumers/);
   });
 
+  test('verify accepts a config written before ANALYSIS_LANGUAGE existed as English', async (t) => {
+    const sandbox = await installed(t);
+    const file = path.join(sandbox.installDir(), 'wrangler.jsonc');
+    const config = readJsonc(file);
+    delete config.vars.ANALYSIS_LANGUAGE;
+    writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
+    const run = await sandbox.run('verify', ['--install', 'acme', '--env', 'production', '--json']);
+    const result = JSON.parse(run.stdout);
+    assert.equal(result.config.diffs.some((diff) => diff.includes('ANALYSIS_LANGUAGE')), false, run.output);
+  });
+
   for (const [label, edit, pattern] of [
     ['gateway identifiers on a direct installation', (vars) => ({ ...vars, CF_AI_GATEWAY_ACCOUNT_ID: 'a'.repeat(32), CF_AI_GATEWAY_ID: 'oi-acme' }), /vars\.CF_AI_GATEWAY_ACCOUNT_ID[\s\S]*vars\.CF_AI_GATEWAY_ID/],
     ['the gateway transport on a direct installation', (vars) => ({ ...vars, AI_TRANSPORT: 'cloudflare-gateway' }), /vars\.AI_TRANSPORT/],
+    ['an analysis language the receipt does not record', (vars) => ({ ...vars, ANALYSIS_LANGUAGE: 'fr' }), /vars\.ANALYSIS_LANGUAGE/],
   ]) {
     test(`verify reports config-mismatch for ${label} (RT-11)`, async (t) => {
       const sandbox = await installed(t);
