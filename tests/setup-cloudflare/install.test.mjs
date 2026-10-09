@@ -100,6 +100,17 @@ describe('setup:cloudflare plan, apply and resume', { concurrency: 6 }, () => {
     assertNoSecretLeak(sandbox, [run]);
   });
 
+  test('apply --analysis-language records it and deploys it from the first deploy; resume refuses a different one', async (t) => {
+    const sandbox = await createSandbox(t);
+    const run = await sandbox.run('apply', applyArgs(sandbox, { extra: ['--analysis-language', 'ko'] }), { input: stdinSecrets() });
+    assert.equal(run.code, 0, run.output);
+    assert.equal(sandbox.receipt().analysisLanguage, 'ko');
+    assert.deepEqual([...new Set(sandbox.state().deploys.map((deploy) => deploy.vars.ANALYSIS_LANGUAGE))], ['ko']);
+    const resume = await sandbox.run('resume', ['--install', 'acme', '--env', 'production', '--yes', '--analysis-language', 'ja']);
+    assert.equal(resume.code, 2, resume.output);
+    assert.match(resume.stderr, /--analysis-language ja differs from the installation's analysis language ko/);
+  });
+
   test('a deploy script that refuses an empty APP_BASE_URL stops discovery cleanly and resume --origin completes', async (t) => {
     const sandbox = await createSandbox(t, { state: { deploy: { refusePendingOrigin: true } } });
     const first = await sandbox.run('apply', applyArgs(sandbox), { input: stdinSecrets() });

@@ -22,6 +22,7 @@
     "WORKSPACE_ID": "ws_0000000000000000000000000000a001",
     "WORKSPACE_JURISDICTION": "",
     "WORKSPACE_BOOTSTRAP": "open",
+    "ANALYSIS_LANGUAGE": "",
     "ANALYSIS_RECOVERY_EPOCH": "ep_0000000000000000000000000000a001"
   },
   "durable_objects": { "bindings": [{ "name": "WORKSPACE_STORE", "class_name": "WorkspaceStore" }] },

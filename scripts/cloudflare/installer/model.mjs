@@ -171,6 +171,18 @@ export function validateProviderKeys(providerKeys, defaultProvider) {
   return providerKeys;
 }
 
+/** The interview languages an installation may analyse in (src/lib/i18n/languages.ts); en is the default. */
+export const ANALYSIS_LANGUAGES = ['en', 'zh', 'fr', 'ja', 'ko', 'es'];
+
+/** --analysis-language: one of ANALYSIS_LANGUAGES. Returns the receipt value: null for English (the default). */
+export function validateAnalysisLanguage(value, option = '--analysis-language') {
+  const code = typeof value === 'string' ? value.trim() : '';
+  if (!ANALYSIS_LANGUAGES.includes(code)) {
+    throw new InstallerError(`${option} must be one of ${ANALYSIS_LANGUAGES.join(', ')}`, { exitCode: REFUSED });
+  }
+  return code === 'en' ? null : code;
+}
+
 export function validateAiTransport(value, option = '--ai-transport') {
   if (!AI_TRANSPORTS.includes(value)) {
     throw new InstallerError(`${option} must be ${AI_TRANSPORTS.join(' or ')}`, {

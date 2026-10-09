@@ -54,6 +54,7 @@ describe('GET /api/config/status', () => {
       hasOpenAiKey: true,
       hasOpenRouterKey: false,
       hasVoiceTranscription: false,
+      analysisLanguage: 'en',
     });
   });
 
@@ -80,7 +81,20 @@ describe('GET /api/config/status', () => {
       hasOpenAiKey: false,
       hasOpenRouterKey: true,
       hasVoiceTranscription: false,
+      analysisLanguage: 'en',
     });
+  });
+
+  it('reports the installation analysis language, and an invalid ANALYSIS_LANGUAGE without guessing', async () => {
+    modeMock.isHostedMode.mockReturnValue(false);
+    contextMock.getRequestContext.mockResolvedValue({
+      authorized: true,
+      context: { anthropicApiKey: null, geminiApiKey: 'configured-but-never-returned', openaiApiKey: null, openrouterApiKey: null },
+    });
+    vi.stubEnv('ANALYSIS_LANGUAGE', 'ja');
+    await expect((await GET()).json()).resolves.toMatchObject({ analysisLanguage: 'ja' });
+    vi.stubEnv('ANALYSIS_LANGUAGE', 'japanese');
+    await expect((await GET()).json()).resolves.toMatchObject({ analysisLanguage: 'en', analysisLanguageInvalid: true });
   });
 
   it('reports Gateway-backed provider availability without pretending OpenRouter is supported', async () => {
@@ -108,6 +122,7 @@ describe('GET /api/config/status', () => {
       hasOpenAiKey: true,
       hasOpenRouterKey: false,
       hasVoiceTranscription: false,
+      analysisLanguage: 'en',
     });
   });
 });

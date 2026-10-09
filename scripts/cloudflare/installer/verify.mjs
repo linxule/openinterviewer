@@ -193,8 +193,11 @@ export function checkInstallationConfig({ template, receipt, configPath }) {
   if (!actual) return { ok: false, diffs: [`installation config ${configPath} is missing`], templateDrift: [] };
   const bootstrap = receipt.phases?.['workspace-init'] ? '' : receipt.bootstrap;
   const expected = buildInstallationConfig(template, receipt, { bootstrap });
-  const owned = ['DEPLOYMENT_TARGET', 'DEPLOYMENT_MODE', 'AI_TRANSPORT', 'AI_PROVIDER', 'CF_AI_GATEWAY_ACCOUNT_ID', 'CF_AI_GATEWAY_ID', 'APP_BASE_URL', 'WORKSPACE_ID', 'WORKSPACE_JURISDICTION', 'WORKSPACE_BOOTSTRAP'];
-  const pick = (identity) => ({ ...identity, vars: Object.fromEntries(owned.map((name) => [name, identity.vars[name]])) });
+  const owned = ['DEPLOYMENT_TARGET', 'DEPLOYMENT_MODE', 'AI_TRANSPORT', 'AI_PROVIDER', 'CF_AI_GATEWAY_ACCOUNT_ID', 'CF_AI_GATEWAY_ID', 'APP_BASE_URL', 'WORKSPACE_ID', 'WORKSPACE_JURISDICTION', 'WORKSPACE_BOOTSTRAP', 'ANALYSIS_LANGUAGE'];
+  // update's drift check ignores ANALYSIS_LANGUAGE (update itself changes it), so verify is
+  // where a receipt/config mismatch shows. A config written before the var existed is English.
+  const value = (identity, name) => (name === 'ANALYSIS_LANGUAGE' ? identity.vars[name] ?? '' : identity.vars[name]);
+  const pick = (identity) => ({ ...identity, vars: Object.fromEntries(owned.map((name) => [name, value(identity, name)])) });
   const diffs = identityDiff(pick(installationIdentity(expected)), pick(installationIdentity(actual)));
   return { ok: diffs.length === 0, diffs, templateDrift: configDrift(template, actual) };
 }

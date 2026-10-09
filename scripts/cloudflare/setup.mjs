@@ -52,6 +52,8 @@ Options
                                 installation's own Cloudflare AI Gateway (apply; update with --change-ai-transport).
                                 cloudflare-gateway needs CF_AI_GATEWAY_ADMIN_TOKEN (AI Gateway Read + Edit) in the
                                 environment and CF_AI_GATEWAY_TOKEN (the Run token) on protected input
+  --analysis-language <code>    en (default) | zh | fr | ja | ko | es: the language analysis is written in
+                                (ANALYSIS_LANGUAGE); apply, or update with a plain deploy or --change-provider
   --jurisdiction <eu|fedramp|none>  Durable Object storage jurisdiction (explicit on first apply; recommended eu)
   --origin <https://host>       final origin; otherwise the workers.dev URL is discovered from the first deploy
   --account-id <id>             Cloudflare account (must be accessible to wrangler)
@@ -102,6 +104,7 @@ const OPTIONS = {
   'rotate-ai-gateway-token': { type: 'boolean' },
   'rotate-admin-password': { type: 'boolean' },
   'forget-provider-key': { type: 'string' },
+  'analysis-language': { type: 'string' },
   yes: { type: 'boolean' },
   json: { type: 'boolean' },
   'wait-seconds': { type: 'string' },

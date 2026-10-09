@@ -100,6 +100,46 @@ describe('setup:cloudflare update and verify', { concurrency: 6 }, () => {
     });
   }
 
+  test('update --analysis-language sets ANALYSIS_LANGUAGE in the receipt and the deployed vars, and en clears it', async (t) => {
+    const sandbox = await installed(t);
+    assert.equal(sandbox.state().deploys.at(-1).vars.ANALYSIS_LANGUAGE, '');
+    assert.equal(Object.hasOwn(sandbox.receipt(), 'analysisLanguage'), false);
+    const secrets = sandbox.state().workers['oi-acme'].secrets;
+    sandbox.newCommit(NEXT_COMMIT);
+
+    const run = await sandbox.run('update', [...UPDATE, '--analysis-language', 'zh']);
+    assert.equal(run.code, 0, run.output);
+    assert.match(run.output, /Analysis language: en -> zh/);
+    assert.equal(sandbox.receipt().analysisLanguage, 'zh');
+    const latest = sandbox.state().deploys.at(-1);
+    assert.equal(latest.vars.ANALYSIS_LANGUAGE, 'zh');
+    assert.deepEqual(sandbox.state().workers['oi-acme'].secrets, secrets);
+    assert.equal(readJsonc(path.join(sandbox.installDir(), 'wrangler.jsonc')).vars.ANALYSIS_LANGUAGE, 'zh');
+
+    // A plain update keeps it; the earlier config is not drift.
+    const again = await sandbox.run('update', UPDATE);
+    assert.equal(again.code, 0, again.output);
+    assert.equal(sandbox.state().deploys.at(-1).vars.ANALYSIS_LANGUAGE, 'zh');
+
+    const back = await sandbox.run('update', [...UPDATE, '--analysis-language', 'en']);
+    assert.equal(back.code, 0, back.output);
+    assert.equal(Object.hasOwn(sandbox.receipt(), 'analysisLanguage'), false);
+    assert.equal(sandbox.state().deploys.at(-1).vars.ANALYSIS_LANGUAGE, '');
+  });
+
+  test('update refuses --analysis-language that is not a supported code, or with an operation that does not deploy', async (t) => {
+    const sandbox = await installed(t);
+    const deploys = sandbox.state().deploys.length;
+    const bad = await sandbox.run('update', [...UPDATE, '--analysis-language', 'de']);
+    assert.equal(bad.code, 2, bad.output);
+    assert.match(bad.stderr, /--analysis-language must be one of en, zh, fr, ja, ko, es/);
+    const withKeyOperation = await sandbox.run('update', [...UPDATE, '--analysis-language', 'ja', '--rotate-admin-password', '--secrets-stdin'], { input: JSON.stringify({ ADMIN_PASSWORD: 'x'.repeat(24) }) });
+    assert.equal(withKeyOperation.code, 2, withKeyOperation.output);
+    assert.match(withKeyOperation.stderr, /--analysis-language changes a var, so it needs a deploy/);
+    assert.equal(sandbox.state().deploys.length, deploys);
+    assert.equal(Object.hasOwn(sandbox.receipt(), 'analysisLanguage'), false);
+  });
+
   test('update requires an explicit existing-install identity', async (t) => {
     const sandbox = await createSandbox(t);
     sandbox.update((state) => {
@@ -403,9 +443,21 @@ describe('setup:cloudflare update and verify', { concurrency: 6 }, () => {
     assert.match(result.config.diffs.join('\n'), /queue consumers/);
   });
 
+  test('verify accepts a config written before ANALYSIS_LANGUAGE existed as English', async (t) => {
+    const sandbox = await installed(t);
+    const file = path.join(sandbox.installDir(), 'wrangler.jsonc');
+    const config = readJsonc(file);
+    delete config.vars.ANALYSIS_LANGUAGE;
+    writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
+    const run = await sandbox.run('verify', ['--install', 'acme', '--env', 'production', '--json']);
+    const result = JSON.parse(run.stdout);
+    assert.equal(result.config.diffs.some((diff) => diff.includes('ANALYSIS_LANGUAGE')), false, run.output);
+  });
+
   for (const [label, edit, pattern] of [
     ['gateway identifiers on a direct installation', (vars) => ({ ...vars, CF_AI_GATEWAY_ACCOUNT_ID: 'a'.repeat(32), CF_AI_GATEWAY_ID: 'oi-acme' }), /vars\.CF_AI_GATEWAY_ACCOUNT_ID[\s\S]*vars\.CF_AI_GATEWAY_ID/],
     ['the gateway transport on a direct installation', (vars) => ({ ...vars, AI_TRANSPORT: 'cloudflare-gateway' }), /vars\.AI_TRANSPORT/],
+    ['an analysis language the receipt does not record', (vars) => ({ ...vars, ANALYSIS_LANGUAGE: 'fr' }), /vars\.ANALYSIS_LANGUAGE/],
   ]) {
     test(`verify reports config-mismatch for ${label} (RT-11)`, async (t) => {
       const sandbox = await installed(t);

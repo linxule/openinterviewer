@@ -43,6 +43,7 @@ import { LinkSettingsSection } from '@/components/studySetup/LinkSettingsSection
 import { ConsentSection } from '@/components/studySetup/ConsentSection';
 import { ThankYouSection } from '@/components/studySetup/ThankYouSection';
 import { InterviewLanguagesSection } from '@/components/studySetup/InterviewLanguagesSection';
+import { isInterviewLanguage } from '@/lib/i18n/languages';
 import { VoiceInputSection } from '@/components/studySetup/VoiceInputSection';
 
 const sectionsForExample = ['study-details', 'profile-fields', 'core-questions', 'topic-areas', 'ai-provider', 'interview-structure', 'interviewer-manner', 'interview-languages', 'voice-input', 'link-settings', 'consent-text', 'thank-you-text'];
@@ -186,6 +187,8 @@ const StudySetupForm: React.FC = () => {
             hasOpenAiKey: data.hasOpenAiKey === true,
             hasOpenRouterKey: data.hasOpenRouterKey === true,
             hasVoiceTranscription: data.hasVoiceTranscription === true,
+            ...(isInterviewLanguage(data.analysisLanguage) ? { analysisLanguage: data.analysisLanguage } : {}),
+            ...(data.analysisLanguageInvalid === true ? { analysisLanguageInvalid: true } : {}),
           });
           setAiTransport(data.aiTransport);
         }
@@ -939,6 +942,8 @@ const StudySetupForm: React.FC = () => {
 
           <InterviewLanguagesSection
             draft={draft}
+            analysisLanguage={configStatus?.analysisLanguage ?? 'en'}
+            analysisLanguageInvalid={configStatus?.analysisLanguageInvalid === true}
             editing={isEditing('interview-languages')}
             onEdit={() => openSection('interview-languages')}
           />
