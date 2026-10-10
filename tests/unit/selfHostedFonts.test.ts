@@ -58,4 +58,17 @@ describe('self-hosted fonts', () => {
       expect(latin).toContain(`{ prop: 'font-family', value: "'${family}'" }`);
     }
   });
+  it('draws CJK dashes and ellipses from a local CJK font on zh and ja content only', () => {
+    const theme = readFileSync(path.join(process.cwd(), 'src/app/globals.css'), 'utf8');
+    for (const [selector, face] of [[':lang(zh)', 'OI CJK Punctuation SC'], [':lang(ja)', 'OI CJK Punctuation JP']]) {
+      const block = theme.slice(theme.indexOf(`${selector} {`), theme.indexOf('}', theme.indexOf(`${selector} {`)));
+      for (const variable of ['sans', 'serif', 'mono']) {
+        expect(block).toContain(`--font-${variable}: '${face}', var(--typeface-${variable}),`);
+      }
+      const faceRule = theme.slice(theme.indexOf(`font-family: '${face}';`));
+      // Only the dash and ellipsis code points, and only fonts already on the device (no download).
+      expect(faceRule.slice(0, faceRule.indexOf('}'))).toContain('unicode-range: U+2014-2015, U+2026;');
+      expect(faceRule.slice(0, faceRule.indexOf('}'))).not.toContain('url(');
+    }
+  });
 });

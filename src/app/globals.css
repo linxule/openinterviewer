@@ -26,6 +26,40 @@
 }
 
 /*
+  CJK dashes and ellipses. In Chinese and Japanese text the Latin web fonts
+  supply U+2014/U+2015 and U+2026, so "——" draws as two short, separated
+  dashes and "……" as Latin dots. On zh/ja content, take only those code points
+  from the system CJK font (unicode-range), so they join as the reader expects.
+  Applies to participant pages (html lang is set from the interview language)
+  and to any element marked with lang="zh-…" or lang="ja".
+*/
+@font-face {
+  font-family: 'OI CJK Punctuation SC';
+  src: local('PingFang SC'), local('PingFangSC-Regular'), local('Hiragino Sans GB'), local('Microsoft YaHei'),
+    local('Noto Sans CJK SC'), local('NotoSansCJKsc-Regular'), local('Source Han Sans SC'), local('Noto Sans SC');
+  unicode-range: U+2014-2015, U+2026;
+}
+
+@font-face {
+  font-family: 'OI CJK Punctuation JP';
+  src: local('Hiragino Sans'), local('HiraginoSans-W3'), local('Hiragino Kaku Gothic ProN'), local('Yu Gothic'),
+    local('Meiryo'), local('Noto Sans CJK JP'), local('NotoSansCJKjp-Regular'), local('Source Han Sans JP');
+  unicode-range: U+2014-2015, U+2026;
+}
+
+:lang(zh) {
+  --font-sans: 'OI CJK Punctuation SC', var(--typeface-sans), system-ui, sans-serif;
+  --font-serif: 'OI CJK Punctuation SC', var(--typeface-serif), Georgia, serif;
+  --font-mono: 'OI CJK Punctuation SC', var(--typeface-mono), ui-monospace, monospace;
+}
+
+:lang(ja) {
+  --font-sans: 'OI CJK Punctuation JP', var(--typeface-sans), system-ui, sans-serif;
+  --font-serif: 'OI CJK Punctuation JP', var(--typeface-serif), Georgia, serif;
+  --font-mono: 'OI CJK Punctuation JP', var(--typeface-mono), ui-monospace, monospace;
+}
+
+/*
   The default border color has changed to `currentcolor` in Tailwind CSS v4,
   so we've added these compatibility styles to make sure everything still
   looks the same as it did with Tailwind CSS v3.
