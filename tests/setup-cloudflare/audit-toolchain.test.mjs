@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
-import { advisoryId, blockingAdvisories, evaluate } from '../../scripts/cloudflare/audit-toolchain.mjs';
+import { advisoryId, blockingAdvisories, evaluate, reachability } from '../../scripts/cloudflare/audit-toolchain.mjs';
 import { ROOT } from '../../scripts/cloudflare/lib.mjs';
 
 const BRACES = {
@@ -63,6 +63,57 @@ test('the committed exceptions are each dated, explained and short-lived', () =>
     assert.match(entry.id, /^GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}$/);
     assert.ok(entry.package && entry.reason && entry.recorded);
     const days = (Date.parse(entry.expires) - Date.parse(entry.recorded)) / 86_400_000;
-    assert.ok(days > 0 && days <= 45, `${entry.id} must expire within 45 days of being recorded`);
+    const limit = entry.onlyVia ? 180 : 45;
+    assert.ok(days > 0 && days <= limit, `${entry.id} must expire within ${limit} days of being recorded`);
+  }
+});
+
+// A lockfile shaped like the real one: braces only under the lint config.
+const lockfile = (extra = {}) => ({
+  packages: {
+    '': { dependencies: { next: '16' }, devDependencies: { 'eslint-config-next': '16', tailwindcss: '4' } },
+    'node_modules/next': {},
+    'node_modules/tailwindcss': {},
+    'node_modules/eslint-config-next': { dev: true, dependencies: { '@next/eslint-plugin-next': '16' } },
+    'node_modules/@next/eslint-plugin-next': { dev: true, dependencies: { 'fast-glob': '3.3.1' } },
+    'node_modules/@next/eslint-plugin-next/node_modules/fast-glob': { dev: true, dependencies: { micromatch: '4' } },
+    'node_modules/micromatch': { dev: true, dependencies: { braces: '3' } },
+    'node_modules/braces': { dev: true },
+    ...extra,
+  },
+});
+const scoped = { ...exception, onlyVia: ['eslint-config-next'], expires: '2027-04-08' };
+
+test('reachability follows nested node_modules resolution to every direct dependency that reaches a package', () => {
+  assert.deepEqual(reachability(lockfile(), 'braces'), { roots: ['eslint-config-next'], devOnly: true });
+  const viaTailwind = lockfile({ 'node_modules/tailwindcss': { dev: true, dependencies: { micromatch: '4' } } });
+  assert.deepEqual(reachability(viaTailwind, 'braces').roots, ['eslint-config-next', 'tailwindcss']);
+  assert.deepEqual(reachability(lockfile(), 'left-pad'), { roots: [], devOnly: false });
+});
+
+test('a scoped exception holds only while every path to the package starts at an allowed dev-only dependency', () => {
+  assert.deepEqual(evaluate(blockingAdvisories(report(BRACES)), [scoped], '2026-12-01', lockfile()).failures, []);
+  // A second dev tool starts to pull it in.
+  const viaTailwind = lockfile({ 'node_modules/tailwindcss': { dev: true, dependencies: { micromatch: '4' } } });
+  assert.match(evaluate(blockingAdvisories(report(BRACES)), [scoped], '2026-12-01', viaTailwind).failures[0], /reached via eslint-config-next, tailwindcss/);
+  // A runtime dependency pulls it in: no longer dev-only.
+  const viaNext = lockfile({ 'node_modules/next': { dependencies: { micromatch: '4' } }, 'node_modules/micromatch': { dependencies: { braces: '3' } }, 'node_modules/braces': {} });
+  assert.match(evaluate(blockingAdvisories(report(BRACES)), [scoped], '2026-12-01', viaNext).failures[0], /not dev-only/);
+  // The allowed root moved to dependencies.
+  const promoted = lockfile();
+  promoted.packages[''].dependencies['eslint-config-next'] = '16';
+  assert.equal(evaluate(blockingAdvisories(report(BRACES)), [scoped], '2026-12-01', promoted).failures.length, 1);
+  // No lockfile to check against: fail closed.
+  assert.equal(evaluate(blockingAdvisories(report(BRACES)), [scoped], '2026-12-01').failures.length, 1);
+  // Still dated.
+  assert.match(evaluate(blockingAdvisories(report(BRACES)), [scoped], '2027-04-09', lockfile()).failures[0], /expired/);
+});
+
+test('the committed scoped exceptions hold against the committed lockfile', () => {
+  const { exceptions } = JSON.parse(readFileSync(path.join(ROOT, 'scripts', 'cloudflare', 'audit-exceptions.json'), 'utf8'));
+  const lock = JSON.parse(readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8'));
+  for (const entry of exceptions.filter((candidate) => candidate.onlyVia)) {
+    const advisory = { id: entry.id, package: entry.package, severity: 'high', title: '' };
+    assert.deepEqual(evaluate([advisory], [entry], entry.recorded, lock).failures, []);
   }
 });
