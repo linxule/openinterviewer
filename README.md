@@ -126,6 +126,7 @@ For people running an instance:
 - [Hosted researcher accounts](docs/operations/hosted.md): researcher journey, operator requirements, migrating pre-opaque-link deployments and the future hosted cutover runbook
 - [Cloudflare installer guide](docs/operations/cloudflare-migration/INSTALLER.md) and [operator runbook](docs/operations/cloudflare-migration/RUNBOOK.md): every installer command, maintenance modes, backup/import, restore and rollback
 - [Node/Vercel to Cloudflare transition runbook](docs/operations/cloudflare-migration/TRANSITION.md)
+- [Upgrade from Vercel or a fork](docs/operations/upgrade-from-vercel-or-a-fork.md): moving an older Vercel/Upstash deployment, or a fork, to the current release on Cloudflare, step by step for you or your coding agent
 - [Cloudflare design record](docs/operations/cloudflare-migration/IMPLEMENTATION.md) and [September 30 release status](docs/operations/cloudflare-migration/evidence/V5-STATUS-2026-09-30.md)
 - [Agent skill for installing and operating a Cloudflare instance](skills/openinterviewer-cloudflare/SKILL.md)
 
