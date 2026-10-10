@@ -22,7 +22,7 @@ const Landing: React.FC = () => {
       <Page className="py-12 md:py-20">
         <div className="space-y-16">
           <section aria-labelledby="landing-heading" className="space-y-8">
-            <Label>OpenInterviewer · Open source</Label>
+            <div><Label>OpenInterviewer · Open source</Label></div>
 
             <div>
               <Label>From the scripted demo</Label>
@@ -50,13 +50,13 @@ const Landing: React.FC = () => {
             <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
               <Link
                 href="/demo"
-                className="inline-flex min-h-11 items-center justify-center rounded bg-action px-4 py-2 font-sans text-[15px] font-medium text-paper-1 hover:bg-action/90"
+                className="inline-flex min-h-11 items-center justify-center rounded-sm bg-action px-4 py-2 font-sans text-[15px] font-medium text-paper-1 hover:bg-action/90"
               >
                 Try the scripted demo · 2 min
               </Link>
               <Link
                 href="/self-host"
-                className="inline-flex min-h-11 items-center justify-center rounded border border-ink-300 bg-transparent px-4 py-2 font-sans text-[15px] font-medium text-ink-900 hover:bg-paper-2"
+                className="inline-flex min-h-11 items-center justify-center rounded-sm border border-ink-300 bg-transparent px-4 py-2 font-sans text-[15px] font-medium text-ink-900 hover:bg-paper-2"
               >
                 Self-host your own
               </Link>

@@ -349,7 +349,7 @@ const InterviewChat: React.FC = () => {
   return (
     <div className="min-h-dvh bg-paper-0">
       {/* Running head */}
-      <header className="sticky top-[var(--preview-banner-height,0px)] z-20 flex min-h-16 items-center justify-between gap-3 border-b border-ink-300 bg-paper-0 px-4 py-2 sm:px-6">
+      <header className="sticky top-(--preview-banner-height,0px) z-20 flex min-h-16 items-center justify-between gap-3 border-b border-ink-300 bg-paper-0 px-4 py-2 sm:px-6">
         <div className="min-w-0">
           <h1 className="truncate font-sans text-[15px] font-semibold text-ink-900">{studyConfig.name}</h1>
           <p className="text-[13px] text-ink-500">{getProgressDisplay()}</p>
@@ -441,7 +441,7 @@ const InterviewChat: React.FC = () => {
                     placeholder={m.placeholder}
                     disabled={isAiThinking}
                     rows={3}
-                    className="input-verbatim w-full resize-none rounded border border-ink-300 bg-paper-2 px-4 py-3 text-[19px] leading-[31px] text-ink-900 placeholder:text-ink-500 disabled:opacity-50"
+                    className="input-verbatim w-full resize-none rounded-sm border border-ink-300 bg-paper-2 px-4 py-3 text-[19px] leading-[31px] text-ink-900 placeholder:text-ink-500 disabled:opacity-50"
                   />
                 </div>
 
@@ -473,7 +473,7 @@ const InterviewChat: React.FC = () => {
               {voice.enabled && voice.state.kind === 'idle' && input.trim() !== '' && (
                 <p className="text-[13px] leading-[20px] text-ink-500">{m.voice.review}</p>
               )}
-              <p className="text-[13px] leading-[20px] text-ink-500 [@media(pointer:coarse)]:hidden">{m.sendShortcut}</p>
+              <p className="text-[13px] leading-[20px] text-ink-500 pointer-coarse:hidden">{m.sendShortcut}</p>
             </div>
           </div>
         )}

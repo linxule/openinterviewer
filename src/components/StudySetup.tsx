@@ -746,7 +746,7 @@ const StudySetupForm: React.FC = () => {
         <div className="mb-2 flex flex-wrap items-center gap-3">
           <h1 className="font-sans text-[24px] font-semibold leading-[32px] text-ink-900">Study Setup</h1>
 
-          <div className="order-last flex w-full flex-wrap gap-2 sm:order-none sm:ml-auto sm:w-auto">
+          <div className="order-last flex w-full flex-wrap gap-2 sm:order-0 sm:ml-auto sm:w-auto">
             <Button variant="quiet" onClick={handleLoadExample} disabled={!draftReady || isSaving}>Load Example</Button>
             {hasRequiredFields && (
               <>
@@ -991,7 +991,7 @@ const StudySetupForm: React.FC = () => {
                       type="text"
                       value={participantLink}
                       readOnly
-                      className="flex-1 bg-paper-2 border border-ink-300 rounded px-3 py-2 text-ink-900 font-sans font-mono text-[13px]"
+                      className="flex-1 bg-paper-2 border border-ink-300 rounded-sm px-3 py-2 text-ink-900 font-sans font-mono text-[13px]"
                     />
                     <Button type="button" variant="quiet" onClick={handleCopyLink}>
                       {linkCopied ? 'Copied!' : 'Copy'}

@@ -19,7 +19,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
     <button
       ref={ref}
       className={cn(
-        'rounded px-4 py-2 font-sans text-[15px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+        'rounded-sm px-4 py-2 font-sans text-[15px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50',
         variantClassName[variant],
         className
       )}

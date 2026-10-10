@@ -1,12 +1,15 @@
 {
-  "comment": "Development-toolchain advisories the release check may pass while they stand. Each entry needs a reason and an expiry; an expired entry fails the check. Production (npm audit --omit=dev) has no exceptions.",
+  "comment": "Development-toolchain advisories the release check may pass while they stand. Each entry needs a reason and an expiry; an expired entry fails the check. An entry with onlyVia also fails, on every run, as soon as the package is reachable from any other direct dependency or is not dev-only (resolved from package-lock.json); such entries may run 180 days, others 45. Production (npm audit --omit=dev) has no exceptions.",
   "exceptions": [
     {
       "id": "GHSA-vfj7-8cjw-p6xm",
       "package": "braces",
-      "reason": "No patched braces release exists (<=3.0.3 is every version). It reaches the toolchain only through tailwindcss 3 (chokidar, micromatch), fast-glob and @next/eslint-plugin-next, which expand this repository's own build and lint patterns, never request input. Remove when braces publishes a fix or Tailwind 4 lands.",
-      "recorded": "2026-10-08",
-      "expires": "2026-11-08"
+      "reason": "No patched braces release exists (<=3.0.3 is every version; the advisory is stack exhaustion from deeply nested patterns). It reaches the toolchain only through eslint-config-next (@next/eslint-plugin-next -> fast-glob -> micromatch), which expands this repository's own lint patterns, never request input. onlyVia makes the check fail if that ever changes. Remove when braces publishes a fix or the Next.js ESLint plugin drops fast-glob.",
+      "recorded": "2026-10-10",
+      "expires": "2027-04-08",
+      "onlyVia": [
+        "eslint-config-next"
+      ]
     }
   ]
 }

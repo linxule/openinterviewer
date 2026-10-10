@@ -242,11 +242,11 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId,
 
       <dl aria-label="Interview conducting provenance" className="mb-8 border-t border-ink-300 pt-4">
         <dt><Label>Conducting provider and model</Label></dt>
-        <dd className="mt-2 font-mono text-[13px] text-ink-500 break-words">
+        <dd className="mt-2 font-mono text-[13px] text-ink-500 wrap-break-word">
           {interview.conductedByProvider ?? 'not recorded'} · {interview.conductedByModel ?? 'not recorded'}
         </dd>
         <dt className="mt-4"><Label>Instructions at save time</Label></dt>
-        <dd className="mt-2 font-sans text-[15px] leading-[24px] text-ink-700 whitespace-pre-wrap max-w-measure break-words">
+        <dd className="mt-2 font-sans text-[15px] leading-[24px] text-ink-700 whitespace-pre-wrap max-w-measure wrap-break-word">
           {interview.conductedWithInstructions ?? 'Default manner (none recorded)'}
         </dd>
       </dl>
@@ -258,7 +258,7 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId,
           {!interview.collectionConfig && <p className="mt-2 max-w-measure text-[13px] text-ink-500">Original profile definitions were not recorded for this interview. Field IDs are shown without reconstructing historical labels.</p>}
           <dl className="mt-2 grid grid-cols-1 gap-3 text-[13px] sm:grid-cols-2 md:grid-cols-3">
             {profileEntries(interview).map(field => (
-              <div key={field.id} className="break-words border-t border-ink-300 pt-2">
+              <div key={field.id} className="wrap-break-word border-t border-ink-300 pt-2">
                 <dt className="text-ink-500">{field.label}</dt>
                 <dd className="mt-1 text-ink-900">{field.status}</dd>
                 {!field.definitionKnown && <p className="mt-1 text-[12px] text-ink-500">Original field definition unavailable</p>}
@@ -283,7 +283,7 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId,
                 id={`turn-${i + 1}`}
                 tabIndex={-1}
                 className={cn(
-                  'focus:outline-none',
+                  'focus:outline-hidden',
                   tracedTurn === i + 1 && 'ring-2 trace-ring ring-offset-4 ring-offset-paper-0'
                 )}
               >

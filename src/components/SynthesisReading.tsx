@@ -75,7 +75,7 @@ export function SynthesisReading({
           {synthesis.bottomLine}
         </Verbatim>
       </section>
-      <Rule className="mt-8" />
+      <Rule />
 
       {/* Stated vs Revealed */}
       <section>
@@ -109,7 +109,7 @@ export function SynthesisReading({
           </div>
         </div>
       </section>
-      <Rule className="mt-8" />
+      <Rule />
 
       {/* Key Themes */}
       <section>
@@ -231,7 +231,7 @@ export function AggregateReading({ synthesis, interviewIndex, openNotes, onNoteO
           {synthesis.bottomLine}
         </Verbatim>
       </section>
-      <Rule className="mt-8" />
+      <Rule />
 
       {/* Key Findings */}
       <section>
@@ -373,7 +373,7 @@ export function ProvenanceFooter({ model, conductedBy, studyRevision, timestamp,
     ...(note ? [note] : []),
   ].join(' · ');
   return (
-    <footer className="mt-10 border-t border-ink-300 pt-4">
+    <footer className="border-t border-ink-300 pt-4">
       <Coordinate className="block">{line}</Coordinate>
     </footer>
   );

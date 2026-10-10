@@ -144,6 +144,6 @@ describe('InterviewChat page layout (A1: the composer is the last block in the d
     const heading = screen.getByRole('heading', { level: 1 });
     const header = heading.closest('header');
     expect(header).not.toBeNull();
-    expect(header!.className).toContain('top-[var(--preview-banner-height,0px)]');
+    expect(header!.className).toContain('top-(--preview-banner-height,0px)');
   });
 });
