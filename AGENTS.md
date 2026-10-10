@@ -53,6 +53,9 @@ The sample-workspace seed is not the public demo. `/demo` is component-memory-on
 
 ### Storage and tenancy
 
+- Standalone projects and membership contracts/validation: `src/lib/projects/`; project HTTP routes: `src/app/api/projects/`, `src/app/api/studies/[id]/project/`
+- Project storage: `src/lib/storage/redisProjects.ts`, `cloudflare/workspace/projects.ts`, with the project sub-port in `src/lib/storage/types.ts` and RPC validation in `src/lib/storage/durableObject.ts`
+- Shared per-study transcript sources and bounded project composition: `src/lib/export/studyTranscriptsSource.ts`, `src/lib/export/projectTranscriptsMarkdown.ts`; typed browser client: `src/services/projectService.ts`
 - Researcher studies/interviews and atomic Redis scripts: `src/lib/kv.ts`
 - Field-level JSON patching inside Redis Lua (preserves untouched value types): `src/lib/studyJsonLua.ts`
 - Redis client construction, cache lifecycle, and Upstash URL validation: `src/lib/kvClient.ts`
@@ -120,6 +123,7 @@ On Cloudflare the participant sequence is the same, with analysis queued by the 
 - User-provided Redis URLs remain restricted to HTTPS Upstash hosts; preserve bounded validation deadlines.
 - AI/provider failure is an error. Never substitute a plausible research response, synthesis, or greeting.
 - Completion persistence and study mutation remain atomic and idempotent under retries and concurrency.
+- Project membership is standalone organization metadata, never study configuration or participant authority. Assignment does not advance study revision/timestamps; deleting a project only ungroups studies. Project export requires its distinct final marker, not an inner study marker.
 - Editing a study advances its revision and invalidates older participant authority.
 - Synthesis (per-interview synthesis, aggregate synthesis, follow-up generation) uses the study's own configured provider and model — never a fixed override. Synthesis provenance must record the provider and model actually used, which may differ from the requested model when the provider serves a specific dated snapshot.
 - Exploration uses the exact selected raw corpus, never a sampled or summary-only substitute. Check every selected record's original provider commitment and transport before use. Reserve a durable attempt before admission/provider execution; lookup/replay and signed save-only receipts must never make another provider request. Located quotes are not semantic-entailment verdicts.

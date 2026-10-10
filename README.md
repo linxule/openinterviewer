@@ -2,7 +2,7 @@
 
 OpenInterviewer is an open-source platform for adaptive, AI-assisted qualitative interviews. Researchers configure a study, share an opaque participant link, and review transcripts and synthesis in a dashboard.
 
-See the [v5.2.1 notes](docs/releases/v5.2.1.md) for Tailwind CSS 4, the [v5.2.0 release notes](docs/releases/v5.2.0.md) for the per-installation analysis language, the [v5.1.0 release notes](docs/releases/v5.1.0.md) for interview languages, voice input and Markdown transcript export, the [v5.0.1 notes](docs/releases/v5.0.1.md) for the Next.js 16.3.8 security update, and the [v5.0.0 release notes](docs/releases/v5.0.0.md) for saved study exploration, explicit datasets,
+See the [v5.3.0 release notes](docs/releases/v5.3.0.md) for standalone projects, project transcript export and the forward-only upgrade, the [v5.2.1 notes](docs/releases/v5.2.1.md) for Tailwind CSS 4, the [v5.2.0 release notes](docs/releases/v5.2.0.md) for the per-installation analysis language, the [v5.1.0 release notes](docs/releases/v5.1.0.md) for interview languages, voice input and Markdown transcript export, the [v5.0.1 notes](docs/releases/v5.0.1.md) for the Next.js 16.3.8 security update, and the [v5.0.0 release notes](docs/releases/v5.0.0.md) for saved study exploration, explicit datasets,
 study deletion and workflow controls. The [v4.2.0 release notes](docs/releases/v4.2.0.md) cover the per-study choice of what participants are told
 about the AI provider, researcher AI budgets and sign-in limits, the [v4.1.1 notes](docs/releases/v4.1.1.md) for
 self-hosted fonts and dependency updates, the [v4.1.0 notes](docs/releases/v4.1.0.md) for participant-session and link-privacy fixes and
@@ -27,6 +27,40 @@ There are four deliberately different ways to use it:
 | **Hosted researcher accounts** | Sign in, then add your own AI and Upstash credentials in the UI | Your Upstash database | A multi-tenant service that an operator runs on the Node/Vercel target; the project does not currently operate one |
 
 The demo is not a disguised live interview: it is deterministic, does not call an AI provider, and does not save data. Real interviews require configured inference access and storage.
+
+## Projects (standalone only)
+
+On standalone Node/Redis and Cloudflare installations, **My Studies** groups studies
+into named, collapsible projects and an explicit **Ungrouped** section. Hosted
+researcher accounts keep the flat study list; projects are not available there.
+
+- Use **New project**, then **+ Study** to create a study in it. Study actions offer
+  **Move to project…** and **Ungroup**. Empty projects remain visible.
+- Grouping is organization, not study configuration. It does not change a study's
+  revision, questions, consent, participant links, transcripts or provider choices.
+- A project's **···** actions rename it, export its transcripts, or delete the
+  project. Deleting a project moves its studies to Ungrouped; it deletes no study
+  or interview.
+- Creating a study and assigning it are two separate saves. If assignment fails,
+  the study still opens with a notice. Move it from the study list; do not create
+  it again. Uncertain project changes are refreshed, not automatically retried.
+- **Export transcripts** downloads one Markdown file containing each study's
+  saved transcripts, including an empty-study header where appropriate. It makes
+  no AI calls and retains each interview's recorded provider/transport disclosure.
+  The limit is 500 interviews total; export larger collections study by study.
+  The client refuses an incomplete download, including a file cut after a valid
+  inner study footer. A transcript-free project has nothing to download.
+
+Exports are checked concatenations of per-study snapshots, not one cross-study
+point-in-time snapshot. The project name and membership roster are checked again
+at completion. The workspace supports at most 1,000 projects and 1,000 studies
+in its project listing; oversize collections are refused rather than truncated.
+A failed grouping read shows a notice and the flat list, not a guessed Ungrouped view.
+
+Back up before upgrading to 5.3. Cloudflare schema 3 is forward-only: a 5.2 build
+refuses the upgraded workspace. Do not roll Node back to 5.2 against the upgraded
+Redis database either: it would ignore memberships and omit project cleanup.
+See the [upgrade/runbook note](docs/operations/cloudflare-migration/RUNBOOK.md#projects-53-forward-only-upgrade).
 
 ## Public deployment checks
 

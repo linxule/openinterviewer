@@ -176,7 +176,7 @@ local function collection(r, key, kind, target, alsoIn, bound)
 end
 
 local TAGS = {
-  study = 'oi:study:', interview = 'oi:interview:', link = 'oi:link:', aggregate = 'oi:aggregate:',
+  project = 'oi:project:', study = 'oi:study:', interview = 'oi:interview:', link = 'oi:link:', aggregate = 'oi:aggregate:',
   consent = '', idempotency = 'oi:idemp:', receipt = 'oi:receipt:', ['mutation-guard'] = 'oi:smg:',
   ['persist-guard'] = 'oi:pguard:', fingerprint = 'oi:fp:', exploration = 'oi:exploration:'
 }
@@ -184,6 +184,51 @@ local ANALYSIS = { pending = true, running = true, complete = true, failed = tru
 local FAILURE = { provider = true, ['invalid-output'] = true, ['too-large'] = true, timeout = true, storage = true }
 local EXPLORATION = { running = true, complete = true, failed = true, ['recovery-required'] = true }
 
+local function uuid(v)
+  return type(v) == 'string' and #v == 36 and string.match(v, '^%x%x%x%x%x%x%x%x%-%x%x%x%x%-4%x%x%x%-[89ab]%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x$') ~= nil
+    and v == string.lower(v)
+end
+local function study_id(v)
+  return type(v) == 'string' and #v > 0 and #v <= 128 and string.match(v, '^[A-Za-z0-9-]+$') ~= nil
+end
+local function integer(v) return type(v) == 'number' and v >= 0 and v <= 9007199254740991 and v == math.floor(v) end
+local function valid_name(v)
+  if type(v) ~= 'string' or #v == 0 or #v > 800 then return false end
+  local n, i, first, last = 0, 1, nil, nil
+  while i <= #v do
+    local b = string.byte(v, i)
+    local cp, size = b, 1
+    if b >= 194 and b <= 223 then cp, size = b - 192, 2
+    elseif b >= 224 and b <= 239 then cp, size = b - 224, 3
+    elseif b >= 240 and b <= 244 then cp, size = b - 240, 4
+    elseif b >= 128 then return false end
+    for j=1,size-1 do
+      local c = string.byte(v,i+j)
+      if not c or c < 128 or c > 191 then return false end
+      cp = cp * 64 + c - 128
+    end
+    if (size == 2 and cp < 128) or (size == 3 and cp < 2048) or (size == 4 and cp < 65536)
+      or cp > 1114111 or (cp >= 55296 and cp <= 57343) or cp < 32 or (cp >= 127 and cp <= 159) then return false end
+    first = first or cp; last = cp
+    n = n + (cp > 65535 and 2 or 1); i = i + size
+  end
+  local function space(cp)
+    return cp == 32 or cp == 160 or cp == 5760 or (cp >= 8192 and cp <= 8202)
+      or cp == 8232 or cp == 8233 or cp == 8239 or cp == 8287 or cp == 12288 or cp == 65279
+  end
+  return n <= 200 and not space(first) and not space(last)
+end
+
+local function project_valid(p, id)
+  if type(p) ~= 'table' or not uuid(id) or p.id ~= id or not valid_name(p.name)
+    or not integer(p.createdAt) or not integer(p.updatedAt) or p.updatedAt < p.createdAt then return false end
+  local n = 0
+  for k in pairs(p) do
+    if k ~= 'id' and k ~= 'name' and k ~= 'createdAt' and k ~= 'updatedAt' then return false end
+    n = n + 1
+  end
+  return n == 4
+end
 local out = {}
 for i, key in ipairs(KEYS) do
   local suffix = string.sub(key, #prefix + 1)
@@ -207,7 +252,31 @@ for i, key in ipairs(KEYS) do
     end
   end
 
-  if family == 'study' then
+  if family == 'project' then
+    r.valid = r.enc == 'prefixed' and project_valid(obj, suffix)
+    r.listed = ismember('all-projects', suffix)
+  elseif family == 'study-project' then
+    local pid = rcall('GET', key)
+    r.valid = study_id(suffix) and uuid(pid)
+    r.study = study_ref(suffix)
+    r.studyListed = ismember('all-studies', suffix)
+    if uuid(pid) then
+      r.projectMissing = not exists('project:' .. pid)
+      r.projectListed = ismember('all-projects', pid)
+      local parentRaw = rcall('GET', 'project:' .. pid)
+      local parent, encoding
+      if type(parentRaw) == 'string' and #parentRaw <= 4096 then parent, encoding = decode(parentRaw, 'oi:project:') end
+      r.parentInvalid = not r.projectMissing and (encoding ~= 'prefixed' or not project_valid(parent, pid))
+    end
+  elseif family == 'all-projects' then
+    collection(r, key, 'set', 'project:')
+    if not r.skipped then
+      r.invalidMembers = 0
+      for _, pid in ipairs(rcall('SMEMBERS', key) or {}) do
+        if not uuid(pid) then r.invalidMembers = r.invalidMembers + 1 end
+      end
+    end
+  elseif family == 'study' then
     if raw then
       if obj then
         r.idOk = obj.id == suffix
@@ -436,6 +505,9 @@ return out
 
 /** @type {Family[]} */
 export const FAMILIES = [
+  { name: 'projects', prefixes: ['project:'], type: 'string', projection: 'project' },
+  { name: 'allProjectsIndex', exact: 'all-projects', type: 'set', projection: 'all-projects' },
+  { name: 'studyProjects', prefixes: ['study-project:'], type: 'string', projection: 'study-project' },
   { name: 'studies', prefixes: ['study:'], type: 'string', projection: 'study' },
   { name: 'interviews', prefixes: ['interview:'], type: 'string', projection: 'interview' },
   { name: 'interviewFingerprints', prefixes: ['interview-fingerprint:'], type: 'string', projection: 'fingerprint' },
@@ -658,6 +730,8 @@ const studyRefCounter = () => ({ present: 0, missing: 0, undecodable: 0, 'invali
 
 function emptyRecords() {
   return {
+    projects: { projected: 0, invalid: 0, notIndexed: 0 },
+    studyProjects: { projected: 0, invalid: 0, study: studyRefCounter(), studyNotIndexed: 0, projectMissing: 0, projectNotIndexed: 0, parentInvalid: 0 },
     studies: {
       projected: 0, encoding: encodingCounter(), identityMismatch: 0,
       revision: { present: 0, missing: 0, max: 0 }, locked: 0, linksDisabled: 0,
@@ -727,6 +801,7 @@ const collectionStats = () => ({ keys: 0, members: 0, missingTargets: 0, skipped
 
 function emptyCollections() {
   return {
+    allProjects: { ...collectionStats(), invalidMembers: 0 },
     allStudies: collectionStats(),
     allInterviews: collectionStats(),
     // Dangling members that all-interviews also lists: one missing interview, listed twice.
@@ -743,6 +818,7 @@ function emptyCollections() {
 }
 
 const COLLECTION_BY_PROJECTION = {
+  'all-projects': 'allProjects',
   'all-studies': 'allStudies',
   'all-interviews': 'allInterviews',
   'study-index': 'studyInterviewIndexes',
@@ -935,6 +1011,24 @@ export async function runInventory(executor, options = {}) {
     }
     if (f.missing || f.wrongType) return;
     switch (projection) {
+      case 'project': {
+        const s = records.projects;
+        s.projected += 1;
+        if (!f.valid) s.invalid += 1;
+        if (!f.listed) s.notIndexed += 1;
+        break;
+      }
+      case 'study-project': {
+        const s = records.studyProjects;
+        s.projected += 1;
+        if (!f.valid) s.invalid += 1;
+        incStudyRef(s.study, f.study);
+        if (!f.studyListed) s.studyNotIndexed += 1;
+        if (f.projectMissing) s.projectMissing += 1;
+        if (f.projectListed === false) s.projectNotIndexed += 1;
+        if (f.parentInvalid) s.parentInvalid += 1;
+        break;
+      }
       case 'study': {
         const s = records.studies;
         s.projected += 1;
@@ -1312,6 +1406,10 @@ function buildReport(input) {
     explorationRecoveryRequired: records.explorationAnswers.status['recovery-required'],
   };
   const orphans = {
+    allProjectsMembersWithoutProject: collections.allProjects.missingTargets,
+    projectsNotIndexed: records.projects.notIndexed,
+    membershipsWithoutStudy: records.studyProjects.study.missing,
+    membershipsWithoutProject: records.studyProjects.projectMissing,
     interviewsWithoutStudy: interviews.study.missing,
     linksWithoutStudy: records.participantLinks.study.missing,
     aggregatesWithoutStudy: records.aggregates.study.missing,
@@ -1358,6 +1456,10 @@ function buildReport(input) {
   const skipped = Object.values(collections).reduce((sum, c) => sum + c.skippedOverBound, 0);
   if (skipped > 0) incompleteReasons.push('collections-over-member-bound');
   if (records.explorationAnswers.sourceChecksOverBound > 0) incompleteReasons.push('exploration-sources-over-bound');
+  if (records.projects.invalid + records.projects.notIndexed + collections.allProjects.invalidMembers
+    + collections.allProjects.missingTargets + records.studyProjects.invalid + records.studyProjects.parentInvalid
+    + records.studyProjects.studyNotIndexed + records.studyProjects.projectMissing + records.studyProjects.projectNotIndexed
+    + records.studyProjects.study.undecodable + records.studyProjects.study.missing > 0) incompleteReasons.push('project-records-invalid');
   const notebook = records.explorationAnswers;
   if (notebook.encoding.undecodable + notebook.identityMismatch + notebook.scopeInvalid
     + notebook.sourcesInvalid + notebook.sourcesUndecodable + notebook.sourcesOtherStudy
@@ -1397,6 +1499,8 @@ function buildReport(input) {
     - collections.explorationReceipts.missingTargetsAlsoInExplorationIndexes;
 
   const research = {
+    projects: familyTable.projects.count,
+    studyProjects: familyTable.studyProjects.count,
     studies: familyTable.studies.count,
     interviews: familyTable.interviews.count,
     participantLinks: familyTable.participantLinks.count,
@@ -1414,7 +1518,7 @@ function buildReport(input) {
     summary: {
       totalKeys: scan.keysSeen - scan.vanishedDuringScan,
       researchRecords: research,
-      hasResearchData: research.studies + research.interviews + research.aggregates + research.explorationAnswers
+      hasResearchData: research.projects + research.studyProjects + familyTable.allProjectsIndex.count + research.studies + research.interviews + research.aggregates + research.explorationAnswers
         + familyTable.explorationIndexes.count + familyTable.explorationOrderIndexes.count + familyTable.explorationReceipts.count > 0,
       pendingOperations: pendingOperationsOnce,
       interviewsAwaitingFirstAnalysis: interviews.analysis.importMapping.notScheduled,

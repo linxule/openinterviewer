@@ -2,6 +2,7 @@
 // Supports both standalone (env-var singleton) and hosted (per-researcher dynamic) modes
 // All functions accept an optional Redis client parameter for multi-tenant support
 
+import { STUDY_DELETION_GUARD_LUA } from './storage/redisStudyGuard';
 import { randomUUID } from 'crypto';
 import type { RedisPort } from './redisPort';
 import { RedisCommitAmbiguousError } from './redisPort';
@@ -1587,19 +1588,7 @@ if redis.call('SCARD', KEYS[2]) > 0 then
   return {'oi:persist-guard'}
 end
 
-local mutationRaw = redis.call('GET', KEYS[3])
-if mutationRaw then
-  if type(mutationRaw) ~= 'string' or string.sub(mutationRaw, 1, 7) ~= 'oi:smg:' then
-    return {'oi:byos-unavailable'}
-  end
-  local mok, mutation = pcall(cjson.decode, string.sub(mutationRaw, 8))
-  if not mok or type(mutation) ~= 'table' then
-    return {'oi:byos-unavailable'}
-  end
-  if mutation.state ~= 'created' then
-    return {'oi:persist-guard'}
-  end
-end
+${STUDY_DELETION_GUARD_LUA}
 `;
 
 export const SET_STUDY_LINKS_SCRIPT = `${STUDY_CAS_LUA}
@@ -2031,7 +2020,9 @@ else
 end
 -- fault cut D1: mutation guard written, study present
 
+-- fault cut DP1: deletion accepted, auxiliary purge not started
 if not purge_auxiliary(ARGV[1], mode) then return {'oi:still-pending'} end
+-- fault cut DP2: auxiliary purge accepted, membership removed under guard
 
 -- The aggregate is a cache of a paid model call. Deleting it here means a
 -- refused delete (the study still has interviews) never destroys it, and the

@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { evictDurableObject, reset, runInDurableObject } from 'cloudflare:test';
 import type { ExplorationAnswer, ExplorationReservation } from '../../src/lib/exploration/types';
-import { MIGRATIONS } from '../../cloudflare/workspace/schema';
+import { CURRENT_SCHEMA_VERSION, MIGRATIONS } from '../../cloudflare/workspace/schema';
 import { applyMigrations } from '../../cloudflare/workspace/migrate';
 import { createDurableWorkspaceStore } from '../../src/lib/storage/durableObject';
 import { testEnv, workspaceStub } from './helpers';
@@ -255,7 +255,7 @@ describe('researcher control and durable notebooks', () => {
     const { reservation } = await notebook();
     await workspaceStub().reserveExploration(reservation);
     const outcome = await runInDurableObject(workspaceStub(), (_instance, state) => applyMigrations(state.storage, [MIGRATIONS[0]]));
-    expect(outcome).toEqual({ status: 'schema-unsupported', storedVersion: 2, reason: 'newer-incompatible' });
+    expect(outcome).toEqual({ status: 'schema-unsupported', storedVersion: CURRENT_SCHEMA_VERSION, reason: 'newer-incompatible' });
     expect(await count('exploration_answers')).toBe(1);
   });
 

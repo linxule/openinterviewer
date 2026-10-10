@@ -290,6 +290,90 @@ export function defineWorkspaceStoreContract(label: string, harness: WorkspaceSt
       expect(await store.readiness()).toEqual({ status: 'ready', maintenance: 'open' });
     });
 
+    describe('projects', () => {
+      it('starts empty and preserves Unicode, duplicate names and deterministic project ordering', async () => {
+        const store = await harness.createStore();
+        expect(await store.projects.list()).toEqual({ status: 'ok', projects: [], memberships: [], studyIds: [] });
+        const a = expectStatus(await store.projects.create({ name: '  Étude 研究 🙂  ' }), 'created').project;
+        const b = expectStatus(await store.projects.create({ name: a.name }), 'created').project;
+        expect(a.name).toBe('Étude 研究 🙂');
+        expect(a.id).not.toBe(b.id);
+        const listed = expectStatus(await store.projects.list(), 'ok');
+        expect(listed.projects).toEqual([a, b].sort((x, y) => y.createdAt - x.createdAt || x.id.localeCompare(y.id)));
+        expect(await store.projects.read({ projectId: a.id })).toEqual({ status: 'found', project: a, studyIds: [] });
+        const renamed = expectStatus(await store.projects.rename({ projectId: a.id, name: 'Renamed' }), 'updated').project;
+        expect(renamed.createdAt).toBe(a.createdAt);
+        expect(renamed.updatedAt).toBeGreaterThanOrEqual(a.updatedAt);
+        expect(await store.projects.rename({ projectId: a.id, name: 'Renamed' })).toEqual({ status: 'updated', project: renamed });
+      });
+
+      it('assigns, moves and ungroups without changing study/link/consent bytes; the original participant can complete', async () => {
+        const store = await harness.createStore();
+        const study = await createStudy(store);
+        const { code, link } = await createLink(store, study);
+        const participant = await consentedParticipant(store, study);
+        const before = await store.getStudy(study.id);
+        const a = expectStatus(await store.projects.create({ name: 'A' }), 'created').project;
+        const b = expectStatus(await store.projects.create({ name: 'B' }), 'created').project;
+        for (const projectId of [a.id, a.id, b.id, null, b.id]) {
+          expect(await store.projects.assignStudy({ studyId: study.id, projectId })).toEqual({ status: 'assigned', studyId: study.id, projectId });
+          expect(await store.getStudy(study.id)).toEqual(before);
+        }
+        expect((await store.projects.delete({ projectId: b.id })).status).toBe('deleted');
+        expect(await store.getStudy(study.id)).toEqual(before);
+        expect(await store.resolveParticipantLinkByCode({ code, now: Date.now(), purpose: 'exchange' })).toEqual({ status: 'found', link });
+        expect(await store.verifyConsent({ participantSessionId: participant.sessionId, studyId: study.id,
+          studyRevision: study.revision, consentText: study.config.consentText, now: Date.now() })).toEqual({ status: 'accepted', consent: participant.consent });
+        expect((await store.persistCompletedInterview(completion(study, participant, link.id))).status).toBe('created');
+      });
+
+      it('project deletion ungroups populated and empty studies but preserves their records and other projects', async () => {
+        const store = await harness.createStore();
+        const a = expectStatus(await store.projects.create({ name: 'Delete me' }), 'created').project;
+        const b = expectStatus(await store.projects.create({ name: 'Keep me' }), 'created').project;
+        const study = await createStudy(store), empty = await createStudy(store), other = await createStudy(store);
+        const { link } = await createLink(store, study);
+        const interview = await persistOne(store, study, link.id);
+        for (const s of [study, empty]) await store.projects.assignStudy({ studyId: s.id, projectId: a.id });
+        await store.projects.assignStudy({ studyId: other.id, projectId: b.id });
+        const before = await store.getStudy(study.id), saved = await store.getInterview(interview.id);
+        expect((await store.projects.delete({ projectId: a.id })).status).toBe('deleted');
+        expect((await store.projects.delete({ projectId: a.id })).status).toBe('deleted');
+        expect(await store.getStudy(study.id)).toEqual(before);
+        expect(await store.getInterview(interview.id)).toEqual(saved);
+        expect((await store.getStudy(empty.id)).status).toBe('found');
+        const list = expectStatus(await store.projects.list(), 'ok');
+        expect(list.memberships.filter(m => [study.id, empty.id].includes(m.studyId))).toEqual([]);
+        expect(list.memberships).toContainEqual({ studyId: other.id, projectId: b.id });
+      });
+
+      it('missing parents refuse; refused study deletion preserves membership and successful deletion removes it', async () => {
+        const store = await harness.createStore();
+        const p = expectStatus(await store.projects.create({ name: 'Cascade' }), 'created').project;
+        const study = await createStudy(store);
+        expect((await store.projects.assignStudy({ studyId: uid(), projectId: p.id })).status).toBe('study-not-found');
+        expect((await store.projects.assignStudy({ studyId: study.id, projectId: uid() })).status).toBe('not-found');
+        await store.projects.assignStudy({ studyId: study.id, projectId: p.id });
+        expect((await store.deleteStudy({ studyId: study.id, expectedRevision: 2, now: Date.now() })).status).toBe('conflict');
+        expect(expectStatus(await store.projects.read({ projectId: p.id }), 'found').studyIds).toEqual([study.id]);
+        expect((await store.deleteStudy({ studyId: study.id, now: Date.now() })).status).toBe('deleted');
+        expect(expectStatus(await store.projects.read({ projectId: p.id }), 'found').studyIds).toEqual([]);
+        expect((await store.projects.rename({ projectId: uid(), name: 'Missing' })).status).toBe('not-found');
+        expect((await store.projects.read({ projectId: uid() })).status).toBe('not-found');
+      });
+
+      it('concurrent assignment and deletion never leave dangling memberships', async () => {
+        const store = await harness.createStore();
+        const study = await createStudy(store);
+        const p = expectStatus(await store.projects.create({ name: 'Race' }), 'created').project;
+        const outcomes = await Promise.all([store.projects.assignStudy({ studyId: study.id, projectId: p.id }),
+          store.projects.delete({ projectId: p.id })]);
+        expect(['assigned', 'not-found']).toContain(outcomes[0].status);
+        expect(outcomes[1].status).toBe('deleted');
+        expect(expectStatus(await store.projects.list(), 'ok').memberships.some(m => m.studyId === study.id)).toBe(false);
+      });
+    });
+
     describe('studies', () => {
       it('ST-01: create returns the minted study; the same key and fingerprint replay it without minting again', async () => {
         const store = await harness.createStore();
@@ -1068,10 +1152,15 @@ export function defineWorkspaceStoreContract(label: string, harness: WorkspaceSt
         expect(await store.saveAggregate(aggregateFor(sampleStudy, clearInput.interviewIds, 'Sample aggregate.')))
           .toBe('saved');
         const sampleLink = capabilities.sampleClearCascadesLinks ? await createLink(store, sampleStudy) : null;
+        const project = expectStatus(await store.projects.create({ name: 'Sample project' }), 'created').project;
+        expect((await store.projects.assignStudy({ studyId, projectId: project.id })).status).toBe('assigned');
+
 
         expect(await store.clearSampleWorkspace(clearInput))
           .toEqual({ status: 'cleared', studiesDeleted: 1, interviewsDeleted: 2 });
         expect(await store.getStudy(studyId)).toEqual({ status: 'not-found' });
+        expect(await store.projects.read({ projectId: project.id })).toEqual({ status: 'found', project, studyIds: [] });
+
         for (const interviewId of clearInput.interviewIds) {
           expect(await store.getInterview(interviewId)).toEqual({ status: 'not-found' });
         }

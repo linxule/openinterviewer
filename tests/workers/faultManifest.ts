@@ -63,6 +63,19 @@ const RESTART_S3 = 'VERIFY-01/JOB-08 a job whose provider call was in flight at 
 const RESTART_TX = 'VERIFY-01/JOB-05 SIGKILL while a transaction holding SQL and an earlier alarm is still open leaves neither after restart; the committed row and its own alarm survive and fire unprompted';
 
 export const CLOUDFLARE_FAULT_CUTS: ReadonlyArray<CloudflareFaultCut> = [
+  {
+    id: 'CF-PROJECTS-ROLLBACK',
+    code: [`${WS}/projects.ts#run`, `${WS}/projects.ts#createProjectsStore`,
+      `${STORE}#createProject`, `${STORE}#renameProject`, `${STORE}#deleteProject`, `${STORE}#assignStudyProject`],
+    cut: 'A throw after membership deletion but before the project deletion commits.',
+    durableEvidence: 'Project, memberships and mutation sequence all retain their pre-transaction values.',
+    expectedReply: 'The domain returns unavailable; an RPC transport failure remains ambiguous in the client.',
+    nextAction: 'Reload before repeating the requested absolute operation. Create has no replay receipt.',
+    coverage: [
+      { file: 'tests/workers/projects.test.ts', title: 'rolls back membership, project and mutation sequence when a later delete statement fails' },
+      { file: 'tests/unit/storage.projects.test.ts', title: 'Durable validates payloads, statuses and requested identities, with safe old-RPC failures' },
+    ],
+  },
   // ---------- Participant completion (JOB-01/05, ST-02/04) ----------
   {
     id: 'CF-COMPLETION-ROLLBACK',
@@ -743,6 +756,8 @@ export const CLOUDFLARE_FAULT_CUTS: ReadonlyArray<CloudflareFaultCut> = [
  * transaction; a read-only surface writes nothing durable.
  */
 export const NON_CUT_SURFACES: Readonly<Record<string, string>> = {
+  [`${STORE}#listProjects`]: 'read-only bounded snapshot RPC',
+  [`${STORE}#readProject`]: 'read-only project roster RPC',
   [`${WS}/context.ts#bumpMutationSeq`]: 'helper: runs inside the caller\'s transaction',
   [`${WS}/context.ts#earliestJobDue`]: 'read helper',
   [`${WS}/participants.ts#getParticipantLink`]: 'read-only transactionSync',

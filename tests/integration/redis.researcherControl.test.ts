@@ -1,7 +1,7 @@
 // @vitest-environment node
 // Runner-owned real Redis: lifecycle and notebook claims must cross the wire.
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   createStudyAtomic, deleteStudy, encodeInterviewValue, getInterviewChecked,
   getStudyChecked, persistCompletedInterview, replaceStudyConfigAtomic,
@@ -320,5 +320,130 @@ describe('durable exploration over authorized Redis client', () => {
     await redis.set(`interview:${interview.id}`, encodeInterviewValue(interview));
     await redis.del(`interview:${interview.id}`);
     expect((await notebook.complete(result(a))).status).toBe('conflict');
+  });
+});
+
+describe('projects over real Redis', () => {
+  let database: DisposableRedis;
+  let client: RedisNodeAdapter;
+  let store: ReturnType<typeof createRedisWorkspaceStore>;
+  beforeEach(async () => {
+    database = await startDisposableRedis();
+    client = database.adapter();
+    store = createRedisWorkspaceStore(client, { researcherId: null });
+  });
+  afterEach(async () => { await database?.close(); });
+  async function create(name = 'Project 🙂') {
+    const result = await store.projects.create({ name });
+    if (result.status !== 'created') throw new Error('Project create failed');
+    return result.project;
+  }
+  it('the Lua writer refuses a name its own readers would reject, writing nothing', async () => {
+    const { PROJECTS_SCRIPT } = await import('@/lib/storage/redisProjects');
+    for (const name of ['bad\u0001name', ' padded ', '']) {
+      const id = randomUUID();
+      expect(await client.eval(PROJECTS_SCRIPT, [], ['create', id, name, '', String(Date.now())])).toEqual(['oi:unavailable']);
+      expect(await client.get('project:' + id)).toBeNull();
+    }
+    const p = await create();
+    expect(await client.eval(PROJECTS_SCRIPT, [], ['rename', p.id, 'bad\u0001name', '', String(Date.now())])).toEqual(['oi:unavailable']);
+    expect(await store.projects.list()).toMatchObject({ status: 'ok', projects: [{ id: p.id, name: 'Project 🙂' }] });
+  });
+  async function seed(bare = false) {
+    const s = makeStoredStudy({ id: randomUUID(), revision: 1 });
+    expect(await createStudyAtomic(s, client)).toBe('created');
+    if (bare) await client.set('study:' + s.id, JSON.stringify(s));
+    return s;
+  }
+  it.each([false, true])('allows assignment, ungrouping and deletion during completion; preserves study bytes (bare=%s)', async bare => {
+    const s = await seed(bare), p = await create();
+    const before = await client.get('study:' + s.id);
+    await client.sadd('study-persisting:' + s.id, 'in-flight-interview');
+    for (const projectId of [p.id, null, p.id]) expect(await store.projects.assignStudy({ studyId: s.id, projectId })).toEqual({ status: 'assigned', studyId: s.id, projectId });
+    expect(await store.projects.delete({ projectId: p.id })).toEqual({ status: 'deleted' });
+    expect(await client.get('study:' + s.id)).toBe(before);
+    expect(await client.scard('study-persisting:' + s.id)).toBe(1);
+    expect(await client.get('study-project:' + s.id)).toBeNull();
+  });
+  it('preserves every safe timestamp integer rather than rounding through Lua cjson', async () => {
+    const p = await create();
+    const stored = { ...p, createdAt: Number.MAX_SAFE_INTEGER - 1, updatedAt: Number.MAX_SAFE_INTEGER };
+    await client.set('project:' + p.id, 'oi:project:' + JSON.stringify(stored));
+    expect(await store.projects.read({ projectId: p.id })).toEqual({ status: 'found', project: stored, studyIds: [] });
+    expect(await store.projects.rename({ projectId: p.id, name: 'Renamed' }))
+      .toEqual({ status: 'updated', project: { ...stored, name: 'Renamed' } });
+    expect(JSON.parse((await client.get<string>('project:' + p.id))!.slice(11)).updatedAt).toBe(Number.MAX_SAFE_INTEGER);
+  });
+  it('checks deletion guards before a no-op and before ungrouping any member', async () => {
+    const a = await seed(), b = await seed(), p = await create();
+    for (const s of [a, b]) await store.projects.assignStudy({ studyId: s.id, projectId: p.id });
+    await client.set('study-mutation-guard:' + b.id, 'oi:smg:{"state":"in-flight","kind":"delete"}');
+    expect(await store.projects.assignStudy({ studyId: b.id, projectId: p.id })).toEqual({ status: 'persist-guard' });
+    expect(await store.projects.delete({ projectId: p.id })).toEqual({ status: 'persist-guard' });
+    expect(await client.get('study-project:' + a.id)).toBe(p.id);
+    expect(await client.get('study-project:' + b.id)).toBe(p.id);
+    expect(await client.get('project:' + p.id)).not.toBeNull();
+    await client.set('study-mutation-guard:' + b.id, 'oi:smg:broken');
+    expect(await store.projects.assignStudy({ studyId: b.id, projectId: null })).toEqual({ status: 'unavailable' });
+    expect(await store.projects.delete({ projectId: p.id })).toEqual({ status: 'unavailable' });
+  });
+  it.each(['study-project', 'study-mutation-guard', 'project', 'all-projects', 'all-studies'])('preflights wrong-type %s without partial writes', async family => {
+    const s = await seed(), p = await create();
+    await store.projects.assignStudy({ studyId: s.id, projectId: p.id });
+    const key = family === 'project' ? 'project:' + p.id
+      : family.startsWith('all-') ? family : family + ':' + s.id;
+    await client.del(key);
+    await client.sadd(key, 'wrong-type');
+    if (family.startsWith('all-')) {
+      await client.del(key); await client.set(key, 'wrong-type');
+    }
+    expect(await store.projects.assignStudy({ studyId: s.id, projectId: null })).toEqual({ status: 'unavailable' });
+    expect(await store.projects.delete({ projectId: p.id })).toEqual({ status: 'unavailable' });
+    expect(await client.exists('study:' + s.id)).toBe(1);
+  });
+  it.each([{ name: ' not-trimmed ' }, { extra: 1 }, { updatedAt: -1 }, { name: null }, { name: 'a'.repeat(201) }])('refuses corrupt project fields before rename/delete: %j', async change => {
+    const s = await seed(), p = await create();
+    await store.projects.assignStudy({ studyId: s.id, projectId: p.id });
+    const bytes = 'oi:project:' + JSON.stringify({ ...p, ...change });
+    await client.set('project:' + p.id, bytes);
+    expect(await store.projects.rename({ projectId: p.id, name: 'Repair?' })).toEqual({ status: 'unavailable' });
+    expect(await store.projects.delete({ projectId: p.id })).toEqual({ status: 'unavailable' });
+    expect(await client.get('project:' + p.id)).toBe(bytes);
+    expect(await client.get('study-project:' + s.id)).toBe(p.id);
+  });
+  it('refuses primary/index divergence and never silently ungroups an orphan', async () => {
+    const s = await seed(), p = await create();
+    await store.projects.assignStudy({ studyId: s.id, projectId: p.id });
+    await client.srem('all-projects', p.id);
+    expect(await store.projects.read({ projectId: p.id })).toEqual({ status: 'unavailable' });
+    expect(await store.projects.list()).toEqual({ status: 'unavailable' });
+    expect(await store.projects.assignStudy({ studyId: s.id, projectId: null })).toEqual({ status: 'unavailable' });
+    expect(await client.get('study-project:' + s.id)).toBe(p.id);
+  });
+  it('bounds enumeration before reads, but still permits individual assignment and purge', async () => {
+    const s = await seed(), p = await create();
+    await client.eval("for i=1,1000 do redis.call('SADD','all-studies','overflow-' .. i) end return 1", [], []);
+    expect(await store.projects.list()).toEqual({ status: 'too-large' });
+    expect(await store.projects.read({ projectId: p.id })).toEqual({ status: 'too-large' });
+    expect(await store.projects.delete({ projectId: p.id })).toEqual({ status: 'too-large' });
+    expect((await store.projects.assignStudy({ studyId: s.id, projectId: p.id })).status).toBe('assigned');
+    expect((await store.deleteStudy({ studyId: s.id, now: Date.now() })).status).toBe('deleted');
+    expect(await client.get('study-project:' + s.id)).toBeNull();
+    await client.eval("for i=1,1000 do redis.call('SADD','all-projects','overflow-' .. i) end return 1", [], []);
+    expect(await store.projects.create({ name: 'Over limit' })).toEqual({ status: 'quota' });
+  });
+  it('purges membership only after accepting empty/populated deletion and refuses late reassignment', async () => {
+    const s = await seed(), p = await create();
+    await store.projects.assignStudy({ studyId: s.id, projectId: p.id });
+    await client.sadd('study-interviews:' + s.id, 'synthetic-interview');
+    await client.set('interview:synthetic-interview', encodeInterviewValue(makeStoredInterview({ id: 'synthetic-interview', studyId: s.id })));
+    expect((await store.deleteStudy({ studyId: s.id, now: Date.now() })).status).toBe('conflict');
+    expect(await client.get('study-project:' + s.id)).toBe(p.id);
+    expect((await store.deleteStudy({ studyId: s.id, deleteInterviews: true, expectedRevision: 2, now: Date.now() })).status).toBe('conflict');
+    expect(await client.get('study-project:' + s.id)).toBe(p.id);
+    expect((await store.deleteStudy({ studyId: s.id, deleteInterviews: true, expectedRevision: 1, now: Date.now() })).status).toBe('deleted');
+    expect(await client.get('study-project:' + s.id)).toBeNull();
+    expect((await store.projects.assignStudy({ studyId: s.id, projectId: p.id })).status).toBe('study-not-found');
+    expect((await store.projects.read({ projectId: p.id })).status).toBe('found');
   });
 });

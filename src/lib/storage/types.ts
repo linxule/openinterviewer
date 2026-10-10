@@ -269,6 +269,7 @@ export type ListInterviewsInput =
   | { scope: 'all'; maximum: number };
 
 export interface WorkspaceStorePort {
+  readonly projects: import('../projects/types').ProjectsStorePort;
   /** Node's bounded delete fence; DO deletion is one atomic transaction. */
   studyMutationStatus?(studyId: string): Promise<'ready' | 'deleting' | 'missing' | 'unavailable'>;
   readonly backend: WorkspaceBackend;

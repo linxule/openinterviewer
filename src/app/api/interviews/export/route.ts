@@ -42,19 +42,15 @@ import {
   SUMMARY_CSV_HEADER,
   SUMMARY_CSV_NAME,
   summaryCsvRow,
-  type InterviewExportPage,
 } from '@/lib/export/interviewExport';
 import { ZipLimitError } from '@/lib/export/zipStream';
 import {
-  buildTranscriptsMarkdown,
-  createTranscriptsMarkdownStream,
   transcriptsContentDisposition,
-  transcriptsMarkdownHeader,
   TRANSCRIPTS_MARKDOWN_CONTENT_TYPE,
 } from '@/lib/export/transcriptsMarkdown';
-import { isDurableWorkspaceStore, type DurableWorkspaceStorePort, type ExportPage, type WorkspaceStorePort } from '@/lib/storage/types';
+import { isDurableWorkspaceStore, type DurableWorkspaceStorePort, type WorkspaceStorePort } from '@/lib/storage/types';
 import { MAX_EXPLORATION_ANSWERS, type ExplorationAnswer } from '@/lib/exploration/types';
-import { studyMutationReadiness, STUDY_DELETION_PENDING_CODE, STUDY_DELETION_PENDING_MESSAGE } from '@/lib/studyMutationReadiness';
+import { prepareStudyTranscriptsSource, exportMutationRefusal, exportChangedResponse, exportUnavailableResponse, remainingExportPages, ExportStorageUnavailableError, EXPORT_PAGE_SIZE, EXPORT_PAGE_BYTES } from '@/lib/export/studyTranscriptsSource';
 
 async function loadStudyAggregates(
   studyIds: string[],
@@ -100,18 +96,6 @@ async function loadExplorations(store: WorkspaceStorePort, studyIds: string[]): 
     }
   }
   return answers;
-}
-
-async function exportMutationRefusal(store: WorkspaceStorePort, studyIds: string[], scopedStart = false): Promise<Response | null> {
-  for (const studyId of new Set(studyIds)) {
-    const status = await studyMutationReadiness(store, studyId);
-    if (status === 'ready') continue;
-    if (status === 'missing') return scopedStart
-      ? NextResponse.json({ error: 'Study not found' }, { status: 404 }) : exportChangedResponse();
-    if (status === 'deleting') return NextResponse.json({ error: STUDY_DELETION_PENDING_MESSAGE, code: STUDY_DELETION_PENDING_CODE, retryable: true }, { status: 409 });
-    return exportUnavailableResponse();
-  }
-  return null;
 }
 
 function pendingExportResponse(): NextResponse {
@@ -163,68 +147,6 @@ async function buildExportResponse(
 }
 
 // ---------- Cloudflare: streamed export over the durable snapshot ----------
-
-/** Rows per export page; the object caps pages at 200 rows. */
-const EXPORT_PAGE_SIZE = 50;
-/** Stored bytes per export page; bounded well below the object's 16 MiB page cap. */
-const EXPORT_PAGE_BYTES = 4 * 1024 * 1024;
-// Memory: the ZIP writer pulls a page only when its output is read, and the
-// Worker's OpenNext wrapper (cloudflare/opennext/backpressureWrapper.ts)
-// passes the client's read rate back through Next's pipe, so a slow download
-// holds a bounded window rather than the whole archive. Only the ZIP32
-// structural limits apply; the 500-interview ceiling is checked up front.
-
-/** A page read or the final check could not be completed; the archive is abandoned. */
-class ExportStorageUnavailableError extends Error {
-  constructor() {
-    super('export storage unavailable');
-    this.name = 'ExportStorageUnavailableError';
-  }
-}
-
-function exportChangedResponse(): NextResponse {
-  return NextResponse.json(
-    {
-      error: 'The interviews changed while the export was being prepared. Try the export again.',
-      code: 'EXPORT_CHANGED',
-      retryable: true,
-    },
-    { status: 409, headers: { 'Cache-Control': 'no-store' } },
-  );
-}
-
-function exportUnavailableResponse(): NextResponse {
-  return NextResponse.json(
-    { error: 'Interview storage is temporarily unavailable.', retryable: true },
-    { status: 503, headers: { 'Cache-Control': 'no-store' } },
-  );
-}
-
-/**
- * The snapshot's pages after the first, which was read before the response
- * started. Throws ExportSnapshotChangedError when a captured interview or
- * aggregate can no longer be reproduced, and ExportStorageUnavailableError
- * when a page cannot be read or makes no progress.
- */
-async function* remainingExportPages(
-  store: DurableWorkspaceStorePort,
-  sequence: number,
-  first: Extract<ExportPage, { status: 'ok' }>,
-  maximumPages: number,
-  studyId?: string,
-): AsyncGenerator<InterviewExportPage> {
-  let page = first;
-  for (let pages = 1; ; pages += 1) {
-    yield { interviews: page.interviews, aggregates: page.aggregates, explorations: page.explorations };
-    const cursor = page.nextCursor;
-    if (cursor === null) return;
-    if (pages >= maximumPages) throw new ExportStorageUnavailableError();
-    const next = await store.readExportPage({ sequence, cursor, pageSize: EXPORT_PAGE_SIZE, maxPageBytes: EXPORT_PAGE_BYTES, ...(studyId ? { studyId } : {}) });
-    if (next.status === 'changed') throw new ExportSnapshotChangedError();
-    if (next.status !== 'ok' || next.nextCursor === cursor) throw new ExportStorageUnavailableError();
-    page = next;
-  }
-}
 
 async function streamDurableExport(store: DurableWorkspaceStorePort, studyId?: string): Promise<Response> {
   const scope = studyId ? { studyId } : {};
@@ -279,8 +201,6 @@ async function streamDurableExport(store: DurableWorkspaceStorePort, studyId?: s
 
 // ---------- One study's transcripts as a single Markdown file ----------
 
-const NO_TRANSCRIPTS_MESSAGE = 'This study has no saved interviews to export.';
-
 function markdownResponse(body: BodyInit, study: StoredStudy): Response {
   return new Response(body, {
     headers: {
@@ -291,50 +211,6 @@ function markdownResponse(body: BodyInit, study: StoredStudy): Response {
   });
 }
 
-async function* interviewPages(pages: AsyncIterable<InterviewExportPage>): AsyncGenerator<StoredInterview[]> {
-  for await (const page of pages) yield page.interviews;
-}
-
-async function streamDurableMarkdown(store: DurableWorkspaceStorePort, study: StoredStudy): Promise<Response> {
-  const scope = { studyId: study.id };
-  const begun = await store.beginExport({ maximum: MAX_EXPORT_INTERVIEWS, ...scope });
-  if (begun.status === 'empty') {
-    return NextResponse.json({ error: NO_TRANSCRIPTS_MESSAGE }, { status: 404, headers: { 'Cache-Control': 'no-store' } });
-  }
-  if (begun.status === 'too-large') {
-    return NextResponse.json({ error: TOO_LARGE_STUDY_MESSAGE }, { status: 413, headers: { 'Cache-Control': 'no-store' } });
-  }
-  if (begun.status !== 'ok') return exportUnavailableResponse();
-  if (begun.count === 0) {
-    return NextResponse.json({ error: NO_TRANSCRIPTS_MESSAGE }, { status: 404, headers: { 'Cache-Control': 'no-store' } });
-  }
-
-  const sequence = begun.sequence;
-  const first = await store.readExportPage({ sequence, cursor: null, pageSize: EXPORT_PAGE_SIZE, maxPageBytes: EXPORT_PAGE_BYTES, ...scope });
-  if (first.status === 'changed') return exportChangedResponse();
-  if (first.status !== 'ok') return exportUnavailableResponse();
-
-  const maximumPages = begun.count + begun.studyIds.length + MAX_EXPLORATION_ANSWERS + 1;
-  const body = createTranscriptsMarkdownStream({
-    header: transcriptsMarkdownHeader(study, begun.count, new Date()),
-    interviews: interviewPages(remainingExportPages(store, sequence, first, maximumPages, study.id)),
-    beforeFinish: async () => {
-      const verified = await store.verifyExportSequence({ sequence, ...scope });
-      if (verified === 'changed') throw new ExportSnapshotChangedError();
-      if (verified !== 'unchanged') throw new ExportStorageUnavailableError();
-    },
-    onError: (error) => {
-      logRequestFailure({
-        event: 'route.failure',
-        route: '/api/interviews/export',
-        method: 'GET',
-        ...(error instanceof ExportStorageUnavailableError ? { reason: 'unavailable' } : {}),
-      }, error);
-    },
-  });
-  return markdownResponse(body, study);
-}
-
 async function exportStudyMarkdown(studyId: string): Promise<Response> {
   const gated = await getAuthorizedResearcherStudyContext(studyId, 'read');
   const denied = configurationRequiredResponse(gated);
@@ -342,19 +218,9 @@ async function exportStudyMarkdown(studyId: string): Promise<Response> {
   if (!gated.authorized || !gated.context) {
     return NextResponse.json({ error: gated.error || 'Unauthorized', retryable: gated.retryable, ...(gated.code ? { code: gated.code } : {}) }, { status: gated.statusCode ?? 401 });
   }
-  const store = gated.context.store;
-  const mutationRefusal = await exportMutationRefusal(store, [studyId], true);
-  if (mutationRefusal) return mutationRefusal;
-  const study = mapStudyLoad(await store.getStudy(studyId));
-  if (!study.ok) return NextResponse.json(study.body, { status: study.status });
-  if (isDurableWorkspaceStore(store)) return await streamDurableMarkdown(store, study.study);
-  const loaded = mapCollectionLoad(await store.listInterviews({ scope: 'study', studyId, maximum: MAX_EXPORT_INTERVIEWS }), { unavailable: 'Interview storage is temporarily unavailable.', tooLarge: TOO_LARGE_STUDY_MESSAGE });
-  if (!loaded.ok) return NextResponse.json(loaded.body, { status: loaded.status });
-  if (loaded.items.length === 0) return NextResponse.json({ error: NO_TRANSCRIPTS_MESSAGE }, { status: 404 });
-  const markdown = buildTranscriptsMarkdown(study.study, loaded.items, new Date());
-  const refusal = await exportMutationRefusal(store, [studyId]);
-  if (refusal) return refusal;
-  return markdownResponse(markdown, study.study);
+  const source = await prepareStudyTranscriptsSource(gated.context.store, studyId);
+  if (source instanceof Response) return source;
+  return markdownResponse(source.body, source.study);
 }
 
 export async function GET(request?: Request) {

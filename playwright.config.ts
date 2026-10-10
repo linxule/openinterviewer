@@ -28,7 +28,7 @@ export default defineConfig({
     },
     {
       name: 'standalone-gateway',
-      testMatch: '**/research-workflow.spec.ts',
+      testMatch: ['**/research-workflow.spec.ts', '**/projects.spec.ts'],
       use: { ...devices['Desktop Chrome'], baseURL: `http://127.0.0.1:${PORT + 1}` },
     },
   ],

@@ -419,3 +419,39 @@ The move of an existing Vercel/Upstash standalone deployment to Cloudflare is in
 - the clean-start and preserve-data runbooks.
 
 Nothing in it runs without production authorization. Old `vercel.app` links cannot move to a Cloudflare-owned domain; plan re-entry.
+
+## Projects 5.3: forward-only upgrade
+
+Back up the installation before upgrading from 5.2 to 5.3. Pause collection for
+an operator-managed backup/upgrade window and preserve the validated pre-upgrade
+backup and its artifact provenance. Follow the existing backup/validation and
+staging promotion procedures above; do not use a production workspace for tests.
+
+5.3 adds application schema 3 (`projects`, `study_projects`) with minimum reader
+3. A 5.2 build refuses that workspace as newer-incompatible. This is intentional:
+5.2 cannot purge or back up memberships. Never lower the reader minimum, edit
+released migrations, or point an old build at the upgraded workspace. Wrangler's
+class-migration tag is not the application SQL schema version and is unchanged.
+
+| Backup | Empty 5.3 recovery target |
+| --- | --- |
+| Format 1 / schema 1 | Accept; notebooks, projects and memberships empty |
+| Format 2 / schema 2 | Accept; projects and memberships empty |
+| Format 3 / schema 3 | Accept, including projects and memberships |
+| Mismatched format/schema or unsupported future version | Refuse |
+
+Before production promotion, run the supported matrix on a clean release commit,
+exercise project grouping/export on staging, and have the lead verify a retained
+5.2 artifact refuses an upgraded disposable workspace. The sliced-migration
+runner test is not evidence of the old bundled artifact's behavior. Record that
+manual result in release evidence; round 2 does not change the restart harness.
+
+Rollback is a compatible forward deployment. A pre-upgrade backup can be restored
+to separate recovery storage when necessary, with an explicit reconciliation of
+records collected since that backup. Do not overwrite live data or omit later
+interviews to make an older build start.
+
+The same operational prohibition applies to standalone Node/Redis: do not roll
+back to 5.2 against a database used by 5.3. Node 5.2 may start but would ignore
+memberships and omit their cleanup. Back up first, keep the upgraded database
+with compatible code, and use isolated recovery storage for any older baseline.

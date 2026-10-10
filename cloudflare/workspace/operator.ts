@@ -18,6 +18,7 @@
 // never research content. A scheduled restore writes nothing: the restore
 // itself would rewind that row, so it is logged as an operator event instead.
 
+import { isProject, isProjectId, isStudyId } from '../../src/lib/projects/validation';
 import type * as Port from '../../src/lib/storage/types';
 import { isRestoreBookmark, RESTORE_WINDOW_MS, type MaintenanceState } from '../../src/lib/storage/types';
 import { isValidRecoveryEpoch, isValidWorkspaceId } from '../../src/lib/storage/analysisProtocol';
@@ -565,6 +566,10 @@ function rowWithinLimits(family: BackupFamily, row: Record<string, string | numb
 /** Cross-row identity checks the SQL constraints cannot express. */
 function rowIdentityValid(family: BackupFamily, row: Record<string, string | number | null>): boolean {
   try {
+    if (family.name === 'projects') return isProject({
+      id: row.id, name: row.name, createdAt: row.created_at, updatedAt: row.updated_at,
+    });
+    if (family.name === 'study_projects') return isStudyId(row.study_id) && isProjectId(row.project_id);
     if (family.name === 'studies') {
       const config = JSON.parse(row.config_json as string) as { id?: unknown } | null;
       return !!config && typeof config === 'object' && config.id === row.id;
@@ -597,6 +602,9 @@ function keyExists(sql: SqlStorage, family: BackupFamily, row: Record<string, st
 }
 
 const REFERENCE_CHECKS: ReadonlyArray<{ name: string; query: string }> = [
+  { name: 'study_projects.study_id', query: `SELECT COUNT(*) AS n FROM study_projects c WHERE NOT EXISTS (SELECT 1 FROM studies p WHERE p.id = c.study_id)` },
+  { name: 'study_projects.project_id', query: `SELECT COUNT(*) AS n FROM study_projects c WHERE NOT EXISTS (SELECT 1 FROM projects p WHERE p.id = c.project_id)` },
+  { name: 'study_projects.fenced', query: `SELECT COUNT(*) AS n FROM study_projects c WHERE EXISTS (SELECT 1 FROM deletion_fences f WHERE f.kind = 'study' AND f.target_id = c.study_id)` },
   { name: 'interviews.study_id', query: `SELECT COUNT(*) AS n FROM interviews c WHERE NOT EXISTS (SELECT 1 FROM studies p WHERE p.id = c.study_id)` },
   { name: 'analysis.interview_id', query: `SELECT COUNT(*) AS n FROM analysis c WHERE NOT EXISTS (SELECT 1 FROM interviews p WHERE p.id = c.interview_id)` },
   { name: 'analysis_jobs.interview_id', query: `SELECT COUNT(*) AS n FROM analysis_jobs c WHERE NOT EXISTS (SELECT 1 FROM interviews p WHERE p.id = c.interview_id)` },
@@ -613,7 +621,7 @@ function finalizeImport(ws: WorkspaceContext, manifest: BackupManifest, manifest
   const accepted = acceptedChunks(ws.sql);
   for (const family of BACKUP_FAMILIES) {
     const described = manifest.families.find((candidate) => candidate.name === family.name)
-      ?? { count: 0, chunks: [] }; // v1 had no exploration family.
+      ?? { count: 0, chunks: [] }; // Validated v1/v2 manifests omit only their unreleased families.
     const chunks = (accepted.get(family.name) ?? []).slice().sort((a, b) => a.index - b.index);
     if (chunks.length !== described.chunks.length || chunks.some((chunk, position) => chunk.index !== position)) {
       return reject('chunk-missing', { [`${family.name}.chunks`]: chunks.length, [`${family.name}.expected`]: described.chunks.length });
@@ -645,13 +653,13 @@ export async function importBackupChunk(ws: WorkspaceContext, input: Rpc.BackupI
     const presented = input.manifest as unknown;
     if (!presented || typeof presented !== 'object') return reject('manifest-invalid');
     const presentedVersion = (presented as { formatVersion?: unknown }).formatVersion;
-    if (presentedVersion !== BACKUP_FORMAT_VERSION && presentedVersion !== 1) return reject('format-unsupported');
+    if (presentedVersion !== BACKUP_FORMAT_VERSION && presentedVersion !== 1 && presentedVersion !== 2) return reject('format-unsupported');
     // The complete manifest (watermark, export time and every chunk
     // descriptor): an import is bound to exactly one backup file.
     const manifest = manifestFromImport(presented);
     if (!manifest) return reject('manifest-invalid');
     if (manifest.schemaVersion !== storedSchemaVersion(ws.sql)
-      && !(manifest.formatVersion === 1 && manifest.schemaVersion === 1 && storedSchemaVersion(ws.sql) === 2)) {
+      && !(manifest.schemaVersion < storedSchemaVersion(ws.sql) && storedSchemaVersion(ws.sql) === 3)) {
       return reject('schema-unsupported');
     }
     if (!isValidWorkspaceId(manifest.sourceWorkspaceId)) return reject('manifest-invalid');

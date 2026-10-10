@@ -129,3 +129,14 @@ describe('UUID_V4', () => {
     expect(UUID_V4.test(key)).toBe(true);
   });
 });
+
+
+describe('project create intent', () => {
+  it('isolates create keys between projects without adding assignment receipts', () => {
+    const a = setupIntentKey(null, null, null, 'project-a');
+    const b = setupIntentKey(null, null, null, 'project-b');
+    expect(isCreateIntentKey(a)).toBe(true);
+    expect(adoptCreateIdempotencyKey(a, 0)).not.toBe(adoptCreateIdempotencyKey(b, 0));
+    expect(setupIntentKey('edit', 'study-a', null, 'project-a')).toBe('edit:study-a');
+  });
+});

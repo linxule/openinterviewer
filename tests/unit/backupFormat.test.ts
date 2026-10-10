@@ -15,6 +15,8 @@ import {
   encodeBackupRecord,
   importManifestOf,
   isValidBackupRow,
+  isValidBackupManifest,
+  backupFamiliesForVersion,
   manifestFromImport,
   sha256Hex,
   validateBackupLines,
@@ -61,7 +63,7 @@ function consentRow(index: number) {
 }
 
 async function buildBackup(): Promise<{ records: BackupRecord[]; lines: string[] }> {
-  const writer = new BackupWriter({ schemaVersion: 1, sourceWorkspaceId: WORKSPACE, exportedAt: 1_700_000_001_000, watermark: WATERMARK });
+  const writer = new BackupWriter({ schemaVersion: 3, sourceWorkspaceId: WORKSPACE, exportedAt: 1_700_000_001_000, watermark: WATERMARK });
   const records: BackupRecord[] = [];
   records.push(await writer.chunk('workspace_meta', [metaRow], WATERMARK));
   records.push(await writer.chunk('studies', [studyRow('study-1'), studyRow('study-2')], WATERMARK));
@@ -79,21 +81,32 @@ async function rechecksum(line: string, mutate: (record: Record<string, unknown>
   return JSON.stringify(record);
 }
 
-describe('operational backup format v2 and legacy v1 (OPS-02, ST-10)', () => {
-  it('accepts a complete legacy v1/schema1 backup but never permits newer data to omit notebooks', async () => {
+describe('operational backup format v3 and legacy v1/v2 (OPS-02, ST-10)', () => {
+  it.each([1, 2] as const)('accepts authentic format%s bytes without adding synthetic families before checksum validation', async version => {
     const { records } = await buildBackup();
     const manifest = records.find(record => record.kind === 'manifest');
     if (!manifest || manifest.kind !== 'manifest') throw new Error('missing fixture manifest');
-    const legacy = { ...manifest.manifest, formatVersion: 1 as const, schemaVersion: 1,
-      families: manifest.manifest.families.filter(family => family.name !== 'exploration_answers') };
+    const legacy = { ...manifest.manifest, formatVersion: version, schemaVersion: version,
+      families: manifest.manifest.families.filter(family => backupFamiliesForVersion(version)!.includes(family.name)) };
     const chunks = records.filter(record => record.kind === 'chunk');
     const lines = [...chunks, { kind: 'manifest' as const, manifest: legacy },
       { kind: 'trailer' as const, complete: true as const, manifestSha256: await backupManifestDigest(legacy) }].map(encodeBackupRecord);
-    expect(await validateBackupLines(lines)).toMatchObject({ status: 'valid', manifest: { formatVersion: 1, schemaVersion: 1 } });
-    const unsafe = { ...legacy, schemaVersion: 2 };
+    expect(await validateBackupLines(lines)).toMatchObject({ status: 'valid', manifest: { formatVersion: version, schemaVersion: version } });
+    const unsafe = { ...legacy, schemaVersion: version + 1 };
     const invalid = [...chunks, { kind: 'manifest' as const, manifest: unsafe },
       { kind: 'trailer' as const, complete: true as const, manifestSha256: await backupManifestDigest(unsafe) }].map(encodeBackupRecord);
     expect(await validateBackupLines(invalid)).toMatchObject({ status: 'rejected', errorClass: 'manifest-invalid' });
+  });
+  it('accepts only truthful released format/schema pairs, and only the current pair for writers', async () => {
+    const { records } = await buildBackup();
+    const current = records.find(r => r.kind === 'manifest');
+    if (!current || current.kind !== 'manifest') throw new Error('missing manifest');
+    for (const formatVersion of [1, 2, 3, 4]) for (const schemaVersion of [1, 2, 3, 4]) {
+      const manifest = { ...current.manifest, formatVersion, schemaVersion,
+        families: current.manifest.families.filter(f => (backupFamiliesForVersion(formatVersion) ?? []).includes(f.name)) };
+      expect(isValidBackupManifest(manifest)).toBe(formatVersion === schemaVersion && formatVersion <= 3);
+    }
+    for (const schemaVersion of [1, 2, 4]) expect(() => new BackupWriter({ schemaVersion, sourceWorkspaceId: WORKSPACE, exportedAt: 1, watermark: WATERMARK })).toThrow();
   });
   it('OPS-02: canonical JSON sorts keys at every depth and drops no values', () => {
     expect(canonicalJson({ b: 1, a: [{ d: null, c: 'x' }], e: {} })).toBe('{"a":[{"c":"x","d":null}],"b":1,"e":{}}');
@@ -144,7 +157,7 @@ describe('operational backup format v2 and legacy v1 (OPS-02, ST-10)', () => {
     });
     expect(await validateBackupLines([otherSource, ...lines.slice(1)])).toMatchObject({ status: 'rejected', errorClass: 'identity-mismatch' });
 
-    const writer = new BackupWriter({ schemaVersion: 1, sourceWorkspaceId: WORKSPACE, exportedAt: 1, watermark: WATERMARK });
+    const writer = new BackupWriter({ schemaVersion: 3, sourceWorkspaceId: WORKSPACE, exportedAt: 1, watermark: WATERMARK });
     await expect(writer.chunk('workspace_meta', [{ ...metaRow, maintenance_version: 2 }], WATERMARK)).rejects.toMatchObject({ errorClass: 'watermark-changed' });
     await expect(writer.chunk('workspace_meta', [metaRow, metaRow], WATERMARK)).rejects.toMatchObject({ errorClass: 'chunk-invalid' });
     await expect(writer.chunk('workspace_meta', [{ ...metaRow, workspace_id: `ws_${'c'.repeat(32)}` }], WATERMARK))
@@ -224,7 +237,7 @@ describe('operational backup format v2 and legacy v1 (OPS-02, ST-10)', () => {
   });
 
   it('OPS-02: the writer refuses unknown families, invalid rows, oversized chunks, reordering and watermark drift', async () => {
-    const writer = new BackupWriter({ schemaVersion: 1, sourceWorkspaceId: WORKSPACE, exportedAt: 1, watermark: WATERMARK });
+    const writer = new BackupWriter({ schemaVersion: 3, sourceWorkspaceId: WORKSPACE, exportedAt: 1, watermark: WATERMARK });
     await expect(writer.chunk('credentials', [{}], WATERMARK)).rejects.toMatchObject({ errorClass: 'family-unknown' });
     await expect(writer.chunk('studies', [{ ...studyRow('s'), revision: '2' }], WATERMARK)).rejects.toMatchObject({ errorClass: 'row-invalid' });
     await expect(writer.chunk('studies', [studyRow('s')], { maintenanceVersion: 4, mutationSeq: 41 }))
@@ -238,7 +251,7 @@ describe('operational backup format v2 and legacy v1 (OPS-02, ST-10)', () => {
   it('OPS-02: the family list is closed and carries no secret, session or credential columns', () => {
     expect(BACKUP_FAMILY_NAMES).toEqual([
       'workspace_meta', 'studies', 'interviews', 'analysis', 'analysis_jobs', 'aggregates',
-      'participant_links', 'consents', 'idempotency_receipts', 'budget_windows', 'budget_members', 'deletion_fences', 'exploration_answers',
+      'participant_links', 'consents', 'idempotency_receipts', 'budget_windows', 'budget_members', 'deletion_fences', 'exploration_answers', 'projects', 'study_projects',
     ]);
     const columns = BACKUP_FAMILIES.flatMap((family) => family.columns.map((column) => column.name));
     for (const column of columns) {

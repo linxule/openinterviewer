@@ -537,7 +537,11 @@ export async function deleteStudy(ws: WorkspaceContext, input: Rpc.DeleteStudyIn
       const checked = gate(ws, 'researcher-mutation');
       if (!checked.ok) return { status: 'held', reason: checked.reason, success: false };
       const row = readStudyRow(ws, studyId);
-      if (!row) return { status: 'deleted', success: true };
+      if (!row) {
+        const removed = ws.sql.exec('DELETE FROM study_projects WHERE study_id = ?', studyId).rowsWritten;
+        if (removed > 0) bumpMutationSeq(ws.sql, now);
+        return { status: 'deleted', success: true };
+      }
       const study = decodeStudyRow(row);
       if (!study) return { status: 'unavailable', success: false, error: 'Failed to delete study' };
       if (input.expectedRevision !== undefined && study.revision !== input.expectedRevision) {
@@ -570,6 +574,7 @@ export async function deleteStudy(ws: WorkspaceContext, input: Rpc.DeleteStudyIn
       ws.sql.exec(`DELETE FROM analysis WHERE interview_id IN (SELECT id FROM interviews WHERE study_id = ?)`, studyId);
       ws.sql.exec(`DELETE FROM interviews WHERE study_id = ?`, studyId);
       ws.sql.exec(`DELETE FROM exploration_answers WHERE study_id = ?`, studyId);
+      ws.sql.exec(`DELETE FROM study_projects WHERE study_id = ?`, studyId);
       ws.sql.exec(`DELETE FROM studies WHERE id = ?`, studyId);
       ws.sql.exec(`DELETE FROM aggregates WHERE study_id = ?`, studyId);
       ws.sql.exec(`DELETE FROM participant_links WHERE study_id = ?`, studyId);

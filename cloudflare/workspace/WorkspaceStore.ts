@@ -10,6 +10,8 @@ import type * as Protocol from '../../src/lib/storage/analysisProtocol';
 import { isValidRecoveryEpoch, isValidWorkspaceId } from '../../src/lib/storage/analysisProtocol';
 import { applyMigrations } from './migrate';
 import { HELD_ALARM_RETRY_MS, readMeta, type WorkspaceContext, type WorkspaceEnv } from './context';
+import { createProjectsStore } from './projects';
+import type { ProjectsStorePort } from '../../src/lib/projects/types';
 import * as studies from './studies';
 import * as participants from './participants';
 import * as budget from './budget';
@@ -108,6 +110,42 @@ export class WorkspaceStore extends DurableObject<WorkspaceEnv> {
     const held = this.requireInitialized();
     if (held) return { status: 'held', reason: held };
     return operator.readiness(this.ws);
+  }
+
+  async listProjects(): ReturnType<ProjectsStorePort['list']> {
+    const held = this.requireInitialized();
+    if (held) return { status: 'held', reason: held };
+    return createProjectsStore(this.ws).list();
+  }
+
+  async readProject(input: Parameters<ProjectsStorePort['read']>[0]): ReturnType<ProjectsStorePort['read']> {
+    const held = this.requireInitialized();
+    if (held) return { status: 'held', reason: held };
+    return createProjectsStore(this.ws).read(input);
+  }
+
+  async createProject(input: Parameters<ProjectsStorePort['create']>[0]): ReturnType<ProjectsStorePort['create']> {
+    const held = this.requireInitialized();
+    if (held) return { status: 'held', reason: held };
+    return createProjectsStore(this.ws).create(input);
+  }
+
+  async renameProject(input: Parameters<ProjectsStorePort['rename']>[0]): ReturnType<ProjectsStorePort['rename']> {
+    const held = this.requireInitialized();
+    if (held) return { status: 'held', reason: held };
+    return createProjectsStore(this.ws).rename(input);
+  }
+
+  async deleteProject(input: Parameters<ProjectsStorePort['delete']>[0]): ReturnType<ProjectsStorePort['delete']> {
+    const held = this.requireInitialized();
+    if (held) return { status: 'held', reason: held };
+    return createProjectsStore(this.ws).delete(input);
+  }
+
+  async assignStudyProject(input: Parameters<ProjectsStorePort['assignStudy']>[0]): ReturnType<ProjectsStorePort['assignStudy']> {
+    const held = this.requireInitialized();
+    if (held) return { status: 'held', reason: held };
+    return createProjectsStore(this.ws).assignStudy(input);
   }
 
   // ---------- Studies ----------

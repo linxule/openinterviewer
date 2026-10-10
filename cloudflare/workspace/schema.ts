@@ -208,6 +208,22 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
       `CREATE INDEX exploration_answers_by_study ON exploration_answers (study_id, created_at, id)`,
     ],
   },
+  {
+    version: 3,
+    name: 'standalone research projects',
+    minReaderVersion: 3,
+    statements: [
+      `CREATE TABLE projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 200),
+        created_at INTEGER NOT NULL CHECK (created_at >= 0),
+        updated_at INTEGER NOT NULL CHECK (updated_at >= 0)
+      )`,
+      `CREATE INDEX projects_by_created ON projects (created_at, id)`,
+      `CREATE TABLE study_projects (study_id TEXT PRIMARY KEY, project_id TEXT NOT NULL)`,
+      `CREATE INDEX study_projects_by_project ON study_projects (project_id, study_id)`,
+    ],
+  },
 ];
 
 /** Highest schema version this build can read and write. */

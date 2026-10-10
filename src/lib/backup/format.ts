@@ -17,7 +17,7 @@
 // Self-contained (no imports, erasable TypeScript only) so a Node operator
 // script can load it with type stripping, and the Durable Object can share it.
 
-export const BACKUP_FORMAT_VERSION = 2;
+export const BACKUP_FORMAT_VERSION = 3;
 /** Rows per chunk the writer and importer accept. */
 export const BACKUP_MAX_CHUNK_ROWS = 500;
 
@@ -39,7 +39,7 @@ function integer(name: string, nullable = false): BackupColumn {
 }
 
 /**
- * Every authoritative table of WorkspaceStore schema v2, in export/import
+ * Every authoritative table of WorkspaceStore schema v3, in export/import
  * order (parents before children). `schema_migrations` travels as the
  * manifest's schemaVersion; `operator_audit` belongs to each object.
  */
@@ -137,7 +137,21 @@ export const BACKUP_FAMILIES: ReadonlyArray<BackupFamily> = Object.freeze([
     columns: [text('id'), text('study_id'), text('record_json'), text('request_fingerprint'),
       integer('created_at'), integer('updated_at'), text('status')],
   },
+  { name: 'projects', key: ['id'], columns: [text('id'), text('name'), integer('created_at'), integer('updated_at')] },
+  { name: 'study_projects', key: ['study_id'], columns: [text('study_id'), text('project_id')] },
 ]);
+
+// Released family sets are explicit: never infer legacy shape by subtraction.
+const V1_FAMILIES = ['workspace_meta', 'studies', 'interviews', 'analysis', 'analysis_jobs',
+  'aggregates', 'participant_links', 'consents', 'idempotency_receipts', 'budget_windows',
+  'budget_members', 'deletion_fences'];
+const V2_FAMILIES = [...V1_FAMILIES, 'exploration_answers'];
+export function backupFamiliesForVersion(version: unknown): readonly string[] | null {
+  if (version === 1) return V1_FAMILIES;
+  if (version === 2) return V2_FAMILIES;
+  if (version === 3) return [...V2_FAMILIES, 'projects', 'study_projects'];
+  return null;
+}
 
 export const BACKUP_FAMILY_NAMES: ReadonlyArray<string> = Object.freeze(BACKUP_FAMILIES.map((family) => family.name));
 
@@ -219,7 +233,7 @@ export type BackupWatermark = { maintenanceVersion: number; mutationSeq: number 
 export type BackupChunkDescriptor = { index: number; rows: number; sha256: string };
 
 export type BackupManifest = {
-  formatVersion: 1 | typeof BACKUP_FORMAT_VERSION;
+  formatVersion: 1 | 2 | typeof BACKUP_FORMAT_VERSION;
   schemaVersion: number;
   sourceWorkspaceId: string;
   exportedAt: number;
@@ -269,7 +283,7 @@ export function importManifestOf(manifest: BackupManifest): BackupImportManifest
 }
 
 /**
- * The manifest an import request carries, validated: a complete v1/v2 manifest
+ * The manifest an import request carries, validated: a complete v1/v2/v3 manifest
  * whose counts agree with its families. Returns exactly the manifest's own
  * members, so its digest equals the file trailer's manifestSha256.
  */
@@ -353,7 +367,7 @@ export class BackupWriter {
   private finished = false;
 
   constructor(input: BackupWriterInput) {
-    if (!isWatermark(input.watermark)) throw new BackupFormatError('manifest-invalid');
+    if (input.schemaVersion !== BACKUP_FORMAT_VERSION || !isWatermark(input.watermark)) throw new BackupFormatError('manifest-invalid');
     this.input = input;
   }
 
@@ -422,24 +436,21 @@ function hasExactKeys(value: Record<string, unknown>, keys: ReadonlyArray<string
   return present.length === keys.length && keys.every((key) => Object.prototype.hasOwnProperty.call(value, key));
 }
 
-/** A complete v1 manifest with a closed shape (no members beyond the format's). */
+/** A complete released manifest with a closed shape (no members beyond the format's). */
 export function isValidBackupManifest(value: unknown): value is BackupManifest {
   if (!isPlainObject(value)) return false;
   if (!hasExactKeys(value, ['formatVersion', 'schemaVersion', 'sourceWorkspaceId', 'exportedAt', 'watermark', 'families'])) return false;
-  if (value.formatVersion !== BACKUP_FORMAT_VERSION && value.formatVersion !== 1) return false;
-  // A newer workspace pretending to use the old family set would silently
-  // omit notebook artifacts and is never accepted.
-  if (value.formatVersion === 1 && value.schemaVersion !== 1) return false;
-  if (!Number.isSafeInteger(value.schemaVersion) || (value.schemaVersion as number) < 1) return false;
+  const families = backupFamiliesForVersion(value.formatVersion);
+  if (!families || value.schemaVersion !== value.formatVersion) return false;
   if (typeof value.sourceWorkspaceId !== 'string' || value.sourceWorkspaceId.length === 0) return false;
   if (!Number.isSafeInteger(value.exportedAt) || !isWatermark(value.watermark)) return false;
   if (!hasExactKeys(value.watermark, ['maintenanceVersion', 'mutationSeq'])) return false;
-  const familyCount = value.formatVersion === 1 ? BACKUP_FAMILIES.length - 1 : BACKUP_FAMILIES.length;
+  const familyCount = families.length;
   if (!Array.isArray(value.families) || value.families.length !== familyCount) return false;
   if (value.families[0]?.count !== 1) return false;
   return value.families.every((family: unknown, position: number) => {
     if (!isPlainObject(family) || !hasExactKeys(family, ['name', 'count', 'chunks'])) return false;
-    if (family.name !== BACKUP_FAMILIES[position].name) return false;
+    if (family.name !== families[position]) return false;
     if (!Number.isSafeInteger(family.count) || (family.count as number) < 0 || !Array.isArray(family.chunks)) return false;
     let total = 0;
     const chunksValid = family.chunks.every((chunk: unknown, index: number) => {
@@ -531,7 +542,7 @@ export class BackupValidator {
     if (record.kind === 'manifest') {
       if (this.manifest) return this.reject('manifest-invalid');
       if (!isValidBackupManifest(record.manifest)) {
-        return this.reject(isPlainObject(record.manifest) && record.manifest.formatVersion !== BACKUP_FORMAT_VERSION && record.manifest.formatVersion !== 1
+        return this.reject(isPlainObject(record.manifest) && backupFamiliesForVersion(record.manifest.formatVersion) === null
           ? 'format-unsupported'
           : 'manifest-invalid');
       }

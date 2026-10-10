@@ -41,6 +41,8 @@ function tempDir(t, prefix) {
 // ---------- Synthetic workspace rows ----------
 
 const ROW_COUNTS = {
+  projects: 0,
+  study_projects: 0,
   workspace_meta: 1,
   studies: 3,
   interviews: 7,
@@ -57,6 +59,10 @@ const ROW_COUNTS = {
 };
 
 function syntheticRow(family, index, watermark) {
+  if (family.name === 'projects') return { id: '00000000-0000-4000-8000-' + String(index + 1).padStart(12, '0'),
+    name: CONTENT_MARKER + ' project 研究', created_at: 1_800_000_000_000, updated_at: 1_800_000_000_000 };
+  if (family.name === 'study_projects') return { study_id: 'studies-id-000',
+    project_id: '00000000-0000-4000-8000-' + String(index + 1).padStart(12, '0') };
   if (family.name === 'workspace_meta') {
     return {
       singleton: 1,
@@ -167,7 +173,7 @@ async function fakeInstallation(t, overrides = {}) {
     importedRows: new Map(),
     importManifest: null,
     finalized: null,
-    schemaVersion: 2,
+    schemaVersion: 3,
     rowCounts: ROW_COUNTS,
     faults: {},
     ...overrides,
@@ -543,8 +549,8 @@ test('OPS-02 backup export writes private chunk files, a manifest and a completi
     assert.equal(statSync(path.join(out, name)).mode & 0o777, 0o600, name);
   }
   const manifest = JSON.parse(readFileSync(path.join(out, 'manifest.json'), 'utf8')).manifest;
-  assert.equal(manifest.formatVersion, 2);
-  assert.equal(manifest.schemaVersion, 2);
+  assert.equal(manifest.formatVersion, 3);
+  assert.equal(manifest.schemaVersion, 3);
   assert.deepEqual(manifest.families.find((family) => family.name === 'exploration_answers'),
     { name: 'exploration_answers', count: 0, chunks: [] });
   assert.equal(manifest.sourceWorkspaceId, WORKSPACE_ID);
@@ -637,8 +643,8 @@ test('OPS-02 notebook artifacts round-trip through CLI backup export and import 
   const validation = await format.validateBackupLines(backupLines(out));
   assert.equal(validation.status, 'valid');
   assert.deepEqual(validation.counts, rowCounts);
-  assert.equal(validation.manifest.formatVersion, 2);
-  assert.equal(validation.manifest.schemaVersion, 2);
+  assert.equal(validation.manifest.formatVersion, 3);
+  assert.equal(validation.manifest.schemaVersion, 3);
   const target = await fakeInstallation(t, { maintenance: { state: 'recovery', version: 1 } });
   const imported = await runCli(['backup', 'import', '--in', out, '--origin', target.origin]);
   assert.equal(imported.code, 0, imported.stderr);
@@ -651,16 +657,36 @@ test('OPS-02 notebook artifacts round-trip through CLI backup export and import 
   assertNoSecretsOrContent(imported);
 });
 
-test('OPS-02 a complete notebook-free format1/schema1 backup imports with its original closed family counts', async (t) => {
+test('OPS-02 format3 CLI exports and imports both project families without logging names', async (t) => {
+  const rowCounts = { ...ROW_COUNTS, projects: 1, study_projects: 1 };
+  const source = await fakeInstallation(t, { rowCounts });
+  const out = path.join(tempDir(t, 'oi-operator-projects-'), 'backup');
+  const exported = await runCli(['backup', 'export', '--out', out, '--origin', source.origin]);
+  assert.equal(exported.code, 0, exported.stderr);
+  const validation = await format.validateBackupLines(backupLines(out));
+  assert.equal(validation.status, 'valid');
+  assert.equal(validation.manifest.formatVersion, 3);
+  assert.equal(validation.manifest.schemaVersion, 3);
+  const target = await fakeInstallation(t, { maintenance: { state: 'recovery', version: 1 } });
+  const imported = await runCli(['backup', 'import', '--in', out, '--origin', target.origin]);
+  assert.equal(imported.code, 0, imported.stderr);
+  assert.deepEqual(imported.json.counts, rowCounts);
+  for (const family of ['projects', 'study_projects']) assert.deepEqual(target.state.importedRows.get(family + ':0'),
+    [syntheticRow(format.backupFamily(family), 0, validation.manifest.watermark)]);
+  assertNoSecretsOrContent(exported);
+  assertNoSecretsOrContent(imported);
+});
+
+for (const version of [1, 2]) test(`OPS-02 legacy format${version}/schema${version} imports with original closed family counts`, async (t) => {
   const backup = await exportFixture(t);
   const manifestFile = path.join(backup, 'manifest.json');
   const { manifest: current } = JSON.parse(readFileSync(manifestFile, 'utf8'));
-  const manifest = { ...current, formatVersion: 1, schemaVersion: 1,
-    families: current.families.filter((family) => family.name !== 'exploration_answers') };
+  const manifest = { ...current, formatVersion: version, schemaVersion: version,
+    families: current.families.filter((family) => format.backupFamiliesForVersion(version).includes(family.name)) };
   writeFileSync(manifestFile, `${JSON.stringify({ kind: 'manifest', manifest })}\n`);
   writeFileSync(path.join(backup, 'trailer.json'), `${JSON.stringify({ kind: 'trailer', complete: true,
     manifestSha256: await format.backupManifestDigest(manifest) })}\n`);
-  const { exploration_answers: _absentNotebook, ...legacyCounts } = ROW_COUNTS;
+  const legacyCounts = Object.fromEntries(Object.entries(ROW_COUNTS).filter(([name]) => format.backupFamiliesForVersion(version).includes(name)));
   const validation = await format.validateBackupLines(backupLines(backup));
   assert.equal(validation.status, 'valid');
   assert.deepEqual(validation.counts, legacyCounts);
@@ -669,9 +695,9 @@ test('OPS-02 a complete notebook-free format1/schema1 backup imports with its or
   assert.equal(result.code, 0, result.stderr);
   assert.deepEqual(result.json.counts, legacyCounts);
   assert.deepEqual(target.state.finalized, legacyCounts);
-  assert.equal(target.state.importManifest.formatVersion, 1);
-  assert.equal(target.state.importManifest.schemaVersion, 1);
-  assert.equal(Object.hasOwn(target.state.importManifest.counts, 'exploration_answers'), false);
+  assert.equal(target.state.importManifest.formatVersion, version);
+  assert.equal(target.state.importManifest.schemaVersion, version);
+  assert.equal(Object.hasOwn(target.state.importManifest.counts, 'exploration_answers'), version === 2);
   assert.equal(target.state.importCalls.some((call) => call.startsWith('exploration_answers:')), false);
   assertNoSecretsOrContent(result);
 });

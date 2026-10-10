@@ -4,6 +4,21 @@ OpenInterviewer grows through contributions, working forks and feedback from
 people conducting real research. Thank you for sharing what works, what is
 missing and how you have adapted the project.
 
+## Version 5.3.0: projects
+
+Thank you to [@8888oukaouka-spec](https://github.com/8888oukaouka-spec) for the
+project layer in the [openinterviewerver02](https://github.com/8888oukaouka-spec/openinterviewerver02)
+fork, and for describing how her studies are organized.
+
+| Contribution | How it informed OpenInterviewer 5.3.0 | Source |
+| --- | --- | --- |
+| Projects that group studies, shown as an accordion in the study list | **Projects**: collapsible project sections and an Ungrouped section; moving a study never changes its configuration, revision or participant links | [Fork commit `dd553c3`](https://github.com/8888oukaouka-spec/openinterviewerver02/commit/dd553c344a98c8642a5e04b6e22434e6227455a4), [`7ed1eee`](https://github.com/8888oukaouka-spec/openinterviewerver02/commit/7ed1eee16a515daf2a26f9c1053dc70486ed3399) |
+| A per-project **+ Study** button and a ··· menu instead of always-visible actions | The same pattern, with Rename, Export transcripts and Delete project (which ungroups, never deletes studies) | [Fork commit `561f7fd`](https://github.com/8888oukaouka-spec/openinterviewerver02/commit/561f7fd5d4f25044cafc7b1dd3a3e389f682de3e) |
+
+As before, the fork commits were reviewed as product and interaction references
+and reimplemented against the current storage contracts (a forward-only schema 3
+on Cloudflare and separate membership keys on Redis); none was cherry-picked.
+
 ## Version 5.1.0: languages, voice input and transcript export
 
 Thank you again to [@8888oukaouka-spec](https://github.com/8888oukaouka-spec) for
@@ -18,8 +33,7 @@ fork and for describing how her studies run.
 
 As in 5.0.0, the fork commits were reviewed as product and interaction references
 and reimplemented against the current storage and consent contracts; none was
-cherry-picked. Her project grouping (studies within projects) is planned for a
-later release with its own storage migration.
+cherry-picked. Her project grouping arrived in 5.3.0 (above).
 
 ## Version 5.0.0: researcher control and evidence exploration
 
