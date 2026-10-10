@@ -2,7 +2,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import JSZip from 'jszip';
-import { makeStoredInterview, makeStoredStudy } from '../fixtures/models';
+import { makeStoredInterview, makeStoredStudy, makeStudyConfig } from '../fixtures/models';
 import type { ExplorationAnswer } from '@/lib/exploration/types';
 import type { DurableWorkspaceStorePort, WorkspaceStorePort } from '@/lib/storage/types';
 import { createInterviewExportStream } from '@/lib/export/interviewExport';
@@ -43,6 +43,32 @@ beforeEach(() => {
 });
 
 describe('study-scoped export', () => {
+  it('has byte-identical analysis entries through the actual scoped Node and durable routes', async () => {
+    const interviews = [makeStoredInterview({ id: 'interview-a', studyId: 'study-a', studyRevision: 1,
+      collectionConfig: makeStudyConfig({ interviewLanguages: ['fr', 'zh'] }), interviewLanguage: 'fr' })];
+    listInterviews.mockResolvedValue({ status: 'ok', items: interviews });
+    const node = await GET(request());
+    const nodeZip = await JSZip.loadAsync(await node.arrayBuffer(), { checkCRC32: true });
+    const beginExport = vi.fn().mockResolvedValue({ status: 'ok', sequence: 3, count: 1, studyIds: ['study-a'] });
+    const readExportPage = vi.fn().mockImplementation(async ({ cursor }) => cursor === null
+      ? { status: 'ok', interviews, aggregates: [], nextCursor: 'notebook' }
+      : { status: 'ok', interviews: [], aggregates: [], explorations: [answer()], nextCursor: null });
+    const verifyExportSequence = vi.fn().mockResolvedValue('unchanged');
+    access.getAuthorizedResearcherStudyContext.mockResolvedValue({ authorized: true, context: { store: {
+      ...store, backend: 'durable-object', beginExport, readExportPage, verifyExportSequence,
+    } } });
+    const durable = await GET(request());
+    const durableZip = await JSZip.loadAsync(await durable.arrayBuffer(), { checkCRC32: true });
+    const analysisNames = Object.keys(nodeZip.files).filter(name => name.startsWith('analysis/'));
+    expect(Object.keys(durableZip.files).filter(name => name.startsWith('analysis/'))).toEqual(analysisNames);
+    for (const name of analysisNames) {
+      expect(await durableZip.files[name].async('uint8array'), name).toEqual(await nodeZip.files[name].async('uint8array'));
+    }
+    const records = (await durableZip.file('analysis/interviews.jsonl')!.async('string')).trim().split('\n').map(line => JSON.parse(line));
+    expect(records.map(record => record.study.id)).toEqual(['study-a']);
+    expect(verifyExportSequence).toHaveBeenCalledWith({ sequence: 3, studyId: 'study-a' });
+  });
+
   it('walks all notebook pages instead of silently exporting only the first 25 answers', async () => {
     listAnswers.mockResolvedValueOnce({ status: 'ok', answers: [answer()], nextCursor: '1:answer-a' })
       .mockResolvedValueOnce({ status: 'ok', answers: [{ ...answer(), id: 'answer-b' }], nextCursor: null });
@@ -124,7 +150,7 @@ describe('study-scoped export', () => {
     const beginExport = vi.fn().mockResolvedValue({ status: 'ok', sequence: 3, count: 0, studyIds: ['study-a'] });
     const readExportPage = vi.fn()
       .mockResolvedValueOnce({ status: 'ok', interviews: [], aggregates: [], explorations: [answer()], nextCursor: 'next' })
-      .mockResolvedValueOnce({ status: 'ok', interviews: [], aggregates: [], explorations: [], nextCursor: null });
+      .mockResolvedValue({ status: 'ok', interviews: [], aggregates: [], explorations: [], nextCursor: null });
     const verifyExportSequence = vi.fn().mockResolvedValue('unchanged');
     const durable = { ...store, backend: 'durable-object', beginExport, readExportPage, verifyExportSequence } as unknown as DurableWorkspaceStorePort;
     access.getAuthorizedResearcherStudyContext.mockResolvedValue({ authorized: true, context: { store: durable } });
@@ -133,7 +159,7 @@ describe('study-scoped export', () => {
     const archive = await response.blob();
     expect(await isCompleteZipArchive(archive)).toBe(true);
     expect(beginExport).toHaveBeenCalledWith({ maximum: 500, studyId: 'study-a' });
-    expect(readExportPage).toHaveBeenCalledTimes(2);
+    expect(readExportPage).toHaveBeenCalledTimes(6);
     for (const [input] of readExportPage.mock.calls) expect(input.studyId).toBe('study-a');
     expect(verifyExportSequence).toHaveBeenCalledWith({ sequence: 3, studyId: 'study-a' });
   });
@@ -142,7 +168,7 @@ describe('study-scoped export', () => {
     const node = await GET(request());
     const nodeZip = await JSZip.loadAsync(await node.arrayBuffer());
     const interview = makeStoredInterview({ id: 'interview-a', studyId: 'study-a' });
-    const streamed = createInterviewExportStream({ pages: (async function* () { yield { interviews: [interview], aggregates: [], explorations: [answer()] }; })() });
+    const streamed = createInterviewExportStream({ pages: async function* () { yield { interviews: [interview], aggregates: [], explorations: [answer()] }; } });
     const zip = await JSZip.loadAsync(await new Response(streamed).arrayBuffer());
     expect(await zip.file('explorations/study-a/answer-a.json')!.async('string')).toBe(await nodeZip.file('explorations/study-a/answer-a.json')!.async('string'));
   });

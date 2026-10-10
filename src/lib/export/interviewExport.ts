@@ -4,11 +4,12 @@
 // produce the same entries with the same decompressed bytes: per interview
 // NNN_<date>_<id8>.json and .md, then aggregates/<studyId>.json (with JSZip's
 // implicit aggregates/ folder entry), then summary.csv with formula-safe
-// cells. The parity tests (zipStream.test.ts, api.export.durable.test.ts)
+// cells, plus snapshot-only analysis files (analysisFiles.ts). The parity tests (zipStream.test.ts, api.export.durable.test.ts)
 // compare the two archives entry by entry.
 
 import type { StoredAggregateSynthesis, StoredInterview } from '@/types';
 import type { ExplorationAnswer } from '@/lib/exploration/types';
+import { analysisCsvHeader, analysisInterviewsHeaderParts, analysisInterviewsRow, analysisJsonLine, analysisProfileRows, analysisReadmeParts, analysisTextChunks, analysisTurnsCsv, analysisTurnsName, collectProfileColumns, PROFILE_COLUMNS, sortedProfileColumns, type ProfileColumns } from './analysisFiles';
 import { csvCell } from '@/lib/csv';
 import { analysisStatus } from '@/lib/analysisState';
 import { createZipStream, type ZipStreamLimits } from './zipStream';
@@ -25,7 +26,7 @@ export function interviewTranscriptMarkdown(interview: StoredInterview): string 
     `# Interview Transcript`,
     `Study: ${interview.studyName}`,
     `Interview ID: ${interview.id}`,
-    `Date: ${new Date(interview.createdAt).toLocaleDateString()}`,
+    `Date: ${new Date(interview.createdAt).toISOString()}`,
     `Duration: ${Math.round((interview.completedAt - interview.createdAt) / 1000 / 60)} minutes`,
     ...(interviewLanguageLine(interview) ? [interviewLanguageLine(interview)!] : []),
     ``
@@ -53,7 +54,7 @@ export function interviewTranscriptMarkdown(interview: StoredInterview): string 
   lines.push(``);
 
   interview.transcript.forEach(msg => {
-    const time = new Date(msg.timestamp).toLocaleTimeString();
+    const time = new Date(msg.timestamp).toISOString();
     const role = msg.role === 'user' ? 'PARTICIPANT' : 'INTERVIEWER';
     lines.push(`[${time}] ${role}:`);
     // Quoted so transcript text cannot imitate a speaker line or a heading.
@@ -142,7 +143,8 @@ export class ExportSnapshotChangedError extends Error {
 }
 
 export type InterviewExportStreamInput = {
-  pages: AsyncIterable<InterviewExportPage>;
+  /** A fresh walk of the SAME snapshot on every invocation; never begin a new export. */
+  pages: () => AsyncIterable<InterviewExportPage>;
   /**
    * Called after the last entry and before the central directory is written.
    * Throw (e.g. ExportSnapshotChangedError) to fail the archive instead.
@@ -159,23 +161,28 @@ export type InterviewExportStreamInput = {
  * sequence check, ZIP limit) errors the stream; the central directory is
  * only written after every page and `beforeFinish` succeeded, so a client
  * can never mistake a truncated download for a complete archive.
- * summary.csv is buffered as one short line per interview (the export's
- * interview ceiling bounds it); every other entry is written as it arrives.
+ * Replay the same bounded pages for combined analysis entries: no corpus-sized
+ * strings or arrays are retained. Only the profile column dictionary survives a pass.
  */
 export function createInterviewExportStream(input: InterviewExportStreamInput): ReadableStream<Uint8Array> {
   const zip = createZipStream({ modifiedAt: input.modifiedAt, limits: input.limits });
   const run = async () => {
-    const csvLines = [SUMMARY_CSV_HEADER];
+    const columns: ProfileColumns = new Map();
+    await zip.addDirectory('analysis/');
+    await zip.addDirectory('analysis/turns/');
     const seenAggregates = new Set<string>();
     const seenExplorations = new Set<string>();
     let position = 0;
-    for await (const page of input.pages) {
+    const interviewIds: string[] = [];
+    for await (const page of input.pages()) {
       for (const interview of page.interviews) {
         const baseName = interviewEntryBaseName(position, interview);
         position += 1;
+        interviewIds.push(interview.id);
         await zip.addFile(`${baseName}.json`, interviewJson(interview));
         await zip.addFile(`${baseName}.md`, interviewTranscriptMarkdown(interview));
-        csvLines.push(summaryCsvRow(interview));
+        await zip.addFile(analysisTurnsName(position - 1), analysisTurnsCsv(interview));
+        collectProfileColumns(columns, interview);
       }
       for (const aggregate of page.aggregates) {
         if (seenAggregates.size === 0) await zip.addDirectory(AGGREGATES_DIRECTORY);
@@ -191,7 +198,27 @@ export function createInterviewExportStream(input: InterviewExportStreamInput): 
         await zip.addFile(entryName, explorationJson(answer));
       }
     }
-    await zip.addFile(SUMMARY_CSV_NAME, csvLines.join('\n'));
+    const orderedColumns = sortedProfileColumns(columns);
+    // Count and identity checks catch a broken replay source as well as missing pages.
+    // Durable storage itself checks the snapshot fingerprint on each page read.
+    async function* rows(header: string | Iterable<string>, row: (interview: StoredInterview) => string): AsyncGenerator<string> {
+      if (typeof header === 'string') yield header;
+      else yield* header;
+      let count = 0;
+      for await (const page of input.pages()) {
+        for (const interview of page.interviews) {
+          if (interview.id !== interviewIds[count]) throw new ExportSnapshotChangedError();
+          count += 1;
+          yield row(interview);
+        }
+      }
+      if (count !== position) throw new ExportSnapshotChangedError();
+    }
+    await zip.addFile(SUMMARY_CSV_NAME, rows(SUMMARY_CSV_HEADER, interview => `\n${summaryCsvRow(interview)}`));
+    await zip.addFile('analysis/interviews.jsonl', rows('', analysisJsonLine));
+    await zip.addFile('analysis/interviews.csv', rows(analysisTextChunks(analysisInterviewsHeaderParts(orderedColumns)), interview => analysisInterviewsRow(interview, orderedColumns)));
+    await zip.addFile('analysis/profile_fields.csv', rows(analysisCsvHeader(PROFILE_COLUMNS), analysisProfileRows));
+    await zip.addFile('analysis/README.md', analysisTextChunks(analysisReadmeParts(orderedColumns)));
     if (input.beforeFinish) await input.beforeFinish();
     await zip.finish();
   };

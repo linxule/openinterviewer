@@ -224,7 +224,7 @@ describe('researcher export paging (ST-08, RT-09)', () => {
       for (const page of pages) yield { interviews: page.interviews, aggregates: page.aggregates };
     }
     const archive = new Uint8Array(await new Response(createInterviewExportStream({
-      pages: source(),
+      pages: source,
       beforeFinish: async () => {
         const verified = await stub.verifyExportSequence({ sequence: begun.sequence });
         if (verified.status !== 'unchanged') throw new ExportSnapshotChangedError();
@@ -232,13 +232,20 @@ describe('researcher export paging (ST-08, RT-09)', () => {
     })).arrayBuffer());
     const zip = await JSZip.loadAsync(archive, { checkCRC32: true });
     expect(Object.keys(zip.files)).toEqual([
-      '001_2026-09-20_iv-b2.json', '001_2026-09-20_iv-b2.md',
-      '002_2026-09-20_iv-a2.json', '002_2026-09-20_iv-a2.md',
-      '003_2026-09-20_iv-b1.json', '003_2026-09-20_iv-b1.md',
-      '004_2026-09-20_iv-a1.json', '004_2026-09-20_iv-a1.md',
+      'analysis/', 'analysis/turns/',
+      '001_2026-09-20_iv-b2.json', '001_2026-09-20_iv-b2.md', 'analysis/turns/001.csv',
+      '002_2026-09-20_iv-a2.json', '002_2026-09-20_iv-a2.md', 'analysis/turns/002.csv',
+      '003_2026-09-20_iv-b1.json', '003_2026-09-20_iv-b1.md', 'analysis/turns/003.csv',
+      '004_2026-09-20_iv-a1.json', '004_2026-09-20_iv-a1.md', 'analysis/turns/004.csv',
       'aggregates/', 'aggregates/study-b.json', 'aggregates/study-a.json', 'summary.csv',
+      'analysis/interviews.jsonl', 'analysis/interviews.csv', 'analysis/profile_fields.csv', 'analysis/README.md',
     ]);
     expect(JSON.parse(await zip.file('004_2026-09-20_iv-a1.json')!.async('string'))).toEqual(complete);
+    const analysis = (await zip.file('analysis/interviews.jsonl')!.async('string')).trimEnd().split('\n').map(line => JSON.parse(line));
+    expect(analysis.map(interview => interview.interview.id)).toEqual(['iv-b2', 'iv-a2', 'iv-b1', 'iv-a1']);
+    expect(analysis[3].analysis.model).toBe('gpt-fixture-2026');
+    expect((await zip.file('analysis/interviews.csv')!.async('uint8array')).slice(0, 3)).toEqual(new Uint8Array([239, 187, 191]));
+    expect(await zip.file('analysis/README.md')!.async('string')).toContain('Before sharing this file with an AI tool');
     const csv = await zip.file('summary.csv')!.async('string');
     expect(csv.split('\n')).toHaveLength(5);
     expect(csv).toContain('"complete"');
@@ -385,6 +392,7 @@ describe('researcher export paging (ST-08, RT-09)', () => {
       const begun = await stub.beginExport({ maximum: 500 });
       if (begun.status !== 'ok') throw new Error(begun.status);
       const { sequence } = begun;
+      let mutated = false;
       async function* pages(): AsyncGenerator<InterviewExportPage> {
         let cursor: string | null = null;
         for (;;) {
@@ -392,13 +400,16 @@ describe('researcher export paging (ST-08, RT-09)', () => {
           if (page.status === 'changed') throw new ExportSnapshotChangedError();
           if (page.status !== 'ok') throw new Error(page.status);
           yield { interviews: page.interviews, aggregates: page.aggregates };
-          if (cursor === null) await duringFirstPage();
+          if (cursor === null && !mutated) {
+            mutated = true;
+            await duringFirstPage();
+          }
           cursor = page.nextCursor;
           if (cursor === null) return;
         }
       }
       const reader = createInterviewExportStream({
-        pages: pages(),
+        pages,
         beforeFinish: async () => {
           const verified = await stub.verifyExportSequence({ sequence });
           if (verified.status !== 'unchanged') throw new ExportSnapshotChangedError();
