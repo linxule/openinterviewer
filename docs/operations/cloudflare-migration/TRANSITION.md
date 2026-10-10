@@ -189,7 +189,7 @@ Preconditions:
 Not executable yet: it requires an Upstash-to-Cloudflare importer, which is not built. The package README asks for one only if the authorized inventory finds data to retain. The importer's contract:
 
 - **Input.** The fenced Upstash database, through the new Read Only token, with read commands only.
-- **Output.** An operational backup directory in current format v2 (`src/lib/backup/format.ts`) that `npm run operator:cloudflare -- backup import` validates and imports unchanged. The legacy format v1 is notebook-free and cannot represent a current workspace that contains exploration answers.
+- **Output.** An operational backup directory in current format v3 (format/schema 3/3, `src/lib/backup/format.ts`) that `npm run operator:cloudflare -- backup import` validates and imports unchanged. The legacy format v1 is notebook-free and cannot represent a current workspace that contains exploration answers.
   - The manifest and its `workspace_meta` row carry a source workspace id (`ws_` followed by 32 hex characters).
   - The row carries a valid activated epoch that differs from the destination's; the import refuses otherwise.
   - The destination keeps its own identity.

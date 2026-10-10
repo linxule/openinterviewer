@@ -554,6 +554,13 @@ beforeAll(async () => {
     now: Date.now(),
   })).status).toBe('admitted');
 
+  // A researcher AI budget counter (same counter shape as participant admission).
+  expect((await store.admitResearcherAiRequest({
+    operation: 'synthesis',
+    counters: [{ key: 'researcher-ai:synthesis:installation:3600', maximum: 5, windowSeconds: 3_600 }],
+    now: Date.now(),
+  })).status).toBe('admitted');
+
   // A key another application wrote into the same database.
   await raw.sendCommand(['SET', `other-app:${BODY_MARKERS.foreign}`, BODY_MARKERS.foreign]);
 
@@ -632,6 +639,7 @@ describe('OPS-04: read-only Redis inventory (scripts/cloudflare/inventory-redis.
       createIdempotency: count('createIdempotency'),
       createIdempotencyIndexes: count('createIdempotencyIndexes'),
       participantRateLimits: count('participantRateLimits'),
+      researcherAiBudgets: count('researcherAiBudgets'),
       saveRateLimits: count('saveRateLimits'),
       unrecognized: count('unrecognized'),
     }).toEqual({
@@ -658,6 +666,7 @@ describe('OPS-04: read-only Redis inventory (scripts/cloudflare/inventory-redis.
       createIdempotency: 4, // A, B, D created; one pending
       createIdempotencyIndexes: 1,
       participantRateLimits: 1,
+      researcherAiBudgets: 1,
       saveRateLimits: 1,
       unrecognized: 1,
     });

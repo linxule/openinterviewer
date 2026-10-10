@@ -531,6 +531,7 @@ export const FAMILIES = [
   { name: 'createIdempotency', prefixes: ['create-idemp:'], type: 'string', projection: 'idempotency' },
   { name: 'createIdempotencyIndexes', prefixes: ['create-idemp-index:'], type: 'zset', projection: 'idempotency-index' },
   { name: 'participantRateLimits', prefixes: ['rate-limit:'], type: 'string', projection: null },
+  { name: 'researcherAiBudgets', prefixes: ['researcher-ai:'], type: 'string', projection: null },
   { name: 'saveRateLimits', prefixes: ['interview-rate:'], type: 'zset', projection: null },
 ];
 const UNRECOGNIZED = { name: 'unrecognized', type: null, projection: null };

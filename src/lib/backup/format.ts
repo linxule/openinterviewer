@@ -1,5 +1,5 @@
-// Operational backup format v2 (OPS-02, ST-10). Format v1/schema v1 remains
-// importable as an explicitly notebook-free legacy workspace. Separate from the researcher
+// Operational backup format v3 (OPS-02, ST-10; v3 adds projects). Format/schema
+// pairs 1/1 and 2/2 stay importable; v1 as an explicitly notebook-free legacy workspace. Separate from the researcher
 // ZIP export: it carries every authoritative WorkspaceStore record family so a
 // quiesced workspace can be imported into a fresh isolated object.
 //

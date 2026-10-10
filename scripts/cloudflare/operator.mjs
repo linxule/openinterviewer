@@ -12,7 +12,7 @@
 // as `Authorization: Bearer`. It never prints credentials, cookies or record
 // contents: only states, versions, counts, identifiers and error classes.
 //
-// Operational backup directory (format v1, src/lib/backup/format.ts):
+// Operational backup directory (current format v3, src/lib/backup/format.ts):
 //   chunks/<NN>-<family>-<index>.json   one chunk record each (rows + sha256)
 //   manifest.json                       format/schema versions, source, watermark, per-chunk checksums
 //   trailer.json                        completion trailer, written last
