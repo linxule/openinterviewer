@@ -122,9 +122,10 @@ export type ProviderCommitment = 'fixed' | 'may-change';
  * Participant voice input. 'installation': recordings are transcribed by this
  * installation's Cloudflare account (Workers AI) and not stored. 'browser':
  * the browser's own speech service (Google in Chrome, Apple in Safari).
+ * 'device': the browser's on-device recognition, with no server fallback.
  * Absent or 'off': no microphone. The consent notice names the processor.
  */
-export type VoiceInputMode = 'off' | 'installation' | 'browser';
+export type VoiceInputMode = 'off' | 'installation' | 'browser' | 'device';
 
 export interface StudyConfig {
   id: string;

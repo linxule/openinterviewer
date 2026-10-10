@@ -8,6 +8,8 @@ import {
 } from '@/lib/studyConfigValidation';
 import { CONSENT_TEXT_PLACEHOLDER_ERROR } from '@/lib/consentText';
 import { THANK_YOU_TEXT_PLACEHOLDER_ERROR } from '@/lib/thankYouText';
+import { copyStudyConfiguration } from '@/lib/researcherStudyDraft';
+import { studyConfigEqual } from '@/lib/studyConfigEquality';
 import { makeStudyConfig } from '../fixtures/models';
 
 describe('validateStudyConfig', () => {
@@ -360,5 +362,26 @@ describe('interviewerInstructions (Slice Q)', () => {
     // JSON omits undefined: the existing wire contract cannot clear by omission.
     expect(validateStudyConfigUpdate(config, JSON.parse(JSON.stringify({ [field]: undefined })), undefined))
       .toMatchObject({ ok: true, config: { [field]: 'Existing text.' } });
+  });
+});
+
+
+describe('voice input configuration', () => {
+  it.each(['off', 'installation', 'browser', 'device'] as const)('accepts %s on canonical, create and update paths', voiceInput => {
+    const config = makeStudyConfig({ voiceInput });
+    expect(validateStudyConfig(config)).toMatchObject({ ok: true, config: { voiceInput } });
+    expect(validateStudyConfigForCreate(config, { id: config.id, createdAt: config.createdAt })).toMatchObject({ ok: true, config: { voiceInput } });
+    expect(validateStudyConfigUpdate(makeStudyConfig(), { voiceInput }, undefined)).toMatchObject({ ok: true, config: { voiceInput } });
+  });
+  it.each(['cloud', '', null, true, {}, []])('fails closed for an unknown voice input %j', voiceInput => {
+    expect(validateStudyConfig({ ...makeStudyConfig(), voiceInput })).toEqual({ ok: false, error: 'Invalid voice input setting' });
+    expect(validateStudyConfigUpdate(makeStudyConfig(), { voiceInput }, undefined)).toMatchObject({ ok: false });
+  });
+  it('preserves device mode across researcher draft copies and treats changing it as a protocol change', () => {
+    const config = makeStudyConfig({ voiceInput: 'device' });
+    expect(copyStudyConfiguration(config).voiceInput).toBe('device');
+    expect(studyConfigEqual(config, { ...config })).toBe(true);
+    expect(studyConfigEqual(config, { ...config, voiceInput: 'browser' })).toBe(false);
+    expect(studyConfigEqual(config, { ...config, voiceInput: 'off' })).toBe(false);
   });
 });

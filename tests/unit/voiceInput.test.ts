@@ -211,7 +211,7 @@ describe('POST /api/transcribe', () => {
 
   it('refuses a study that does not offer transcription by this installation', async () => {
     withAiBinding();
-    for (const voiceInput of [undefined, 'off', 'browser'] as const) {
+    for (const voiceInput of [undefined, 'off', 'browser', 'device'] as const) {
       kvMock.getStudy.mockResolvedValue(makeStoredStudy({ id: 'study-a', config: { ...voiceConfig, voiceInput } }));
       const res = await transcribePOST(transcribeRequest());
       expect(res.status).toBe(403);

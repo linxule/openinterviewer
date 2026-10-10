@@ -85,13 +85,13 @@ function v2CreateOperation(studyId: string, researcherId: string) {
   };
 }
 
-const request = () => new Request('http://localhost/api/studies', {
+const request = (voiceInput?: 'browser' | 'device' | 'installation') => new Request('http://localhost/api/studies', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
     'Idempotency-Key': IDEMPOTENCY_KEY,
   },
-  body: JSON.stringify({ config: makeStudyConfig() }),
+  body: JSON.stringify({ config: makeStudyConfig({ ...(voiceInput ? { voiceInput } : {}) }) }),
 });
 
 beforeEach(() => {
@@ -182,6 +182,19 @@ beforeEach(() => {
 });
 
 describe('hosted study creation ownership saga', () => {
+  it.each(['browser', 'device'] as const)('hosted creation accepts %s without server transcription capability', async voiceInput => {
+    modeMock.isHostedMode.mockReturnValue(true);
+    const response = await POST(request(voiceInput));
+    expect(response.status).toBe(200);
+    expect(kvMock.createStudyAtomic.mock.calls[0][0].config.voiceInput).toBe(voiceInput);
+  });
+
+  it('hosted creation still refuses installation transcription', async () => {
+    modeMock.isHostedMode.mockReturnValue(true);
+    expect((await POST(request('installation'))).status).toBe(400);
+    expect(kvMock.createStudyAtomic).not.toHaveBeenCalled();
+  });
+
   it('does not create researcher data when the durable operation cannot begin', async () => {
     modeMock.isHostedMode.mockReturnValue(true);
     platformMock.beginCreateStudyOperationV2.mockResolvedValue({ status: 'unavailable' });

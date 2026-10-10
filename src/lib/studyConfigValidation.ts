@@ -272,7 +272,7 @@ export function validateStudyConfig(value: unknown): ValidationResult {
   }
   const languages = validateInterviewLanguages(value);
   if (!languages.ok) return languages;
-  if (value.voiceInput !== undefined && !['off', 'installation', 'browser'].includes(value.voiceInput as string)) {
+  if (value.voiceInput !== undefined && !['off', 'installation', 'browser', 'device'].includes(value.voiceInput as string)) {
     return { ok: false, error: 'Invalid voice input setting' };
   }
   if (value.linksEnabled !== undefined && typeof value.linksEnabled !== 'boolean') {

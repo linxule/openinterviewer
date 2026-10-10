@@ -460,6 +460,33 @@ export function defineWorkspaceStoreContract(label: string, harness: WorkspaceSt
         });
       });
 
+      it('device voice is revision-bound: an unchanged save is stable and switching modes fences old consent and completion', async () => {
+        const store = await harness.createStore();
+        const study = await createStudy(store);
+        const { link } = await createLink(store, study);
+        const participant = await consentedParticipant(store, study);
+        const input = completion(study, participant, link.id);
+        const updated = expectStatus(await store.replaceStudyConfig({
+          studyId: study.id, expectedRevision: 1,
+          config: { ...study.config, voiceInput: 'device' }, now: Date.now(),
+        }), 'updated').study;
+        expect(updated.revision).toBe(2);
+        expect(updated.config.voiceInput).toBe('device');
+        expect((await store.verifyConsent({ participantSessionId: participant.sessionId,
+          studyId: study.id, studyRevision: updated.revision,
+          consentText: updated.config.consentText, now: Date.now() })).status).toBe('mismatch');
+        expect((await store.persistCompletedInterview(input)).status).toBe('revision-stale');
+        const unchanged = expectStatus(await store.replaceStudyConfig({
+          studyId: study.id, expectedRevision: 2, config: updated.config, now: Date.now(),
+        }), 'updated').study;
+        expect(unchanged.revision).toBe(2);
+        const switched = expectStatus(await store.replaceStudyConfig({
+          studyId: study.id, expectedRevision: 2,
+          config: { ...updated.config, voiceInput: 'browser' }, now: Date.now(),
+        }), 'updated').study;
+        expect(switched.revision).toBe(3);
+      });
+
       it('ST-01: replacing the config advances the revision and a stale expected revision conflicts', async () => {
         const store = await harness.createStore();
         const study = await createStudy(store);

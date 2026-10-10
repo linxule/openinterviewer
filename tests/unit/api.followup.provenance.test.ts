@@ -126,6 +126,13 @@ afterEach(() => {
 });
 
 describe('follow-up synthesis provenance', () => {
+  it('copies device voice from the canonical parent into a generated follow-up', async () => {
+    parentStudy.config.voiceInput = 'device';
+    const response = await POST(request(), { params: Promise.resolve({ id: parentStudy.id }) });
+    expect(response.status).toBe(200);
+    expect((await response.json()).followUpConfig.voiceInput).toBe('device');
+  });
+
   async function scopedAggregate() {
     const sources = [
       makeStoredInterview({ id: 'interview-a', studyId: parentStudy.id, studyRevision: 2, synthesis: {} as never }),
