@@ -97,6 +97,10 @@ export const fr: Messages = {
     send: 'Envoyer',
     sendShortcut: '⌘/Ctrl + Entrée pour envoyer',
     voice: {
+      ready: 'La saisie vocale est prête. Appuyez sur le micro pour parler.',
+      starting: 'Démarrage du micro…',
+      noText: 'Aucun texte n’a été reconnu. Veuillez réessayer ou saisir votre réponse.',
+      interrupted: 'La saisie vocale s’est arrêtée de manière inattendue. Veuillez réessayer ou saisir votre réponse.',
       preparing: 'Préparation de la saisie vocale sur cet appareil…',
       deviceUnavailable: 'La saisie vocale n’est pas disponible sur cet appareil. Veuillez saisir votre réponse.',
       start: 'Démarrer la saisie vocale',

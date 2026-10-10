@@ -97,6 +97,10 @@ export const ja: Messages = {
     send: '送信',
     sendShortcut: '⌘/Ctrl + Enter で送信',
     voice: {
+      ready: '音声入力の準備ができました。マイクボタンを押して話してください。',
+      starting: 'マイクを起動しています…',
+      noText: '文字を認識できませんでした。もう一度お試しいただくか、回答を入力してください。',
+      interrupted: '音声入力が予期せず停止しました。もう一度お試しいただくか、回答を入力してください。',
       preparing: 'このデバイスで音声入力を準備しています…',
       deviceUnavailable: 'このデバイスでは音声入力を利用できません。回答を入力してください。',
       start: '音声入力を開始',
