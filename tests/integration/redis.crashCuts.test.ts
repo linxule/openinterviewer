@@ -578,6 +578,32 @@ describe('standalone create/delete W1/W2/S1–S4/D1–D4', () => {
     expect(await redis.get(`study-aggregate:${study.id}`)).toBeNull();
   });
 
+  it('a lost project-create reply is ambiguous, with one committed project and no automatic retry', async () => {
+    const projects = createRedisWorkspaceStore(redis, { researcherId: null }).projects;
+    const before = await redis.scard('all-projects');
+    armLoss('transport-response-loss', 'local op, id, name, studyId, now');
+    expect(await projects.create({ name: 'Lost reply project' })).toEqual({ status: 'ambiguous' });
+    expect(await redis.scard('all-projects')).toBe(before + 1);
+    expect((await projects.list()).status).toBe('ok');
+  });
+
+  it.each(['DP1', 'DP2'] as const)('%s membership purge cut resumes without late reassignment', async cut => {
+    const study = makeStoredStudy({ id: uuid(), createdAt: NOW, updatedAt: NOW });
+    expect(await createStudyAtomic(study, redis)).toBe('created');
+    const projects = createRedisWorkspaceStore(redis, { researcherId: null }).projects;
+    const created = await projects.create({ name: 'Purge crash fixture' });
+    if (created.status !== 'created') throw new Error('Project create failed');
+    expect((await projects.assignStudy({ studyId: study.id, projectId: created.project.id })).status).toBe('assigned');
+    armCut(cut);
+    expect((await deleteStudy(study.id, redis)).status).toBe('unavailable');
+    expect(await redis.get('study-project:' + study.id)).toBe(cut === 'DP1' ? created.project.id : null);
+    expect((await projects.assignStudy({ studyId: study.id, projectId: created.project.id })).status).toBe('persist-guard');
+    coverFaultCut(cut);
+    expect((await deleteStudy(study.id, redis)).status).toBe('deleted');
+    expect(await redis.get('study-project:' + study.id)).toBeNull();
+    expect((await projects.read({ projectId: created.project.id })).status).toBe('found');
+  });
+
   it('D5 cuts after the aggregate DEL, leaving the study present and the aggregate gone', async () => {
     const study = makeStoredStudy({ id: uuid(), createdAt: NOW, updatedAt: NOW });
     expect(await createStudyAtomic(study, redis)).toBe('created');
@@ -588,10 +614,15 @@ describe('standalone create/delete W1/W2/S1–S4/D1–D4', () => {
     expect(await saveStudyAggregate(aggregate, redis)).toBe('saved');
     expect(await deleteInterview(sourceId, study.id, redis)).toBe(true);
 
+    const projects = createRedisWorkspaceStore(redis, { researcherId: null }).projects;
+    const created = await projects.create({ name: 'Purge crash fixture' });
+    if (created.status !== 'created') throw new Error('Project create failed');
+    await projects.assignStudy({ studyId: study.id, projectId: created.project.id });
     armCut('D5');
     expect((await deleteStudy(study.id, redis)).status).toBe('unavailable');
     expect(await redis.get(`study:${study.id}`)).toBeTruthy();
     expect(await redis.get(`study-aggregate:${study.id}`)).toBeNull();
+    expect(await redis.get('study-project:' + study.id)).toBeNull();
     coverFaultCut('D5');
 
     expect((await deleteStudy(study.id, redis)).status).toBe('deleted');

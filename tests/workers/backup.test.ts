@@ -97,6 +97,8 @@ function seedSource(sql: Sql): void {
   };
   insert(sql, 'exploration_answers', { id: notebook.id, study_id: notebook.studyId, record_json: JSON.stringify(notebook),
     request_fingerprint: notebook.requestFingerprint, created_at: NOW, updated_at: NOW, status: notebook.status });
+  insert(sql, 'projects', { id: '00000000-0000-4000-8000-000000000001', name: 'Synthetic project 研究', created_at: NOW, updated_at: NOW });
+  insert(sql, 'study_projects', { study_id: 's-1', project_id: '00000000-0000-4000-8000-000000000001' });
   // The restored source's own deployment epoch, a frozen state and a mutation history.
   sql.exec(`UPDATE workspace_meta SET activated_epoch = ?, maintenance_state = 'frozen', maintenance_version = 5, mutation_seq = 12`, OLD_EPOCH);
 }
@@ -233,7 +235,7 @@ describe('operational backup export (OPS-02)', () => {
     for (const family of BACKUP_FAMILY_NAMES) {
       expect(validation.counts[family], family).toBe(sourceRows[family].length);
     }
-    expect(validation.manifest).toMatchObject({ schemaVersion: 2, sourceWorkspaceId: testEnv.WORKSPACE_ID, watermark: { maintenanceVersion: 5, mutationSeq: 12 } });
+    expect(validation.manifest).toMatchObject({ schemaVersion: 3, sourceWorkspaceId: testEnv.WORKSPACE_ID, watermark: { maintenanceVersion: 5, mutationSeq: 12 } });
     expect(manifestOf(backup.records).families.find((family) => family.name === 'budget_members')!.chunks).toHaveLength(2);
     const links = chunksOf(backup.records).filter((chunk) => chunk.family === 'participant_links').flatMap((chunk) => chunk.rows);
     expect(links.map((row) => row.expires_at)).toEqual([PAST, FUTURE, null]);
@@ -384,12 +386,12 @@ describe('operational backup import (ST-10, OPS-02)', () => {
       maintenance_version: 1, mutation_seq: 1, created_at: NOW, updated_at: NOW,
     });
 
-    const sameEpoch = new BackupWriter({ schemaVersion: 2, sourceWorkspaceId: testEnv.WORKSPACE_ID, exportedAt: NOW, watermark });
+    const sameEpoch = new BackupWriter({ schemaVersion: 3, sourceWorkspaceId: testEnv.WORKSPACE_ID, exportedAt: NOW, watermark });
     const sameEpochMeta = await sameEpoch.chunk('workspace_meta', [metaFor(testEnv.ANALYSIS_RECOVERY_EPOCH)], watermark);
     const sameEpochManifest = (await sameEpoch.finish()).manifest.manifest;
     expect(await importChunk(sameEpochManifest, sameEpochMeta)).toEqual({ status: 'rejected', errorClass: 'epoch-not-rotated' });
 
-    const dangling = new BackupWriter({ schemaVersion: 2, sourceWorkspaceId: testEnv.WORKSPACE_ID, exportedAt: NOW, watermark });
+    const dangling = new BackupWriter({ schemaVersion: 3, sourceWorkspaceId: testEnv.WORKSPACE_ID, exportedAt: NOW, watermark });
     const danglingMeta = await dangling.chunk('workspace_meta', [metaFor(OLD_EPOCH)], watermark);
     const orphan = await dangling.chunk('interviews', [{
       id: 'iv-orphan', study_id: 's-missing', record_json: interviewRecord('iv-orphan', 's-missing'), fingerprint: 'a'.repeat(64),
@@ -408,7 +410,7 @@ describe('operational backup import (ST-10, OPS-02)', () => {
     const study = { id: 's-mix', config_json: JSON.stringify({ id: 's-mix', name: 'Mix' }), revision: 1, created_at: NOW, updated_at: NOW, interview_count: 0, is_locked: 0, sample_fixture: 0 };
     async function backupAt(mutationSeq: number, consentExpiry: number) {
       const watermark = { maintenanceVersion: 1, mutationSeq };
-      const writer = new BackupWriter({ schemaVersion: 2, sourceWorkspaceId: testEnv.WORKSPACE_ID, exportedAt: NOW, watermark });
+      const writer = new BackupWriter({ schemaVersion: 3, sourceWorkspaceId: testEnv.WORKSPACE_ID, exportedAt: NOW, watermark });
       const meta = await writer.chunk('workspace_meta', [{
         singleton: 1, workspace_id: testEnv.WORKSPACE_ID, activated_epoch: OLD_EPOCH, maintenance_state: 'frozen',
         maintenance_version: 1, mutation_seq: mutationSeq, created_at: NOW, updated_at: NOW,
@@ -454,7 +456,7 @@ describe('operational backup import (ST-10, OPS-02)', () => {
       maintenance_version: 1, mutation_seq: 1, created_at: NOW, updated_at: NOW,
     };
     const study = (id: string, revision = 1): Row => ({ id, config_json: JSON.stringify({ id, name: 'Size' }), revision, created_at: NOW, updated_at: NOW, interview_count: 0, is_locked: 0, sample_fixture: 0 });
-    const writer = new BackupWriter({ schemaVersion: 2, sourceWorkspaceId: testEnv.WORKSPACE_ID, exportedAt: NOW, watermark });
+    const writer = new BackupWriter({ schemaVersion: 3, sourceWorkspaceId: testEnv.WORKSPACE_ID, exportedAt: NOW, watermark });
     const meta = await writer.chunk('workspace_meta', [metaRow], watermark);
     const studies = await writer.chunk('studies', [study('s-size')], watermark);
     const zeroRevision = await writer.chunk('studies', [study('s-zero', 0)], watermark);
@@ -482,22 +484,56 @@ describe('operational backup import (ST-10, OPS-02)', () => {
     expect(await withSql((sql) => sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM interviews`).one().n)).toBe(0);
   });
 
-  it('a complete notebook-free v1/schema1 backup imports into schema2 without inventing artifacts', async () => {
+  it.each([1, 2] as const)('legacy format%s imports into schema3 with absent families empty', async version => {
     await reset();
     expect(await transition('open', 'recovery')).toMatchObject({ status: 'transitioned' });
     const watermark = { maintenanceVersion: 1, mutationSeq: 0 };
-    const writer = new BackupWriter({ schemaVersion: 1, sourceWorkspaceId: testEnv.WORKSPACE_ID, exportedAt: NOW, watermark });
+    const writer = new BackupWriter({ schemaVersion: 3, sourceWorkspaceId: testEnv.WORKSPACE_ID, exportedAt: NOW, watermark });
     const meta = await writer.chunk('workspace_meta', [{ singleton: 1, workspace_id: testEnv.WORKSPACE_ID, activated_epoch: OLD_EPOCH,
       maintenance_state: 'frozen', maintenance_version: 1, mutation_seq: 0, created_at: NOW, updated_at: NOW }], watermark);
     const studies = await writer.chunk('studies', [{ id: 'legacy-study', config_json: JSON.stringify({ id: 'legacy-study', name: 'Legacy synthetic study' }),
       revision: 1, created_at: NOW, updated_at: NOW, interview_count: 0, is_locked: 0, sample_fixture: 0 }], watermark);
     const current = (await writer.finish()).manifest.manifest;
-    const legacy: BackupManifest = { ...current, formatVersion: 1, schemaVersion: 1,
-      families: current.families.filter(family => family.name !== 'exploration_answers') };
+    const legacy: BackupManifest = { ...current, formatVersion: version, schemaVersion: version,
+      families: current.families.filter(family => !['projects', 'study_projects', ...(version === 1 ? ['exploration_answers'] : [])].includes(family.name)) };
     expect(await importChunk(legacy, meta)).toMatchObject({ status: 'accepted' });
     expect(await importChunk(legacy, studies)).toMatchObject({ status: 'accepted' });
     expect(await importChunk(legacy, null, true)).toMatchObject({ status: 'finalized', counts: { studies: 1, interviews: 0 } });
     expect(await workspaceStub().getStudy({ studyId: 'legacy-study' })).toMatchObject({ status: 'found' });
     expect(await withSql(sql => sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM exploration_answers`).one().n)).toBe(0);
+    expect(await withSql(sql => sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM projects').one().n)).toBe(0);
+    expect(await withSql(sql => sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM study_projects').one().n)).toBe(0);
+
   });
+  it.each(['missing-study', 'missing-project', 'fenced-study', 'duplicate', 'invalid-project'] as const)(
+    'rejects %s project import and remains in recovery', async fault => {
+      await reset();
+      expect(await transition('open', 'recovery')).toMatchObject({ status: 'transitioned' });
+      const watermark = { maintenanceVersion: 1, mutationSeq: 0 };
+      const writer = new BackupWriter({ schemaVersion: 3, sourceWorkspaceId: testEnv.WORKSPACE_ID, exportedAt: NOW, watermark });
+      const chunks: BackupChunkRecord[] = [];
+      chunks.push(await writer.chunk('workspace_meta', [{ singleton: 1, workspace_id: testEnv.WORKSPACE_ID, activated_epoch: OLD_EPOCH,
+        maintenance_state: 'frozen', maintenance_version: 1, mutation_seq: 0, created_at: NOW, updated_at: NOW }], watermark));
+      chunks.push(await writer.chunk('studies', [{ id: 'project-study', config_json: JSON.stringify({ id: 'project-study' }),
+        revision: 1, created_at: NOW, updated_at: NOW, interview_count: 0, is_locked: 0, sample_fixture: 0 }], watermark));
+      if (fault === 'fenced-study') chunks.push(await writer.chunk('deletion_fences', [{
+        kind: 'study', target_id: 'project-study', deleted_at: NOW, expires_at: FUTURE, sample_fixture: 0,
+      }], watermark));
+      const pid = '00000000-0000-4000-8000-000000000001';
+      chunks.push(await writer.chunk('projects', [{ id: pid, name: fault === 'invalid-project' ? ' padded ' : 'Valid',
+        created_at: NOW, updated_at: NOW }], watermark));
+      const member = { study_id: fault === 'missing-study' ? 'missing' : 'project-study',
+        project_id: fault === 'missing-project' ? '00000000-0000-4000-8000-000000000002' : pid };
+      chunks.push(await writer.chunk('study_projects', fault === 'duplicate' ? [member, member] : [member], watermark));
+      const manifest = (await writer.finish()).manifest.manifest;
+      let rejected = false;
+      for (const chunk of chunks) {
+        const outcome = await importChunk(manifest, chunk);
+        if (outcome.status === 'rejected') { rejected = true; break; }
+        expect(outcome.status).toBe('accepted');
+      }
+      if (!rejected) expect(await importChunk(manifest, null, true)).toMatchObject({ status: 'rejected', errorClass: 'reference-invalid' });
+      expect(await withSql(sql => sql.exec<{ maintenance_state: string }>('SELECT maintenance_state FROM workspace_meta').one().maintenance_state)).toBe('recovery');
+    });
+
 });

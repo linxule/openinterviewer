@@ -755,6 +755,7 @@ describe('OPS-04: read-only Redis inventory (scripts/cloudflare/inventory-redis.
       explorationRecoveryRequired: 1,
     });
     expect(report.orphans).toEqual({
+      allProjectsMembersWithoutProject: 0, projectsNotIndexed: 0, membershipsWithoutStudy: 0, membershipsWithoutProject: 0,
       interviewsWithoutStudy: 1,
       linksWithoutStudy: 1,
       aggregatesWithoutStudy: 1,
@@ -816,6 +817,55 @@ describe('OPS-04: read-only Redis inventory (scripts/cloudflare/inventory-redis.
     for (const [name, marker] of Object.entries(BODY_MARKERS).filter(([name]) => name !== 'foreign')) {
       expect(wire.includes(marker), `wire reply carries ${name}`).toBe(false);
     }
+  });
+
+  it('inventories project-only data, memberships, corruption and bounds without exposing names or changing data', async () => {
+    const db = await startDisposableRedis();
+    const projectRaw = createClient({ url: db.url, RESP: 2 });
+    await projectRaw.connect();
+    const id = randomUUID(), studyId = randomUUID(), missing = randomUUID();
+    const marker = 'PRIVATE-PROJECT-NAME-研究';
+    const projectKey = 'project:' + id, membershipKey = 'study-project:' + studyId;
+    const project = 'oi:project:' + JSON.stringify({ id, name: marker, createdAt: 1, updatedAt: 1 });
+    const replies: string[] = [], violations: string[] = [];
+    const inventory = () => runInventory(executorFor(upstashShim({ log: [], violations, replies, client: projectRaw })));
+    try {
+      await projectRaw.set(projectKey, project);
+      await projectRaw.sAdd('all-projects', id);
+      let report = await inventory();
+      expect(report.complete).toBe(true);
+      expect(report.summary.hasResearchData).toBe(true);
+      expect(report.summary.researchRecords.projects).toBe(1);
+      await projectRaw.set('study:' + studyId, JSON.stringify({ id: studyId, createdAt: 1 }));
+      await projectRaw.sAdd('all-studies', studyId);
+      await projectRaw.set(membershipKey, id);
+      report = await inventory();
+      expect(report.complete).toBe(true);
+      expect(report.records.studyProjects).toMatchObject({ projected: 1, invalid: 0, projectMissing: 0 });
+      await projectRaw.del('study:' + studyId);
+      await projectRaw.set(membershipKey, missing);
+      await projectRaw.sAdd('all-projects', missing);
+      await projectRaw.sRem('all-projects', id);
+      report = await inventory();
+      expect(report.complete).toBe(false);
+      expect(report.orphans).toMatchObject({ allProjectsMembersWithoutProject: 1, projectsNotIndexed: 1, membershipsWithoutStudy: 1, membershipsWithoutProject: 1 });
+      await projectRaw.set(membershipKey, 'malformed-target');
+      await projectRaw.set(projectKey, 'oi:project:' + JSON.stringify({ id, name: marker, createdAt: -1, updatedAt: 1 }));
+      report = await inventory();
+      expect(report.incompleteReasons).toContain('project-records-invalid');
+      expect(report.records.projects.invalid).toBe(1);
+      expect(report.records.studyProjects.invalid).toBe(1);
+      await projectRaw.del(membershipKey);
+      await projectRaw.sAdd(membershipKey, id);
+      expect((await inventory()).incompleteReasons).toContain('known-family-type-mismatch');
+      await projectRaw.sAdd('all-projects', Array.from({ length: 10001 }, (_, i) => 'over-bound-' + i));
+      expect((await inventory()).incompleteReasons).toContain('collections-over-member-bound');
+      expect(await projectRaw.sMembers(membershipKey)).toEqual([id]);
+      expect(violations).toEqual([]);
+      expect(JSON.stringify(report)).not.toContain(marker);
+      expect(replies.join('')).not.toContain(marker);
+      expect(JSON.stringify(report)).not.toContain(id);
+    } finally { await projectRaw.quit(); await db.close(); }
   });
 
   it('treats a notebook-only orphan database as research data without returning questions, quotes or hashes', async () => {

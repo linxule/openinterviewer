@@ -213,6 +213,7 @@ export async function clearSampleWorkspace(
       }
       for (const studyId of fixtureStudies) {
         touchedStudies.delete(studyId);
+        ws.sql.exec(`DELETE FROM study_projects WHERE study_id = ?`, studyId);
         ws.sql.exec(`DELETE FROM studies WHERE id = ?`, studyId);
         ws.sql.exec(`DELETE FROM aggregates WHERE study_id = ?`, studyId);
         ws.sql.exec(`DELETE FROM participant_links WHERE study_id = ?`, studyId);

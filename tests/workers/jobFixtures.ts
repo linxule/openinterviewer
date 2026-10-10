@@ -114,7 +114,7 @@ export async function resetWorkspace(): Promise<void> {
   await runInDurableObject(stub, async (_instance, state) => {
     const sql = state.storage.sql;
     for (const table of [
-      'studies', 'interviews', 'analysis', 'analysis_jobs', 'idempotency_receipts', 'deletion_fences',
+      'study_projects', 'projects', 'exploration_answers', 'studies', 'interviews', 'analysis', 'analysis_jobs', 'idempotency_receipts', 'deletion_fences',
       'consents', 'participant_links', 'budget_windows', 'budget_members', 'aggregates',
     ]) {
       sql.exec(`DELETE FROM ${table}`);

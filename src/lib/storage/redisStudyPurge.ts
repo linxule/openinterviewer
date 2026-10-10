@@ -7,7 +7,8 @@ local function valid_auxiliary_types(studyId, mode)
     local actual = redis.call('TYPE', key).ok
     return actual == 'none' or actual == kind
   end
-  if not expected('study-consent-index:' .. studyId, 'set')
+  if not expected('study-project:' .. studyId, 'string')
+    or not expected('study-consent-index:' .. studyId, 'set')
     or not expected('study-exploration-index:' .. studyId, 'set')
     or not expected('study-exploration-keys:' .. studyId, 'hash')
     or not expected('study-exploration-order:' .. studyId, 'zset')
@@ -24,6 +25,7 @@ local function valid_auxiliary_types(studyId, mode)
   return true
 end
 local function purge_auxiliary(studyId, mode)
+  redis.call('DEL', 'study-project:' .. studyId)
   local remaining = false
   local function batch(index, remove)
     local ids = redis.call('SRANDMEMBER', index, 100)
@@ -158,7 +160,9 @@ for _, id in ipairs(ids) do
   if mode == 'standalone' then redis.call('SREM', 'all-interviews', id) end
 end
 redis.call('DEL', aggregateKey)
+-- fault cut DP1: deletion accepted, auxiliary purge not started
 local auxiliaryDone = purge_auxiliary(ARGV[1], mode)
+-- fault cut DP2: auxiliary purge accepted, membership removed under guard
 if redis.call('SCARD', KEYS[2]) > 0 or not auxiliaryDone then return {'oi:still-pending'} end
 redis.call('DEL', KEYS[1], KEYS[2], persistSet)
 if mode == 'standalone' then redis.call('SREM', KEYS[3], ARGV[1]) end

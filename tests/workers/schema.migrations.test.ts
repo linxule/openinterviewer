@@ -84,6 +84,40 @@ describe('migration runner (ST-09)', () => {
     })));
   });
 
+  it('upgrades actual schema1 through schema2 to schema3 without changing study columns or notebook rows', async () => {
+    await runInDurableObject(scratchObject('projects-upgrade'), (_instance, state) => {
+      const sql = state.storage.sql;
+      sql.exec('DROP TABLE study_projects'); sql.exec('DROP TABLE projects'); sql.exec('DROP TABLE exploration_answers');
+      sql.exec('DELETE FROM schema_migrations WHERE version > 1');
+      const before = sql.exec("SELECT name FROM pragma_table_info('studies')").toArray();
+      sql.exec("INSERT INTO studies VALUES (?, ?, 1, 1, 1, 0, 0, 0)", "legacy", JSON.stringify({ id: "legacy" }));
+      expect(applyMigrations(state.storage, MIGRATIONS.slice(0, 2))).toMatchObject({ status: 'ready', applied: [2] });
+      sql.exec("INSERT INTO exploration_answers VALUES ('answer', 'legacy', '{}', 'fp', 1, 1, 'failed')");
+      expect(applyMigrations(state.storage)).toMatchObject({ status: 'ready', applied: [3] });
+      expect(sql.exec("SELECT name FROM pragma_table_info('studies')").toArray()).toEqual(before);
+      expect(sql.exec('SELECT id FROM studies').toArray()).toEqual([{ id: 'legacy' }]);
+      expect(sql.exec('SELECT id FROM exploration_answers').toArray()).toEqual([{ id: 'answer' }]);
+      expect(sql.exec('SELECT * FROM study_projects').toArray()).toEqual([]);
+      expect(applyMigrations(state.storage, MIGRATIONS.slice(0, 2)))
+        .toEqual({ status: 'schema-unsupported', storedVersion: 3, reason: 'newer-incompatible' });
+    });
+  });
+
+  it('interrupted migration3 rolls back its tables and ledger; the real migration then succeeds', async () => {
+    await runInDurableObject(scratchObject('projects-interrupted'), (_instance, state) => {
+      const sql = state.storage.sql;
+      sql.exec('DROP TABLE study_projects'); sql.exec('DROP TABLE projects');
+      sql.exec('DELETE FROM schema_migrations WHERE version = 3');
+      const migration = MIGRATIONS[2];
+      expect(() => applyMigrations(state.storage, [...MIGRATIONS.slice(0, 2),
+        { ...migration, statements: [...migration.statements, 'INSERT INTO missing_table VALUES (1)'] }])).toThrow();
+      expect(tableExists(state, 'projects')).toBe(false);
+      expect(tableExists(state, 'study_projects')).toBe(false);
+      expect(ledger(state).map(row => row.version)).toEqual([1, 2]);
+      expect(applyMigrations(state.storage)).toMatchObject({ status: 'ready', applied: [3] });
+    });
+  });
+
   it('an interrupted migration leaves no partial schema or ledger row and is retried on the next start', async () => {
     const broken: Migration = {
       version: N,

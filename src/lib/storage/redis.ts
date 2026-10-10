@@ -17,6 +17,7 @@
 // authority gate, whose denials routes map to 401/403/404/409/503); those stay
 // on their existing route paths. Every other operation uses the client passed.
 
+import { createRedisProjectsStore } from './redisProjects';
 import {
   clearSampleWorkspaceRecords,
   createStudyAtomic,
@@ -81,6 +82,7 @@ export type RedisWorkspaceStoreOptions = {
 };
 
 export type StandaloneOnlyOperation =
+  | 'projects'
   | 'createStudy'
   | 'deleteStudy'
   | 'createParticipantLink'
@@ -173,6 +175,7 @@ export function createRedisWorkspaceStore(client: RedisPort, options: RedisWorks
 
   return {
     backend: 'redis',
+    projects: createRedisProjectsStore(client, () => standaloneOnly('projects')),
     // Hosted stores receive the authorized researcher's BYOS client here.
     exploration: createRedisExplorationStore(client),
 

@@ -85,7 +85,7 @@ function envelope(n: number, epoch: string) {
 async function reset(): Promise<void> {
   await runInDurableObject(workspaceStub(), async (_instance, state) => {
     const sql = state.storage.sql;
-    for (const table of ['analysis_jobs', 'analysis', 'interviews', 'aggregates', 'participant_links', 'consents', 'budget_windows', 'exploration_answers', 'studies', 'operator_audit']) {
+    for (const table of ['study_projects', 'projects', 'analysis_jobs', 'analysis', 'interviews', 'aggregates', 'participant_links', 'consents', 'budget_windows', 'exploration_answers', 'studies', 'operator_audit']) {
       sql.exec(`DELETE FROM ${table}`);
     }
     sql.exec(`UPDATE workspace_meta SET maintenance_state = 'open', maintenance_version = 0, activated_epoch = ?`, testEnv.ANALYSIS_RECOVERY_EPOCH);

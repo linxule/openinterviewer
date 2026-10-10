@@ -1,3 +1,5 @@
+import { isProjectOutcome } from '../projects/validation';
+import type { ProjectsStorePort } from '../projects/types';
 // WorkspaceStorePort client for the WorkspaceStore Durable Object (Cloudflare
 // target). Portable module: it never imports Workers modules; it receives the
 // namespace binding as an opaque structural value and uses only Web Crypto.
@@ -474,6 +476,14 @@ export function createDurableWorkspaceStore(config: DurableWorkspaceConfig): Dur
 
   const store: DurableWorkspaceStorePort = {
     backend: 'durable-object',
+    projects: {
+      list: () => call<Awaited<ReturnType<ProjectsStorePort['list']>>>('listProjects', undefined, unavailable, value => isProjectOutcome(value, 'list', undefined)),
+      read: (input) => call<Awaited<ReturnType<ProjectsStorePort['read']>>>('readProject', input, unavailable, value => isProjectOutcome(value, 'read', input)),
+      create: (input) => call<Awaited<ReturnType<ProjectsStorePort['create']>>>('createProject', input, ambiguous, value => isProjectOutcome(value, 'create', input)),
+      rename: (input) => call<Awaited<ReturnType<ProjectsStorePort['rename']>>>('renameProject', input, ambiguous, value => isProjectOutcome(value, 'rename', input)),
+      delete: (input) => call<Awaited<ReturnType<ProjectsStorePort['delete']>>>('deleteProject', input, ambiguous, value => isProjectOutcome(value, 'delete', input)),
+      assignStudy: (input) => call<Awaited<ReturnType<ProjectsStorePort['assignStudy']>>>('assignStudyProject', input, ambiguous, value => isProjectOutcome(value, 'assignStudy', input)),
+    },
 
     readiness: () => call<StoreReadiness>('readiness', undefined, unavailable, acceptReadiness),
 

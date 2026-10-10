@@ -200,6 +200,9 @@ describe('revision-bumping mutations (ST-03)', () => {
 describe('deleteStudy (ST-07)', () => {
   it('ST-07: a refused populated delete has no side effects, so later edits and saves still succeed', async () => {
     const study = await createStudy();
+    const project = await workspaceStub().createProject({ name: 'Refused deletion project' });
+    if (project.status !== 'created') throw new Error('project create failed');
+    await workspaceStub().assignStudyProject({ studyId: study.id, projectId: project.project.id });
     const first = await enrolParticipant(study);
     const second = await enrolParticipant(study);
     expect((await workspaceStub().persistCompletedInterview(await persistInput(first))).status).toBe('created');
@@ -207,6 +210,7 @@ describe('deleteStudy (ST-07)', () => {
     const seq = await mutationSeq();
     const snapshot = {
       studies: await sql(`SELECT * FROM studies`),
+      memberships: await sql(`SELECT * FROM study_projects`),
       links: await sql(`SELECT * FROM participant_links`),
       aggregates: await sql(`SELECT * FROM aggregates`),
       receipts: await sql(`SELECT * FROM idempotency_receipts`),
@@ -220,6 +224,7 @@ describe('deleteStudy (ST-07)', () => {
     });
     expect({
       studies: await sql(`SELECT * FROM studies`),
+      memberships: await sql(`SELECT * FROM study_projects`),
       links: await sql(`SELECT * FROM participant_links`),
       aggregates: await sql(`SELECT * FROM aggregates`),
       receipts: await sql(`SELECT * FROM idempotency_receipts`),
@@ -249,11 +254,17 @@ describe('deleteStudy (ST-07)', () => {
     expect(await workspaceStub().saveAggregate({ aggregate: aggregateFor(study.id), now: T0 })).toBe('saved');
     const other = await createStudy();
     await enrolParticipant(other);
+    const project = await workspaceStub().createProject({ name: 'Cascade project' });
+    if (project.status !== 'created') throw new Error('project create failed');
+    for (const member of [study, other]) await workspaceStub().assignStudyProject({ studyId: member.id, projectId: project.project.id });
     const seq = await mutationSeq();
 
     expect(await workspaceStub().deleteStudy({ studyId: study.id, now: T0 })).toEqual({ status: 'deleted', success: true });
 
     expect(await count('studies', 'id = ?', study.id)).toBe(0);
+    expect(await count('study_projects', 'study_id = ?', study.id)).toBe(0);
+    expect(await count('study_projects', 'study_id = ?', other.id)).toBe(1);
+    expect(await count('projects', 'id = ?', project.project.id)).toBe(1);
     expect(await count('participant_links', 'study_id = ?', study.id)).toBe(0);
     expect(await count('consents', 'study_id = ?', study.id)).toBe(0);
     expect(await count('aggregates', 'study_id = ?', study.id)).toBe(0);
