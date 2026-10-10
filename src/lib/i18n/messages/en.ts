@@ -90,6 +90,10 @@ export interface Messages {
       recording: (elapsed: string) => string;
       listening: string;
       transcribing: string;
+      ready: string;
+      starting: string;
+      noText: string;
+      interrupted: string;
       preparing: string;
       deviceUnavailable: string;
       review: string;
@@ -218,6 +222,10 @@ export const en: Messages = {
     send: 'Send',
     sendShortcut: '⌘/Ctrl + Enter to send',
     voice: {
+      ready: 'Voice input is ready. Press the microphone to speak.',
+      starting: 'Starting the microphone…',
+      noText: 'No text was captured. Please try again or type your answer.',
+      interrupted: 'Voice input stopped unexpectedly. Please try again or type your answer.',
       preparing: 'Preparing speech on this device…',
       deviceUnavailable: 'Voice input is unavailable on this device. Please type your answer.',
       start: 'Start voice input',

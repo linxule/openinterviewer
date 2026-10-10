@@ -97,6 +97,10 @@ export const es: Messages = {
     send: 'Enviar',
     sendShortcut: '⌘/Ctrl + Intro para enviar',
     voice: {
+      ready: 'La entrada de voz está lista. Pulsa el micrófono para hablar.',
+      starting: 'Activando el micrófono…',
+      noText: 'No se ha reconocido ningún texto. Inténtalo de nuevo o escribe tu respuesta.',
+      interrupted: 'La entrada de voz se ha detenido de forma inesperada. Inténtalo de nuevo o escribe tu respuesta.',
       preparing: 'Preparando la entrada de voz en este dispositivo…',
       deviceUnavailable: 'La entrada de voz no está disponible en este dispositivo. Escribe tu respuesta.',
       start: 'Iniciar la entrada de voz',

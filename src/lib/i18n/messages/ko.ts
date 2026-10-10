@@ -97,6 +97,10 @@ export const ko: Messages = {
     send: '보내기',
     sendShortcut: '⌘/Ctrl + Enter로 보내기',
     voice: {
+      ready: '음성 입력이 준비되었습니다. 마이크 버튼을 누르고 말씀해 주세요.',
+      starting: '마이크를 켜는 중…',
+      noText: '인식된 텍스트가 없습니다. 다시 시도하시거나 응답을 입력해 주세요.',
+      interrupted: '음성 입력이 예기치 않게 중지되었습니다. 다시 시도하시거나 응답을 입력해 주세요.',
       preparing: '이 기기에서 음성 입력을 준비하고 있습니다…',
       deviceUnavailable: '이 기기에서는 음성 입력을 사용할 수 없습니다. 응답을 입력해 주세요.',
       start: '음성 입력 시작',

@@ -14,11 +14,14 @@ import { MAX_CLIP_SECONDS, toVoiceClip } from './wavClip';
 
 export type VoiceState =
   | { kind: 'idle' }
+  | { kind: 'ready' }
+  | { kind: 'starting' }
+  | { kind: 'stopping' }
   | { kind: 'recording'; seconds: number }
   | { kind: 'listening' }
   | { kind: 'transcribing' }
   | { kind: 'preparing' }
-  | { kind: 'error'; reason: 'denied' | 'failed' | 'unsupported' | 'limited' | 'unavailable' | 'deviceUnavailable' };
+  | { kind: 'error'; reason: 'denied' | 'failed' | 'unsupported' | 'limited' | 'unavailable' | 'deviceUnavailable' | 'noText' | 'interrupted' };
 
 /** Shared by local availability, installation and recognition.
  * Chrome 155 reports all six as available or downloadable for local processing (checked 2026-10-10).
@@ -26,6 +29,11 @@ export type VoiceState =
 export const SPEECH_TAGS: Record<InterviewLanguage, string> = {
   en: 'en-US', zh: 'zh-CN', fr: 'fr-FR', ja: 'ja-JP', ko: 'ko-KR', es: 'es-ES',
 };
+
+/** Chinese and Japanese text is not space-separated. */
+export function speechJoiner(language: InterviewLanguage): string {
+  return language === 'zh' || language === 'ja' ? '' : ' ';
+}
 
 type SpeechRecognitionLike = {
   lang: string;
@@ -35,8 +43,11 @@ type SpeechRecognitionLike = {
   onresult: ((event: { resultIndex: number; results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }> }) => void) | null;
   onerror: ((event: { error: string }) => void) | null;
   onend: (() => void) | null;
+  onaudiostart: (() => void) | null;
+  onnomatch: (() => void) | null;
   start(): void;
   stop(): void;
+  abort(): void;
 };
 
 type DeviceAvailability = 'available' | 'downloadable' | 'downloading' | 'unavailable';
@@ -85,6 +96,10 @@ export function useVoiceInput(options: {
   const { mode, language, studyId, researcherPreview, participantSessionHandle, onText } = options;
   const deviceSessionKey = `oi:device-voice-unavailable:${researcherPreview ? 'preview' : participantSessionHandle ?? 'session'}:${studyId ?? ''}`;
   const [state, setState] = useState<VoiceState>({ kind: 'idle' });
+  const [preview, setPreview] = useState('');
+  const [speechTag, setSpeechTag] = useState(SPEECH_TAGS[language]);
+  const speechCleanup = useRef<(() => void) | null>(null);
+  const speechStop = useRef<(() => void) | null>(null);
   const [supported, setSupported] = useState(false);
   const recorder = useRef<MediaRecorder | null>(null);
   const recognition = useRef<SpeechRecognitionLike | null>(null);
@@ -130,9 +145,7 @@ export function useVoiceInput(options: {
     }
     return () => {
       generation.current += 1;
-      const session = recognition.current;
-      recognition.current = null;
-      session?.stop();
+      speechCleanup.current?.();
     };
   }, [mode, language, deviceSessionKey]);
 
@@ -143,9 +156,7 @@ export function useVoiceInput(options: {
     deviceAvailability.current = 'unavailable';
     setSupported(false);
     setState({ kind: 'error', reason: 'deviceUnavailable' });
-    const session = recognition.current;
-    recognition.current = null;
-    session?.stop();
+    speechCleanup.current?.();
   }, [deviceSessionKey]);
 
   const clearTimer = () => {
@@ -158,7 +169,7 @@ export function useVoiceInput(options: {
     return () => {
       mounted.current = false;
       clearTimer();
-      recognition.current?.stop();
+      speechCleanup.current?.();
       if (recorder.current?.state === 'recording') recorder.current.stop();
       recorder.current?.stream.getTracks().forEach((track) => track.stop());
     };
@@ -222,6 +233,7 @@ export function useVoiceInput(options: {
   }, [transcribe]);
 
   const startListening = useCallback(() => {
+    if (recognition.current) return;
     const Recognition = speechRecognitionClass();
     if (!Recognition) {
       if (mode === 'device') disableDevice();
@@ -250,38 +262,130 @@ export function useVoiceInput(options: {
     }
     session.lang = SPEECH_TAGS[language];
     session.continuous = true;
-    session.interimResults = false;
-    session.onresult = (event) => {
-      if (!mounted.current || recognition.current !== session) return;
-      for (let index = event.resultIndex; index < event.results.length; index += 1) {
-        const result = event.results[index];
-        if (result.isFinal && result[0].transcript.trim()) onTextRef.current(result[0].transcript.trim());
+    session.interimResults = true;
+    const committed = new Set<number>();
+    const interim = new Map<number, string>();
+    let finalCount = 0;
+    let stopping = false;
+    let startupTimer: ReturnType<typeof setTimeout> | undefined;
+    let stopTimer: ReturnType<typeof setTimeout> | undefined;
+    let audioStarted = false;
+    let permission: PermissionStatus | null = null;
+    const active = () => mounted.current && recognition.current === session;
+    const previewText = () => [...interim.entries()].sort(([a], [b]) => a - b).map(([, text]) => text).filter(Boolean).join(speechJoiner(language));
+    const release = (abort: boolean) => {
+      clearTimeout(startupTimer);
+      clearTimeout(stopTimer);
+      if (permission) permission.onchange = null;
+      recognition.current = null;
+      speechCleanup.current = null;
+      speechStop.current = null;
+      interim.clear();
+      if (mounted.current) setPreview('');
+      // Invalidate before abort: browsers can emit error/end synchronously.
+      if (abort) {
+        try { session.abort(); } catch { /* Already ended. */ }
       }
     };
+    // Unfinalized speech still goes to the answer box for review (some local
+    // recognizers emit interim text without a final).
+    const keepInterim = () => {
+      const text = previewText();
+      if (text) {
+        onTextRef.current(text);
+        finalCount += 1;
+      }
+    };
+    const finish = (abort = false) => {
+      if (!active()) return;
+      keepInterim();
+      release(abort);
+      setState(finalCount ? { kind: 'idle' } : { kind: 'error', reason: 'noText' });
+    };
+    session.onaudiostart = () => {
+      if (!active()) return;
+      audioStarted = true;
+      clearTimeout(startupTimer);
+      if (!stopping) setState({ kind: 'listening' });
+    };
+    session.onnomatch = () => { /* The end handler decides whether any text was captured. */ };
+    session.onresult = (event) => {
+      if (!active()) return;
+      for (const index of interim.keys()) {
+        if (index >= event.results.length) interim.delete(index);
+      }
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const result = event.results[index];
+        const text = result[0].transcript.trim();
+        if (result.isFinal) {
+          interim.delete(index);
+          if (!committed.has(index)) {
+            committed.add(index);
+            if (text) {
+              onTextRef.current(text);
+              finalCount += 1;
+            }
+          }
+        } else if (!committed.has(index)) interim.set(index, text);
+      }
+      setPreview(previewText());
+    };
     session.onerror = (event) => {
-      if (!mounted.current || recognition.current !== session) return;
+      if (!active()) return;
       if (mode === 'device' && ['language-not-supported', 'service-not-allowed'].includes(event.error)) {
+        keepInterim();
         disableDevice();
         return;
       }
-      setState({ kind: 'error', reason: event.error === 'not-allowed' || event.error === 'service-not-allowed' ? 'denied' : 'failed' });
+      keepInterim();
+      release(true);
+      setState({ kind: 'error', reason: event.error === 'aborted' ? 'interrupted'
+        : event.error === 'no-speech' ? 'noText'
+        : event.error === 'not-allowed' || event.error === 'service-not-allowed' ? 'denied' : 'failed' });
     };
-    session.onend = () => {
-      if (recognition.current !== session) return;
-      recognition.current = null;
-      if (mounted.current) setState((current) => (current.kind === 'listening' ? { kind: 'idle' } : current));
-    };
+    session.onend = () => finish();
     recognition.current = session;
-    setState({ kind: 'listening' });
+    speechCleanup.current = () => release(true);
+    speechStop.current = () => {
+      if (!active() || stopping) return;
+      stopping = true;
+      clearTimeout(startupTimer);
+      setState({ kind: 'stopping' });
+      stopTimer = setTimeout(() => finish(true), 10_000);
+      try { session.stop(); } catch { finish(true); }
+    };
+    setPreview('');
+    setSpeechTag(session.lang);
+    setState({ kind: 'starting' });
+    const armStartupDeadline = () => {
+      if (!active() || stopping || audioStarted || startupTimer !== undefined) return;
+      startupTimer = setTimeout(() => {
+        if (!active()) return;
+        release(true);
+        setState({ kind: 'error', reason: 'failed' });
+      }, 8_000);
+    };
     try {
       session.start();
     } catch {
       if (mode === 'device') disableDevice();
       else {
-        recognition.current = null;
+        release(true);
         setState({ kind: 'error', reason: 'failed' });
       }
+      return;
     }
+    // Capture waits for the browser's permission prompt, so the start-up
+    // deadline runs only once microphone access is granted. Without the
+    // Permissions API there is no deadline; Stop still releases the session.
+    try {
+      navigator.permissions?.query({ name: 'microphone' as PermissionName }).then((status) => {
+        if (!active()) return;
+        permission = status;
+        if (status.state === 'granted') armStartupDeadline();
+        else status.onchange = () => { if (status.state === 'granted') armStartupDeadline(); };
+      }, () => { /* Unsupported permission name. */ });
+    } catch { /* Unsupported permission name. */ }
   }, [language, mode, disableDevice]);
 
   const prepareDevice = useCallback(async () => {
@@ -302,7 +406,7 @@ export function useVoiceInput(options: {
         deviceAvailability.current = 'available';
         // Do not open the microphone unexpectedly after a slow download.
         // The participant can keep typing/sending, then press the mic when ready.
-        setState({ kind: 'idle' });
+        setState({ kind: 'ready' });
       }
     } catch {
       if (mounted.current && generation.current === currentGeneration) disableDevice();
@@ -316,11 +420,11 @@ export function useVoiceInput(options: {
       recorder.current?.stop();
       return;
     }
-    if (state.kind === 'listening') {
-      recognition.current?.stop();
+    if (state.kind === 'starting' || state.kind === 'listening') {
+      speechStop.current?.();
       return;
     }
-    if (state.kind === 'transcribing' || preparing.current || !supported) return;
+    if (state.kind === 'stopping' || state.kind === 'transcribing' || preparing.current || !supported) return;
     if (mode === 'installation') void startRecording();
     else if (mode === 'browser') startListening();
     else if (mode === 'device' && !deviceDisabled.current) {
@@ -329,5 +433,5 @@ export function useVoiceInput(options: {
     }
   }, [mode, startListening, startRecording, prepareDevice, state.kind, supported]);
 
-  return { enabled: mode === 'installation' || mode === 'browser' || mode === 'device', supported, state, toggle };
+  return { enabled: mode === 'installation' || mode === 'browser' || mode === 'device', supported, state, preview, speechTag, toggle };
 }
