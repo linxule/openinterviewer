@@ -73,7 +73,11 @@ export function analysisJsonLine(interview: StoredInterview): string {
 
 /** CSV record separators AND embedded text newlines are CRLF; JSONL retains exact text. */
 export function analysisCsvRow(cells: readonly unknown[]): string {
-  return cells.map(cell => csvCell(cell === undefined || cell === null ? '' : String(cell).replace(/\r\n?|\n/g, '\r\n'))).join(',') + '\r\n';
+  return cells.map(cell => {
+    // A finite number cannot carry a formula; guarding it would turn -0.5 into text.
+    if (typeof cell === 'number' && Number.isFinite(cell)) return `"${String(cell)}"`;
+    return csvCell(cell === undefined || cell === null ? '' : String(cell).replace(/\r\n?|\n/g, '\r\n'));
+  }).join(',') + '\r\n';
 }
 export const analysisCsvHeader = (cells: readonly string[]) => '\uFEFF' + analysisCsvRow(cells);
 
@@ -191,7 +195,7 @@ These views use each interview's own saved collectionConfig and consent/provider
 - profile_fields.csv: one row per saved profile field value, preserving the label at collection.
 - README.md: this data dictionary and sharing guidance.
 
-All CSVs are UTF-8 with BOM, CRLF record endings and quoted cells. Embedded text newlines are normalized to CRLF. Every cell, including headers, passes the spreadsheet formula-injection guard. CSV text cells may start with an added apostrophe (') for that guard: use the JSONL for verbatim quotes, not CSV.
+All CSVs are UTF-8 with BOM, CRLF record endings and quoted cells. Embedded text newlines are normalized to CRLF. Every text cell, including headers, passes the spreadsheet formula-injection guard; numbers are written as plain numbers. CSV text cells may start with an added apostrophe (') for that guard: use the JSONL for verbatim quotes, not CSV.
 
 ## interviews.csv columns and JSONL fields
 

@@ -99,6 +99,7 @@ describe('analysis file builders', () => {
     const parsed = parseCsv(csv);
     expect(parsed[0]).toEqual(parsed[1]);
     expect(parsed[0]).toEqual(["'=calc", "' +calc", "'-1", "'@fn", "'\tfoo", "'\r\nbar", '研究,"引文"']);
+    expect(analysisCsvRow([-0.5, 12, '-0.5'])).toBe(`"-0.5","12","'-0.5"\r\n`);
     const turns = analysisTurnsCsv(fixture());
     expect(parseCsv(turns)[2][9]).toBe("'=研究, \"引文\"\r\n第二行\r\n第三行\r\n尾行");
   });
