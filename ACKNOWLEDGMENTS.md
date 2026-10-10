@@ -4,6 +4,15 @@ OpenInterviewer grows through contributions, working forks and feedback from
 people conducting real research. Thank you for sharing what works, what is
 missing and how you have adapted the project.
 
+## Version 5.4.0 (draft): device voice
+
+Device voice continues the participant-microphone idea inspired by Yinghua
+([@8888oukaouka-spec](https://github.com/8888oukaouka-spec)) and her
+[openinterviewerver02](https://github.com/8888oukaouka-spec/openinterviewerver02)
+fork, credited under 5.1.0 below. The local-only mode is a new implementation
+against OpenInterviewer’s configuration and consent contracts, not code authored
+by her or cherry-picked from the fork.
+
 ## Version 5.3.0: projects
 
 Thank you to [@8888oukaouka-spec](https://github.com/8888oukaouka-spec) for the
