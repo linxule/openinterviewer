@@ -376,21 +376,21 @@ export default function StudyList() {
                 setMenuOpenId(null); setMovingStudy(null);
               }}>
               <Icon name="chevron" className={collapsed.has(group.id) ? undefined : 'rotate-180'} />
-              <span className="break-words min-w-0">{group.name}</span>{' '}
-              <Coordinate>{group.studies.length} {group.studies.length === 1 ? 'study' : 'studies'}</Coordinate>
+              <span className="break-words min-w-0">{group.name}{' '}
+                <Coordinate className="whitespace-nowrap font-normal">{group.studies.length} {group.studies.length === 1 ? 'study' : 'studies'}</Coordinate></span>
             </button>
             {group.project && <>
               <Button className="min-h-11" variant="quiet" disabled={projectBusy} onClick={() => router.push(`/setup?projectId=${group.id}`)}>+ Study</Button>
               <div className="relative" onKeyDown={event => { if (event.key === 'Escape') { setProjectMenu(null); projectTriggers.current[group.id]?.focus(); } }}>
-                <button type="button" className="min-h-11 min-w-11 text-ink-700" aria-label={`Project actions for ${group.name}`}
+                <button type="button" className="min-h-11 min-w-11 text-ink-700" aria-label={`Project actions for ${group.name}`} aria-haspopup="menu"
                   aria-expanded={projectMenu === group.id} ref={el => { projectTriggers.current[group.id] = el; }}
                   onClick={() => setProjectMenu(projectMenu === group.id ? null : group.id)}>···</button>
                 {projectMenu === group.id && <div className="absolute right-0 z-20 w-48 rounded-sm border border-ink-300 bg-paper-1 shadow-note">
-                  <Button className="min-h-11 w-full justify-start" variant="quiet" disabled={projectBusy} onClick={() => nameProject(group.id, group.name)}>Rename</Button>
-                  <Button className="min-h-11 w-full justify-start" variant="quiet" disabled={projectBusy} onClick={() => void downloadProject(group.id)}>Export transcripts</Button>
-                  <Button className="min-h-11 w-full justify-start" variant="destructive" disabled={projectBusy} onClick={() => {
+                  <button type="button" className="block min-h-11 w-full px-3 py-2 text-left text-[13px] text-ink-700 hover:bg-paper-2 disabled:cursor-not-allowed disabled:opacity-50" disabled={projectBusy} onClick={() => nameProject(group.id, group.name)}>Rename</button>
+                  <button type="button" className="block min-h-11 w-full px-3 py-2 text-left text-[13px] text-ink-700 hover:bg-paper-2 disabled:cursor-not-allowed disabled:opacity-50" disabled={projectBusy} onClick={() => void downloadProject(group.id)}>Export transcripts</button>
+                  <button type="button" className="block min-h-11 w-full px-3 py-2 text-left text-[13px] text-error hover:bg-paper-2 disabled:cursor-not-allowed disabled:opacity-50" disabled={projectBusy} onClick={() => {
                     if (window.confirm('Delete this project? Its studies will move to Ungrouped. No study or interview will be deleted.')) void runProjectAction(() => deleteProject(group.id));
-                  }}>Delete project</Button>
+                  }}>Delete project</button>
                 </div>}
               </div>
             </>}
