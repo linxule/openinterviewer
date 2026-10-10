@@ -65,6 +65,7 @@ export const fr: Messages = {
       mayChange: 'La personne responsable de l’étude peut analyser ultérieurement vos réponses avec un autre fournisseur ou modèle d’IA.',
     },
     voice: {
+      device: 'Si vous utilisez le microphone, votre navigateur transcrit votre voix en texte sur cet ordinateur et indique que l’enregistrement y reste. Cette étude ne reçoit que le texte que vous choisissez d’envoyer, jamais l’enregistrement. Lors de la première utilisation, votre navigateur peut télécharger un pack vocal (environ 60 Mo).',
       installation: 'Si vous utilisez le microphone, votre enregistrement est envoyé à Cloudflare pour être transcrit en texte par Cloudflare Workers AI. Cette étude ne conserve pas l’enregistrement, et vous pouvez modifier le texte avant de l’envoyer.',
       browser: 'Si vous utilisez le microphone, le service vocal de votre navigateur transcrit votre voix en texte : Google dans Chrome, Apple dans Safari, selon leurs propres conditions. Vous pouvez modifier le texte avant de l’envoyer.',
     },
@@ -96,6 +97,8 @@ export const fr: Messages = {
     send: 'Envoyer',
     sendShortcut: '⌘/Ctrl + Entrée pour envoyer',
     voice: {
+      preparing: 'Préparation de la saisie vocale sur cet appareil…',
+      deviceUnavailable: 'La saisie vocale n’est pas disponible sur cet appareil. Veuillez saisir votre réponse.',
       start: 'Démarrer la saisie vocale',
       stop: 'Arrêter l’enregistrement',
       recording: (elapsed) => `Enregistrement ${elapsed} (1:00 maximum)`,

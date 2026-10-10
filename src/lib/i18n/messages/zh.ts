@@ -65,6 +65,7 @@ export const zh: Messages = {
       mayChange: '研究人员之后可能会使用其他 AI 服务商或模型分析您的回答。',
     },
     voice: {
+      device: '如果您使用麦克风，浏览器会在这台电脑上将您的语音转为文字，并表示录音不会离开这台电脑。本研究只会收到您选择发送的文字，不会收到录音。首次使用时，浏览器可能需要下载语音包（约 60 MB）。',
       installation: '如果您使用麦克风，您的录音将发送至 Cloudflare，由 Cloudflare Workers AI 转换为文字。本研究不会保留录音，发送前您可以编辑文字。',
       browser: '如果您使用麦克风，您的浏览器的语音服务会将语音转换为文字：在 Chrome 中由 Google 提供，在 Safari 中由 Apple 提供，并适用其各自的条款。发送前您可以编辑文字。',
     },
@@ -96,6 +97,8 @@ export const zh: Messages = {
     send: '发送',
     sendShortcut: '按 ⌘/Ctrl + Enter 发送',
     voice: {
+      preparing: '正在为这台设备准备语音输入…',
+      deviceUnavailable: '这台设备无法使用语音输入。请键入您的回答。',
       start: '开始语音输入',
       stop: '停止录音',
       recording: (elapsed) => `正在录音 ${elapsed}（最长 1:00）`,

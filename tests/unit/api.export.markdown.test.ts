@@ -54,6 +54,15 @@ const study = makeStoredStudy({ id: 'study-a', config: { ...makeStoredStudy().co
 const exportedAt = new Date(Date.UTC(2026, 9, 8, 12, 0, 0));
 
 describe('transcripts Markdown builder', () => {
+  it('describes device voice from the saved collection revision, not the current mode', () => {
+    const markdown = buildTranscriptsMarkdown(study, [interview({
+      collectionConfig: { ...study.config, voiceInput: 'device' },
+    })], exportedAt);
+    expect(markdown).toContain('the browser turns speech into text on the participant’s computer');
+    expect(markdown).toContain('says the recording stays there; the study receives only the text the participant sends');
+    expect(markdown).not.toContain('speech turned into text by Cloudflare Workers AI');
+  });
+
   it('quotes every transcript line so content cannot forge headings, speakers or the closing marker', () => {
     const markdown = buildTranscriptsMarkdown(study, [interview()], exportedAt);
     const lines = markdown.split('\n');

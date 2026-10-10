@@ -88,6 +88,7 @@ export function voiceInputLine(interview: StoredInterview): string | null {
   switch (interview.collectionConfig?.voiceInput) {
     case 'installation': return 'Voice input offered: speech turned into text by Cloudflare Workers AI; the participant could edit the text before sending.';
     case 'browser': return 'Voice input offered: speech turned into text by the participant\'s browser speech service; the participant could edit the text before sending.';
+    case 'device': return 'Voice input offered: the browser turns speech into text on the participant’s computer and says the recording stays there; the study receives only the text the participant sends. The browser may first download a speech pack (about 60 MB); the participant could edit the text before sending.';
     default: return null;
   }
 }

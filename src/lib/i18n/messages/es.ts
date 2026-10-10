@@ -65,6 +65,7 @@ export const es: Messages = {
       mayChange: 'La persona responsable del estudio puede analizar más adelante tus respuestas con otro proveedor o modelo de IA.',
     },
     voice: {
+      device: 'Si usa el micrófono, su navegador convierte su voz en texto en este ordenador e indica que la grabación no sale de él. Este estudio solo recibe el texto que usted decida enviar, nunca la grabación. La primera vez, su navegador puede descargar un paquete de voz (unos 60 MB).',
       installation: 'Si usas el micrófono, tu grabación se envía a Cloudflare para que Cloudflare Workers AI la convierta en texto. Este estudio no guarda la grabación y puedes editar el texto antes de enviarlo.',
       browser: 'Si usas el micrófono, el servicio de voz de tu navegador convierte tu voz en texto: en Chrome lo hace Google y en Safari, Apple, según sus propias condiciones. Puedes editar el texto antes de enviarlo.',
     },
@@ -96,6 +97,8 @@ export const es: Messages = {
     send: 'Enviar',
     sendShortcut: '⌘/Ctrl + Intro para enviar',
     voice: {
+      preparing: 'Preparando la entrada de voz en este dispositivo…',
+      deviceUnavailable: 'La entrada de voz no está disponible en este dispositivo. Escriba su respuesta.',
       start: 'Iniciar la entrada de voz',
       stop: 'Detener la grabación',
       recording: (elapsed) => `Grabando ${elapsed} (máximo 1:00)`,

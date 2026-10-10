@@ -451,7 +451,7 @@ const InterviewChat: React.FC = () => {
                       type="button"
                       variant="quiet"
                       onClick={voice.toggle}
-                      disabled={isAiThinking || voice.state.kind === 'transcribing'}
+                      disabled={isAiThinking || voice.state.kind === 'transcribing' || voice.state.kind === 'preparing'}
                       aria-pressed={voice.state.kind === 'recording' || voice.state.kind === 'listening'}
                       className="min-h-11 w-full sm:w-auto"
                     >
@@ -467,6 +467,7 @@ const InterviewChat: React.FC = () => {
                     ? m.voice.recording(`${Math.floor(voice.state.seconds / 60)}:${String(voice.state.seconds % 60).padStart(2, '0')}`)
                     : voice.state.kind === 'listening' ? m.voice.listening
                     : voice.state.kind === 'transcribing' ? m.voice.transcribing
+                    : voice.state.kind === 'preparing' ? m.voice.preparing
                     : m.voice[voice.state.reason]}
                 </p>
               )}

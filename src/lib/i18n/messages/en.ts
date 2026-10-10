@@ -62,7 +62,7 @@ export interface Messages {
       mayChange: string;
     };
     /** Shown when the study offers voice input; names who turns speech into text. */
-    voice: { installation: string; browser: string };
+    voice: { installation: string; browser: string; device: string };
   };
   interview: {
     phases: Record<InterviewPhase, string>;
@@ -90,6 +90,8 @@ export interface Messages {
       recording: (elapsed: string) => string;
       listening: string;
       transcribing: string;
+      preparing: string;
+      deviceUnavailable: string;
       review: string;
       denied: string;
       failed: string;
@@ -184,6 +186,7 @@ export const en: Messages = {
       mayChange: 'The researcher may later analyze your responses with a different AI provider or model.',
     },
     voice: {
+      device: 'If you use the microphone, your browser turns your speech into text on this computer and says the recording stays there. This study receives only the text you choose to send, never the recording. The first time, your browser may download a speech pack (about 60 MB).',
       installation: 'If you use the microphone, your recording is sent to Cloudflare to be turned into text by Cloudflare Workers AI. This study does not keep the recording, and you can edit the text before sending it.',
       browser: 'If you use the microphone, your browser\'s speech service turns your speech into text: in Chrome this is Google, in Safari Apple, under their own terms. You can edit the text before sending it.',
     },
@@ -215,6 +218,8 @@ export const en: Messages = {
     send: 'Send',
     sendShortcut: '⌘/Ctrl + Enter to send',
     voice: {
+      preparing: 'Preparing speech on this device…',
+      deviceUnavailable: 'Voice input is unavailable on this device. Please type your answer.',
       start: 'Start voice input',
       stop: 'Stop recording',
       recording: (elapsed) => `Recording ${elapsed} (up to 1:00)`,

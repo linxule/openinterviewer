@@ -65,6 +65,7 @@ export const ja: Messages = {
       mayChange: '研究者は今後、別の AI プロバイダーやモデルを使ってあなたの回答を分析する場合があります。',
     },
     voice: {
+      device: 'マイクを使う場合、ブラウザーがこのコンピューター上で音声を文字に変換し、録音はこのコンピューターの外に出ないとしています。この調査が受け取るのは、あなたが送信を選んだ文字だけで、録音は受け取りません。初回は、ブラウザーが音声パック（約60 MB）をダウンロードすることがあります。',
       installation: 'マイクを使用すると、録音は Cloudflare に送信され、Cloudflare Workers AI によって文字に変換されます。この研究では録音を保管せず、送信前に文字を編集できます。',
       browser: 'マイクを使用すると、ブラウザの音声サービスが音声を文字に変換します。Chrome では Google、Safari では Apple が、それぞれの規約に基づいて処理します。送信前に文字を編集できます。',
     },
@@ -96,6 +97,8 @@ export const ja: Messages = {
     send: '送信',
     sendShortcut: '⌘/Ctrl + Enter で送信',
     voice: {
+      preparing: 'このデバイスで音声入力を準備しています…',
+      deviceUnavailable: 'このデバイスでは音声入力を利用できません。回答を入力してください。',
       start: '音声入力を開始',
       stop: '録音を停止',
       recording: (elapsed) => `録音中 ${elapsed}（最長 1:00）`,
