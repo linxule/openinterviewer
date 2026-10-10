@@ -102,6 +102,7 @@ export async function projectAssignmentFailureJourney(page: Page) {
   const name = `Deleted before assignment ${Date.now()}`;
   await page.goto('/studies'); await newProject(page, name);
   await page.getByRole('region', { name, exact: true }).getByRole('button', { name: '+ Study', exact: true }).click();
+  await page.waitForURL(/\/setup\?projectId=[0-9a-f-]+/);
   const projectId = new URL(page.url()).searchParams.get('projectId')!;
   await fillProjectStudy(page, 'Study survives assignment failure');
   const deleted = await page.evaluate(async id => (await fetch(`/api/projects/${id}`, { method: 'DELETE' })).status, projectId);
