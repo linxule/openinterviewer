@@ -95,7 +95,7 @@ export default defineConfig([
     'dist/**',
     'next-env.d.ts',
     'coverage/**',
-    'playwright-report/**',
+    'playwright-report*/**',
     'test-results/**',
     '**/.open-next/**',
     '**/.wrangler/**',
