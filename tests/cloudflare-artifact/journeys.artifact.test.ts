@@ -704,7 +704,10 @@ describe('operator status and an abandoned export on one workspace (OPS-01, ST-0
 
     const { zip, bytes } = await exportZip(app, researcher);
     expect(interviewEntries(zip)).toHaveLength(3);
-    expect(Object.keys(zip.files).filter((name) => name.endsWith('.md'))).toHaveLength(3);
+    expect(Object.keys(zip.files).filter((name) => name.endsWith('.md') && !name.startsWith('analysis/'))).toHaveLength(3);
+    for (const name of ['analysis/README.md', 'analysis/interviews.jsonl', 'analysis/interviews.csv', 'analysis/profile_fields.csv']) expect(zip.file(name), name).toBeTruthy();
+    expect(Object.keys(zip.files).filter((name) => /^analysis\/turns\/\d{3}\.csv$/.test(name))).toHaveLength(3);
+    expect((await zip.file('analysis/interviews.jsonl')!.async('string')).trim().split('\n')).toHaveLength(3);
     const summary = (await zip.file('summary.csv')!.async('string')).split('\n').filter(Boolean);
     expect(summary).toHaveLength(4);
     for (const interviewId of interviewIds) expect(summary.some((row) => row.includes(`"${interviewId}"`))).toBe(true);

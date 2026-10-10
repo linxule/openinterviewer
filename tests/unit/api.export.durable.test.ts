@@ -11,7 +11,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import JSZip from 'jszip';
 import type { StoredAggregateSynthesis, StoredInterview } from '@/types';
-import { makeStoredInterview } from '../fixtures/models';
+import { makeStoredInterview, makeStudyConfig } from '../fixtures/models';
 import { standaloneTestContext } from '../helpers/workspaceStoreFixture';
 import type { RedisPort } from '@/lib/redisPort';
 
@@ -112,6 +112,13 @@ function fixtures(): { interviews: StoredInterview[]; aggregates: StoredAggregat
       id: 'session-cc33-newest',
       studyId: 'study-b',
       studyName: '+HYPERLINK("x") Ünïcödé study',
+      studyRevision: 3,
+      collectionConfig: makeStudyConfig({ interviewLanguages: ['zh', 'en'], voiceInput: 'browser' }),
+      interviewLanguage: 'zh', providerCommitment: 'fixed',
+      conductedByProvider: 'openai', conductedByModel: 'fixture-conversation',
+      consentHash: 'a'.repeat(64), consentAcceptedAt: base,
+      consentTransport: 'cloudflare-gateway', aiTransport: 'cloudflare-gateway',
+      aiProvider: 'gemini', aiModel: 'fixture-analysis',
       createdAt: base + 3_000_000,
       completedAt: base + 3_900_000,
       participantProfile: {
@@ -124,6 +131,7 @@ function fixtures(): { interviews: StoredInterview[]; aggregates: StoredAggregat
         timestamp: base,
       },
       transcript: [
+        { id: 'system', role: 'system', content: 'Synthetic system message', timestamp: base },
         { id: 'm-1', role: 'ai', content: 'Hello 👋', timestamp: base + 3_000_000 },
         { id: 'm-2', role: 'user', content: '=cmd|calc', timestamp: base + 3_060_000 },
       ],
@@ -326,12 +334,21 @@ describe('GET /api/interviews/export on Cloudflare (RT-09, ST-08, F1)', () => {
     expect(entries.map((entry) => entry.name)).toEqual(reference.map((entry) => entry.name));
     expect(entries).toEqual(reference);
     expect(entries.map((entry) => entry.name)).toEqual([
-      '001_2026-09-20_session-.json', '001_2026-09-20_session-.md',
-      '002_2026-09-20_session-.json', '002_2026-09-20_session-.md',
-      '003_2026-09-20_session-.json', '003_2026-09-20_session-.md',
-      '004_2026-09-20_session-.json', '004_2026-09-20_session-.md',
+      'analysis/', 'analysis/turns/',
+      '001_2026-09-20_session-.json', '001_2026-09-20_session-.md', 'analysis/turns/001.csv',
+      '002_2026-09-20_session-.json', '002_2026-09-20_session-.md', 'analysis/turns/002.csv',
+      '003_2026-09-20_session-.json', '003_2026-09-20_session-.md', 'analysis/turns/003.csv',
+      '004_2026-09-20_session-.json', '004_2026-09-20_session-.md', 'analysis/turns/004.csv',
       'aggregates/', 'aggregates/study-b.json', 'aggregates/study-a.json', 'summary.csv',
+      'analysis/interviews.jsonl', 'analysis/interviews.csv', 'analysis/profile_fields.csv', 'analysis/README.md',
     ]);
+    const jsonl = entries.find(entry => entry.name === 'analysis/interviews.jsonl')!.text!;
+    const records = jsonl.trimEnd().split('\n').map(line => JSON.parse(line));
+    expect(records).toHaveLength(data.interviews.length);
+    expect(records[0].turns.map((turn: { index: number }) => turn.index)).toEqual([2, 3]);
+    expect(records[0].interview).toMatchObject({ language: 'zh', languageTag: 'zh-Hans', voiceInput: 'browser' });
+    expect(records[0].consent.conductedBy.model).toBe('fixture-conversation');
+    expect(records[0].analysis.model).toBe('fixture-analysis');
     const csv = entries.find((entry) => entry.name === 'summary.csv')!.text!;
     expect(csv).toContain(`"'+HYPERLINK(""x"") Ünïcödé study"`);
     expect(csv).toContain(`"'@bottom line"`);
@@ -341,7 +358,7 @@ describe('GET /api/interviews/export on Cloudflare (RT-09, ST-08, F1)', () => {
     expect(methods().filter((method) => method === 'beginExport')).toHaveLength(1);
     expect(rpcCalls[0].input).toEqual({ maximum: 500 });
     const pages = rpcCalls.filter((call) => call.method === 'readExportPage');
-    expect(pages).toHaveLength(data.interviews.length + data.aggregates.length);
+    expect(pages).toHaveLength(1 + 5 * (data.interviews.length + data.aggregates.length - 1));
     for (const page of pages) {
       expect(page.input.sequence).toBe(SEQUENCE);
       expect(page.input.pageSize).toBeLessThanOrEqual(200);
@@ -364,6 +381,20 @@ describe('GET /api/interviews/export on Cloudflare (RT-09, ST-08, F1)', () => {
     expect(response.status).toBe(status);
     expect(await response.json()).toEqual(body);
     expect(methods()).toEqual(['beginExport']);
+  });
+
+  it('refuses a partial archive when an analysis-file replay cannot reproduce the snapshot', async () => {
+    let reads = 0;
+    const data = fixtures();
+    scriptExport(data, { pageHook: () => {
+      reads += 1;
+      // Initial six pages, then summary pass, then fail inside JSONL's pass.
+      return reads === 12 ? { status: 'changed' } : null;
+    } });
+    const { bytes, error } = await collect(await GET());
+    expect(error).toBeInstanceOf(Error);
+    expect(await isCompleteZipArchive(new Blob([bytes as Uint8Array<ArrayBuffer>]))).toBe(false);
+    expect(methods()).not.toContain('verifyExportSequence');
   });
 
   it('F1/ST-08: a snapshot change before the response starts is 409 EXPORT_CHANGED, retryable', async () => {

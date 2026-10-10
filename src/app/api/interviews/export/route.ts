@@ -27,6 +27,7 @@ import {
   MAX_OWNED_STUDIES,
 } from '@/lib/ownedStudies';
 import JSZip from 'jszip';
+import { analysisCsvHeader, analysisInterviewsHeader, analysisInterviewsRow, analysisJsonLine, analysisProfileRows, analysisReadme, analysisTurnsCsv, analysisTurnsName, collectProfileColumns, PROFILE_COLUMNS, sortedProfileColumns, type ProfileColumns } from '@/lib/export/analysisFiles';
 import { StoredInterview, StoredAggregateSynthesis, type StoredStudy } from '@/types';
 import { logRequestFailure } from '@/lib/requestLog';
 import {
@@ -116,6 +117,8 @@ async function buildExportResponse(
   beforeReturn?: () => Promise<Response | null>,
 ): Promise<Response> {
   const zip = new JSZip();
+  zip.folder('analysis/turns');
+  const columns: ProfileColumns = new Map();
 
   // Entry names and contents come from the builders the Cloudflare stream
   // uses, so the two archives cannot drift apart.
@@ -123,6 +126,8 @@ async function buildExportResponse(
     const baseName = interviewEntryBaseName(index, interview);
     zip.file(`${baseName}.json`, interviewJson(interview));
     zip.file(`${baseName}.md`, interviewTranscriptMarkdown(interview));
+    zip.file(analysisTurnsName(index), analysisTurnsCsv(interview));
+    collectProfileColumns(columns, interview);
   });
 
   for (const [studyId, aggregate] of aggregates) {
@@ -134,6 +139,11 @@ async function buildExportResponse(
 
   const csvLines = [SUMMARY_CSV_HEADER, ...interviews.map(summaryCsvRow)];
   zip.file(SUMMARY_CSV_NAME, csvLines.join('\n'));
+  const orderedColumns = sortedProfileColumns(columns);
+  zip.file('analysis/interviews.jsonl', interviews.map(analysisJsonLine).join(''));
+  zip.file('analysis/interviews.csv', analysisInterviewsHeader(orderedColumns) + interviews.map(interview => analysisInterviewsRow(interview, orderedColumns)).join(''));
+  zip.file('analysis/profile_fields.csv', analysisCsvHeader(PROFILE_COLUMNS) + interviews.map(analysisProfileRows).join(''));
+  zip.file('analysis/README.md', analysisReadme(orderedColumns));
 
   const zipBlob = await zip.generateAsync({ type: 'blob' });
   const refusal = await beforeReturn?.();
@@ -169,7 +179,7 @@ async function streamDurableExport(store: DurableWorkspaceStorePort, studyId?: s
   // Every page carries at least one row or aggregate, which bounds the walk.
   const maximumPages = begun.count + begun.studyIds.length + MAX_EXPLORATION_ANSWERS + 1;
   const body = createInterviewExportStream({
-    pages: remainingExportPages(store, sequence, first, maximumPages, studyId),
+    pages: () => remainingExportPages(store, sequence, first, maximumPages, studyId),
     beforeFinish: async () => {
       const verified = await store.verifyExportSequence({ sequence, ...scope });
       if (verified === 'changed') throw new ExportSnapshotChangedError();

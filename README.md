@@ -331,7 +331,19 @@ For researchers:
 6. Choose a dataset, run aggregate analysis, or ask questions in **Explore**; export the study or workspace.
 7. Pause and resume collection without replacing links, or delete a study in Settings when its retention period ends.
 
-**Export this study** downloads a ZIP of raw records, transcripts, the aggregate and the notebook. **Export transcripts (.md)** downloads one Markdown file with every saved transcript of the study, for reading or for another analysis tool. Transcript text is quoted exactly as saved, and each interview lists what its participant was told about the AI. If a participant was promised that the study uses only one provider and model, sending the file to a different AI service may break that promise. A download that did not finish is refused rather than saved.
+**Export this study** downloads a ZIP of raw records, transcripts, the aggregate and the notebook, plus an `analysis/` folder for coding tools and spreadsheets. The same analysis files are included in workspace ZIP exports.
+
+The ZIP retains the per-interview `NNN_*.json` and `.md`, `summary.csv`, `aggregates/` and `explorations/`. It adds:
+
+- `analysis/README.md`: field definitions, historical-label rules and the consent/provider sharing warning.
+- `analysis/interviews.jsonl`: one interview per line, with collection context, recorded consent and analysis provenance, profile values and verbatim turns.
+- `analysis/interviews.csv`: interview-level data and one column per observed profile field ID, labeled from the newest interview.
+- `analysis/turns/NNN.csv`: one turn table per interview to bound export memory; indices match analysis citations, including gaps for omitted system messages.
+- `analysis/profile_fields.csv`: profile values in long form with their labels at collection.
+
+CSVs use UTF-8 with BOM and CRLF. Formula-like text is protected with an added apostrophe; use JSONL for verbatim quotes. Unknown historical fields are not filled from today’s study configuration. ZIP Markdown dates are ISO UTC.
+
+**Export transcripts (.md)** downloads one Markdown file with every saved transcript of the study, for reading or for another analysis tool. Transcript text is quoted exactly as saved, and each interview lists what its participant was told about the AI. If a participant was promised that the study uses only one provider and model, sending the file to a different AI service may break that promise. A download that did not finish is refused rather than saved.
 
 ### Explore this study
 

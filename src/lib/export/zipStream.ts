@@ -1,7 +1,7 @@
 // Streaming PKZIP writer (ST-08, RT-09). Web Streams only, so the same code
 // runs in Node 24+ and workerd. Entries are deflated through
 // CompressionStream('deflate-raw') and written with data descriptors, so
-// memory is bounded by the entry being added plus the central-directory
+// memory is bounded by the entry (or current async text chunk) plus the central-directory
 // records (name + fixed fields per entry). The central directory is written
 // only by finish(); abort() or any error errors the readable side instead, so
 // a consumer never receives a well-formed archive that is missing entries.
@@ -51,7 +51,7 @@ export type ZipStreamOptions = {
 
 export type ZipStream = {
   readonly readable: ReadableStream<Uint8Array>;
-  addFile(name: string, data: string | Uint8Array): Promise<void>;
+  addFile(name: string, data: string | Uint8Array | AsyncIterable<string> | Iterable<string>): Promise<void>;
   addDirectory(name: string): Promise<void>;
   /** Writes the central directory and closes the stream. */
   finish(): Promise<void>;
@@ -200,7 +200,9 @@ export function createZipStream(options: ZipStreamOptions = {}): ZipStream {
     return bytes;
   }
 
-  async function deflateInto(data: Uint8Array): Promise<number> {
+  async function deflateInto(chunks: AsyncIterable<Uint8Array>): Promise<{ compressedSize: number; uncompressedSize: number; crc: number }> {
+    let uncompressedSize = 0;
+    let crc = 0;
     const compressor = new CompressionStream('deflate-raw');
     const input = compressor.writable.getWriter();
     const output = compressor.readable.getReader();
@@ -221,21 +223,34 @@ export function createZipStream(options: ZipStreamOptions = {}): ZipStream {
       }
     })();
     const feed = (async () => {
-      for (let start = 0; start < data.length; start += INPUT_SLICE_BYTES) {
-        await input.write(data.subarray(start, Math.min(start + INPUT_SLICE_BYTES, data.length)) as Uint8Array<ArrayBuffer>);
+      try {
+        for await (const data of chunks) {
+          uncompressedSize += data.length;
+          if (uncompressedSize > limits.maxEntryBytes) throw new ZipLimitError('entry-size');
+          crc = crc32(data, crc);
+          for (let start = 0; start < data.length; start += INPUT_SLICE_BYTES) {
+            await input.write(data.subarray(start, Math.min(start + INPUT_SLICE_BYTES, data.length)) as Uint8Array<ArrayBuffer>);
+          }
+        }
+        await input.close();
+      } catch (error) {
+        await input.abort(error).catch(() => undefined);
+        throw error;
       }
-      await input.close();
     })();
     await Promise.all([feed, pump]);
-    return compressedSize;
+    return { compressedSize, uncompressedSize, crc };
   }
 
-  async function addFile(name: string, data: string | Uint8Array): Promise<void> {
+  async function addFile(name: string, data: string | Uint8Array | AsyncIterable<string> | Iterable<string>): Promise<void> {
     begin();
     try {
       const nameBytes = encodeName(name, false);
-      const bytes = typeof data === 'string' ? encoder.encode(data) : data;
-      if (bytes.length > limits.maxEntryBytes) throw new ZipLimitError('entry-size');
+      async function* chunks(): AsyncGenerator<Uint8Array> {
+        if (typeof data === 'string') yield encoder.encode(data);
+        else if (data instanceof Uint8Array) yield data;
+        else for await (const chunk of data) yield encoder.encode(chunk);
+      }
       const entryOffset = offset;
       const flags = FLAG_DATA_DESCRIPTOR | FLAG_UTF8;
       await emit(localHeader({
@@ -246,14 +261,13 @@ export function createZipStream(options: ZipStreamOptions = {}): ZipStream {
         compressedSize: 0,
         uncompressedSize: 0,
       }));
-      const crc = crc32(bytes);
-      const compressedSize = await deflateInto(bytes);
+      const { crc, compressedSize, uncompressedSize } = await deflateInto(chunks());
       const descriptor = new Uint8Array(DATA_DESCRIPTOR_BYTES);
       const view = new DataView(descriptor.buffer);
       view.setUint32(0, DATA_DESCRIPTOR_SIGNATURE, true);
       view.setUint32(4, crc, true);
       view.setUint32(8, compressedSize, true);
-      view.setUint32(12, bytes.length, true);
+      view.setUint32(12, uncompressedSize, true);
       await emit(descriptor);
       central.push({
         name: nameBytes,
@@ -261,7 +275,7 @@ export function createZipStream(options: ZipStreamOptions = {}): ZipStream {
         method: METHOD_DEFLATE,
         crc,
         compressedSize,
-        uncompressedSize: bytes.length,
+        uncompressedSize,
         offset: entryOffset,
         externalAttributes: 0,
       });

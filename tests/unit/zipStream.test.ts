@@ -131,6 +131,35 @@ describe('createZipStream (RT-09, ST-08)', () => {
     expect(loaded.files['plain.txt'].date.toISOString()).toBe('2026-09-23T12:34:56.000Z');
   });
 
+  it('streams one entry from chunks with correct cumulative CRC and lengths', async () => {
+    const zip = createZipStream();
+    const out = collect(zip.readable);
+    async function* chunks() { yield '研究\n'; yield '"quoted"'; yield ''; yield 'final\n'; }
+    await zip.addFile('analysis.jsonl', chunks());
+    await zip.finish();
+    const { bytes, error } = await out;
+    expect(error).toBeNull();
+    const loaded = await JSZip.loadAsync(bytes, { checkCRC32: true });
+    expect(await loaded.file('analysis.jsonl')!.async('string')).toBe('研究\n"quoted"final\n');
+  });
+
+  it('counts cumulative chunk bytes and abandons a file on a source failure without closing records', async () => {
+    for (const failSource of [true, false]) {
+      const zip = createZipStream({ limits: { maxEntryBytes: 10 } });
+      const out = collect(zip.readable);
+      async function* chunks() {
+        yield '123456';
+        if (failSource) throw new ExportSnapshotChangedError();
+        yield '78901';
+      }
+      await expect(zip.addFile('analysis.jsonl', chunks())).rejects.toThrow();
+      await expect(zip.finish()).rejects.toThrow();
+      const { bytes, error } = await out;
+      expect(error).toBeInstanceOf(failSource ? ExportSnapshotChangedError : ZipLimitError);
+      expect(containsSignature(bytes, EOCD)).toBe(false);
+    }
+  });
+
   it('computes the standard CRC-32', () => {
     expect(crc32(new TextEncoder().encode('123456789'))).toBe(0xcbf43926);
     expect(crc32(new Uint8Array())).toBe(0);
@@ -302,7 +331,7 @@ describe('createInterviewExportStream parity with the Node JSZip export (ST-08, 
     // Paged exactly as the Durable Object pages: interviews, then aggregates
     // in first-seen study order.
     const stream = createInterviewExportStream({
-      pages: pagesOf([
+      pages: () => pagesOf([
         { interviews: interviews.slice(0, 2), aggregates: [] },
         { interviews: interviews.slice(2), aggregates: [] },
         { interviews: [], aggregates: [aggregates.get('study-b')!] },
@@ -325,7 +354,7 @@ describe('createInterviewExportStream parity with the Node JSZip export (ST-08, 
   it('ST-08: an export without aggregates matches JSZip too (no aggregates/ folder)', async () => {
     const { interviews } = fixtures();
     const reference = await jszipReference(interviews, new Map());
-    const { bytes } = await collect(createInterviewExportStream({ pages: pagesOf([{ interviews, aggregates: [] }]) }));
+    const { bytes } = await collect(createInterviewExportStream({ pages: () => pagesOf([{ interviews, aggregates: [] }]) }));
     expect(await entriesOf(bytes)).toEqual(reference);
   });
 
@@ -336,7 +365,7 @@ describe('createInterviewExportStream parity with the Node JSZip export (ST-08, 
       yield { interviews: interviews.slice(0, 1), aggregates: [] };
       throw new ExportSnapshotChangedError();
     }
-    const { bytes, error } = await collect(createInterviewExportStream({ pages: changing(), onError }));
+    const { bytes, error } = await collect(createInterviewExportStream({ pages: changing, onError }));
     expect(error).toBeInstanceOf(ExportSnapshotChangedError);
     expect(onError).toHaveBeenCalledWith(expect.any(ExportSnapshotChangedError));
     expect(containsSignature(bytes, EOCD)).toBe(false);
@@ -353,7 +382,7 @@ describe('createInterviewExportStream parity with the Node JSZip export (ST-08, 
       throw new Error('observer failed');
     });
     const outcome = await Promise.race([
-      collect(createInterviewExportStream({ pages: changing(), onError })),
+      collect(createInterviewExportStream({ pages: changing, onError })),
       new Promise<'pending'>((resolve) => setTimeout(() => resolve('pending'), 2_000)),
     ]);
     expect(outcome).not.toBe('pending');
@@ -366,7 +395,7 @@ describe('createInterviewExportStream parity with the Node JSZip export (ST-08, 
   it('ST-08: a failed final sequence check omits archive finalization', async () => {
     const { interviews } = fixtures();
     const { bytes, error } = await collect(createInterviewExportStream({
-      pages: pagesOf([{ interviews, aggregates: [] }]),
+      pages: () => pagesOf([{ interviews, aggregates: [] }]),
       beforeFinish: async () => {
         throw new ExportSnapshotChangedError();
       },
