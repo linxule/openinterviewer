@@ -97,8 +97,8 @@ export const zh: Messages = {
     send: '发送',
     sendShortcut: '按 ⌘/Ctrl + Enter 发送',
     voice: {
-      preparing: '正在为这台设备准备语音输入…',
-      deviceUnavailable: '这台设备无法使用语音输入。请键入您的回答。',
+      preparing: '正在这台设备上准备语音输入…',
+      deviceUnavailable: '这台设备无法使用语音输入。请直接输入您的回答。',
       start: '开始语音输入',
       stop: '停止录音',
       recording: (elapsed) => `正在录音 ${elapsed}（最长 1:00）`,
