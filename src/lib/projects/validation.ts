@@ -12,7 +12,9 @@ export function isStudyId(value: unknown): value is string {
 }
 export function normalizeProjectName(value: unknown): string | null {
   // Reject controls before trimming so leading newlines are not silently accepted.
-  if (typeof value !== 'string' || /[\u0000-\u001f\u007f-\u009f]/.test(value)) return null;
+  // Lone UTF-16 surrogates cannot be stored as UTF-8 (Redis readers reject them), so they are refused here.
+  if (typeof value !== 'string' || /[\u0000-\u001f\u007f-\u009f]/.test(value)
+    || /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(value)) return null;
   const name = value.trim();
   return name.length > 0 && name.length <= 200 ? name : null;
 }

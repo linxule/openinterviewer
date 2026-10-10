@@ -8,6 +8,10 @@ describe('project domain validation', () => {
     expect(normalizeProjectName('🙂'.repeat(100))).not.toBeNull();
     expect(normalizeProjectName('🙂'.repeat(101))).toBeNull();
   });
+  it('refuses lone UTF-16 surrogates but keeps paired ones', () => {
+    for (const lone of ['\ud800', 'a\udc00b', 'x\ud83d']) expect(normalizeProjectName(lone)).toBeNull();
+    expect(normalizeProjectName('a\ud83d\ude42b')).toBe('a🙂b');
+  });
   it.each(['', '   ', '\nName', 'Name\t', '\u007f', '\u0085', 'a'.repeat(201), null, 3])('rejects invalid names: %j', value => {
     expect(normalizeProjectName(value)).toBeNull();
   });

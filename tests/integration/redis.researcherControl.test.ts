@@ -338,6 +338,17 @@ describe('projects over real Redis', () => {
     if (result.status !== 'created') throw new Error('Project create failed');
     return result.project;
   }
+  it('the Lua writer refuses a name its own readers would reject, writing nothing', async () => {
+    const { PROJECTS_SCRIPT } = await import('@/lib/storage/redisProjects');
+    for (const name of ['bad\u0001name', ' padded ', '']) {
+      const id = randomUUID();
+      expect(await client.eval(PROJECTS_SCRIPT, [], ['create', id, name, '', String(Date.now())])).toEqual(['oi:unavailable']);
+      expect(await client.get('project:' + id)).toBeNull();
+    }
+    const p = await create();
+    expect(await client.eval(PROJECTS_SCRIPT, [], ['rename', p.id, 'bad\u0001name', '', String(Date.now())])).toEqual(['oi:unavailable']);
+    expect(await store.projects.list()).toMatchObject({ status: 'ok', projects: [{ id: p.id, name: 'Project 🙂' }] });
+  });
   async function seed(bare = false) {
     const s = makeStoredStudy({ id: randomUUID(), revision: 1 });
     expect(await createStudyAtomic(s, client)).toBe('created');

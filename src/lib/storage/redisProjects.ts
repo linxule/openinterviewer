@@ -109,6 +109,8 @@ local function json(status, p)
 end
 if not kind('all-projects','set') or not kind('all-studies','set') then return result('unavailable') end
 
+if (op == 'create' or op == 'rename') and not valid_name(name) then return result('unavailable') end
+
 if op == 'create' then
   if redis.call('SCARD','all-projects') >= 1000 then return result('quota') end
   if not kind('project:' .. id,'string') then return result('unavailable') end
