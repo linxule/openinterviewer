@@ -46,12 +46,14 @@ describe('self-hosted fonts', () => {
   });
 
   it('defines the families every consumer reads through --font-*', () => {
+    const theme = readFileSync(path.join(process.cwd(), 'src/app/globals.css'), 'utf8');
     for (const [variable, family] of [
-      ['--font-serif', 'Source Serif 4'],
-      ['--font-sans', 'Public Sans'],
-      ['--font-mono', 'IBM Plex Mono'],
+      ['serif', 'Source Serif 4'],
+      ['sans', 'Public Sans'],
+      ['mono', 'IBM Plex Mono'],
     ]) {
-      expect(css).toContain(`${variable}: '${family}', '${family} Fallback';`);
+      expect(css).toContain(`--typeface-${variable}: '${family}', '${family} Fallback';`);
+      expect(theme).toContain(`--font-${variable}: var(--typeface-${variable}),`);
       expect(css).toContain(`font-family: '${family} Fallback';`);
       expect(latin).toContain(`{ prop: 'font-family', value: "'${family}'" }`);
     }

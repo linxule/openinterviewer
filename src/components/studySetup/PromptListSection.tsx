@@ -81,7 +81,7 @@ export function PromptListSection({ draft, editing, onEdit, kind }: PromptListSe
               onChange={(e) => config.update(draft, i, e.target.value)}
               placeholder={config.placeholder(i)}
               rows={2}
-              className="flex-1 resize-none bg-paper-2 border border-ink-300 rounded px-3 py-2 text-ink-900 font-sans"
+              className="flex-1 resize-none bg-paper-2 border border-ink-300 rounded-sm px-3 py-2 text-ink-900 font-sans"
             />
             {items.length > 1 && (
               <button

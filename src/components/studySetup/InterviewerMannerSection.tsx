@@ -38,7 +38,7 @@ export function InterviewerMannerSection({ draft, editing, onEdit }: Interviewer
       onEdit={onEdit}
       read={<InterviewerMannerSheet draft={draft} />}
     >
-      <Label>Start from a preset</Label>
+      <div><Label>Start from a preset</Label></div>
       <div className="flex flex-wrap gap-x-4 gap-y-1">
         {INTERVIEWER_MANNER_PRESETS.map(({ id, label, text }) => (
           <button

@@ -288,7 +288,7 @@ const DemoSimulation: React.FC = () => {
             <div className="space-y-10">
               <div className="md:grid md:grid-cols-[1.15fr_0.85fr] md:items-start md:gap-10">
                 <div className="space-y-5">
-                  <Label>Participant view → researcher view</Label>
+                  <div><Label>Participant view → researcher view</Label></div>
                   <Verbatim as="h1" className="text-[32px] font-normal leading-[38px] text-ink-900 md:text-[40px] md:leading-[44px]">
                     See an interview become an insight.
                   </Verbatim>
@@ -377,11 +377,11 @@ const DemoSimulation: React.FC = () => {
                         tabIndex={message.evidence ? -1 : undefined}
                         data-testid={message.evidence ? 'demo-evidence-turn' : message.role === 'interviewer' ? 'demo-message-ai' : undefined}
                         className={cn(
-                          'focus:outline-none',
+                          'focus:outline-hidden',
                           message.evidence && highlightEvidence && 'ring-2 trace-ring ring-offset-4 ring-offset-paper-0'
                         )}
                       >
-                        <Label className={cn('block', message.role === 'participant' && 'md:pl-[3.75rem]')}>
+                        <Label className={cn('block', message.role === 'participant' && 'md:pl-15')}>
                           {message.role === 'interviewer' ? 'Scripted interviewer' : 'Maya · fictional participant'}
                         </Label>
                         <Turn speaker={message.role} turnIndex={index + 1} showCoordinate className="mt-1">
@@ -396,7 +396,7 @@ const DemoSimulation: React.FC = () => {
                   <fieldset
                     ref={choiceGroupRef}
                     tabIndex={-1}
-                    className="mt-8 border-0 border-t border-ink-300 pt-6 focus:outline-none"
+                    className="mt-8 border-0 border-t border-ink-300 pt-6 focus:outline-hidden"
                   >
                     <legend className="px-1 font-sans text-[15px] font-semibold text-ink-900">Choose Maya’s response</legend>
                     <p className="mb-4 mt-1 font-sans text-[13px] text-ink-500">Every option is fictional and pre-written.</p>
@@ -436,11 +436,11 @@ const DemoSimulation: React.FC = () => {
           {view === 'insight' && branch && (
             <div data-testid="demo-insight" className="space-y-8">
               <header className="space-y-3">
-                <Label>Researcher view</Label>
+                <div><Label>Researcher view</Label></div>
                 <h1
                   ref={insightHeadingRef}
                   tabIndex={-1}
-                  className="font-sans text-[24px] font-semibold leading-[32px] text-ink-900 outline-none"
+                  className="font-sans text-[24px] font-semibold leading-[32px] text-ink-900 outline-hidden"
                 >
                   Illustrative synthesis
                 </h1>
@@ -511,7 +511,7 @@ const DemoSimulation: React.FC = () => {
                 </Button>
                 <Link
                   href="/self-host"
-                  className="inline-flex min-h-11 items-center justify-center rounded bg-action px-4 py-2 font-sans text-[15px] font-medium text-paper-1 hover:bg-action/90"
+                  className="inline-flex min-h-11 items-center justify-center rounded-sm bg-action px-4 py-2 font-sans text-[15px] font-medium text-paper-1 hover:bg-action/90"
                 >
                   Set up your own instance
                 </Link>

@@ -49,7 +49,7 @@ export function ProfileFieldsSection({ draft, editing, onEdit }: ProfileFieldsSe
                 ) : null}
                 <Coordinate
                   className={cn(
-                    'mt-1 inline-block rounded border border-ink-300 px-2 py-1',
+                    'mt-1 inline-block rounded-sm border border-ink-300 px-2 py-1',
                     field.required ? 'border-ink-500 text-ink-900' : 'text-ink-500'
                   )}
                 >
@@ -87,14 +87,14 @@ export function ProfileFieldsSection({ draft, editing, onEdit }: ProfileFieldsSe
                   value={field.label}
                   onChange={(e) => draft.updateProfileField(field.id, { label: e.target.value })}
                   placeholder="Field label (e.g., Current Role)"
-                  className="w-full bg-paper-2 border border-ink-300 rounded px-3 py-2 text-ink-900 font-sans text-[13px]"
+                  className="w-full bg-paper-2 border border-ink-300 rounded-sm px-3 py-2 text-ink-900 font-sans text-[13px]"
                 />
                 <input
                   type="text"
                   value={field.extractionHint}
                   onChange={(e) => draft.updateProfileField(field.id, { extractionHint: e.target.value })}
                   placeholder="Hint for AI (e.g., Their job title or position)"
-                  className="w-full bg-paper-2 border border-ink-300 rounded px-3 py-2 text-ink-900 font-sans text-[13px]"
+                  className="w-full bg-paper-2 border border-ink-300 rounded-sm px-3 py-2 text-ink-900 font-sans text-[13px]"
                 />
               </div>
               <div className="flex items-center gap-2">
@@ -104,7 +104,7 @@ export function ProfileFieldsSection({ draft, editing, onEdit }: ProfileFieldsSe
                 >
                   <Coordinate
                     className={cn(
-                      'rounded border border-ink-300 px-2 py-1',
+                      'rounded-sm border border-ink-300 px-2 py-1',
                       field.required ? 'border-ink-500 text-ink-900' : 'text-ink-500'
                     )}
                   >

@@ -25,15 +25,17 @@ export default function SelfHostPage() {
   return (
     <main className="min-h-dvh bg-paper-0">
       <Page className="space-y-16 py-12 md:py-20">
-        <Link
-          href="/"
-          className="font-sans text-[13px] text-ink-500 underline underline-offset-2 hover:text-ink-900"
-        >
-          Back home
-        </Link>
+        <div>
+          <Link
+            href="/"
+            className="font-sans text-[13px] text-ink-500 underline underline-offset-2 hover:text-ink-900"
+          >
+            Back home
+          </Link>
+        </div>
 
         <section className="space-y-3">
-          <Label>Self-host OpenInterviewer</Label>
+          <div><Label>Self-host OpenInterviewer</Label></div>
           <h1 className="font-sans text-[24px] font-semibold leading-[32px] text-ink-900 md:text-[32px] md:leading-[40px]">
             Your deployment, credentials, and storage
           </h1>

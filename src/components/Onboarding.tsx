@@ -248,7 +248,7 @@ const Onboarding: React.FC = () => {
                           placeholder={configured ? '(currently set)' : provider.placeholder}
                           autoComplete="new-password"
                           aria-describedby={validation.error ? errorId : undefined}
-                          className="min-w-0 flex-1 bg-paper-2 border border-ink-300 rounded px-3 py-2 text-ink-900 font-sans text-[13px]"
+                          className="min-w-0 flex-1 bg-paper-2 border border-ink-300 rounded-sm px-3 py-2 text-ink-900 font-sans text-[13px]"
                         />
                         <Button
                           type="button"
@@ -321,7 +321,7 @@ const Onboarding: React.FC = () => {
                     onChange={(e) => { setRedisUrl(e.target.value); setRedisValidation({ loading: false, valid: null, error: null }); }}
                     placeholder="https://your-db.upstash.io"
                     aria-describedby={redisValidation.error ? 'onboarding-redis-error' : undefined}
-                    className="w-full bg-paper-2 border border-ink-300 rounded px-3 py-2 text-ink-900 font-sans text-[13px]"
+                    className="w-full bg-paper-2 border border-ink-300 rounded-sm px-3 py-2 text-ink-900 font-sans text-[13px]"
                   />
                 </div>
 
@@ -336,7 +336,7 @@ const Onboarding: React.FC = () => {
                     onChange={(e) => { setRedisToken(e.target.value); setRedisValidation({ loading: false, valid: null, error: null }); }}
                     placeholder="AXxx..."
                     aria-describedby={redisValidation.error ? 'onboarding-redis-error' : undefined}
-                    className="w-full bg-paper-2 border border-ink-300 rounded px-3 py-2 text-ink-900 font-sans text-[13px]"
+                    className="w-full bg-paper-2 border border-ink-300 rounded-sm px-3 py-2 text-ink-900 font-sans text-[13px]"
                   />
                 </div>
 

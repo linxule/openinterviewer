@@ -773,7 +773,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
     <div>
       {/* Header */}
       <div className="mb-8">
-        <h1 className="break-words font-sans text-[24px] font-semibold leading-[32px] text-ink-900">
+        <h1 className="wrap-break-word font-sans text-[24px] font-semibold leading-[32px] text-ink-900">
           {study.config.name}
         </h1>
         <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
@@ -1367,7 +1367,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
                       type="text"
                       value={participantLink}
                       readOnly
-                      className="min-w-0 flex-1 rounded border border-ink-300 bg-paper-2 px-3 py-2 font-mono text-[13px] text-ink-900"
+                      className="min-w-0 flex-1 rounded-sm border border-ink-300 bg-paper-2 px-3 py-2 font-mono text-[13px] text-ink-900"
                     />
                     <Button variant="quiet" onClick={handleCopyLink} className="inline-flex items-center gap-2">
                       <Icon name={copied ? 'check' : 'copy'} />

@@ -349,9 +349,10 @@
   size-adjust: 134.59%;
 }
 
-/* Consumed by tailwind.config.ts and globals.css. */
+/* Consumed by the @theme font stacks in globals.css (--font-sans etc. are
+   Tailwind's own theme variables, so these carry other names). */
 :root {
-  --font-serif: 'Source Serif 4', 'Source Serif 4 Fallback';
-  --font-sans: 'Public Sans', 'Public Sans Fallback';
-  --font-mono: 'IBM Plex Mono', 'IBM Plex Mono Fallback';
+  --typeface-serif: 'Source Serif 4', 'Source Serif 4 Fallback';
+  --typeface-sans: 'Public Sans', 'Public Sans Fallback';
+  --typeface-mono: 'IBM Plex Mono', 'IBM Plex Mono Fallback';
 }

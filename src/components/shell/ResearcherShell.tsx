@@ -38,7 +38,7 @@ export default function ResearcherShell({ children }: { children: ReactNode }) {
     <BreadcrumbProvider>
       <a
         href="#researcher-main"
-        className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:m-2 focus:rounded focus:bg-paper-1 focus:px-3 focus:py-2"
+        className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:m-2 focus:rounded-sm focus:bg-paper-1 focus:px-3 focus:py-2"
       >
         Skip to content
       </a>

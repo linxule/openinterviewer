@@ -3,7 +3,7 @@ import { cn } from '@/lib/cn'
 import { Label } from './Label'
 
 const controlClassName =
-  'bg-paper-2 border border-ink-300 rounded px-3 py-2 text-ink-900 font-sans'
+  'bg-paper-2 border border-ink-300 rounded-sm px-3 py-2 text-ink-900 font-sans'
 
 export interface FieldProps {
   label: string

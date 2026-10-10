@@ -389,7 +389,7 @@ export default function StudyList() {
                       </button>
                       {menuOpenId === study.id && (
                         <div
-                          className="absolute right-0 z-10 mt-1 w-48 rounded border border-ink-300 bg-paper-1 shadow-note"
+                          className="absolute right-0 z-10 mt-1 w-48 rounded-sm border border-ink-300 bg-paper-1 shadow-note"
                           onKeyDown={(event) => {
                             if (event.key === 'Escape') {
                               setMenuOpenId(null);

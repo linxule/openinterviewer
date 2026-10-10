@@ -2,7 +2,7 @@ import type { HTMLAttributes, ReactNode } from 'react'
 import { cn } from '@/lib/cn'
 
 export function Page({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn('mx-auto max-w-[66rem] px-5 md:px-12', className)} {...props} />
+  return <div className={cn('mx-auto max-w-264 px-5 md:px-12', className)} {...props} />
 }
 
 export function Measure({ className, ...props }: HTMLAttributes<HTMLDivElement>) {

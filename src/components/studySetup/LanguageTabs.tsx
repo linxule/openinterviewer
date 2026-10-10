@@ -18,7 +18,7 @@ export function LanguageTabs({ languages, selected, onSelect, label }: {
           aria-selected={language === selected}
           lang={LANGUAGE_TAGS[language]}
           onClick={() => onSelect(language)}
-          className={`rounded border px-3 py-1 text-[13px] ${language === selected ? 'border-ink-900 bg-paper-2 text-ink-900' : 'border-ink-300 text-ink-700 hover:bg-paper-2'}`}
+          className={`rounded-sm border px-3 py-1 text-[13px] ${language === selected ? 'border-ink-900 bg-paper-2 text-ink-900' : 'border-ink-300 text-ink-700 hover:bg-paper-2'}`}
         >
           {LANGUAGE_NATIVE_NAMES[language]}{index === 0 ? ' (default)' : ''}
         </button>

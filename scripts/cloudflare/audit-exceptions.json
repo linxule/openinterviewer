@@ -4,9 +4,9 @@
     {
       "id": "GHSA-vfj7-8cjw-p6xm",
       "package": "braces",
-      "reason": "No patched braces release exists (<=3.0.3 is every version). It reaches the toolchain only through tailwindcss 3 (chokidar, micromatch), fast-glob and @next/eslint-plugin-next, which expand this repository's own build and lint patterns, never request input. Remove when braces publishes a fix or Tailwind 4 lands.",
-      "recorded": "2026-10-08",
-      "expires": "2026-11-08"
+      "reason": "No patched braces release exists (<=3.0.3 is every version). Since Tailwind 4 (5.3.0) it reaches the toolchain only through eslint-config-next (@next/eslint-plugin-next -> fast-glob -> micromatch), which expands this repository's own lint patterns, never request input. Remove when braces publishes a fix or eslint-config-next drops fast-glob.",
+      "recorded": "2026-10-10",
+      "expires": "2026-11-24"
     }
   ]
 }

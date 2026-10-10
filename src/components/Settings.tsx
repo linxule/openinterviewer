@@ -250,7 +250,7 @@ const Settings: React.FC = () => {
             </Button>
             <ExternalLink
               href="/api/health/ready"
-              className="rounded border border-ink-300 bg-transparent px-4 py-2 font-sans text-[15px] font-medium text-ink-900 transition-colors hover:bg-paper-2"
+              className="rounded-sm border border-ink-300 bg-transparent px-4 py-2 font-sans text-[15px] font-medium text-ink-900 transition-colors hover:bg-paper-2"
             >
               View readiness status
             </ExternalLink>
@@ -376,7 +376,7 @@ const Settings: React.FC = () => {
                     placeholder={configured ? '(currently set)' : provider.placeholder}
                     autoComplete="new-password"
                     aria-describedby={validation.error ? errorId : undefined}
-                    className="min-w-0 flex-1 bg-paper-2 border border-ink-300 rounded px-3 py-2 text-ink-900 font-sans text-[13px]"
+                    className="min-w-0 flex-1 bg-paper-2 border border-ink-300 rounded-sm px-3 py-2 text-ink-900 font-sans text-[13px]"
                   />
                   <Button
                     type="button"
@@ -463,7 +463,7 @@ const Settings: React.FC = () => {
               onChange={(e) => { setRedisUrl(e.target.value); setRedisValidation({ loading: false, valid: null, error: null }); }}
               placeholder={profile?.hasRedisConfigured ? '(currently set)' : 'https://your-db.upstash.io'}
               aria-describedby={redisValidation.error ? 'settings-redis-error' : undefined}
-              className="w-full bg-paper-2 border border-ink-300 rounded px-3 py-2 text-ink-900 font-sans text-[13px]"
+              className="w-full bg-paper-2 border border-ink-300 rounded-sm px-3 py-2 text-ink-900 font-sans text-[13px]"
             />
           </div>
           <div>
@@ -477,7 +477,7 @@ const Settings: React.FC = () => {
               onChange={(e) => { setRedisToken(e.target.value); setRedisValidation({ loading: false, valid: null, error: null }); }}
               placeholder={profile?.hasRedisConfigured ? '(currently set)' : 'AXxx...'}
               aria-describedby={redisValidation.error ? 'settings-redis-error' : undefined}
-              className="w-full bg-paper-2 border border-ink-300 rounded px-3 py-2 text-ink-900 font-sans text-[13px]"
+              className="w-full bg-paper-2 border border-ink-300 rounded-sm px-3 py-2 text-ink-900 font-sans text-[13px]"
             />
           </div>
           <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -578,7 +578,7 @@ const Settings: React.FC = () => {
               value={deleteConfirmation}
               onChange={(event) => setDeleteConfirmation(event.target.value)}
               autoComplete="off"
-              className="min-w-0 flex-1 bg-paper-2 border border-ink-300 rounded px-3 py-2 text-ink-900 font-sans text-[13px]"
+              className="min-w-0 flex-1 bg-paper-2 border border-ink-300 rounded-sm px-3 py-2 text-ink-900 font-sans text-[13px]"
             />
             <Button
               type="button"

@@ -155,7 +155,7 @@ const Consent: React.FC = () => {
                 <label
                   key={option}
                   lang={LANGUAGE_TAGS[option]}
-                  className={`cursor-pointer rounded border px-3 py-1.5 text-[15px] ${option === language ? 'border-ink-900 bg-paper-2 text-ink-900' : 'border-ink-300 text-ink-700 hover:bg-paper-2'}`}
+                  className={`cursor-pointer rounded-sm border px-3 py-1.5 text-[15px] ${option === language ? 'border-ink-900 bg-paper-2 text-ink-900' : 'border-ink-300 text-ink-700 hover:bg-paper-2'}`}
                 >
                   <input
                     type="radio"
