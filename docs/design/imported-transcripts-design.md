@@ -330,14 +330,16 @@ Required realistic test layers:
 
 Separate consent for the transcription processor (Workers AI Whisper) from analysis-provider permission; re-attest before sending audio. Define recording size/duration, format conversion, retention/deletion, transcription budget, no-retry attempts and audio hash provenance. Do not assume Whisper reliably diarises a focus group; speaker mapping and researcher review are still required. Preserve the transcription output as a separately identified source, document that machine transcription is not verbatim ground truth, and keep correction history. Assess a Node installation's Workers AI access explicitly rather than routing Node audio through an unapproved platform account. No audio credentials, storage, automatic conversion or calls in v6.0 import scope.
 
-## 10. Owner questions and release blockers
+## 10. Owner decisions (2026-10-10)
 
-1. Accept import-only studies on the ordinary study model for v6.0, with mixed AI/human studies deferred? If mixed is essential, define participant-link/protocol changes before implementation.
-2. Accept standalone-first with hosted explicitly unavailable, and the mandatory isolated Redis migration/credential cutover? A marker-only in-place migration cannot satisfy historical-reader fail-closed behavior.
-3. Is full focus-group analysis an MVP requirement, or should MVP permit speaker mapping but restrict synthesis to one participant until profiles/count semantics are updated?
-4. Should optional AI cleaning ship in v6.0 or follow deterministic preparation? Proposed design never uses cleaned prose as evidence; changing that would require a separately approved evidence model.
-5. Approve retention: immutable extracted raw and reviewed pseudonym map in the private workspace, original binaries not retained, share-safe exports by default? Research programmes may require source-file retention or stricter raw deletion policies.
-6. Are the initial 2 MiB/10,000-source-item/100-interview limits and strict DOCX subset useful for the intended student/researcher workflows? Validate with owner-supplied *synthetic* representative transcripts before increasing limits or adding a dependency.
-7. Approve attestation copy and how researchers reference their institution's participant permission. This design records assertions; it does not decide whether a particular research consent permits processing.
+The owner answered the questions this section originally listed. These decisions override the matching proposals above where they differ.
 
-The prototype remains useful regardless of these answers. None is permission to migrate, publish, deploy, send research data to a provider, or weaken an existing consent promise.
+1. Import-only studies on the ordinary study model for v6.0. Mixed AI and human studies are deferred. Researchers compare the two by placing an imported study and an AI study in the same project.
+2. Standalone first; hosted import is unavailable. For Node and Redis, use the 5.3 precedent instead of a mandatory isolated-database cutover. The release notes tell operators to copy the Redis database before upgrading, and rollback is not supported. Cloudflare keeps the migration 4 / minimum reader 4 gate. Revisit after asking Yinghua, who runs a fork on Vercel with Redis.
+3. No focus-group analysis in v6.0. The parser still reads and labels several speakers, and the researcher maps them. Analysis treats one participant per record. Focus groups follow in 6.1.
+4. Deterministic preparation in v6.0: timestamps, speaker labels, filler words and the Zoom, Teams, Otter and Word formats. The only AI step in v6.0 is a cheap, single-call suggestion of which speaker is the interviewer and which the participant, which the researcher confirms. Fuller AI cleaning follows in 6.1, as suggested edits the researcher accepts. Cleaned text is never used as quoted evidence.
+5. Retention as proposed: keep the extracted raw text unchanged, do not keep the uploaded file, keep the pseudonym map private, and make exports share-safe by default.
+6. The initial limits stand: 2 MiB per file, 10,000 source items, 100 interviews per study. We test the parsers with synthetic samples we create in each real format; no owner data is needed.
+7. Attestation wording names the AI generically, as researchers' own consent forms usually do: "I confirm the people in these interviews agreed to their transcripts being analysed by AI for this research." It adds an optional field for an ethics approval or reference. The app still records, for each analysis, the provider and model that actually ran, and shows them in exports.
+
+None of these decisions is permission to migrate, deploy, or send research data to a provider. Implementation follows a v6 plan.
