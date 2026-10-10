@@ -10,6 +10,7 @@ import { InterviewAnalysisPanel } from '@/components/analysis/InterviewAnalysisP
 import { useInterviewAnalysis } from '@/components/analysis/useInterviewAnalysis';
 import { useSetTrailingCrumb } from '@/components/shell/breadcrumb';
 import { cn } from '@/lib/cn';
+import { LANGUAGE_TAGS } from '@/lib/i18n/languages';
 
 interface InterviewDetailProps {
   interviewId: string;
@@ -297,7 +298,7 @@ const InterviewDetail: React.FC<InterviewDetailProps> = ({ interviewId, studyId,
                   showCoordinate
                   className="mt-1"
                 >
-                  <div className="prose-verbatim">
+                  <div className="prose-verbatim" lang={interview.interviewLanguage ? LANGUAGE_TAGS[interview.interviewLanguage] : undefined}>
                     <ReactMarkdown>{msg.content}</ReactMarkdown>
                   </div>
                 </Turn>
