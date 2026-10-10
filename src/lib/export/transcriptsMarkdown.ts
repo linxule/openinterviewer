@@ -12,6 +12,13 @@ import type { StoredInterview, StoredStudy, StudyConfig } from '@/types';
 import { PROVIDER_MODELS, PROVIDER_OPTIONS } from '@/lib/providerRegistry';
 import { LANGUAGE_ENGLISH_NAMES, LANGUAGE_NATIVE_NAMES } from '@/lib/i18n/languages';
 
+export const AI_SHARING_WARNING = [
+    '> **Before sharing this file with an AI tool:** each interview below records what its',
+    '> participant was told about the AI that would handle their responses. Where a participant',
+    '> was told the study uses only one provider and model, sending this file to a different AI',
+    '> service may break that promise.',
+].join('\n');
+
 export const TRANSCRIPTS_MARKDOWN_CONTENT_TYPE = 'text/markdown; charset=utf-8';
 
 const COMPLETE_MARKER_PREFIX = '<!-- openinterviewer-export complete: ';
@@ -103,10 +110,7 @@ export function transcriptsMarkdownHeader(study: StoredStudy, count: number, exp
     `- Exported: ${isoUtc(exportedAt.getTime())}`,
     `- Interviews: ${count}`,
     '',
-    '> **Before sharing this file with an AI tool:** each interview below records what its',
-    '> participant was told about the AI that would handle their responses. Where a participant',
-    '> was told the study uses only one provider and model, sending this file to a different AI',
-    '> service may break that promise.',
+    AI_SHARING_WARNING,
     '',
     'Transcript text is quoted exactly as saved. Times are UTC.',
     '',
