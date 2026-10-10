@@ -46,6 +46,7 @@ function seed(voiceInput?: VoiceInputMode, extra: Parameters<typeof makeStudyCon
 }
 
 beforeEach(() => {
+  Object.defineProperty(navigator, 'permissions', { configurable: true, value: { query: vi.fn(async () => ({ state: 'granted', onchange: null })) } });
   vi.clearAllMocks();
   FakeRecognition.last = null;
   vi.stubGlobal('webkitSpeechRecognition', FakeRecognition);
@@ -135,6 +136,7 @@ describe('participant voice input', () => {
     render(<InterviewChat />);
     fireEvent.change(screen.getByLabelText('Your response'), { target: { value: 'typed answer' } });
     fireEvent.click(screen.getByRole('button', { name: 'Start voice input' }));
+    await act(async () => {}); // permission query
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
     act(() => {
       if (terminal === 'end') FakeRecognition.last?.onend?.();

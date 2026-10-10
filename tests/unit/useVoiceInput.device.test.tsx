@@ -34,6 +34,7 @@ function options(language: InterviewLanguage = 'en') {
     participantSessionHandle: `device-session-${sessionNumber}`, onText };
 }
 const mount = () => renderHook(() => useVoiceInput(options()));
+let micPermission: { state: PermissionState; onchange: (() => void) | null };
 
 beforeEach(() => {
   sessionNumber += 1;
@@ -44,6 +45,8 @@ beforeEach(() => {
   vi.stubGlobal('SpeechRecognition', Recognition);
   vi.stubGlobal('webkitSpeechRecognition', undefined);
   vi.stubGlobal('fetch', vi.fn());
+  micPermission = { state: 'granted', onchange: null };
+  Object.defineProperty(navigator, 'permissions', { configurable: true, value: { query: vi.fn(async () => micPermission) } });
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
@@ -242,6 +245,7 @@ describe('shared speech lifecycle', () => {
     await act(async () => {});
     expect(hook.result.current.supported).toBe(true);
     act(() => hook.result.current.toggle());
+    await act(async () => {}); // permission query
     return { ...hook, session: Recognition.sessions[0] };
   }
 
@@ -280,6 +284,32 @@ describe('shared speech lifecycle', () => {
     act(() => { session.onaudiostart?.(); session.result([['stale', true]]); session.onend?.(); });
     expect(result.current.state.kind).toBe('starting');
     expect(onText).not.toHaveBeenCalled();
+  });
+
+  it('waits for the permission prompt before starting the deadline', async () => {
+    vi.useFakeTimers();
+    micPermission = { state: 'prompt', onchange: null };
+    const { result } = await start();
+    act(() => vi.advanceTimersByTime(30_000));
+    expect(result.current.state.kind).toBe('starting');
+    expect(vi.getTimerCount()).toBe(0);
+    micPermission.state = 'granted';
+    act(() => micPermission.onchange?.());
+    act(() => vi.advanceTimersByTime(7_999));
+    expect(result.current.state.kind).toBe('starting');
+    act(() => vi.advanceTimersByTime(1));
+    expect(result.current.state).toEqual({ kind: 'error', reason: 'failed' });
+    expect(micPermission.onchange).toBeNull();
+  });
+
+  it('has no start-up deadline without the Permissions API', async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(navigator, 'permissions', { configurable: true, value: undefined });
+    const { result } = await start();
+    act(() => vi.advanceTimersByTime(30_000));
+    expect(result.current.state.kind).toBe('starting');
+    act(() => result.current.toggle());
+    expect(result.current.state.kind).toBe('stopping');
   });
 
   it('clears the startup timer and disables device mode when start throws', async () => {

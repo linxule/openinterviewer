@@ -269,11 +269,14 @@ export function useVoiceInput(options: {
     let stopping = false;
     let startupTimer: ReturnType<typeof setTimeout> | undefined;
     let stopTimer: ReturnType<typeof setTimeout> | undefined;
+    let audioStarted = false;
+    let permission: PermissionStatus | null = null;
     const active = () => mounted.current && recognition.current === session;
     const previewText = () => [...interim.entries()].sort(([a], [b]) => a - b).map(([, text]) => text).filter(Boolean).join(speechJoiner(language));
     const release = (abort: boolean) => {
       clearTimeout(startupTimer);
       clearTimeout(stopTimer);
+      if (permission) permission.onchange = null;
       recognition.current = null;
       speechCleanup.current = null;
       speechStop.current = null;
@@ -301,6 +304,7 @@ export function useVoiceInput(options: {
     };
     session.onaudiostart = () => {
       if (!active()) return;
+      audioStarted = true;
       clearTimeout(startupTimer);
       if (!stopping) setState({ kind: 'listening' });
     };
@@ -353,11 +357,14 @@ export function useVoiceInput(options: {
     setPreview('');
     setSpeechTag(session.lang);
     setState({ kind: 'starting' });
-    startupTimer = setTimeout(() => {
-      if (!active()) return;
-      release(true);
-      setState({ kind: 'error', reason: 'failed' });
-    }, 8_000);
+    const armStartupDeadline = () => {
+      if (!active() || stopping || audioStarted || startupTimer !== undefined) return;
+      startupTimer = setTimeout(() => {
+        if (!active()) return;
+        release(true);
+        setState({ kind: 'error', reason: 'failed' });
+      }, 8_000);
+    };
     try {
       session.start();
     } catch {
@@ -366,7 +373,19 @@ export function useVoiceInput(options: {
         release(true);
         setState({ kind: 'error', reason: 'failed' });
       }
+      return;
     }
+    // Capture waits for the browser's permission prompt, so the start-up
+    // deadline runs only once microphone access is granted. Without the
+    // Permissions API there is no deadline; Stop still releases the session.
+    try {
+      navigator.permissions?.query({ name: 'microphone' as PermissionName }).then((status) => {
+        if (!active()) return;
+        permission = status;
+        if (status.state === 'granted') armStartupDeadline();
+        else status.onchange = () => { if (status.state === 'granted') armStartupDeadline(); };
+      }, () => { /* Unsupported permission name. */ });
+    } catch { /* Unsupported permission name. */ }
   }, [language, mode, disableDevice]);
 
   const prepareDevice = useCallback(async () => {
