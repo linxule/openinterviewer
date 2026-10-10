@@ -66,6 +66,9 @@
     "zustand": "^5.0.15"
   },
   "overrides": {
+    "@node-minify/core": {
+      "glob": "10.5.0"
+    },
     "miniflare": {
       "undici": "7.29.1"
     },
