@@ -294,6 +294,20 @@ writable live workspace. Running notebook attempts also count as in-flight
 work during maintenance; recovery activation marks them uncertain, not eligible
 for automatic provider replay.
 
+Version 5.3 adds projects migration 3 with `minReaderVersion: 3` (backup format
+3), so it is forward-fix in the same way. The order that worked on the
+maintained instance: `draining`, then `frozen`; `backup export` run from a
+checkout of the release that is still deployed (the CLI refuses a backup whose
+record families do not match the deployed schema); `setup:cloudflare -- update`,
+which exits 3 (held) because the workspace is frozen; `maintenance open`; then
+`verify`.
+
+For a minute or two after any deploy, requests can still reach a workspace
+object running the previous code: routes the new release adds answer 503 and
+`status` reports the previous schema. Wait until `status` reports the new schema
+version before treating either as a failure or reopening for
+participants.
+
 Classify each release against the deployed commit before deploying it:
 
 | Class | How to recognize it | Rollback procedure |

@@ -16,6 +16,11 @@ updates:
       # lift once they support it.
       - dependency-name: eslint
         update-types: [version-update:semver-major]
+      # Next 16.4 builds, but the OpenNext Worker then answers every request with 500
+      # ("Unexpected loadManifest(/.next/server/preview-props.json)"); the artifact lane
+      # catches it. Lift when opennextjs/opennextjs-cloudflare#1355 ships in a release.
+      - dependency-name: next
+        versions: ['>=16.4.0']
     groups:
       # Provider upgrades also need the explicitly authorized live smoke tier.
       providers:
