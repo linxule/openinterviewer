@@ -21,7 +21,7 @@ export type VoiceState =
   | { kind: 'error'; reason: 'denied' | 'failed' | 'unsupported' | 'limited' | 'unavailable' | 'deviceUnavailable' };
 
 /** Shared by local availability, installation and recognition.
- * zh-CN is provisional: manually check Chrome against cmn-Hans-CN before release.
+ * Chrome 155 reports all six as available or downloadable for local processing (checked 2026-10-10).
  */
 export const SPEECH_TAGS: Record<InterviewLanguage, string> = {
   en: 'en-US', zh: 'zh-CN', fr: 'fr-FR', ja: 'ja-JP', ko: 'ko-KR', es: 'es-ES',
