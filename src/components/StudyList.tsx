@@ -385,7 +385,7 @@ export default function StudyList() {
                 <button type="button" className="min-h-11 min-w-11 text-ink-700" aria-label={`Project actions for ${group.name}`}
                   aria-expanded={projectMenu === group.id} ref={el => { projectTriggers.current[group.id] = el; }}
                   onClick={() => setProjectMenu(projectMenu === group.id ? null : group.id)}>···</button>
-                {projectMenu === group.id && <div className="absolute right-0 z-20 w-48 rounded border border-ink-300 bg-paper-1 shadow-note">
+                {projectMenu === group.id && <div className="absolute right-0 z-20 w-48 rounded-sm border border-ink-300 bg-paper-1 shadow-note">
                   <Button className="min-h-11 w-full justify-start" variant="quiet" disabled={projectBusy} onClick={() => nameProject(group.id, group.name)}>Rename</Button>
                   <Button className="min-h-11 w-full justify-start" variant="quiet" disabled={projectBusy} onClick={() => void downloadProject(group.id)}>Export transcripts</Button>
                   <Button className="min-h-11 w-full justify-start" variant="destructive" disabled={projectBusy} onClick={() => {
