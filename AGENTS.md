@@ -1,6 +1,6 @@
 # OpenInterviewer agent guide
 
-This is the canonical repository guide for coding agents and contributors. `README.md` owns product, setup, environment, and operator guidance. Keep this file focused on code navigation, trust boundaries, and verification; do not copy volatile deployment IDs, model availability claims, or test counts into it.
+This is the canonical repository guide for coding agents and contributors. `README.md` and the guides it links in `docs/` own product, setup, environment, and operator guidance. Keep this file focused on code navigation, trust boundaries, and verification; do not copy volatile deployment IDs, model availability claims, or test counts into it.
 
 ## Start here
 
@@ -12,7 +12,7 @@ This is the canonical repository guide for coding agents and contributors. `READ
 
 ## Sources of truth
 
-- Product journeys, environment variables, privacy boundaries, and release/rollback guidance: `README.md`
+- Product journeys and privacy boundaries: `README.md`; research workflow: `docs/research-guide.md`; environment variables and setup: `docs/self-hosting-cloudflare.md`, `docs/self-hosting-node.md`, `docs/operations/hosted.md`; verification, release and provider contract: `docs/development.md`
 - Contributor workflow: `CONTRIBUTING.md`
 - Commands and dependency versions: `package.json`
 - Environment template: `.env.example`
@@ -196,6 +196,6 @@ For a hosted build, use the non-secret fixture environment from `.github/workflo
 - Preserve unrelated dirty files and review the scoped diff.
 - Add or update the smallest realistic regression for changed behavior.
 - Run focused verification, then the proportional full gate.
-- Update `README.md`, `.env.example`, and this guide only when their contracts actually changed.
+- Update `README.md`, the `docs/` guides it links, `.env.example`, and this guide only when their contracts actually changed.
 - Report remaining operational or migration caveats explicitly.
 - Do not commit, push, merge, deploy, rotate credentials, or mutate external data without user authorization.

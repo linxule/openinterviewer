@@ -1,157 +1,48 @@
 # OpenInterviewer
 
-OpenInterviewer is an open-source platform for adaptive, AI-assisted qualitative interviews. Researchers configure a study, share an opaque participant link, and review transcripts and synthesis in a dashboard.
+OpenInterviewer is an open-source platform for adaptive, AI-assisted qualitative interviews. Researchers configure a study, share an opaque participant link, and review transcripts and synthesis in a dashboard. An AI interviewer conducts each interview, and the transcript is saved before any analysis runs.
 
-See the [v5.3.0 release notes](docs/releases/v5.3.0.md) for standalone projects, project transcript export and the forward-only upgrade, the [v5.2.1 notes](docs/releases/v5.2.1.md) for Tailwind CSS 4, the [v5.2.0 release notes](docs/releases/v5.2.0.md) for the per-installation analysis language, the [v5.1.0 release notes](docs/releases/v5.1.0.md) for interview languages, voice input and Markdown transcript export, the [v5.0.1 notes](docs/releases/v5.0.1.md) for the Next.js 16.3.8 security update, and the [v5.0.0 release notes](docs/releases/v5.0.0.md) for saved study exploration, explicit datasets,
-study deletion and workflow controls. The [v4.2.0 release notes](docs/releases/v4.2.0.md) cover the per-study choice of what participants are told
-about the AI provider, researcher AI budgets and sign-in limits, the [v4.1.1 notes](docs/releases/v4.1.1.md) for
-self-hosted fonts and dependency updates, the [v4.1.0 notes](docs/releases/v4.1.0.md) for participant-session and link-privacy fixes and
-admin-password rotation, and the [v4.0.0 notes](docs/releases/v4.0.0.md) for the Cloudflare standalone
-target, the Cloudflare AI Gateway transport, and provider fixes that also affect v3.0.0.
-The [v3.0.0 notes](docs/releases/v3.0.0.md) cover save-first completion and deferred analysis.
+The latest release is 5.4.0, which adds on-device voice input and analysis files in the study export. Read the [5.4.0 release notes](docs/releases/v5.4.0.md) or [all release notes](docs/releases/).
 
-For the maintained Cloudflare installation's dated rollout evidence and remaining
-follow-ups, see the [30 September release status](docs/operations/cloudflare-migration/evidence/V5-STATUS-2026-09-30.md).
-It separates completed work, unverified limits and optional deployment paths;
-use the runtime checks below for current health.
+The project's own instance is [open-interview.linxule.com](https://open-interview.linxule.com). It is a standalone installation on Cloudflare, with an EU-jurisdiction workspace and provider calls through its own Cloudflare AI Gateway. The former address, `openinterviewer.vercel.app`, redirects there.
 
-Contributing or working with a coding agent? Start with [`CONTRIBUTING.md`](CONTRIBUTING.md) and the repository map in [`AGENTS.md`](AGENTS.md).
+## What it does
 
-There are four deliberately different ways to use it:
+As of 5.4.0, OpenInterviewer offers:
 
-| Journey | Credentials | Persistence | Intended use |
+- adaptive interviews with 3 structure modes and an editable interviewer manner
+- 4 AI providers (Google Gemini, Anthropic Claude, OpenAI and OpenRouter), called directly or through Vercel AI Gateway or your own Cloudflare AI Gateway
+- opaque, revision-bound participant links and server-recorded consent
+- a per-study choice of what participants are told about the AI provider
+- interviews in English, Simplified Chinese, French, Japanese, Korean and Spanish, with analysis in a per-installation language
+- voice input, transcribed by the installation, by the browser's dictation, or locally in desktop Chrome
+- save-first completion, with per-interview synthesis, aggregate analysis and follow-up study generation
+- **Explore**, which answers questions against saved transcripts with located quotations
+- study and workspace ZIP exports with analysis-ready JSONL and CSV files, and Markdown transcript exports
+- projects to group studies, on standalone installations
+- study pause, resume and deletion, and limits on researcher AI requests
+- a keyless demo that needs no provider or database
+
+The [research guide](docs/research-guide.md) explains how each of these works.
+
+## Ways to use it
+
+| Option | Credentials | Where data is stored | Use it to |
 | --- | --- | --- | --- |
-| **Keyless public demo** (`/demo`) | None | None | See the participant and analysis experience with scripted sample data |
-| **Self-hosted on Cloudflare** (recommended) | Server-side provider keys: the default provider's, plus any of the other three | A SQLite Durable Object in your Cloudflare account (no Upstash) | Run your own instance on Cloudflare Workers with durable background analysis; the project's own instance runs this way |
-| **Self-hosted on Node/Vercel** | Vercel AI Gateway/OIDC or server-side provider keys | Your deployment's Upstash database | Run your own instance on Vercel or any Node host |
-| **Hosted researcher accounts** | Sign in, then add your own AI and Upstash credentials in the UI | Your Upstash database | A multi-tenant service that an operator runs on the Node/Vercel target; the project does not currently operate one |
+| Keyless public demo (`/demo`) | None | Nowhere | See the participant and analysis experience with scripted sample data |
+| Self-host on Cloudflare (recommended) | Server-side provider keys: the default provider's, plus any of the other 3 | A SQLite Durable Object in your Cloudflare account (no Upstash) | Run your own instance on Cloudflare Workers with durable background analysis; the project's own instance runs this way |
+| Self-host on Node or Vercel | Vercel AI Gateway/OIDC or server-side provider keys | Your deployment's Upstash database | Run your own instance on Vercel or any Node host |
+| Hosted researcher accounts | Sign in, then add your own AI and Upstash credentials in the UI | Your Upstash database | Use a multi-tenant service that an operator runs on the Node/Vercel target; the project does not currently operate one |
 
-The demo is not a disguised live interview: it is deterministic, does not call an AI provider, and does not save data. Real interviews require configured inference access and storage.
+### Try the keyless demo
 
-## Projects (standalone only)
+Open `/demo` on a running instance. It needs no login, provider key or database. The demo is deterministic, calls no AI provider and saves nothing. Every response, follow-up and insight is pre-written and visibly labeled as synthetic. It shows the participant-to-researcher workflow, not model quality. Real interviews need configured inference access and storage.
 
-On standalone Node/Redis and Cloudflare installations, **My Studies** groups studies
-into named, collapsible projects and an explicit **Ungrouped** section. Hosted
-researcher accounts keep the flat study list; projects are not available there.
+### Use a hosted researcher account
 
-- Use **New project**, then **+ Study** to create a study in it. Study actions offer
-  **Move to project…** and **Ungroup**. Empty projects remain visible.
-- Grouping is organization, not study configuration. It does not change a study's
-  revision, questions, consent, participant links, transcripts or provider choices.
-- A project's **···** actions rename it, export its transcripts, or delete the
-  project. Deleting a project moves its studies to Ungrouped; it deletes no study
-  or interview.
-- Creating a study and assigning it are two separate saves. If assignment fails,
-  the study still opens with a notice. Move it from the study list; do not create
-  it again. Uncertain project changes are refreshed, not automatically retried.
-- **Export transcripts** downloads one Markdown file containing each study's
-  saved transcripts, including an empty-study header where appropriate. It makes
-  no AI calls and retains each interview's recorded provider/transport disclosure.
-  The limit is 500 interviews total; export larger collections study by study.
-  The client refuses an incomplete download, including a file cut after a valid
-  inner study footer. A transcript-free project has nothing to download.
+In hosted mode, a platform operator configures the application once. Researchers sign in with OAuth, then add their own AI key and Upstash database in the app. Their credentials are encrypted at rest, and the operator's keys never stand in for a missing researcher key. Operators should read the [hosted operations guide](docs/operations/hosted.md).
 
-Exports are checked concatenations of per-study snapshots, not one cross-study
-point-in-time snapshot. The project name and membership roster are checked again
-at completion. The workspace supports at most 1,000 projects and 1,000 studies
-in its project listing; oversize collections are refused rather than truncated.
-A failed grouping read shows a notice and the flat list, not a guessed Ungrouped view.
-
-Back up before upgrading to 5.3. Cloudflare schema 3 is forward-only: a 5.2 build
-refuses the upgraded workspace. Do not roll Node back to 5.2 against the upgraded
-Redis database either: it would ignore memberships and omit project cleanup.
-See the [upgrade/runbook note](docs/operations/cloudflare-migration/RUNBOOK.md#projects-53-forward-only-upgrade).
-
-## Public deployment checks
-
-The project's own instance is [open-interview.linxule.com](https://open-interview.linxule.com), a standalone installation on Cloudflare (EU-jurisdiction workspace, provider calls through its own Cloudflare AI Gateway). The former address, `openinterviewer.vercel.app`, redirects there. The public `/demo` works without provider or storage configuration. Deployment mode and persistent-workspace health are runtime state, so check them instead of preserving a dated snapshot in this README:
-
-- `/api/config/mode` reports the active mode and whether the configuration shape is valid;
-- `/api/config/readiness` exposes the same safe configuration contract for setup UI; and
-- `/api/health/ready` additionally checks the mode-specific database and returns `503` when the application cannot serve persistent researcher workflows.
-
-Both configuration endpoints also report `analysisExecution`: `synchronous` on Node/Vercel deployments and `queued-v2` on Cloudflare, where analysis runs as a durable background job.
-
-Pushes to `main` deploy nothing. The maintainer deploys each release with the Cloudflare installer, staging first, after the full local release check on a clean checkout of the release commit ([INSTALLER.md, maintained instance](docs/operations/cloudflare-migration/INSTALLER.md#maintained-instance)). A Node/Vercel self-hoster who connects Vercel's Git integration gets production deploys from `main` and previews from other branches; `vercel.json` skips `dependabot/**` branches.
-
-## 1. Try the keyless demo
-
-Open `/demo` on a running instance. No login, provider key, or database is required.
-
-The demo:
-
-- lets visitors steer a fictional participant through three questions with fixed, branching responses;
-- ends in an illustrative researcher note with an exact transcript quote, interpretation, nuance, and hypothesis to test;
-- makes no AI-provider or persistence request;
-- accepts no visitor-written interview content and keeps its selected path in component memory only; and
-- is safe to run while the real provider and storage configuration is absent.
-
-Every response, follow-up, and insight is pre-written and visibly labeled as synthetic. The demo is useful for understanding the participant-to-researcher workflow, not model quality, latency, or provider availability.
-
-The authenticated researcher workspace also offers **Load Sample**, which writes a synthetic study and interviews to the researcher's configured store (a Cloudflare workspace or a Node/Vercel Upstash database) so dashboard and aggregate-analysis screens can be explored. It is storage-backed sample data and does not power the public `/demo`. Loading or clearing the sample makes no AI call; generating new aggregate or follow-up analysis uses the configured provider and may count against its quota. **Clear Sample** removes the designated sample fixture, not arbitrary synthetic studies created through ordinary interview workflows.
-
-## 2. Use a hosted researcher account
-
-In hosted mode, the platform operator configures the application once. Researchers should not need the Vercel dashboard or deployment environment variables. Hosted mode runs on the Node/Vercel target only (not on Cloudflare), and the project's own instance does not offer hosted accounts.
-
-Hosted researcher BYOS intentionally uses the direct provider adapters (`AI_TRANSPORT=direct`). This keeps each request bound to that researcher's encrypted credential and retains full Gemini, Claude, OpenAI, and OpenRouter support. The platform operator's Gateway balance or provider keys never substitute for a missing researcher credential.
-
-The researcher journey is:
-
-1. Sign in with an OAuth provider offered on the login page.
-2. Complete the in-app onboarding.
-3. Add at least one researcher-owned AI key: Google Gemini, Anthropic Claude, OpenAI, or OpenRouter.
-4. Add a researcher-owned Upstash Redis REST URL and REST token.
-5. Validate and save the credentials.
-6. Create and save a study, generate a participant link, and share it.
-
-The setup UI uses password inputs and never returns stored credential values to the browser. Credentials are encrypted before being stored in the platform database. They must be decrypted by the application's server functions when making a request on the researcher's behalf; encryption at rest is not end-to-end encryption. AI providers receive the prompts and interview content required to generate a response, under the researcher's provider account and terms. Upstash stores the study and interview records under the researcher's account.
-
-All four AI keys belong in the authenticated onboarding or account-connections UI. In hosted mode, deployment-owner `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and `OPENROUTER_API_KEY` values are ignored for researcher work; the application never falls back to them when a researcher's key is absent.
-
-Testing, saving, and completing onboarding can each revalidate credentials, so one setup pass may make several provider model-list requests and Redis pings. Those requests are rate-limited but may count against provider quotas. The repository-local setup checker described below never contacts those services.
-
-### Hosted platform operator requirements
-
-Hosted mode is multi-tenant infrastructure. The operator, not each researcher, must configure:
-
-| Variable | Requirement |
-| --- | --- |
-| `DEPLOYMENT_MODE` | `hosted` |
-| `AI_TRANSPORT` | `direct`; hosted researcher BYOS does not use platform Gateway credentials |
-| `APP_BASE_URL` | Stable HTTPS origin used for OAuth callbacks and participant links |
-| `SESSION_SECRET` | Independent random value, at least 32 characters |
-| `PARTICIPANT_TOKEN_SECRET` | Different independent random value, at least 32 characters |
-| `RATE_LIMIT_SALT` | A third independent random value, at least 32 characters |
-| `PLATFORM_KV_REST_API_URL` | Platform-owned Upstash REST URL for accounts, encrypted credentials, ownership, and link records |
-| `PLATFORM_KV_REST_API_TOKEN` | Write-capable token for that platform database |
-| `PLATFORM_KEY_PREFIX` | Environment-specific namespace such as `staging` or `production` |
-| `CREDENTIAL_ENCRYPTION_KEYS` | JSON object mapping key IDs to base64-encoded 32-byte AES keys |
-| `CREDENTIAL_ENCRYPTION_ACTIVE_KEY_ID` | Key ID used for new credential writes |
-| `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` | One supported OAuth pair; at least one complete pair is required |
-| `GITHUB_CLIENT_ID` + `GITHUB_CLIENT_SECRET` | One supported OAuth pair; either provider may be omitted when the other pair is complete |
-
-Example keyring shape, with the real key omitted:
-
-```env
-CREDENTIAL_ENCRYPTION_KEYS={"2026-08":"BASE64_32_BYTE_KEY"}
-CREDENTIAL_ENCRYPTION_ACTIVE_KEY_ID=2026-08
-```
-
-Generate a credential-encryption key with `openssl rand -base64 32`. Keep every old key in the keyring until all credentials written with it have been rotated. `CREDENTIAL_ENCRYPTION_KEY` is the legacy, unversioned migration variable; retain it only while old records still need to be read, then remove it.
-
-Generate `SESSION_SECRET`, `PARTICIPANT_TOKEN_SECRET`, and `RATE_LIMIT_SALT` independently with `openssl rand -hex 32`. Do not reuse any value across purposes or environments.
-
-Create separate OAuth applications for staging and production. Their callback URLs are:
-
-```text
-https://YOUR_ORIGIN/api/auth/oauth/google/callback
-https://YOUR_ORIGIN/api/auth/oauth/github/callback
-```
-
-Do not use `NEXT_PUBLIC_` for credentials or signing keys. `APP_BASE_URL` is intentionally server-only.
-
-## 3. Run a self-hosted standalone instance
+### Self-host an instance
 
 A standalone instance has one researcher login (`ADMIN_PASSWORD`) and the instance's own provider keys. Two targets run the same application:
 
@@ -163,423 +54,95 @@ A standalone instance has one researcher login (`ADMIN_PASSWORD`) and the instan
 | Install and update | `npm run setup:cloudflare` (guided installer: plan, apply, resume, update, verify) | Vercel project settings, or your Node host's |
 | Operations | Maintenance modes, backup/import and point-in-time restore via `npm run operator:cloudflare` | Upstash backups and your host's tooling |
 
-To try the application locally without any account or credentials, run `npm ci && npm run build:cloudflare && npm run preview:cloudflare`: the built Worker runs in local workerd with synthetic provider responses and throwaway storage.
+To try the application locally without any account or credentials, run `npm ci && npm run build:cloudflare && npm run preview:cloudflare`. The built Worker runs in local workerd with synthetic provider responses and throwaway storage.
 
-### Cloudflare
-
-The Next.js app runs through [OpenNext](https://opennext.js.org/cloudflare). Provider keys belong to the installation and are sent directly or through the installation's own Cloudflare AI Gateway (`--ai-transport cloudflare-gateway`: logging, caching, retries and fallback off; see [INSTALLER.md](docs/operations/cloudflare-migration/INSTALLER.md#ai-transport-cloudflare-ai-gateway)). Vercel AI Gateway and hosted researcher accounts are not available on this target. Design, limits and every deviation from the migration specification are recorded in [`docs/operations/cloudflare-migration/`](docs/operations/cloudflare-migration/IMPLEMENTATION.md).
-
-Requirements: a Cloudflare account with Workers, Durable Objects and Queues; `npx wrangler login`; the key of the default provider (`--provider`), and optionally the keys of the other providers (`--provider-keys`, or later with `update --add-provider-key`, no redeploy); an administrator password of 16 characters or more whose sign-in body fits Cloudflare's 1 KiB limit (at most 1,009 ASCII characters, fewer with multi-byte or JSON-escaped characters; the installer refuses a longer one, and `npm run setup:check -- --target cloudflare` reports it as `env.ADMIN_PASSWORD.too_long`). For the local release check: a clean checkout (no uncommitted changes and no untracked files outside `.gitignore`), a local `redis-server` (or Docker) and Playwright browsers.
-
-Worker size does not decide the plan. The bundle is about 27 MiB uncompressed and 5.3 MiB gzip (27,403 KiB and 5,440 KiB in September 2026; `build:cloudflare` prints it as `Total Upload`). Since [4 September 2026](https://developers.cloudflare.com/changelog/post/2026-09-04-increased-worker-size-limit/) the [Worker size limit](https://developers.cloudflare.com/workers/platform/limits/#worker-size) is 64 MiB uncompressed on both Free and Paid, with no compressed limit. Under the earlier compressed limits (3 MB Free, 10 MB Paid) this bundle would have needed Workers Paid. Workers Paid is still recommended, because the Free plan allows [10 ms of CPU time](https://developers.cloudflare.com/workers/platform/limits/#cpu-time) per HTTP request, which server rendering is unlikely to fit (not measured on a live Worker). Provider usage is billed by your provider separately.
-
-Use the checked-in tooling; it never provisions or deploys implicitly:
+On Cloudflare, build and check a release artifact on a clean checkout, then plan the installation:
 
 ```bash
 npm ci
-npm run build:cloudflare                  # builds dist/cloudflare/artifact; refuses if .env*/.dev.vars files are present
-npm run check:cloudflare -- --skip-build  # full local release matrix on that artifact; writes the receipt deploy requires
+npm run build:cloudflare
+npm run check:cloudflare -- --skip-build
 npm run setup:cloudflare -- plan --install <name> --env production --provider openai --jurisdiction eu
-# Credentials come from your secret manager on stdin. The template holds op:// references only
-# and lives outside the checkout: an untracked file there makes the checkout dirty and apply refuses.
-op inject -i ~/secure/secrets.tpl.json | npm run setup:cloudflare -- apply --install <name> --env production --provider openai \
-  --jurisdiction eu --secrets-stdin --yes --operator-token-file <path outside this repository>
-npm run setup:cloudflare -- verify --install <name> --env production
 ```
 
-Without `--origin`, the installer discovers the Worker's `workers.dev` URL from the first deploy and keeps the app not-ready until that origin is set. To use a custom domain, pass `--origin https://…` and attach the domain to the Worker in the Cloudflare dashboard; the installer never changes DNS or routes. `npm run preview:cloudflare` runs the built artifact in local workerd with synthetic provider responses, no credentials and throwaway storage. Operator actions (maintenance modes, operational backup/import, point-in-time restore, recovery activation) use `npm run operator:cloudflare`, which needs the administrator password and the generated operator token.
+Then run `apply` with credentials piped on stdin from a secret manager, and `verify`. Never keep credentials in a file inside the checkout. Choose the jurisdiction before the first install, because changing it later is a migration. Follow [Self-host on Cloudflare](docs/self-hosting-cloudflare.md) for the full steps.
 
-The JSON on stdin holds only `{"ADMIN_PASSWORD": "…", "OPENAI_API_KEY": "…"}`, plus one key per extra provider named with `--provider-keys`. Never keep it in a file inside the checkout, where `git add` can pick it up: pipe it from a secret manager as above (the template holds references such as `{{ op://<vault>/<item>/password }}`, not values, and is kept outside the checkout like any other file you add), or drop `--secrets-stdin` and type the values at the installer's hidden prompt. If you must use a file, keep it outside the repository and delete it afterwards. The installer generates the session, participant, rate-limit and operator secrets and the recovery epoch, and sends all secrets to Cloudflare through stdin. It records a non-secret receipt in `cloudflare/installations/`. Updates use `setup:cloudflare -- update`; interrupted installs use `resume`. The project's own production installation is deployed the same way, with `update` from the owner's workstation after `npm run check:cloudflare` ([Maintained instance](docs/operations/cloudflare-migration/INSTALLER.md#maintained-instance)); the `promote-cloudflare` job in `.github/workflows/ci.yml` is an unconfigured option for installations that choose CI ownership ([Optional: CI-owned deployment](docs/operations/cloudflare-migration/INSTALLER.md#optional-ci-owned-deployment)). See [INSTALLER.md](docs/operations/cloudflare-migration/INSTALLER.md) and the operator [RUNBOOK.md](docs/operations/cloudflare-migration/RUNBOOK.md) for maintenance modes, operational backup/import, restore and rollback. A coding agent can drive the same commands with [`skills/openinterviewer-cloudflare`](skills/openinterviewer-cloudflare/SKILL.md).
-
-Choose the Durable Object jurisdiction (`eu` recommended) before the first install; it restricts where the workspace is stored, not where every request or provider call is processed, and changing it later is a migration. Staging is always a separately named Worker with its own storage, Queue, secrets and origin. A one-click Deploy to Cloudflare button is not offered. The button deploys through Workers Builds, which would become a second deployment owner and cannot perform the installer's secret generation or its origin and workspace bootstrap. The guided installer is the supported path (see `SETUP-04` in [DEVIATIONS.md](docs/operations/cloudflare-migration/evidence/DEVIATIONS.md)). A button will be published only after a complete fresh-account installation through it has been tested.
-
-On Cloudflare, analysis after a participant saves runs as a background job. The researcher sees queued, running, complete, failed or needs-recovery states; "needs recovery" means a paid provider call may have run but its result could not be confirmed, and running it again may make another paid request.
-
-### Node/Vercel
-
-The Node/Vercel target needs an Upstash database. The subsections below cover requirements, local setup, production variables and a Vercel deploy.
-
-#### Requirements
-
-- Node.js 24.19 or newer (`.nvmrc` and `.node-version` are included)
-- either Vercel AI Gateway authentication or one Google Gemini, Anthropic Claude, OpenAI, or OpenRouter API key
-- one Upstash Redis database with its REST URL and write-capable REST token
-- a stable HTTPS origin for production
-
-Storage is required for real studies and interviews. The app does not auto-create, auto-connect, or silently substitute a database. Create Upstash Redis yourself, whether directly in Upstash or through the Vercel Marketplace, then configure the exact REST variables below.
-
-#### Local setup
+On Node or Vercel, you need Node.js 24.19 or newer, an Upstash Redis database, and either Vercel AI Gateway or a provider key. Configure the standalone section of `.env.local`, then check it and start the app:
 
 ```bash
 git clone https://github.com/linxule/openinterviewer.git
 cd openinterviewer
 npm ci
 cp .env.example .env.local
-```
-
-Edit `.env.local` and configure the standalone section. Generate each secret independently; do not reuse the admin password or any signing/rate-limit secret:
-
-```bash
-openssl rand -base64 24   # ADMIN_PASSWORD
-openssl rand -hex 32      # SESSION_SECRET
-openssl rand -hex 32      # PARTICIPANT_TOKEN_SECRET
-openssl rand -hex 32      # RATE_LIMIT_SALT
-```
-
-Then validate names and value shapes without revealing values or calling a provider:
-
-```bash
 npm run setup:check -- --mode standalone
 npm run dev
 ```
 
-Open `http://localhost:3000`. The researcher dashboard uses `ADMIN_PASSWORD`; participant access uses opaque links exchanged for short-lived, HttpOnly session cookies. Sign-in counts failed attempts in Redis, so it needs the Upstash variables and `RATE_LIMIT_SALT`; without them it answers 503 (see [Security and data boundaries](#security-and-data-boundaries)).
+Follow [Self-host on Node or Vercel](docs/self-hosting-node.md) for the variables, the Vercel deploy and the setup checker.
 
-#### Production variables
+### Check a running instance
 
-| Variable | Requirement |
-| --- | --- |
-| `DEPLOYMENT_MODE` | `standalone` |
-| `APP_BASE_URL` | Canonical HTTPS origin, for example `https://interviews.example.org` |
-| `ADMIN_PASSWORD` | Independent researcher login password; minimum 16 characters |
-| `SESSION_SECRET` | Independent random value, at least 32 characters |
-| `PARTICIPANT_TOKEN_SECRET` | Different independent random value, at least 32 characters |
-| `RATE_LIMIT_SALT` | A third independent random value, at least 32 characters |
-| `KV_REST_API_URL` | Your Upstash REST URL (`https://…upstash.io`) |
-| `KV_REST_API_TOKEN` | Write-capable REST token |
-| `AI_TRANSPORT` | `direct` (default) or `gateway`; hosted researcher BYOS requires `direct` |
-| `AI_GATEWAY_API_KEY` | Gateway authentication outside Vercel; optional on Vercel because the AI SDK uses project OIDC |
-| `AI_GATEWAY_ZERO_DATA_RETENTION` | Optional `true`/`false` Gateway routing filter; enable only on a Vercel plan that supports request-scoped ZDR |
-| `GEMINI_API_KEY` | Required for Gemini when `AI_TRANSPORT=direct` |
-| `ANTHROPIC_API_KEY` | Required for Claude when `AI_TRANSPORT=direct` |
-| `OPENAI_API_KEY` | Required for OpenAI when `AI_TRANSPORT=direct` |
-| `OPENROUTER_API_KEY` | Required for OpenRouter, which is direct-only |
-| `AI_PROVIDER` | Optional default: `gemini`, `claude`, `openai`, or `openrouter`; omitted means `gemini` |
-| `GEMINI_MODEL` / `CLAUDE_MODEL` / `OPENAI_MODEL` / `OPENROUTER_MODEL` | Optional provider-specific interview-turn model override |
+Deployment mode and persistent-workspace health are runtime state, so check them on the instance:
 
-Choose one transport:
+- `/api/config/mode` reports the active mode and whether the configuration shape is valid
+- `/api/config/readiness` exposes the same safe configuration contract for setup UI
+- `/api/health/ready` also checks the mode-specific database, and returns `503` when the application cannot serve persistent researcher workflows
 
-- `AI_TRANSPORT=gateway` is the streamlined Vercel path. The AI SDK authenticates deployed functions with project OIDC, so no provider key is required. OpenInterviewer supports Gemini, Claude, and OpenAI through Gateway, pins each request to the model creator's endpoint, disables model fallback and SDK retries, requests no-prompt-training routing, and records the requested model, resolved response model, and routed provider. OpenRouter is not exposed in this mode.
-- `AI_TRANSPORT=direct` keeps the portable native adapters. Configure at least one matching provider key. This is required for hosted researcher BYOS and for OpenRouter.
-
-A per-study selection can override `AI_PROVIDER`, but it must be available through the active transport. Each provider-specific model variable takes precedence over the legacy `AI_MODEL` migration fallback. The study's configured provider and model — the researcher's own choice — drive interview turns, per-interview synthesis, aggregate analysis, and follow-up generation alike; there is no separate fixed synthesis model. Provenance records the requested model and the provider-reported response model actually used. Model availability changes, so verify the IDs currently enabled on your provider account rather than relying on an old README list.
-
-For a production readiness check:
-
-```bash
-npm run setup:check -- --mode standalone --production
-```
-
-#### Deploy on Vercel
-
-1. Import the repository into a new Vercel project.
-2. Create an Upstash Redis database separately and obtain its REST URL and write token.
-3. Set `AI_TRANSPORT=gateway` to use Vercel OIDC and Gateway credits, or keep `direct` and add a matching provider key. Add every other required standalone variable to the intended Vercel environment. Use the interactive `vercel env add NAME` command or the project's environment-variable settings; avoid putting secret values in shell history.
-4. Keep Preview and Production storage and secrets separate.
-5. Deploy a preview first and run the production-mode setup checker against an environment file pulled for that project, if desired.
-6. Put a project-scoped monthly AI Gateway budget in place before public interviews. Verify login, study save, participant consent, one interview, export, expiry, and revocation before assigning the production domain.
-
-`vercel env pull .env.local` overwrites that file. Keep manual local-only overrides in `.env.development.local`, or back them up before pulling. Never commit any `.env*.local` file.
-
-### Provider API and model contract
-
-This applies to both targets, except where a transport is named.
-
-The Vercel transport uses [`ai`](https://ai-sdk.dev/docs) with [Vercel AI Gateway](https://vercel.com/docs/ai-gateway), strict `Output.object` JSON Schema, project OIDC (or `AI_GATEWAY_API_KEY` off Vercel), creator-endpoint pinning, and no model fallback. The direct transport retains first-class native adapters:
-
-- Google Gemini uses [`@google/genai`](https://ai.google.dev/gemini-api/docs/libraries) and the Interactions API with `store: false` and a JSON response schema.
-- Anthropic Claude uses [`@anthropic-ai/sdk`](https://platform.claude.com/docs/en/cli-sdks-libraries/sdks/typescript), the Messages API, and native structured output through `output_config.format`.
-- OpenAI uses the official [`openai`](https://github.com/openai/openai-node) SDK, the [Responses API](https://developers.openai.com/api/docs/guides/migrate-to-responses), strict structured output, and `store: false`.
-- OpenRouter uses the official [`@openrouter/sdk`](https://openrouter.ai/docs/client-sdks/typescript/overview) stable Chat API. Its routing policy sets strict JSON Schema, `require_parameters`, `data_collection: "deny"`, zero-data-retention (`zdr`), and no model fallback.
-
-OpenRouter is a routing service: interview content is sent to the selected upstream inference endpoint under the researcher's OpenRouter account. The application records the OpenRouter adapter, requested model, resolved response model, and routed upstream provider in generation provenance. Provenance is written server-side when the deferred analysis attaches its result; the browser never supplies it. Privacy and structured-output routing constraints can make some models unavailable; the application reports that as a provider error instead of silently relaxing the policy.
-
-Claude and OpenAI defaults were updated against the official [Claude Sonnet 5.5](https://platform.claude.com/docs/en/models/sonnet-5-5/overview) and [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol) documentation on **2026-09-29**. Without an environment or per-study override, new studies default to `gemini-3.8-flash`, `claude-sonnet-5-5`, `gpt-6.1-sol`, and `openai/gpt-5.6-terra`, respectively. Gemini and OpenRouter defaults are unchanged from the **2026-08-14** catalog review. Existing saved studies keep their configured models, and legacy catalog IDs remain accepted. GPT-6 Luna is available as a lower-cost OpenAI choice. GPT-6.1 Sol requires reasoning: turning extra reasoning off selects `low`, not the unsupported `none`. Sonnet 5.5 uses `between_tools` when extra reasoning is off. The native Sonnet ID maps to `anthropic/claude-sonnet-5.5` on Vercel Gateway. OpenRouter offers curated entries plus a bounded `provider/model` slug, but it does not support `openrouter/auto` or promise that every catalog model satisfies this application's strict-schema and zero-data-retention requirements.
-
-## Setup diagnostics
-
-The checker is designed for people and coding agents:
-
-```bash
-# Keyless demo prerequisites
-npm run setup:check -- --mode demo
-
-# Local standalone .env files
-npm run setup:check -- --mode standalone
-
-# A specific production file
-npm run setup:check -- --mode standalone --production --env-file .env.production.local
-
-# Hosted operator configuration, redacted JSON output
-npm run setup:check -- --mode hosted --production --json
-
-# Cloudflare: an env file kept outside the checkout plus wrangler.jsonc bindings and queue settings
-npm run setup:check -- --target cloudflare --env-file ~/secure/openinterviewer.cloudflare.env
-```
-
-It validates the Node version, required variable names, URL/key shapes, OAuth pairs, and secret independence. It reads the same local env-file family used for development, but it never prints values, writes secrets, makes network requests, provisions resources, or calls a paid model. A nonzero exit status means setup is incomplete.
-
-## Research workflow
-
-For researchers:
-
-1. Create and save a study.
-2. Configure questions, profile fields, provider/model, interviewer structure and manner, consent text, and link expiry.
-3. Generate an opaque participant link from the saved revision.
-4. Share the link and collect interviews.
-5. Review individual transcripts and synthesis.
-6. Choose a dataset, run aggregate analysis, or ask questions in **Explore**; export the study or workspace.
-7. Pause and resume collection without replacing links, or delete a study in Settings when its retention period ends.
-
-**Export this study** downloads a ZIP of raw records, transcripts, the aggregate and the notebook, plus an `analysis/` folder for coding tools and spreadsheets. The same analysis files are included in workspace ZIP exports.
-
-The ZIP retains the per-interview `NNN_*.json` and `.md`, `summary.csv`, `aggregates/` and `explorations/`. It adds:
-
-- `analysis/README.md`: field definitions, historical-label rules and the consent/provider sharing warning.
-- `analysis/interviews.jsonl`: one interview per line, with collection context, recorded consent and analysis provenance, profile values and verbatim turns.
-- `analysis/interviews.csv`: interview-level data and one column per observed profile field ID, labeled from the newest interview.
-- `analysis/turns/NNN.csv`: one turn table per interview to bound export memory; indices match analysis citations, including gaps for omitted system messages.
-- `analysis/profile_fields.csv`: profile values in long form with their labels at collection.
-
-CSVs use UTF-8 with BOM and CRLF. Formula-like text is protected with an added apostrophe; use JSONL for verbatim quotes. Unknown historical fields are not filled from today’s study configuration. ZIP Markdown dates are ISO UTC.
-
-**Export transcripts (.md)** downloads one Markdown file with every saved transcript of the study, for reading or for another analysis tool. Transcript text is quoted exactly as saved, and each interview lists what its participant was told about the AI. If a participant was promised that the study uses only one provider and model, sending the file to a different AI service may break that promise. A download that did not finish is refused rather than saved.
-
-### Explore this study
-
-**Explore** answers questions against saved transcripts in one study, including interviews whose individual analysis is pending or failed. Select revisions, particular interviews, or recorded profile fields first. Unknown, refused, vague and ambiguous profile values remain unknown; a numeric range accepts only a recorded scalar number, not an inferred age. Original field definitions are preserved for newly saved interviews. Older records without those definitions are visibly unknown, not relabeled with today's schema.
-
-Ask for provisional archetypes, concerns, unexpected themes, or evidence supporting and challenging a hypothesis. Answers save with the question, exact source manifest, scope counts, timestamps, and requested and served model provenance. Findings separate supporting, challenging and uncertain quotations. A quotation matched to a participant's transcript is a located quotation, not proof that the interpretation is correct or that a theme is prevalent.
-
-One request includes the full selected corpus: at most 100 interviews and 256 KiB of exact provider-facing interview records. The complete prompt, including question, study context, continuity and system instructions, has a separate 320 KiB bound. Byte limits can refuse fewer than 100 interviews and do not guarantee a custom model's context capacity. Larger selections are refused before a provider request; narrow the dataset or export it. Nothing is silently sampled. Dataset inspection is bounded at 1,000 saved interviews. There is no cross-study chat, vector index or web search.
-
-Every admitted question is durable and idempotent. Checking the same attempt does not call the provider again. A timeout or uncertain interruption becomes **Needs recovery**; starting another attempt is an explicit action and may incur another provider charge. A generated answer that could not be saved remains downloadable and can be saved using its signed, save-only receipt for 24 hours, without another model call. Each study retains at most 500 attempts.
-
-### Study lifecycle
-
-**New study**, **Edit study** and **Duplicate for testing** have separate draft identities. Reloading an edit loads the matching saved study; a restored stale draft requires review before saving. Duplicate copies configuration only, not interviews, links or analysis. Preview still runs the saved revision.
-
-Pausing blocks participant entry, calls and completion but preserves the revision and active links. Resuming restores those links; revoked or expired links remain unusable. Saving unchanged configuration does not advance the revision. A real settings change still advances it and invalidates old participant authority.
-
-Settings includes a **Danger Zone**. Deleting a populated study requires two confirmations tied to its identifier and reviewed revision. It removes the live study, interviews, links, aggregate and exploration notebook. Large Redis deletions are resumable; a pending operation is not reported as complete. Late analysis writes cannot recreate the study. Downloads, external backups and provider requests already started are outside this live-store deletion. Legacy unindexed consent records contain identifiers and a hash, not transcripts, and expire after four hours; new consent records are indexed for cleanup.
-
-For participants:
-
-1. Open the study link.
-2. Review the study information and give consent.
-3. Complete the adaptive interview.
-4. Choose **Continue to save interview** and wait for **Your responses have been saved. It is now safe to close this tab.** before closing the tab.
-
-Finishing saves the transcript before starting analysis in the background. If the save fails, keep the tab open and use **Retry save**. Once the save is confirmed, the participant can close the tab even if analysis is still pending or fails. Researchers can use **Run analysis** on an interview or the pending-analysis batch action on a study to recover unfinished analysis. The saved transcript and JSON remain available from the interview detail view. Researchers can also customize the participant thank-you text in study setup.
-
-#### Researcher AI request limits
-
-On a standalone installation (Node or Cloudflare), every AI call the researcher starts is counted before the provider is called: preview greetings, preview turns and preview analysis, aggregate analysis, study exploration, follow-up study generation and **Run analysis**. Each operation has a limit per signed-in session and a limit for the whole workspace, so signing in again does not reset the workspace limit. At a limit the request is refused with HTTP 429, a `Retry-After` header and "Too many AI requests from this workspace. Please wait before trying again."; nothing is sent to the provider and nothing is charged by it. Participant interviews have their own limits and never count here.
-
-| Operation | Per session | Per workspace |
-| --- | --- | --- |
-| Preview greeting | 10 per 10 minutes | 200 per day |
-| Preview turn | 60 per hour | 1,000 per day |
-| Preview analysis | 10 per hour | 100 per day |
-| Aggregate analysis | 20 per hour | 100 per day |
-| Study exploration | 20 per hour | 100 per day |
-| Follow-up study | 20 per hour | 100 per day |
-| Run analysis | 100 per hour | 500 per day |
-
-A window opens at the first counted request and does not slide. On Cloudflare, **Run analysis** is counted only when it starts new work: repeating a request that was already accepted, or asking again while an analysis is still running, is free. On Node every **Run analysis** request is counted. The limits are set in `STANDALONE_RESEARCHER_AI_POLICY` (`src/lib/researcherAiBudget.ts`). Hosted accounts use the hosted platform limits instead.
-
-Exploration reserves a notebook attempt before checking the budget. If the budget refuses it, the notebook records a failed, budget-limited attempt and no model request is made; the response retains that attempt rather than losing its identity behind a standalone error. Replaying or saving an existing attempt does not consume another AI budget.
-
-### How the interviewer is controlled
-
-**Interview Structure** balances coverage and depth through three modes: Structured, Standard, and Exploratory.
-**Interviewer Manner** controls phrasing and carriage through Neutral, Warm, Formal, Plain language, and Concrete incidents presets or your own editable instructions, injected verbatim into the interview and greeting prompts.
-**The prompt itself**, in `src/lib/prompts/`, is a further customization layer for self-hosters only.
-
-The default is brief, open, non-leading questions, one at a time, with no praise and no routine paraphrase (a brief check of understanding at a natural transition is allowed). Leading and evaluative turns can shape participants' answers.
-
-Your manner instructions can override the default question craft, including brevity and how many questions to ask per turn. The prompt tells the model not to change the interview phases, ending, profile fields to collect, or response format. This is the only study field explicitly allowed to override question craft: read pasted instructions carefully.
-
-Test with **Preview**, which runs the saved study, so save first, before sharing a link. Editing manner advances the revision and invalidates issued links like any other edit. Tune it before collection or on a scratch study.
-
-The built-in question craft, for reference or a methods appendix:
-
-```
-QUESTION CRAFT:
-- Ask ONE question per turn. Never stack two questions, and never offer either/or alternatives inside a question. (Exception: a profile field that has preset options may be asked as a closed question listing those options.)
-- Keep each turn short: at most one brief sentence before the question, then the question in a single sentence.
-- Ask open, non-leading questions. Do not suggest an answer, offer example answers, or embed your own interpretation in the question. Prefer "What was that like?" over "Was that frustrating?"
-- Do not evaluate answers. No "great point", "interesting", "that makes sense". A brief acknowledgement ("Thank you.") is enough.
-- Do not summarise or paraphrase what the participant said before the next question, except briefly to check your understanding at a natural transition. To anchor a follow-up, quote their own words exactly and briefly.
-- Follow the participant's vocabulary. Use their terms for things, not yours.
-- Use plain language. No jargon from the research question or topic areas unless the participant used it first.
-- If the participant seems distressed or reluctant, say so plainly, remind them they may skip any question, and do not press.
-- Do not ask for personal identifying information beyond the profile fields listed.
-```
-
-Instructions steer a model; they do not bind it. The response format is enforced by code; the phases and ending are not. Model and provider choice matter, so review early transcripts.
-
-Two worked examples to paste into Interviewer Manner:
-
-- Register in a language: "Use polite (desu/masu) register." The language itself is a study setting (**Interview Languages**, below); manner adjusts how the interviewer speaks in it.
-- A short screening study: "Ask two short, open questions per turn. Do not suggest answers or evaluate responses." This overrides the default one-question rule; save and Preview to check the result.
-
-Instructions ride every turn: a long manner costs tokens under hosted quotas. Each interview record snapshots the instructions in force when it was saved, so later study edits do not rewrite its record.
-
-Analysis uses the study's current configured provider and model, including when the study was edited after collection; the result records the study revision used. Each interview separately records the provider and model configured when it was saved.
-
-Each study also sets what participants are told about the AI provider (**AI Provider → What participants are told**):
-
-- **Only this provider and model** (the default for new studies). The consent notice names the provider and the model, and says the study does not switch them. An interview saved under this setting can be re-analyzed only with that provider and model. After you switch the study to another one, re-analyzing an earlier interview is refused (`PROVIDER_NOT_DISCLOSED`) until you set the study back.
-- **The provider or model may change.** The consent notice names the provider and says you may later analyze responses with a different provider or model. Re-analysis uses whatever the study is set to.
-
-Studies saved before this setting existed keep their old notice, and their interviews are not checked, until the study is saved again. Aggregate analysis defaults to the current revision, but an explicit dataset may include earlier revisions. Aggregate analysis, exploration and follow-up generation check each selected interview's provider commitment and transport disclosure before sending content. Follow-up generation preserves the stored aggregate's source scope. Researcher previews do not store research records; if preview analysis fails, **Export transcript** still opens the transcript download.
-
-### Interview languages
-
-**Interview Languages** lists the languages participants may choose: English, Simplified Chinese, French, Japanese, Korean and Spanish. With more than one, the consent page opens with a language choice, preselected from the participant's browser (else the study's default language). The consent page, data notice, interview screens and thank-you screen then use that language, and the interviewer conducts the whole interview in it, asking questions written in another language in the participant's language.
-
-- **Consent text** is written for each language in its section; a blank one is generated from the research question in that language when you save. The participant's consent is recorded against the text they read, and every later request names the same language: a client that switches language is refused.
-- **Analysis** is written in the installation's analysis language, English unless set otherwise, with quotations kept verbatim in the participant's language. Set `ANALYSIS_LANGUAGE` to `zh`, `fr`, `ja`, `ko` or `es` (Node: an environment variable; Cloudflare: `npm run setup:cloudflare -- update --analysis-language <code>`). It applies to every study and to analyses written after the change; earlier analyses keep their language until they are run again. Rolling back to 5.1 returns analysis to English (5.1 ignores the setting; the receipt keeps it for the next upgrade). The study setup's Interview Languages section shows the current setting. Each saved interview records the language it was conducted in.
-- **Translations** of the fixed participant screens and the data notice were drafted with AI assistance and reviewed by three other AI models; they are not certified translations (see `docs/translations/`). Your consent text in each language is your own: have it checked as your ethics process requires.
-- A study saved with only English keeps working exactly as before. A study with a language setting is refused by releases before 5.1 (fail-closed), so do not roll back past 5.1 while one is collecting.
-
-### Voice input
-
-**Voice Input** lets participants speak an answer instead of typing it. The text appears in their answer box to check and edit; nothing is sent until they press Send. The consent notice states who turns speech into text:
-
-- **Transcribed by this installation**: the browser records up to one minute, converts it to 16 kHz WAV and sends it to `/api/transcribe`, which passes it to Cloudflare Workers AI (`@cf/openai/whisper-large-v3-turbo`) once. OpenInterviewer does not store or log the recording or its text. Cloudflare's Workers AI terms say customer content is not used to train models; they do not state a retention period, so the consent line promises only that the study does not keep the recording. Works in current Chrome, Edge, Firefox and Safari, on phones and computers. On Cloudflare the installation's `AI` binding is used directly, never through AI Gateway; on Node set `CLOUDFLARE_WORKERS_AI_ACCOUNT_ID` and `CLOUDFLARE_WORKERS_AI_TOKEN` (an API token with Workers AI permissions). Cloudflare charges about $0.0005 per audio minute after its free daily allowance of 10,000 Neurons (roughly 200 audio minutes). Each request is admitted like an interview turn (40 clips per session per hour; 1,500 per study per day). The model's voice-activity filter drops silence and steady noise, but like any speech model it can occasionally turn a non-speech sound into a stock phrase (in staging tests, once, the Japanese for “thanks for watching”). The participant's check before sending is the safeguard, so the text is never sent on its own.
-- **The browser's own dictation**: no setup. Chrome sends the audio to Google and Safari to Apple, under their terms; Firefox does not support it. Use it only where your ethics approval allows these processors.
-- **On the participant’s computer (desktop Chrome only)** (`device`): the browser turns speech into text locally with `processLocally = true`, never falling back to a speech service or installation transcription. Available in desktop Chrome 139+ where the selected language pack is supported; phones, Safari, Firefox and unsupported devices show no microphone and participants type instead. The browser may first download a speech pack (about 60 MB). Participants can keep typing and sending during preparation, then press the mic again when ready. This is the browser’s local-processing promise, not something the page can independently verify. No server credentials, bindings or readiness capability are needed.
-- **Off** (the default).
-
-Transcription by the installation is not offered on the hosted service, which refuses to save it; browser dictation and device voice work there. The six speech tags are centralized in `SPEECH_TAGS` in `src/lib/voice/useVoiceInput.ts`; desktop Chrome 155 accepts all six (including `zh-CN`) for local processing. Its translations were reviewed like the others (`docs/translations/REVIEW-2026-10.md`). See the [draft v5.4.0 notes](docs/releases/v5.4.0.md).
-
-A 5.3 build rejects saved `voiceInput: device` configurations, rather than silently changing modes: participant access and link creation are refused (409); canonical-study validation also fails closed (503). Unchanged saves return 400 `Invalid voice input setting`. Before rollback, stop collection and explicitly change affected studies to **Off** on 5.4, which advances their revision; distribute new links before resuming. Saved interviews retain their original device-mode collection configuration, which 5.3 does not fully understand—prefer rolling forward if those records need processing or export.
-
-Changing study configuration advances its revision and invalidates links and participant sessions issued for the previous revision. Generate and distribute a new link after a consequential edit. Pausing/resuming collection and unchanged saves do not advance the revision.
+Both configuration endpoints also report `analysisExecution`. It is `synchronous` on Node/Vercel deployments and `queued-v2` on Cloudflare, where analysis runs as a durable background job.
 
 ## Security and data boundaries
 
-- Provider and storage credentials stay server-side; no secret belongs in a `NEXT_PUBLIC_` variable.
+OpenInterviewer is built to keep participants' data and researchers' credentials within known limits:
+
+- Provider and storage credentials stay server-side. No secret belongs in a `NEXT_PUBLIC_` variable.
 - Hosted credentials are encrypted at rest with a versioned AES-256-GCM keyring.
 - Researcher and participant sessions use separate signing secrets and token types.
 - Participant URLs contain high-entropy opaque codes, not study configuration or reusable API bearer JWTs.
 - The opaque code is exchanged for a short-lived HttpOnly, `SameSite=Strict` cookie and removed from the address bar.
 - Participant APIs resolve the live, server-owned study revision and recheck link status.
 - AI failures are errors, not fabricated research responses.
-- Researcher sign-in allows 10 failed attempts per client per 15 minutes and 200 across all clients per hour, on both standalone targets. A client is its IPv4 address, or its /64 for IPv6. Every attempt is counted before the password is compared, and a correct password is not counted. Over a limit sign-in answers 429 with `Retry-After`, even for the correct password; if the attempt store (Durable Object or Redis) or `RATE_LIMIT_SALT` is unavailable it answers 503 rather than skipping the limit.
-- On Node, the sign-in client is the first address of `x-vercel-forwarded-for`, `x-forwarded-for` or `x-real-ip`, as for participant limits. On Vercel the platform sets `x-vercel-forwarded-for`. Behind a host or proxy that passes client-supplied values through, a client can choose its own address, and only the global window bounds it, which it can exhaust to block every sign-in for up to an hour. Put such a host behind a proxy that overwrites the header.
-- On Cloudflare, rate limits use only the validated `CF-Connecting-IP`, automatic invocation logs are disabled (they would record participant link codes in URLs), and no Redis client can be constructed inside the Worker.
+- Researcher sign-in allows 10 failed attempts per client per 15 minutes, and 200 across all clients per hour, on both standalone targets. A client is its IPv4 address, or its /64 for IPv6. Every attempt is counted before the password is compared, and a correct password is not counted.
+- Over a sign-in limit, sign-in answers 429 with `Retry-After`, even for the correct password. If the attempt store (Durable Object or Redis) or `RATE_LIMIT_SALT` is unavailable, it answers 503 rather than skipping the limit.
+- On Node, the sign-in client is the first address of `x-vercel-forwarded-for`, `x-forwarded-for` or `x-real-ip`, as for participant limits. On Vercel the platform sets `x-vercel-forwarded-for`. Behind a host or proxy that passes client-supplied values through, a client can choose its own address, and only the global window bounds it. That client can exhaust the window to block every sign-in for up to an hour. Put such a host behind a proxy that overwrites the header.
+- On Cloudflare, rate limits use only the validated `CF-Connecting-IP`. Automatic invocation logs are disabled, because they would record participant link codes in URLs. No Redis client can be constructed inside the Worker.
 - Researchers remain responsible for consent language, retention, deletion, provider terms, and applicable research/privacy governance.
 
-Do not place real credentials in issues, logs, screenshots, chat transcripts, or diagnostic output.
+Do not place real credentials in issues, logs, screenshots, chat transcripts or diagnostic output.
 
-## Migrating pre-opaque-link deployments
+## Contribute
 
-This section applies only to releases that minted signed-JWT share URLs before the opaque-link security rebuild. Those historical links cannot be converted into the current opaque, revision-bound link records, including old links configured to never expire. Current standalone and hosted deployments use the same opaque-link contract.
+Contributing or working with a coding agent? Start with [`CONTRIBUTING.md`](CONTRIBUTING.md) and the repository map in [`AGENTS.md`](AGENTS.md). The [development guide](docs/development.md) lists the verification commands, test lanes and release steps.
 
-Before cutover:
+## Documentation
 
-1. Inventory active legacy studies and notify researchers that new participant URLs are required.
-2. Stop or explicitly close legacy collection and export the studies/interviews needed for retention.
-3. Preserve the legacy deployment and its Redis configuration unchanged for a bounded rollback/export window.
-4. Generate and distribute new opaque links only after the hosted study is active.
+For researchers:
 
-Do not point legacy and hosted releases at the same writable keyspace. A rollback restores the old deployment and its original storage; it does not merge interviews collected by both generations. Export any hosted data needed before rolling back.
+- [Research guide](docs/research-guide.md): the demo and sample study, running a study, interviewer control and question craft, provider disclosure, languages, voice input, revisions, Explore, exports, projects and researcher AI request limits
 
-## Future hosted cutover runbook
+For people running an instance:
 
-No deploy command in this repository performs the cutover automatically. Hosted v2 isolation uses a schema-lineage sentinel. Absence of `study-ops:v2` is not proof that a prefix or database is safe.
+- [Self-host on Cloudflare](docs/self-hosting-cloudflare.md): requirements, plan choice, install, credentials, jurisdiction and updates
+- [Self-host on Node or Vercel](docs/self-hosting-node.md): requirements, local setup, production variables, transports, Vercel deploy and setup diagnostics
+- [Hosted researcher accounts](docs/operations/hosted.md): researcher journey, operator requirements, migrating pre-opaque-link deployments and the future hosted cutover runbook
+- [Cloudflare installer guide](docs/operations/cloudflare-migration/INSTALLER.md) and [operator runbook](docs/operations/cloudflare-migration/RUNBOOK.md): every installer command, maintenance modes, backup/import, restore and rollback
+- [Node/Vercel to Cloudflare transition runbook](docs/operations/cloudflare-migration/TRANSITION.md)
+- [Cloudflare design record](docs/operations/cloudflare-migration/IMPLEMENTATION.md) and [September 30 release status](docs/operations/cloudflare-migration/evidence/V5-STATUS-2026-09-30.md)
+- [Agent skill for installing and operating a Cloudflare instance](skills/openinterviewer-cloudflare/SKILL.md)
 
-1. Set a new `PLATFORM_KEY_PREFIX` or a new platform Redis before enabling v2. Never share a production write namespace with staging or a pre-v2 keyspace.
-2. Set `PLATFORM_SCHEMA_LINEAGE=v2-clean` only after attesting that this prefix/database has no v1 `study-operation` / `study-operations` / pre-authority-leak owner rows. Hosted production `npm run setup:check -- --mode hosted --production` fails if lineage would HOLD.
-3. Unset `PLATFORM_SCHEMA_LINEAGE` after the sentinel exists (optional); bootstrap remains idempotent on GET.
-4. Do not roll back the deployment to pre-v2 after researchers have v2 data. Roll forward, or take hosted APIs offline. Unknown lineage is HOLD: readiness is false and writes return 503 `schema-hold`.
-5. Account deletion is journaled, resume-safe, and does not wipe BYOS.
-6. Credential cache eviction is isolate-local; TTL is 5 minutes; the account-deletion journal fails closed across isolates.
-7. Real-Redis tests never point at production and never `FLUSHDB` a preexisting URL. They create a disposable instance (or an attested CI service) and brand the adapter with a runner-minted token.
+For contributors:
 
-Create staging-only OAuth clients, scope environment variables to the staging project, and verify `/demo`, OAuth, onboarding, two isolated researcher accounts, opaque-link exchange, consent, interview completion, export, and account deletion resume before promoting a production candidate. Do not reuse real participant content.
-
-## Development and verification
-
-```bash
-npm ci
-npx playwright install chromium
-npm run lint
-npm run typecheck
-npm test
-npm run test:setup
-npm run setup:check -- --mode demo
-npm run build
-npm run test:e2e
-npm run test:redis-crash
-npm run test:adversarial
-git diff --check
-```
-
-Cloudflare lanes (no account or credentials needed; everything runs in local workerd with synthetic fixtures):
-
-```bash
-npm run test:cloudflare             # real local Durable Object SQLite, alarms and Queue batches
-npm run test:contract:redis         # the shared WorkspaceStore scenarios and the Node sign-in budget on disposable Redis
-npm run test:setup:cloudflare       # installer against a fake wrangler
-npm run build:cloudflare
-npm run test:cloudflare:artifact    # the built Worker artifact in local workerd
-npm run test:e2e:cloudflare         # browser journeys against the built artifact
-npm run test:inventory:redis        # the old-Upstash inventory tool (TRANSITION.md) on disposable Redis
-npm run preview:cloudflare          # click through the built artifact locally (synthetic provider)
-npm run check:cloudflare            # all of the above plus the existing matrix, on one artifact
-```
-
-The artifact, Cloudflare browser and restart launchers remove credential-like environment variables (names that, in any letter case, contain `API_KEY`, `API_TOKEN`, `ACCOUNT_ID`, `SECRET`, `PASSWORD`, `KV_REST`, `UPSTASH` or `OIDC`, or end in `_TOKEN`) from their own process before wrangler loads, and print the names they removed, never the values. The Worker under test receives only synthetic bindings. `check:cloudflare` removes the same variables from every lane and the build, and prints the names once. You do not need to unset anything first.
-
-The browser suite covers the keyless demo plus standalone direct and Gateway research workflows: study creation, participant-link exchange, consent, interview, saving, deferred analysis, researcher recovery and review, and export. The workflow tests run the real application APIs with synthetic provider HTTP responses and a fresh disposable Redis instance per test. They require Docker or a local `redis-server`; inherited `REDIS_URL` or Redis attestation configuration is refused. Test-only servers use fixture credentials and Next's test proxy; the deployed application does not enable that proxy. These tests verify application behavior, not live provider availability, model quality, or hosted OAuth onboarding.
-
-Production logs are allowlisted JSON and never contain prompts, keys, or bodies. An `interview.analysis` event with `reason: corrupt-record` means a stored interview record was refused for structural reasons and left unchanged; it is not a Redis outage (`reason: unavailable`) and will not resolve by retrying. Real-Redis crash and shared-BYOS adversarial jobs also refuse inherited production Redis connections.
-
-Live-provider compatibility is a separate, paid check that the fixture suites cannot make. `tests/smoke/provider-provenance.smoke.test.ts` runs one real synthesis call through the direct adapter for a single provider and confirms the served response names a model. Set `SMOKE_EXPLORATION=1` to add one exploration call; authorize two paid calls for that opt-in. Each test allows one HTTP attempt, disables automatic retries, and uses synthetic interviews only:
-
-```bash
-SMOKE_PROVIDER=gemini GEMINI_API_KEY=... npx vitest run --config vitest.smoke.config.mts
-```
-
-It refuses to run with more than one provider credential present, writes nothing, and prints only provider, requested and served model, and a failure class.
-
-For ordinary updates, use a reviewed pull request and require CI before merging to `main`. On Cloudflare, run `npm run check:cloudflare` on a clean checkout of the release commit, then `npm run setup:cloudflare -- update` for staging, check it, and then production; `update` runs `verify` itself. On Vercel, verify the production deployment the Git integration created from `main` and scan runtime errors. The hosted cutover runbook above is for the first hosted-mode infrastructure cutover, not every application release.
-
-## Project structure
-
-```text
-src/
-├── app/                 Next.js pages and API routes
-│   ├── api/             Auth, onboarding, studies, links, interviews, and synthesis
-│   ├── demo/            Keyless scripted demo
-│   └── p/               Opaque participant-link entry (/p/<code>, rewritten in next.config.js)
-├── components/          Researcher and participant UI
-├── lib/                 Auth, storage, provider, validation, and tenancy logic
-├── services/            Browser-side API clients
-├── store.ts             Participant/researcher client state
-└── types.ts             Shared domain types
-
-cloudflare/              Worker entry, Durable Object workspace, analysis Queue consumer, OpenNext wrapper
-scripts/cloudflare/      Build, release check, deploy, installer (setup:cloudflare) and operator CLI
-scripts/check-setup.mjs  Redacted local setup diagnostics
-scripts/check-sync-artifacts.mjs  Fails the check gate on iCloud sync-conflict copies
-docs/operations/cloudflare-migration/  Installer, runbook, transition and evidence for the Cloudflare target
-docs/releases/           Release notes
-skills/                  Agent skill for installing and operating a Cloudflare instance
-tests/                   Unit, integration, Workers, artifact and browser regressions
-wrangler.jsonc           Cloudflare Worker template (installations are generated from it)
-```
+- [Development and verification](docs/development.md): checks, test lanes, live-provider smoke test, releases, provider API and model contract, and project structure
+- [Contributing guide](CONTRIBUTING.md) and [agent and architecture guide](AGENTS.md)
+- [Release notes](docs/releases/), latest [5.4.0](docs/releases/v5.4.0.md)
+- [Translation review, October 2026](docs/translations/REVIEW-2026-10.md)
 
 ## Acknowledgments
 
 Thank you to [@8888oukaouka-spec](https://github.com/8888oukaouka-spec) for the
 [openinterviewerver02 fork](https://github.com/8888oukaouka-spec/openinterviewerver02),
 its study-deletion prototype and historical-analysis change, and the research
-workflow proposal that helped shape v5's evidence exploration. See
+workflow proposal that helped shape v5's evidence exploration, and for the ideas
+behind interview languages, voice input, Markdown export (5.1) and projects (5.3). See
 [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md) for the contributions and source commits.
 
 ## License

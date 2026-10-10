@@ -2,7 +2,7 @@
 
 Thanks for improving OpenInterviewer. This application handles research consent, participant transcripts, researcher credentials, and provider-backed analysis, so small-looking changes can cross important trust boundaries.
 
-Read [`AGENTS.md`](AGENTS.md) first for the architecture map, security invariants, and area-specific tests. Use [`README.md`](README.md) for product behavior and setup.
+Read [`AGENTS.md`](AGENTS.md) first for the architecture map, security invariants, and area-specific tests. Use [`README.md`](README.md) and the guides it links for product behavior and setup.
 
 ## Local development
 
@@ -20,7 +20,7 @@ npm run setup:check -- --mode standalone
 npm run dev
 ```
 
-The keyless `/demo` needs no provider key or database. Real researcher and participant flows require the standalone variables documented in `README.md`, or a correctly configured hosted deployment.
+The keyless `/demo` needs no provider key or database. Real researcher and participant flows require the standalone variables documented in [`docs/self-hosting-node.md`](docs/self-hosting-node.md), or a correctly configured hosted deployment.
 
 Never commit credentials or real participant content. Use synthetic fixtures only.
 

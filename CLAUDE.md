@@ -1,6 +1,6 @@
 # OpenInterviewer
 
-Read `AGENTS.md` before changing this repository. It is the canonical architecture, trust-boundary, navigation, and verification guide for all coding agents. `README.md` owns user and operator setup.
+Read `AGENTS.md` before changing this repository. It is the canonical architecture, trust-boundary, navigation, and verification guide for all coding agents. `README.md` and the guides it links in `docs/` own user and operator setup.
 
 Do not duplicate durable project guidance here: duplicated instructions drift. Preserve the Next-managed block below when editing this file.
 
