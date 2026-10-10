@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { SPEECH_TAGS, useVoiceInput } from '@/lib/voice/useVoiceInput';
 import type { InterviewLanguage } from '@/lib/i18n/languages';
 
@@ -10,16 +10,23 @@ class Recognition {
   lang = '';
   processLocally = false;
   continuous = false;
-  interimResults = true;
+  interimResults = false;
   onresult: ((event: unknown) => void) | null = null;
   onerror: ((event: { error: string }) => void) | null = null;
   onend: (() => void) | null = null;
+  onaudiostart: (() => void) | null = null;
+  onspeechstart: (() => void) | null = null;
+  onnomatch: (() => void) | null = null;
   start = vi.fn(() => {
     // Every started instance must satisfy the local-only contract, including retries.
     expect(this.processLocally).toBe(true);
     Recognition.sessions.push(this);
   });
-  stop = vi.fn(() => this.onend?.());
+  stop = vi.fn();
+  abort = vi.fn();
+  result(results: [string, boolean][], resultIndex = 0) {
+    this.onresult?.({ resultIndex, results: results.map(([transcript, isFinal]) => ({ isFinal, 0: { transcript } })) });
+  }
 }
 const onText = vi.fn();
 let sessionNumber = 0;
@@ -39,7 +46,7 @@ beforeEach(() => {
   vi.stubGlobal('webkitSpeechRecognition', undefined);
   vi.stubGlobal('fetch', vi.fn());
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('device-only speech input', () => {
   it.each(['available', 'downloadable', 'downloading'])('offers the mic only after %s is resolved', async availability => {
@@ -78,7 +85,7 @@ describe('device-only speech input', () => {
     expect(Recognition.install).toHaveBeenCalledExactlyOnceWith({ langs: ['en-US'], processLocally: true });
     expect(Recognition.sessions).toHaveLength(0);
     await act(async () => resolve(true));
-    expect(result.current.state.kind).toBe('idle');
+    expect(result.current.state.kind).toBe('ready');
     expect(Recognition.sessions).toHaveLength(0);
     act(() => result.current.toggle());
     expect(Recognition.sessions).toHaveLength(1);
@@ -214,21 +221,259 @@ describe('device-only speech input', () => {
   });
 });
 
+describe('shared speech lifecycle', () => {
+  async function start() {
+    const hook = mount();
+    await act(async () => {});
+    expect(hook.result.current.supported).toBe(true);
+    act(() => hook.result.current.toggle());
+    return { ...hook, session: Recognition.sessions[0] };
+  }
+
+  it('starts once, and waits for audio rather than speech before reporting listening', async () => {
+    const { result, session } = await start();
+    expect(result.current.state).toEqual({ kind: 'starting' });
+    expect(session.interimResults).toBe(true);
+    act(() => session.onspeechstart?.());
+    expect(result.current.state.kind).toBe('starting');
+    act(() => session.onaudiostart?.());
+    expect(result.current.state).toEqual({ kind: 'listening' });
+  });
+
+  it('does not open two sessions for two presses before React renders', async () => {
+    const { result } = mount();
+    await act(async () => {});
+    act(() => { result.current.toggle(); result.current.toggle(); });
+    expect(Recognition.sessions).toHaveLength(1);
+    expect(result.current.state.kind).toBe('starting');
+  });
+
+  it('aborts a startup after eight seconds, suppresses its aborted event, and permits retry', async () => {
+    vi.useFakeTimers();
+    const { result, session } = await start();
+    session.abort.mockImplementation(() => {
+      session.onerror?.({ error: 'aborted' });
+      session.onend?.();
+    });
+    act(() => vi.advanceTimersByTime(7_999));
+    expect(result.current.state.kind).toBe('starting');
+    act(() => vi.advanceTimersByTime(1));
+    expect(session.abort).toHaveBeenCalledTimes(1);
+    expect(result.current.state).toEqual({ kind: 'error', reason: 'failed' });
+    expect(result.current.supported).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+    act(() => result.current.toggle());
+    expect(Recognition.sessions).toHaveLength(2);
+    act(() => { session.onaudiostart?.(); session.result([['stale', true]]); session.onend?.(); });
+    expect(result.current.state.kind).toBe('starting');
+    expect(onText).not.toHaveBeenCalled();
+  });
+
+  it('clears the startup timer and disables device mode when start throws', async () => {
+    vi.useFakeTimers();
+    class CannotStart extends Recognition {
+      start = vi.fn(() => { throw new Error('cannot start'); });
+    }
+    vi.stubGlobal('SpeechRecognition', CannotStart);
+    const { result } = mount();
+    await act(async () => {});
+    act(() => result.current.toggle());
+    expect(result.current.state).toEqual({ kind: 'error', reason: 'deviceUnavailable' });
+    expect(result.current.supported).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('clears the startup deadline when audio begins', async () => {
+    vi.useFakeTimers();
+    const { result, session } = await start();
+    act(() => session.onaudiostart?.());
+    act(() => vi.advanceTimersByTime(8_000));
+    expect(result.current.state.kind).toBe('listening');
+    expect(session.abort).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('replaces interim text per index, removes retracted results, and commits each final once', async () => {
+    const { result, session } = await start();
+    act(() => session.result([[' first ', false], ['draft', false]]));
+    expect(result.current.preview).toBe('first draft');
+    expect(onText).not.toHaveBeenCalled();
+    act(() => session.result([['revised', false]]));
+    expect(result.current.preview).toBe('revised');
+    act(() => session.result([['finished', true], ['next', false]]));
+    act(() => session.result([['finished', true], ['new next', false]], 1));
+    act(() => session.result([['finished', true], ['new next', false]]));
+    expect(result.current.preview).toBe('new next');
+    expect(onText).toHaveBeenCalledExactlyOnceWith('finished');
+    act(() => session.result([['finished', true], ['second', true]], 1));
+    expect(result.current.preview).toBe('');
+    expect(onText.mock.calls).toEqual([['finished'], ['second']]);
+    act(() => session.onend?.());
+    expect(result.current.state.kind).toBe('idle');
+  });
+
+  it('accepts a late final while stopping and clears the grace timer on end', async () => {
+    vi.useFakeTimers();
+    const { result, session } = await start();
+    act(() => session.onaudiostart?.());
+    act(() => result.current.toggle());
+    expect(result.current.state.kind).toBe('stopping');
+    expect(session.stop).toHaveBeenCalledTimes(1);
+    act(() => result.current.toggle());
+    expect(session.stop).toHaveBeenCalledTimes(1);
+    expect(Recognition.sessions).toHaveLength(1);
+    act(() => session.result([['late final', true]]));
+    expect(onText).toHaveBeenCalledExactlyOnceWith('late final');
+    act(() => session.onend?.());
+    expect(result.current.state.kind).toBe('idle');
+    expect(vi.getTimerCount()).toBe(0);
+    expect(session.abort).not.toHaveBeenCalled();
+  });
+
+  it('commits interim-only speech once on end, and drops any late events', async () => {
+    const { result, session } = await start();
+    act(() => session.result([['你好', false], ['世界', false]]));
+    expect(onText).not.toHaveBeenCalled();
+    act(() => { session.onend?.(); session.onend?.(); session.result([['late', true]]); });
+    expect(onText).toHaveBeenCalledExactlyOnceWith('你好 世界');
+    expect(result.current.preview).toBe('');
+    expect(result.current.state.kind).toBe('idle');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('keeps an unfinished last phrase after a committed final, once', async () => {
+    const { result, session } = await start();
+    act(() => session.result([['final', true], ['unfinished', false]]));
+    act(() => session.onend?.());
+    expect(onText.mock.calls).toEqual([['final'], ['unfinished']]);
+    expect(result.current.preview).toBe('');
+    expect(result.current.state.kind).toBe('idle');
+  });
+
+  it.each(['empty', 'whitespace', 'nomatch'])('reports noText after %s and releases the session', async outcome => {
+    vi.useFakeTimers();
+    const { result, session } = await start();
+    act(() => {
+      if (outcome === 'whitespace') session.result([['  ', false]]);
+      if (outcome === 'nomatch') session.onnomatch?.();
+      session.onend?.();
+    });
+    expect(result.current.state).toEqual({ kind: 'error', reason: 'noText' });
+    expect(result.current.supported).toBe(true);
+    expect(onText).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('reports foreign aborted as interrupted without disabling the mic, even without end', async () => {
+    vi.useFakeTimers();
+    const { result, session } = await start();
+    act(() => session.result([['kept draft', false]]));
+    act(() => session.onerror?.({ error: 'aborted' }));
+    expect(result.current.state).toEqual({ kind: 'error', reason: 'interrupted' });
+    expect(result.current.supported).toBe(true);
+    expect(result.current.preview).toBe('');
+    expect(vi.getTimerCount()).toBe(0);
+    act(() => result.current.toggle());
+    expect(Recognition.sessions).toHaveLength(2);
+    expect(onText).toHaveBeenCalledExactlyOnceWith('kept draft');
+  });
+
+  it('reports no-speech as noText', async () => {
+    const { result, session } = await start();
+    act(() => session.onerror?.({ error: 'no-speech' }));
+    expect(result.current.state).toEqual({ kind: 'error', reason: 'noText' });
+    expect(onText).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('bounds stop during startup with a ten-second grace, interim=%s', async hasInterim => {
+    vi.useFakeTimers();
+    const { result, session } = await start();
+    session.abort.mockImplementation(() => {
+      session.onerror?.({ error: 'aborted' });
+      session.onend?.();
+    });
+    if (hasInterim) act(() => session.result([['recovered', false]]));
+    act(() => result.current.toggle());
+    act(() => session.onaudiostart?.());
+    act(() => vi.advanceTimersByTime(9_999));
+    expect(result.current.state.kind).toBe('stopping');
+    expect(session.abort).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(1));
+    expect(session.abort).toHaveBeenCalledTimes(1);
+    expect(result.current.state).toEqual(hasInterim ? { kind: 'idle' } : { kind: 'error', reason: 'noText' });
+    expect(result.current.preview).toBe('');
+    expect(onText.mock.calls).toEqual(hasInterim ? [['recovered']] : []);
+    expect(vi.getTimerCount()).toBe(0);
+    act(() => result.current.toggle());
+    expect(Recognition.sessions).toHaveLength(2);
+  });
+
+  it.each(['not-allowed', 'network', 'language-not-supported'])('clears timers and preview after %s without waiting for end', async error => {
+    vi.useFakeTimers();
+    const { result, session } = await start();
+    act(() => session.result([['draft', false]]));
+    act(() => result.current.toggle());
+    act(() => session.onerror?.({ error }));
+    expect(result.current.state.kind).toBe('error');
+    expect(result.current.preview).toBe('');
+    expect(vi.getTimerCount()).toBe(0);
+    act(() => session.onend?.());
+    expect(result.current.state.kind).toBe('error');
+    // A terminal device failure drops the draft; other errors keep it for review.
+    if (error === 'language-not-supported') expect(onText).not.toHaveBeenCalled();
+    else expect(onText).toHaveBeenCalledExactlyOnceWith('draft');
+  });
+
+  it.each(['starting', 'stopping'])('aborts and clears timers on unmount while %s without committing', async phase => {
+    vi.useFakeTimers();
+    const { result, session, unmount } = await start();
+    act(() => session.result([['discard', false]]));
+    if (phase === 'stopping') act(() => result.current.toggle());
+    unmount();
+    expect(session.abort).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+    act(() => { session.onerror?.({ error: 'aborted' }); session.onend?.(); });
+    expect(onText).not.toHaveBeenCalled();
+  });
+
+  it('cleans up a device session on language change and ignores its late events', async () => {
+    vi.useFakeTimers();
+    const { result, rerender } = renderHook(({ language }) => useVoiceInput(options(language)), { initialProps: { language: 'en' as InterviewLanguage } });
+    await act(async () => {});
+    act(() => result.current.toggle());
+    const session = Recognition.sessions[0];
+    act(() => session.result([['discard', false]]));
+    rerender({ language: 'zh' });
+    await act(async () => {});
+    expect(session.abort).toHaveBeenCalledTimes(1);
+    expect(result.current.preview).toBe('');
+    expect(vi.getTimerCount()).toBe(0);
+    act(() => result.current.toggle());
+    expect(Recognition.sessions[1].lang).toBe('zh-CN');
+    act(() => { session.result([['stale', true]]); session.onend?.(); });
+    expect(result.current.state.kind).toBe('starting');
+    expect(onText).not.toHaveBeenCalled();
+  });
+});
+
 describe('language changes outside device mode', () => {
-  it('keeps browser dictation listening when the language prop changes', async () => {
-    const stop = vi.fn();
-    class CloudRecognition {
-      lang = ''; continuous = false; interimResults = true;
-      onresult = null; onerror = null; onend = null;
-      start = vi.fn(); stop = stop;
+  it('keeps browser dictation and its speech tag when the language prop changes', async () => {
+    class CloudRecognition extends Recognition {
+      start = vi.fn(() => { Recognition.sessions.push(this); });
     }
     vi.stubGlobal('SpeechRecognition', CloudRecognition);
     const { result, rerender } = renderHook(({ language }) => useVoiceInput({ ...options(language), mode: 'browser' }), { initialProps: { language: 'en' as InterviewLanguage } });
     await waitFor(() => expect(result.current.supported).toBe(true));
     act(() => result.current.toggle());
+    const session = Recognition.sessions[0];
+    expect(session.processLocally).toBe(false);
+    act(() => session.onaudiostart?.());
     expect(result.current.state).toEqual({ kind: 'listening' });
     rerender({ language: 'ja' });
-    expect(stop).not.toHaveBeenCalled();
+    expect(session.stop).not.toHaveBeenCalled();
+    expect(session.abort).not.toHaveBeenCalled();
     expect(result.current.state).toEqual({ kind: 'listening' });
+    expect(result.current.speechTag).toBe('en-US');
   });
 });
