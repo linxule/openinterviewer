@@ -99,13 +99,20 @@ export function useVoiceInput(options: {
 
   // Feature detection runs after mount so the server and first client render agree.
   useEffect(() => {
+    if (mode !== 'device') setSupported(voiceInputSupported(mode));
+  }, [mode]);
+
+  // Device mode re-checks local availability per language. Kept separate so a
+  // language change never resets or stops installation/browser voice input.
+  useEffect(() => {
+    if (mode !== 'device') return;
     const currentGeneration = ++generation.current;
     deviceDisabled.current = deviceSessionDisabled(deviceSessionKey);
-    setState(mode === 'device' && deviceDisabled.current ? { kind: 'error', reason: 'deviceUnavailable' } : { kind: 'idle' });
+    setState(deviceDisabled.current ? { kind: 'error', reason: 'deviceUnavailable' } : { kind: 'idle' });
     preparing.current = false;
     deviceAvailability.current = 'unavailable';
-    setSupported(voiceInputSupported(mode));
-    if (mode === 'device' && !deviceDisabled.current) {
+    setSupported(false);
+    if (!deviceDisabled.current) {
       const Recognition = speechRecognitionClass();
       if (typeof Recognition?.available === 'function' && typeof Recognition.install === 'function') {
         // A missing/rejected API is not permission to use remote dictation.

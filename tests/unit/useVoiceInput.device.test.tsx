@@ -213,3 +213,22 @@ describe('device-only speech input', () => {
     expect(Recognition.sessions).toHaveLength(0);
   });
 });
+
+describe('language changes outside device mode', () => {
+  it('keeps browser dictation listening when the language prop changes', async () => {
+    const stop = vi.fn();
+    class CloudRecognition {
+      lang = ''; continuous = false; interimResults = true;
+      onresult = null; onerror = null; onend = null;
+      start = vi.fn(); stop = stop;
+    }
+    vi.stubGlobal('SpeechRecognition', CloudRecognition);
+    const { result, rerender } = renderHook(({ language }) => useVoiceInput({ ...options(language), mode: 'browser' }), { initialProps: { language: 'en' as InterviewLanguage } });
+    await waitFor(() => expect(result.current.supported).toBe(true));
+    act(() => result.current.toggle());
+    expect(result.current.state).toEqual({ kind: 'listening' });
+    rerender({ language: 'ja' });
+    expect(stop).not.toHaveBeenCalled();
+    expect(result.current.state).toEqual({ kind: 'listening' });
+  });
+});
