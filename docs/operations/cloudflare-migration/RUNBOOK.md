@@ -37,6 +37,27 @@ A lost response is resolved by reading `status`, never by repeating a transition
 
 **Unknown outcomes.** A maintenance transition, activation, restore, import chunk or import finalize may have committed when the Worker answers `OUTCOME_UNKNOWN` or a 5xx other than a definite refusal, when a 2xx reply lacks the expected result (for example a body that is not JSON), or when no complete reply arrives: the connection fails or is reset, the body is cut off, or nothing arrives within 120 s (`no reply: <code>`, with `detail.network`). The CLI then exits 1 with `detail.outcome: "unknown"`. It does not resend the request, except an import chunk or finalize, which is idempotent and is sent up to three times in all. It reads `status` once and puts it in `detail.status`. If that read fails too, `detail.status.unavailable` gives the reason and the message says `status could not be read either`. In that case run `status` before anything else, and repeat it until it answers. Compare it with what you asked for: a changed state or version, or a changed activated epoch, means the request ran. For an import, re-run the same command: accepted chunks come back as duplicates, and a finalized import answers `finalized` again.
 
+### Voice input modes and rollback
+
+A study offers `off`, `installation`, `browser` or `device`. Only `installation`
+uses the Workers AI binding. `browser` uses the browser's speech service;
+`device` requires desktop Chrome's local recognition and no server capability,
+credential or gateway. An absent local API or unavailable pack hides the mic;
+participants type. A first-use pack download (about 60 MB) does not block typing.
+If preparation or local recognition is unavailable, there is no remote fallback.
+
+Before reverting 5.4 to 5.3, stop collection and explicitly save affected studies
+with voice input **Off** while still on 5.4. That changes the revision and
+invalidates prior participant authority; issue new links before resuming.
+A 5.3 validator rejects `device` with `Invalid voice input setting`: unchanged
+saves return 400, participant context and link generation return 409, and the
+canonical loader's independent check returns 503. It does not silently disable
+voice or send audio elsewhere. Existing data is not deleted. Saved interview
+collection configurations can still contain `device`; old exports cannot describe
+that mode and operations validating those configurations can refuse them. Prefer
+rolling forward to 5.4 if these records need processing. This does not alter any
+existing schema rollback restrictions. See the [draft release notes](../../releases/v5.4.0.md).
+
 ### Sign-in lockout
 
 Sign-in is limited on Cloudflare: 10 failed attempts per client per 15 minutes, and 200 across all clients per hour. Each client is its IPv4 address, or its /64 for IPv6, so a lockout covers every address in that /64. Each window opens with its first counted attempt and is never extended. Over a limit, `/api/auth` answers 429 with `Retry-After`, and the CLI exits 1 with "retry after N seconds". A client-level lockout clears within 15 minutes. A global lockout means many failures from many clients; it blocks every sign-in, including the correct password, for up to one hour. Sign-in works in every maintenance state and under epoch, identity and bootstrap holds. Only an unsupported schema or unavailable workspace storage refuses it (503).

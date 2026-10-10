@@ -16,6 +16,9 @@ import Consent from '@/components/Consent';
 
 class FakeRecognition {
   static last: FakeRecognition | null = null;
+  static available = vi.fn();
+  static install = vi.fn();
+  processLocally = false;
   lang = '';
   continuous = false;
   interimResults = true;
@@ -94,6 +97,7 @@ describe('consent notice for voice input', () => {
   it.each([
     ['installation', /recording is sent to Cloudflare to be turned into text by Cloudflare Workers AI/],
     ['browser', /in Chrome this is Google, in Safari Apple/],
+    ['device', /your browser turns your speech into text on this computer/],
   ] as const)('names who turns speech into text: %s', (mode, text) => {
     useStore.setState(useStore.getInitialState(), true);
     useStore.getState().beginParticipantSession(makeStudyConfig({ id: 'study-v', voiceInput: mode }), 'participant-handle-v-123456');
@@ -106,5 +110,36 @@ describe('consent notice for voice input', () => {
     useStore.getState().beginParticipantSession(makeStudyConfig({ id: 'study-v' }), 'participant-handle-v-123456');
     render(<Consent />);
     expect(screen.queryByText(/microphone/i)).not.toBeInTheDocument();
+  });
+});
+
+
+describe('device mic and consent', () => {
+  it('keeps typing and Send available during preparation, then shows a localized failure without a mic', async () => {
+    FakeRecognition.available.mockResolvedValue('downloadable');
+    let finish!: (value: boolean) => void;
+    FakeRecognition.install.mockReturnValue(new Promise<boolean>(resolve => { finish = resolve; }));
+    seed('device', { interviewLanguages: ['ja'] });
+    useStore.setState({ participantLanguage: 'ja' });
+    render(<InterviewChat />);
+    fireEvent.click(await screen.findByRole('button', { name: '音声入力を開始' }));
+    expect(screen.getByRole('status')).toHaveTextContent('このデバイスで音声入力を準備しています…');
+    fireEvent.change(screen.getByLabelText('あなたの回答'), { target: { value: '入力できます' } });
+    expect(screen.getByRole('button', { name: '送信' })).toBeEnabled();
+    await act(async () => finish(false));
+    expect(screen.queryByRole('button', { name: '音声入力を開始' })).not.toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('このデバイスでは音声入力を利用できません');
+    expect(screen.getByLabelText('あなたの回答')).toHaveValue('入力できます');
+  });
+
+  it.each([
+    ['ja', /録音はこのコンピューターの外に出ないとしています/],
+    ['zh', /浏览器会在这台电脑上将您的语音转为文字/],
+  ] as const)('renders the device consent notice in %s', (language, text) => {
+    useStore.setState(useStore.getInitialState(), true);
+    useStore.getState().beginParticipantSession(makeStudyConfig({ id: 'study-v', voiceInput: 'device', interviewLanguages: [language] }), 'participant-handle-v-123456');
+    render(<Consent />);
+    expect(screen.getByText(text)).toHaveTextContent(/60 MB/);
+    expect(screen.queryByText(/Cloudflare Workers AI/)).not.toBeInTheDocument();
   });
 });

@@ -19,6 +19,11 @@ const OPTIONS: { value: VoiceInputMode; label: string; detail: string }[] = [
     detail: 'Recordings of up to one minute go to Cloudflare, which already hosts the study, and are turned into text by Whisper. OpenInterviewer does not keep them; Cloudflare’s terms rule out training on them but state no retention period. Works in current browsers on phones and computers. Cloudflare bills about $0.0005 per audio minute after a free daily allowance.',
   },
   {
+    value: 'device',
+    label: 'On the participant’s computer (desktop Chrome only)',
+    detail: 'Your participant’s browser turns speech into text on their computer and says the audio stays there; the study receives only the text they send. Chrome makes that promise; this app cannot check it. The first use may download a speech pack (about 60 MB). Participants on phones, Safari and Firefox will not see the microphone and will type instead.',
+  },
+  {
     value: 'browser',
     label: 'The browser’s own dictation',
     detail: 'No setup. Chrome sends the audio to Google and Safari to Apple, under their terms, and Firefox does not support it. Use only where your ethics approval allows these processors.',

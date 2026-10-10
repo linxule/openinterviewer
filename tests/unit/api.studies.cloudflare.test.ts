@@ -429,6 +429,22 @@ describe('/api/studies/[id] on Cloudflare (ST-01, ST-03)', () => {
     expect(store.replaceStudyConfig).not.toHaveBeenCalled();
   });
 
+  it('PUT carries device mode through validation into a revision-guarded replacement', async () => {
+    const study = studyAt(5);
+    store.readiness.mockResolvedValue(ready());
+    store.getStudy.mockResolvedValue({ status: 'found', study });
+    store.replaceStudyConfig.mockResolvedValue({ status: 'updated', study: {
+      ...study, revision: 6, config: { ...study.config, voiceInput: 'device' },
+    } });
+    const response = await updateStudy(jsonRequest('http://localhost', 'PUT', {
+      config: { voiceInput: 'device' }, expectedRevision: 5,
+    }), params);
+    expect(response.status).toBe(200);
+    expect(store.replaceStudyConfig).toHaveBeenCalledWith(expect.objectContaining({
+      expectedRevision: 5, config: expect.objectContaining({ voiceInput: 'device' }),
+    }));
+  });
+
   it('ST-03: PUT replaces the config against the loaded revision and keeps the soft lock', async () => {
     const study = studyAt(5, { interviewCount: 2 });
     store.readiness.mockResolvedValue(ready());

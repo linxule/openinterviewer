@@ -3,8 +3,8 @@
 // Participant voice input (study setting voiceInput). 'installation' records
 // a clip of at most 60 seconds, converts it to 16 kHz WAV in the browser and
 // sends it to /api/transcribe (Workers AI); 'browser' uses the browser's own
-// SpeechRecognition. Either way the text lands in the answer box for the
-// participant to check before sending; nothing is sent automatically.
+// SpeechRecognition; device mode requires local processing with no fallback.
+// The text lands in the answer box to check; nothing is sent automatically.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { VoiceInputMode } from '@/types';
@@ -17,15 +17,19 @@ export type VoiceState =
   | { kind: 'recording'; seconds: number }
   | { kind: 'listening' }
   | { kind: 'transcribing' }
-  | { kind: 'error'; reason: 'denied' | 'failed' | 'unsupported' | 'limited' | 'unavailable' };
+  | { kind: 'preparing' }
+  | { kind: 'error'; reason: 'denied' | 'failed' | 'unsupported' | 'limited' | 'unavailable' | 'deviceUnavailable' };
 
-/** Regional tags the browsers' speech services expect. */
-const SPEECH_TAGS: Record<InterviewLanguage, string> = {
+/** Shared by local availability, installation and recognition.
+ * Chrome 155 reports all six as available or downloadable for local processing (checked 2026-10-10).
+ */
+export const SPEECH_TAGS: Record<InterviewLanguage, string> = {
   en: 'en-US', zh: 'zh-CN', fr: 'fr-FR', ja: 'ja-JP', ko: 'ko-KR', es: 'es-ES',
 };
 
 type SpeechRecognitionLike = {
   lang: string;
+  processLocally?: boolean;
   continuous: boolean;
   interimResults: boolean;
   onresult: ((event: { resultIndex: number; results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }> }) => void) | null;
@@ -35,11 +39,19 @@ type SpeechRecognitionLike = {
   stop(): void;
 };
 
-function speechRecognitionClass(): (new () => SpeechRecognitionLike) | null {
+type DeviceAvailability = 'available' | 'downloadable' | 'downloading' | 'unavailable';
+type LocalSpeechOptions = { langs: string[]; processLocally: true };
+type SpeechRecognitionClass = {
+  new (): SpeechRecognitionLike;
+  available?: (options: LocalSpeechOptions) => Promise<DeviceAvailability>;
+  install?: (options: LocalSpeechOptions) => Promise<boolean>;
+};
+
+function speechRecognitionClass(): SpeechRecognitionClass | null {
   if (typeof window === 'undefined') return null;
   const candidate = (window as unknown as Record<string, unknown>).SpeechRecognition
     ?? (window as unknown as Record<string, unknown>).webkitSpeechRecognition;
-  return typeof candidate === 'function' ? candidate as new () => SpeechRecognitionLike : null;
+  return typeof candidate === 'function' ? candidate as SpeechRecognitionClass : null;
 }
 
 export function voiceInputSupported(mode: VoiceInputMode | undefined): boolean {
@@ -53,6 +65,15 @@ export function voiceInputSupported(mode: VoiceInputMode | undefined): boolean {
   return false;
 }
 
+// Remember terminal device failures across interview remounts in this tab.
+// Only a capability decision and non-secret session selector, never audio/text.
+// Memory retains it when sessionStorage is unavailable.
+const disabledDeviceSessions = new Set<string>();
+function deviceSessionDisabled(key: string): boolean {
+  if (disabledDeviceSessions.has(key)) return true;
+  try { return sessionStorage.getItem(key) === '1'; } catch { return false; }
+}
+
 export function useVoiceInput(options: {
   mode: VoiceInputMode | undefined;
   language: InterviewLanguage;
@@ -62,6 +83,7 @@ export function useVoiceInput(options: {
   onText: (text: string) => void;
 }) {
   const { mode, language, studyId, researcherPreview, participantSessionHandle, onText } = options;
+  const deviceSessionKey = `oi:device-voice-unavailable:${researcherPreview ? 'preview' : participantSessionHandle ?? 'session'}:${studyId ?? ''}`;
   const [state, setState] = useState<VoiceState>({ kind: 'idle' });
   const [supported, setSupported] = useState(false);
   const recorder = useRef<MediaRecorder | null>(null);
@@ -69,10 +91,62 @@ export function useVoiceInput(options: {
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const mounted = useRef(true);
   const onTextRef = useRef(onText);
+  const deviceAvailability = useRef<DeviceAvailability>('unavailable');
+  const deviceDisabled = useRef(false);
+  const preparing = useRef(false);
+  const generation = useRef(0);
   useEffect(() => { onTextRef.current = onText; }, [onText]);
 
   // Feature detection runs after mount so the server and first client render agree.
-  useEffect(() => { setSupported(voiceInputSupported(mode)); }, [mode]);
+  useEffect(() => {
+    if (mode !== 'device') setSupported(voiceInputSupported(mode));
+  }, [mode]);
+
+  // Device mode re-checks local availability per language. Kept separate so a
+  // language change never resets or stops installation/browser voice input.
+  useEffect(() => {
+    if (mode !== 'device') return;
+    const currentGeneration = ++generation.current;
+    deviceDisabled.current = deviceSessionDisabled(deviceSessionKey);
+    setState(deviceDisabled.current ? { kind: 'error', reason: 'deviceUnavailable' } : { kind: 'idle' });
+    preparing.current = false;
+    deviceAvailability.current = 'unavailable';
+    setSupported(false);
+    if (!deviceDisabled.current) {
+      const Recognition = speechRecognitionClass();
+      if (typeof Recognition?.available === 'function' && typeof Recognition.install === 'function') {
+        // A missing/rejected API is not permission to use remote dictation.
+        void (async () => {
+          try {
+            const availability = await Recognition.available!({ langs: [SPEECH_TAGS[language]], processLocally: true });
+            if (generation.current !== currentGeneration) return;
+            deviceAvailability.current = availability;
+            setSupported(['available', 'downloadable', 'downloading'].includes(availability));
+          } catch {
+            if (generation.current === currentGeneration) setSupported(false);
+          }
+        })();
+      }
+    }
+    return () => {
+      generation.current += 1;
+      const session = recognition.current;
+      recognition.current = null;
+      session?.stop();
+    };
+  }, [mode, language, deviceSessionKey]);
+
+  const disableDevice = useCallback(() => {
+    deviceDisabled.current = true;
+    disabledDeviceSessions.add(deviceSessionKey);
+    try { sessionStorage.setItem(deviceSessionKey, '1'); } catch { /* In-memory fallback. */ }
+    deviceAvailability.current = 'unavailable';
+    setSupported(false);
+    setState({ kind: 'error', reason: 'deviceUnavailable' });
+    const session = recognition.current;
+    recognition.current = null;
+    session?.stop();
+  }, [deviceSessionKey]);
 
   const clearTimer = () => {
     if (timer.current) clearInterval(timer.current);
@@ -150,31 +224,92 @@ export function useVoiceInput(options: {
   const startListening = useCallback(() => {
     const Recognition = speechRecognitionClass();
     if (!Recognition) {
-      setState({ kind: 'error', reason: 'unsupported' });
+      if (mode === 'device') disableDevice();
+      else setState({ kind: 'error', reason: 'unsupported' });
       return;
     }
-    const session = new Recognition();
+    let session: SpeechRecognitionLike;
+    try { session = new Recognition(); } catch {
+      if (mode === 'device') disableDevice();
+      else setState({ kind: 'error', reason: 'failed' });
+      return;
+    }
+    if (mode === 'device') {
+      // Never start a device recognizer without the browser's local-only flag.
+      // A rejected/ignored setter fails closed too.
+      try {
+        // A browser without the attribute would accept the assignment as a plain
+        // property and recognize in the cloud, so require it to exist first.
+        if (!('processLocally' in session)) throw new Error('Local recognition unsupported');
+        session.processLocally = true;
+        if (session.processLocally !== true) throw new Error('Local recognition unavailable');
+      } catch {
+        disableDevice();
+        return;
+      }
+    }
     session.lang = SPEECH_TAGS[language];
     session.continuous = true;
     session.interimResults = false;
     session.onresult = (event) => {
+      if (!mounted.current || recognition.current !== session) return;
       for (let index = event.resultIndex; index < event.results.length; index += 1) {
         const result = event.results[index];
         if (result.isFinal && result[0].transcript.trim()) onTextRef.current(result[0].transcript.trim());
       }
     };
     session.onerror = (event) => {
-      if (!mounted.current) return;
+      if (!mounted.current || recognition.current !== session) return;
+      if (mode === 'device' && ['language-not-supported', 'service-not-allowed'].includes(event.error)) {
+        disableDevice();
+        return;
+      }
       setState({ kind: 'error', reason: event.error === 'not-allowed' || event.error === 'service-not-allowed' ? 'denied' : 'failed' });
     };
     session.onend = () => {
+      if (recognition.current !== session) return;
       recognition.current = null;
       if (mounted.current) setState((current) => (current.kind === 'listening' ? { kind: 'idle' } : current));
     };
     recognition.current = session;
-    session.start();
     setState({ kind: 'listening' });
-  }, [language]);
+    try {
+      session.start();
+    } catch {
+      if (mode === 'device') disableDevice();
+      else {
+        recognition.current = null;
+        setState({ kind: 'error', reason: 'failed' });
+      }
+    }
+  }, [language, mode, disableDevice]);
+
+  const prepareDevice = useCallback(async () => {
+    if (preparing.current || deviceDisabled.current) return;
+    const Recognition = speechRecognitionClass();
+    if (typeof Recognition?.install !== 'function') {
+      disableDevice();
+      return;
+    }
+    preparing.current = true;
+    const currentGeneration = generation.current;
+    setState({ kind: 'preparing' });
+    try {
+      const installed = await Recognition.install({ langs: [SPEECH_TAGS[language]], processLocally: true });
+      if (!mounted.current || generation.current !== currentGeneration) return;
+      if (!installed) disableDevice();
+      else {
+        deviceAvailability.current = 'available';
+        // Do not open the microphone unexpectedly after a slow download.
+        // The participant can keep typing/sending, then press the mic when ready.
+        setState({ kind: 'idle' });
+      }
+    } catch {
+      if (mounted.current && generation.current === currentGeneration) disableDevice();
+    } finally {
+      if (generation.current === currentGeneration) preparing.current = false;
+    }
+  }, [language, disableDevice]);
 
   const toggle = useCallback(() => {
     if (state.kind === 'recording') {
@@ -185,10 +320,14 @@ export function useVoiceInput(options: {
       recognition.current?.stop();
       return;
     }
-    if (state.kind === 'transcribing') return;
+    if (state.kind === 'transcribing' || preparing.current || !supported) return;
     if (mode === 'installation') void startRecording();
     else if (mode === 'browser') startListening();
-  }, [mode, startListening, startRecording, state.kind]);
+    else if (mode === 'device' && !deviceDisabled.current) {
+      if (deviceAvailability.current === 'available') startListening();
+      else if (deviceAvailability.current === 'downloadable' || deviceAvailability.current === 'downloading') void prepareDevice();
+    }
+  }, [mode, startListening, startRecording, prepareDevice, state.kind, supported]);
 
-  return { enabled: mode === 'installation' || mode === 'browser', supported, state, toggle };
+  return { enabled: mode === 'installation' || mode === 'browser' || mode === 'device', supported, state, toggle };
 }
