@@ -6,6 +6,7 @@ import { deploymentNotReadyResponse } from '../runtime/readinessGate';
 import { RESEARCHER_WORKSPACE_HELD_COPY, workspaceHeldResponse } from '../canonicalStudy';
 import { readBoundedBytes, readBoundedJsonObject } from '../requestBody';
 import { logRequestFailure } from '../requestLog';
+import type { WorkspaceStorePort } from '../storage/types';
 import type { ProjectsStorePort, ProjectOutcome } from './types';
 import { closed, normalizeProjectName } from './validation';
 
@@ -13,8 +14,8 @@ export function projectJson(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
 }
 export function invalidProjectRequest() { return projectJson({ error: 'Invalid project request.' }, 400); }
-export async function withProjects(route: string, write: boolean, action: (store: ProjectsStorePort) => Promise<NextResponse>): Promise<NextResponse> {
-  let response: NextResponse;
+export async function withProjects(route: string, write: boolean, action: (store: ProjectsStorePort, workspace: WorkspaceStorePort) => Promise<Response>): Promise<Response> {
+  let response: Response;
   try {
     response = await (async () => {
       const notReady = deploymentNotReadyResponse(route);
@@ -32,7 +33,7 @@ export async function withProjects(route: string, write: boolean, action: (store
       if (readiness.status === 'held') return projectOutcomeResponse(readiness, route);
       if (readiness.status !== 'ready') return projectOutcomeResponse({ status: 'unavailable' }, route);
       if (write && readiness.maintenance !== 'open') return projectOutcomeResponse({ status: 'held', reason: 'maintenance' }, route);
-      return action(access.context.store.projects);
+      return action(access.context.store.projects, access.context.store);
     })();
   } catch (error) {
     logRequestFailure({ event: 'route.failure', route, status: 500 }, error);

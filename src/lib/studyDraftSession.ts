@@ -66,15 +66,16 @@ export function releaseCreateIdempotency(intentKey: string, authorityEpoch: numb
   try { sessionStorage.removeItem(IDEM_STATE_STORAGE); } catch { /* in-memory intent still completes */ }
 }
 
-export function setupIntentKey(prefill: string | null, studyId: string | null, parentId: string | null): string {
+export function setupIntentKey(prefill: string | null, studyId: string | null, parentId: string | null, projectId?: string | null): string {
   if (prefill === 'edit' && studyId) return `edit:${studyId}`;
-  if (prefill === 'duplicate' && studyId) return `duplicate:${studyId}`;
-  if (prefill === 'followup') return parentId ? `followup:${parentId}` : 'followup';
-  return 'create';
+  const project = projectId ? `:project:${projectId}` : '';
+  if (prefill === 'duplicate' && studyId) return `duplicate:${studyId}${project}`;
+  if (prefill === 'followup') return `${parentId ? `followup:${parentId}` : 'followup'}${project}`;
+  return `create${project}`;
 }
 
 export function isCreateIntentKey(intentKey: string): boolean {
-  return intentKey === 'create' || intentKey.startsWith('followup') || intentKey.startsWith('duplicate:');
+  return intentKey === 'create' || intentKey.startsWith('create:project:') || intentKey.startsWith('followup') || intentKey.startsWith('duplicate:');
 }
 
 export function adoptCreateIdempotencyKey(intentKey: string, authorityEpoch: number): string {

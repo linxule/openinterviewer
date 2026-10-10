@@ -4,6 +4,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useStore } from '@/store';
 import { StudyConfig } from '@/types';
+import { assignStudyProject } from '@/services/projectService';
+import { isProjectId } from '@/lib/projects/validation';
 import { readStudy, saveStudy } from '@/services/storageService';
 import {
   IDEMPOTENCY_KEY_CONSUMED,
@@ -60,6 +62,7 @@ const StudySetupForm: React.FC = () => {
     setAiTransport,
   } = useStore();
 
+  const projectId = searchParams.get('projectId');
   const prefillType = searchParams.get('prefill');
   const setupIntent = studySetupIntent(prefillType);
   const requestedStudyId = searchParams.get('studyId') ?? (setupIntent === 'followup' ? followupDraftSourceId() : null);
@@ -103,7 +106,7 @@ const StudySetupForm: React.FC = () => {
   // Study revision, made legible (F1, M6)
   const [studyRevision, setStudyRevision] = useState<number | null>(null);
 
-  const initialIntentKey = setupIntentKey(prefillType, requestedStudyId, setupIntent === 'followup' ? requestedStudyId : null);
+  const initialIntentKey = setupIntentKey(prefillType, requestedStudyId, setupIntent === 'followup' ? requestedStudyId : null, projectId);
   const [initialAuthority] = useState(() => {
     const epoch = readAuthorityEpoch();
     return {
@@ -302,7 +305,7 @@ const StudySetupForm: React.FC = () => {
   // authorityEpoch. Edit never owns a key. Intent change invalidates in-flight work.
   useEffect(() => {
     const prefill = searchParams.get('prefill');
-    const nextIntent = setupIntentKey(prefill, requestedStudyId, draft.parentStudyInfo?.id ?? (setupIntent === 'followup' ? requestedStudyId : null));
+    const nextIntent = setupIntentKey(prefill, requestedStudyId, draft.parentStudyInfo?.id ?? (setupIntent === 'followup' ? requestedStudyId : null), projectId);
     const current = intentKeyRef.current;
     if (
       current === 'followup'
@@ -338,7 +341,7 @@ const StudySetupForm: React.FC = () => {
       nextIntent,
       authorityEpochRef.current
     );
-  }, [searchParams, requestedStudyId, setupIntent, draft.parentStudyInfo?.id]);
+  }, [searchParams, requestedStudyId, setupIntent, draft.parentStudyInfo?.id, projectId]);
 
   useEffect(() => {
     if (isAuthenticated === null) return;
@@ -661,7 +664,13 @@ const StudySetupForm: React.FC = () => {
           if (idempotencyKey) releaseCreateIdempotency(intentKey, epoch, idempotencyKey);
         }
         setSaveSuccess(true);
-        router.push(`/studies/${study.id}`);
+        let assignmentFailed = false;
+        if (!isUpdate && configStatus?.mode === 'standalone' && projectId && isProjectId(projectId)) {
+          const assignment = await assignStudyProject(study.id, projectId);
+          assignmentFailed = assignment.status !== 'ok';
+        }
+        if (!applySaveIfCurrent(ticket, intentKey, epoch, idempotencyKey)) return;
+        router.push(`/studies/${study.id}${assignmentFailed ? '?projectAssignmentFailed=1' : ''}`);
         return;
       }
 
@@ -1078,5 +1087,5 @@ export default function StudySetup() {
   // A different intent gets a fresh component state, including asynchronous action guards.
   const intent = studySetupIntent(searchParams.get('prefill'));
   const sourceId = searchParams.get('studyId') ?? (intent === 'followup' ? followupDraftSourceId() : null);
-  return <StudySetupForm key={`${intent}:${sourceId ?? 'new'}`} />;
+  return <StudySetupForm key={`${intent}:${sourceId ?? 'new'}:${searchParams.get('projectId') ?? ''}`} />;
 }
