@@ -26,7 +26,6 @@ class FakeRecognition {
   onerror: ((event: { error: string }) => void) | null = null;
   onend: (() => void) | null = null;
   onaudiostart: (() => void) | null = null;
-  onspeechstart: (() => void) | null = null;
   onnomatch: (() => void) | null = null;
   start = vi.fn(() => { FakeRecognition.last = this; });
   stop = vi.fn();
@@ -80,7 +79,7 @@ describe('participant voice input', () => {
     fireEvent.click(screen.getByRole('button', { name: '録音を停止' }));
     expect(screen.getByRole('button', { name: '送信' })).toBeDisabled();
     act(() => FakeRecognition.last?.onend?.());
-    await waitFor(() => expect(textarea.value).toBe('私は 研究者です'));
+    await waitFor(() => expect(textarea.value).toBe('私は研究者です'));
     expect(screen.getByRole('button', { name: '送信' })).toBeEnabled();
     expect(screen.getByText('送信する前に文字をご確認ください。')).toBeInTheDocument();
     expect(interviewApiMock.generateInterviewResponse).not.toHaveBeenCalled();
@@ -109,18 +108,21 @@ describe('participant voice input', () => {
     act(() => FakeRecognition.last?.onresult?.({ resultIndex: 0, results: [{ isFinal: false, 0: { transcript: '临时文字' } }] }));
     const preview = screen.getByText('临时文字');
     expect(preview).toHaveAttribute('lang', 'zh-CN');
-    expect(preview).toHaveAttribute('aria-live', 'polite');
+    expect(preview).not.toHaveAttribute('aria-live');
     expect(preview).toHaveClass('text-ink-500');
     expect(textarea).toHaveValue('手动输入');
     expect(sessionStorage.getItem(RESEARCH_STORE_KEY)).toBe(storedBefore);
     expect(useStore.getState().interviewHistory).toBe(historyBefore);
     fireEvent.click(screen.getByRole('button', { name: '停止录音' }));
+    // While Chrome finalizes, the button still reads Stop (pressed) but is disabled.
+    expect(screen.getByRole('button', { name: '停止录音' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: '停止录音' })).toBeDisabled();
     fireEvent.keyDown(textarea, { key: 'Enter', ctrlKey: true });
     expect(interviewApiMock.generateInterviewResponse).not.toHaveBeenCalled();
     expect(screen.getByText('临时文字')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '发送' })).toBeDisabled();
     act(() => FakeRecognition.last?.onend?.());
-    expect(textarea).toHaveValue('手动输入 临时文字');
+    expect(textarea).toHaveValue('手动输入临时文字');
     expect(screen.queryByText('临时文字')).not.toBeInTheDocument();
     expect(screen.getByText('发送前请检查文字。')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '发送' })).toBeEnabled();

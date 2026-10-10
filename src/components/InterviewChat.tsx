@@ -13,7 +13,7 @@ import { Button, Turn } from '@/components/ui';
 import NoSessionNotice from '@/components/NoSessionNotice';
 import { useParticipantLanguage } from '@/lib/i18n/useParticipantLanguage';
 import { hasLanguageSetting } from '@/lib/i18n/languages';
-import { useVoiceInput } from '@/lib/voice/useVoiceInput';
+import { speechJoiner, useVoiceInput } from '@/lib/voice/useVoiceInput';
 
 // Primitive props keep completed turns from reparsing Markdown when the
 // composer changes or another message arrives.
@@ -67,7 +67,7 @@ const InterviewChat: React.FC = () => {
     researcherPreview: viewMode === 'preview',
     participantSessionHandle,
     // Text is added to the answer box for the participant to check; never sent.
-    onText: (text) => setInput((current) => (current.trimEnd() ? `${current.trimEnd()} ${text}` : text)),
+    onText: (text) => setInput((current) => (current.trimEnd() ? `${current.trimEnd()}${speechJoiner(shownLanguage)}${text}` : text)),
   });
   const voiceListening = voice.state.kind === 'starting' || voice.state.kind === 'listening';
   const voicePreviewVisible = voiceListening || voice.state.kind === 'stopping';
@@ -454,10 +454,10 @@ const InterviewChat: React.FC = () => {
                       variant="quiet"
                       onClick={voice.toggle}
                       disabled={isAiThinking || voice.state.kind === 'transcribing' || voice.state.kind === 'preparing' || voice.state.kind === 'stopping'}
-                      aria-pressed={voice.state.kind === 'recording' || voiceListening}
+                      aria-pressed={voice.state.kind === 'recording' || voicePreviewVisible}
                       className="min-h-11 w-full sm:w-auto"
                     >
-                      {voice.state.kind === 'recording' || voiceListening ? m.voice.stop : m.voice.start}
+                      {voice.state.kind === 'recording' || voicePreviewVisible ? m.voice.stop : m.voice.start}
                     </Button>
                     {sendButton}
                   </div>
@@ -476,7 +476,7 @@ const InterviewChat: React.FC = () => {
                 </p>
               )}
               {voice.enabled && voicePreviewVisible && voice.preview && (
-                <p lang={voice.speechTag} aria-live="polite" className="text-[13px] leading-[20px] text-ink-500">{voice.preview}</p>
+                <p lang={voice.speechTag} className="text-[13px] leading-[20px] text-ink-500">{voice.preview}</p>
               )}
               {voice.enabled && (voice.state.kind === 'idle' || voice.state.kind === 'ready') && input.trim() !== '' && (
                 <p className="text-[13px] leading-[20px] text-ink-500">{m.voice.review}</p>

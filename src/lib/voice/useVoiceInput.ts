@@ -30,6 +30,11 @@ export const SPEECH_TAGS: Record<InterviewLanguage, string> = {
   en: 'en-US', zh: 'zh-CN', fr: 'fr-FR', ja: 'ja-JP', ko: 'ko-KR', es: 'es-ES',
 };
 
+/** Chinese and Japanese text is not space-separated. */
+export function speechJoiner(language: InterviewLanguage): string {
+  return language === 'zh' || language === 'ja' ? '' : ' ';
+}
+
 type SpeechRecognitionLike = {
   lang: string;
   processLocally?: boolean;
@@ -39,7 +44,6 @@ type SpeechRecognitionLike = {
   onerror: ((event: { error: string }) => void) | null;
   onend: (() => void) | null;
   onaudiostart: (() => void) | null;
-  onspeechstart: (() => void) | null;
   onnomatch: (() => void) | null;
   start(): void;
   stop(): void;
@@ -266,7 +270,7 @@ export function useVoiceInput(options: {
     let startupTimer: ReturnType<typeof setTimeout> | undefined;
     let stopTimer: ReturnType<typeof setTimeout> | undefined;
     const active = () => mounted.current && recognition.current === session;
-    const previewText = () => [...interim.entries()].sort(([a], [b]) => a - b).map(([, text]) => text).filter(Boolean).join(' ');
+    const previewText = () => [...interim.entries()].sort(([a], [b]) => a - b).map(([, text]) => text).filter(Boolean).join(speechJoiner(language));
     const release = (abort: boolean) => {
       clearTimeout(startupTimer);
       clearTimeout(stopTimer);
@@ -325,6 +329,7 @@ export function useVoiceInput(options: {
     session.onerror = (event) => {
       if (!active()) return;
       if (mode === 'device' && ['language-not-supported', 'service-not-allowed'].includes(event.error)) {
+        keepInterim();
         disableDevice();
         return;
       }

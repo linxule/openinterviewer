@@ -101,7 +101,7 @@ export const zh: Messages = {
       starting: '正在启动麦克风……',
       noText: '没有识别到文字。请重试，或直接输入您的回答。',
       interrupted: '语音输入意外中断。请重试，或直接输入您的回答。',
-      preparing: '正在这台设备上准备语音输入…',
+      preparing: '正在这台设备上准备语音输入……',
       deviceUnavailable: '这台设备无法使用语音输入。请直接输入您的回答。',
       start: '开始语音输入',
       stop: '停止录音',

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
-import { SPEECH_TAGS, useVoiceInput } from '@/lib/voice/useVoiceInput';
+import { SPEECH_TAGS, speechJoiner, useVoiceInput } from '@/lib/voice/useVoiceInput';
 import type { InterviewLanguage } from '@/lib/i18n/languages';
 
 class Recognition {
@@ -15,7 +15,6 @@ class Recognition {
   onerror: ((event: { error: string }) => void) | null = null;
   onend: (() => void) | null = null;
   onaudiostart: (() => void) | null = null;
-  onspeechstart: (() => void) | null = null;
   onnomatch: (() => void) | null = null;
   start = vi.fn(() => {
     // Every started instance must satisfy the local-only contract, including retries.
@@ -221,6 +220,22 @@ describe('device-only speech input', () => {
   });
 });
 
+describe('speechJoiner', () => {
+  it('joins Chinese and Japanese without spaces, other languages with one', () => {
+    expect(['zh', 'ja', 'ko', 'en', 'fr', 'es'].map(l => speechJoiner(l as InterviewLanguage))).toEqual(['', '', ' ', ' ', ' ', ' ']);
+  });
+
+  it('commits zh interim fragments without a space', async () => {
+    const { result } = renderHook(() => useVoiceInput(options('zh')));
+    await act(async () => {});
+    act(() => result.current.toggle());
+    const session = Recognition.sessions[0];
+    act(() => session.result([['你好', false], ['世界', false]]));
+    act(() => session.onend?.());
+    expect(onText).toHaveBeenCalledExactlyOnceWith('你好世界');
+  });
+});
+
 describe('shared speech lifecycle', () => {
   async function start() {
     const hook = mount();
@@ -230,12 +245,10 @@ describe('shared speech lifecycle', () => {
     return { ...hook, session: Recognition.sessions[0] };
   }
 
-  it('starts once, and waits for audio rather than speech before reporting listening', async () => {
+  it('starts once, and waits for audio before reporting listening', async () => {
     const { result, session } = await start();
     expect(result.current.state).toEqual({ kind: 'starting' });
     expect(session.interimResults).toBe(true);
-    act(() => session.onspeechstart?.());
-    expect(result.current.state.kind).toBe('starting');
     act(() => session.onaudiostart?.());
     expect(result.current.state).toEqual({ kind: 'listening' });
   });
@@ -336,6 +349,7 @@ describe('shared speech lifecycle', () => {
     act(() => session.result([['你好', false], ['世界', false]]));
     expect(onText).not.toHaveBeenCalled();
     act(() => { session.onend?.(); session.onend?.(); session.result([['late', true]]); });
+    // The test hook speaks English; see the joiner test for zh/ja.
     expect(onText).toHaveBeenCalledExactlyOnceWith('你好 世界');
     expect(result.current.preview).toBe('');
     expect(result.current.state.kind).toBe('idle');
@@ -420,9 +434,7 @@ describe('shared speech lifecycle', () => {
     expect(vi.getTimerCount()).toBe(0);
     act(() => session.onend?.());
     expect(result.current.state.kind).toBe('error');
-    // A terminal device failure drops the draft; other errors keep it for review.
-    if (error === 'language-not-supported') expect(onText).not.toHaveBeenCalled();
-    else expect(onText).toHaveBeenCalledExactlyOnceWith('draft');
+    expect(onText).toHaveBeenCalledExactlyOnceWith('draft');
   });
 
   it.each(['starting', 'stopping'])('aborts and clears timers on unmount while %s without committing', async phase => {
