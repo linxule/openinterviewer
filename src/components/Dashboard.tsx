@@ -213,6 +213,7 @@ export default function Dashboard() {
           <Button
             type="button"
             variant="primary"
+            title="ZIP with raw records, transcripts, saved analyses, and analysis JSONL/CSV files with a data dictionary"
             onClick={() => void handleExportAll()}
             disabled={exporting || blockedByOperation}
           >

@@ -1133,7 +1133,7 @@ const StudyDetail: React.FC<StudyDetailProps> = ({ studyId }) => {
             <p className="mt-2 max-w-measure text-[13px] text-ink-700">A collection-configuration edit advances the revision and invalidates earlier participant authority. Retained interviews remain available; choose their revisions explicitly for analysis. Pausing access does not change the protocol revision.</p>
             <div className="mt-3 flex flex-wrap gap-3">
               <Button variant="primary" disabled={operationPending} onClick={() => router.push(`/setup?prefill=edit&studyId=${encodeURIComponent(studyId)}`)}>Edit study</Button>
-              <Button variant="quiet" disabled={operationPending || isExporting} onClick={() => void handleExportStudy()}>{isExporting ? 'Preparing study export…' : 'Export this study'}</Button>
+              <Button variant="quiet" disabled={operationPending || isExporting} onClick={() => void handleExportStudy()} title="ZIP with raw records, transcripts, saved analyses, and analysis JSONL/CSV files with a data dictionary">{isExporting ? 'Preparing study export…' : 'Export this study'}</Button>
               <Button variant="quiet" disabled={operationPending || isExportingTranscripts || study.interviewCount === 0} onClick={() => void handleExportTranscripts()} title="All transcripts in one Markdown file, with what each participant was told about the AI">{isExportingTranscripts ? 'Preparing transcripts…' : 'Export transcripts (.md)'}</Button>
             </div>
           </section>

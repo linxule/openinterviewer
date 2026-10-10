@@ -55,6 +55,7 @@ The sample-workspace seed is not the public demo. `/demo` is component-memory-on
 
 - Standalone projects and membership contracts/validation: `src/lib/projects/`; project HTTP routes: `src/app/api/projects/`, `src/app/api/studies/[id]/project/`
 - Project storage: `src/lib/storage/redisProjects.ts`, `cloudflare/workspace/projects.ts`, with the project sub-port in `src/lib/storage/types.ts` and RPC validation in `src/lib/storage/durableObject.ts`
+- Study ZIP analysis views: `src/lib/export/analysisFiles.ts`; both ZIP paths use these snapshot-only builders. Combined entries stream from repeated reads of the same fenced snapshot; turn CSVs are per-interview shards. Keep citation indices 1-based over the full stored transcript, including omitted system-message positions.
 - Shared per-study transcript sources and bounded project composition: `src/lib/export/studyTranscriptsSource.ts`, `src/lib/export/projectTranscriptsMarkdown.ts`; typed browser client: `src/services/projectService.ts`
 - Researcher studies/interviews and atomic Redis scripts: `src/lib/kv.ts`
 - Field-level JSON patching inside Redis Lua (preserves untouched value types): `src/lib/studyJsonLua.ts`
