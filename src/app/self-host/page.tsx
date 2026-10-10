@@ -89,7 +89,7 @@ export default function SelfHostPage() {
               operator runbook, readiness checks, hosted BYOS, legacy-link retirement, staging, and rollback.
             </p>
             <a
-              href="https://github.com/linxule/openinterviewer#3-run-a-self-hosted-standalone-instance"
+              href="https://github.com/linxule/openinterviewer#self-host-an-instance"
               className="mt-3 inline-block font-sans text-[13px] font-medium text-action underline underline-offset-2"
             >
               Open the setup guide

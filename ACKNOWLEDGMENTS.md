@@ -4,7 +4,7 @@ OpenInterviewer grows through contributions, working forks and feedback from
 people conducting real research. Thank you for sharing what works, what is
 missing and how you have adapted the project.
 
-## Version 5.4.0 (draft): device voice
+## Version 5.4.0: device voice
 
 Device voice continues the participant-microphone idea inspired by Yinghua
 ([@8888oukaouka-spec](https://github.com/8888oukaouka-spec)) and her

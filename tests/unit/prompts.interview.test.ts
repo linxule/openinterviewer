@@ -69,9 +69,9 @@ it('keeps synthesis independent of researcher manner', () => {
   expect(buildAggregateSynthesisPrompt(makeStudyConfig({ interviewerInstructions: 'INTERVIEWER MANNER sentinel' }), [], 0)).not.toContain('INTERVIEWER MANNER');
 });
 
-describe('README question craft', () => {
+describe('research guide question craft', () => {
   it('quotes the QUESTION_CRAFT constant verbatim so a methods appendix cannot drift', () => {
-    const readme = readFileSync('README.md', 'utf8');
-    expect(readme).toContain(QUESTION_CRAFT);
+    const guide = readFileSync('docs/research-guide.md', 'utf8');
+    expect(guide).toContain(QUESTION_CRAFT);
   });
 });
