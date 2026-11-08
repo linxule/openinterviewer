@@ -2,7 +2,7 @@
 
 OpenInterviewer is an open-source platform for adaptive, AI-assisted qualitative interviews. Researchers configure a study, share an opaque participant link, and review transcripts and synthesis in a dashboard. An AI interviewer conducts each interview, and the transcript is saved before any analysis runs.
 
-The latest release is 5.4.4, a maintenance release with routine dependency updates. Version 5.4.3 was a security release that updated Next.js to fix two critical vulnerabilities, and 5.4.2 made voice input show what it is doing and never fail silently. Read the [5.4.4](docs/releases/v5.4.4.md), [5.4.3](docs/releases/v5.4.3.md) and [5.4.2](docs/releases/v5.4.2.md) release notes, or [all release notes](docs/releases/).
+The latest release is 5.4.5, a maintenance release that updates the AI provider libraries. Version 5.4.4 brought routine dependency updates, and 5.4.3 was a security release that updated Next.js to fix two critical vulnerabilities. Read the [5.4.5](docs/releases/v5.4.5.md), [5.4.4](docs/releases/v5.4.4.md) and [5.4.3](docs/releases/v5.4.3.md) release notes, or [all release notes](docs/releases/).
 
 The project's own instance is [open-interview.linxule.com](https://open-interview.linxule.com). It is a standalone installation on Cloudflare, with an EU-jurisdiction workspace and provider calls through its own Cloudflare AI Gateway. The former address, `openinterviewer.vercel.app`, redirects there.
 
