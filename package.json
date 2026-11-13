@@ -48,7 +48,7 @@
     "check:cloudflare": "node scripts/cloudflare/check.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.131.0",
+    "@anthropic-ai/sdk": "^1.7.0",
     "@google/genai": "^2.32.0",
     "@openrouter/sdk": "1.5.50",
     "@upstash/redis": "^1.41.0",
