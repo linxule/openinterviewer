@@ -27,10 +27,10 @@ export const HOUR_MS = 60 * 60 * 1000;
 export const TRANSCRIPT_MARKER = 'synthetic-participant-speech-7f3a';
 
 export const PROVIDER_MODELS: Readonly<Record<AIProviderType, { requested: string; served: string }>> = {
-  openai: { requested: 'gpt-5.6-terra', served: 'gpt-5.6-terra-2026-09-01' },
+  openai: { requested: 'gpt-6.1-sol', served: 'gpt-6.1-sol-2026-09-01' },
   claude: { requested: 'claude-sonnet-5', served: 'claude-sonnet-5-20260901' },
-  gemini: { requested: 'gemini-3.7-flash', served: 'gemini-3.7-flash-001' },
-  openrouter: { requested: 'openai/gpt-5.6-terra', served: 'openai/gpt-5.6-terra-2026-09-01' },
+  gemini: { requested: 'gemini-3.8-flash', served: 'gemini-3.8-flash-001' },
+  openrouter: { requested: 'openai/gpt-6.1-sol', served: 'openai/gpt-6.1-sol-2026-09-01' },
 };
 
 export const PROVIDER_HOSTS: Readonly<Record<AIProviderType, string>> = {

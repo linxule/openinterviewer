@@ -61,7 +61,7 @@ delete process.env.PLATFORM_KV_REST_API_TOKEN;
 const CLI = path.join(process.cwd(), 'scripts', 'cloudflare', 'inventory-redis.mjs');
 const REST_URL = 'https://inventory-fixture.upstash.io';
 const REST_TOKEN = `synthetic-inventory-token-${randomBytes(12).toString('hex')}`;
-const MODEL = 'gemini-3.7-flash';
+const MODEL = 'gemini-3.8-flash';
 const DAY_SECONDS = 86_400;
 
 /** Every string that must never appear in any output of the tool. */

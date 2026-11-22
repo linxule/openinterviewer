@@ -76,7 +76,7 @@ describe('persistCompletedInterview commit (ST-02, JOB-01, JOB-05)', () => {
       state: 'pending',
       input_json: JSON.stringify(frozenInput(study)),
       requested_provider: 'openai',
-      requested_model: 'gpt-5.6-terra',
+      requested_model: 'gpt-6.1-sol',
       next_due_at: T0,
     }]);
     expect(await sql(`SELECT plan_key, expires_at FROM budget_members WHERE member = ? ORDER BY plan_key`, input.interview.id))
@@ -462,7 +462,7 @@ describe('transaction and wake-up durability (ST-04, JOB-05)', () => {
     await sql(
       `INSERT INTO analysis_jobs (job_id, interview_id, generation, recovery_epoch, state, input_json,
          requested_provider, requested_model, allocated_at, updated_at, dispatch_state, terminal_at)
-       VALUES (?, 'session-unrelated-synthetic', 1, ?, 'complete', '{}', 'openai', 'gpt-5.6-terra', ?, ?, 'none', ?)`,
+       VALUES (?, 'session-unrelated-synthetic', 1, ?, 'complete', '{}', 'openai', 'gpt-6.1-sol', ?, ?, 'none', ?)`,
       reused,
       testEnv.ANALYSIS_RECOVERY_EPOCH,
       T0 - DAY,
@@ -560,7 +560,7 @@ describe('frozen inputs and integrity (JOB-02, ST-05)', () => {
     expect(await sql(`SELECT input_json, requested_provider, requested_model FROM analysis_jobs`)).toEqual([{
       input_json: JSON.stringify(frozenInput(study)),
       requested_provider: 'openai',
-      requested_model: 'gpt-5.6-terra',
+      requested_model: 'gpt-6.1-sol',
     }]);
   });
 
@@ -701,7 +701,7 @@ describe('frozen inputs and integrity (JOB-02, ST-05)', () => {
     const resolved = { ...input, initialAnalysis: { ...frozenInput(study), requestedProvider: 'gemini' as const } };
     expect(await workspaceStub().persistCompletedInterview(resolved)).toEqual({ status: 'created' });
     expect(await sql(`SELECT requested_provider, requested_model FROM analysis_jobs`))
-      .toEqual([{ requested_provider: 'gemini', requested_model: 'gpt-5.6-terra' }]);
+      .toEqual([{ requested_provider: 'gemini', requested_model: 'gpt-6.1-sol' }]);
   });
 
   it('ST-05: a lost-response replay of an imported generation-0 or analysis-less record is a duplicate, never corrupt', async () => {
@@ -726,7 +726,7 @@ describe('frozen inputs and integrity (JOB-02, ST-05)', () => {
           analysis === 'failed' ? 'provider' : null,
           analysis === 'complete' ? 1 : null,
           analysis === 'complete' ? JSON.stringify({ statedPreferences: [], revealedPreferences: [], themes: [], contradictions: [], keyInsights: [], bottomLine: 'Synthetic.' }) : null,
-          analysis === 'complete' ? JSON.stringify({ aiProvider: 'openai', aiModel: 'gpt-5.6-terra', requestedAiModel: 'gpt-5.6-terra' }) : null,
+          analysis === 'complete' ? JSON.stringify({ aiProvider: 'openai', aiModel: 'gpt-6.1-sol', requestedAiModel: 'gpt-6.1-sol' }) : null,
           T0,
         );
       }

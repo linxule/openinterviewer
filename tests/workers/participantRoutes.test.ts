@@ -45,7 +45,7 @@ import { alarmAt, createStudy, DAY, setMaintenance, sha256Hex, sql, T0, testEnv 
 const ADMIN_PASSWORD = 'synthetic-admin-password-0123456789';
 const ORIGIN = String(testEnv.APP_BASE_URL);
 // The study's explicit model; deliberately not the provider default.
-const STUDY_MODEL = 'gpt-5.6-sol';
+const STUDY_MODEL = 'gpt-6.2-sol';
 
 const runtime = globalThis as unknown as Record<symbol, unknown>;
 

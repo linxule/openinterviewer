@@ -38,7 +38,7 @@ const result = {
     supporting: [{ interviewIndex: 1, turnIndex: 2, quote: 'Speed helped me.' }], challenging: [], uncertain: [] }],
   limitations: ['One selected interview; no prevalence claim.'],
 };
-const execution = { provider: 'gemini' as const, requestedModel: 'gemini-3.7-flash', model: 'gemini-3.7-flash-001' };
+const execution = { provider: 'gemini' as const, requestedModel: 'gemini-3.8-flash', model: 'gemini-3.8-flash-001' };
 let study: ReturnType<typeof makeStoredStudy>;
 let interviews: ReturnType<typeof makeStoredInterview>[];
 let context: ResearcherContext;
@@ -192,7 +192,7 @@ describe('durable exploration request boundary', () => {
   it('replays the saved attempt before newly incompatible/oversized sources or unavailable provider configuration', async () => {
     const first = await (await ask()).json();
     interviews[0].transcript[1].content = 'x'.repeat(MAX_EXPLORATION_CORPUS_BYTES);
-    interviews[0].providerCommitment = 'fixed'; interviews[0].conductedByProvider = 'openai'; interviews[0].conductedByModel = 'gpt-5.6-terra';
+    interviews[0].providerCommitment = 'fixed'; interviews[0].conductedByProvider = 'openai'; interviews[0].conductedByModel = 'gpt-6.1-sol';
     getInterviewProvider.mockImplementation(() => { throw new Error('Synthetic missing provider key'); });
     vi.stubEnv('SESSION_SECRET', '');
     const second = await ask();
@@ -290,7 +290,7 @@ describe('preflight fails closed before paid admission', () => {
   });
 
   it('checks fixed source provider/model commitments without silently excluding incompatible interviews', async () => {
-    interviews[0].providerCommitment = 'fixed'; interviews[0].conductedByProvider = 'openai'; interviews[0].conductedByModel = 'gpt-5.6-terra';
+    interviews[0].providerCommitment = 'fixed'; interviews[0].conductedByProvider = 'openai'; interviews[0].conductedByModel = 'gpt-6.1-sol';
     const response = await ask();
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ code: 'PROVIDER_COMMITMENT_MISMATCH', incompatibleInterviewCount: 1 });

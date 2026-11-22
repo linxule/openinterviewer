@@ -68,11 +68,11 @@ export interface AIModelOption {
 
 // Available Gemini models
 export const GEMINI_MODELS: AIModelOption[] = [
-  { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', desc: 'Newest Flash model' },
-  { id: 'gemini-3.7-flash', label: 'Gemini 3.7 Flash', desc: 'Balanced capability and speed' },
-  { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', desc: 'Fast, cost-effective' },
-  { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', desc: 'Higher quality' },
-  { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro Preview', desc: 'Higher capability (preview)' },
+  { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', desc: 'Balanced speed and cost' },
+  { id: 'gemini-4-hydrogen', label: 'Gemini 4 Hydrogen', desc: 'Fastest Gemini 4 model' },
+  { id: 'gemini-4-neon', label: 'Gemini 4 Neon', desc: 'Balanced Gemini 4 capability and speed' },
+  { id: 'gemini-4-carbon', label: 'Gemini 4 Carbon', desc: 'Higher capability Gemini 4 model' },
+  { id: 'gemini-4-argon', label: 'Gemini 4 Argon', desc: 'Highest capability Gemini 4 model' },
 ];
 
 // Available Claude models
@@ -82,36 +82,33 @@ export const CLAUDE_MODELS: AIModelOption[] = [
   { id: 'claude-sonnet-5', label: 'Claude Sonnet 5', desc: 'Balanced capability and speed' },
   { id: 'claude-opus-5', label: 'Claude Opus 5', desc: 'Highest capability' },
   { id: 'claude-fable-5', label: 'Claude Fable 5', desc: 'Creative and expressive' },
-  { id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5', desc: 'Balanced capability and speed' },
-  { id: 'claude-opus-4-5', label: 'Claude Opus 4.5', desc: 'Higher capability' },
 ];
 
 // Available OpenAI Responses API models
 export const OPENAI_MODELS: AIModelOption[] = [
-  { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol', desc: 'Latest balanced quality and cost' },
+  { id: 'gpt-6.2-sol', label: 'GPT-6.2 Sol', desc: 'Newest balanced quality and cost' },
+  { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol', desc: 'Balanced quality and cost' },
   { id: 'gpt-6-sol', label: 'GPT-6 Sol', desc: 'Balanced capability and cost' },
   { id: 'gpt-6-luna', label: 'GPT-6 Luna', desc: 'Lowest-cost option; validate on your study' },
-  { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', desc: 'Cost-efficient' },
-  { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', desc: 'Balanced capability and speed' },
-  { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', desc: 'Previous-generation high-capability option' },
 ];
 
 // Curated OpenRouter models. A bounded provider/model slug can also be entered
 // by self-hosters, but automatic model routing is intentionally not supported.
 export const OPENROUTER_MODELS: AIModelOption[] = [
-  { id: 'openai/gpt-5.6-luna', label: 'GPT-5.6 Luna', desc: 'Cost-efficient' },
-  { id: 'openai/gpt-5.6-terra', label: 'GPT-5.6 Terra', desc: 'Balanced capability and speed' },
-  { id: 'openai/gpt-5.6-sol', label: 'GPT-5.6 Sol', desc: 'Highest capability' },
+  { id: 'openai/gpt-6.2-sol', label: 'GPT-6.2 Sol', desc: 'Newest balanced quality and cost' },
+  { id: 'openai/gpt-6.1-sol', label: 'GPT-6.1 Sol', desc: 'Balanced quality and cost' },
+  { id: 'openai/gpt-6-luna', label: 'GPT-6 Luna', desc: 'Cost-efficient' },
+  { id: 'anthropic/claude-sonnet-5.5', label: 'Claude Sonnet 5.5', desc: 'Latest balanced capability and speed' },
   { id: 'anthropic/claude-sonnet-5', label: 'Claude Sonnet 5', desc: 'Balanced capability and speed' },
   { id: 'anthropic/claude-opus-5', label: 'Claude Opus 5', desc: 'Highest capability' },
-  { id: 'google/gemini-3.7-flash', label: 'Gemini 3.7 Flash', desc: 'Fast multimodal model' },
+  { id: 'google/gemini-3.8-flash', label: 'Gemini 3.8 Flash', desc: 'Fast multimodal model' },
 ];
 
 // Default models for each provider
 export const DEFAULT_GEMINI_MODEL = 'gemini-3.8-flash';
 export const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-5-5';
 export const DEFAULT_OPENAI_MODEL = 'gpt-6.1-sol';
-export const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-5.6-terra';
+export const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-6.1-sol';
 
 // Link expiration options
 export type LinkExpirationOption = 'never' | '7days' | '30days' | '90days';

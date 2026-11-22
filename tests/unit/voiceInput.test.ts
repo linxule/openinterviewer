@@ -48,7 +48,7 @@ const providersMock = vi.hoisted(() => ({
     config?.aiProvider === 'claude' ? 'claude' : 'gemini'
   )),
   resolveSynthesisModel: vi.fn((config: { aiProvider?: string; aiModel?: string }) => (
-    config?.aiModel ?? (config?.aiProvider === 'claude' ? 'claude-opus-4-5' : 'gemini-3.1-pro-preview')
+    config?.aiModel ?? (config?.aiProvider === 'claude' ? 'claude-opus-5' : 'gemini-4-argon')
   )),
 }));
 
@@ -102,7 +102,7 @@ import { WORKER_INVOCATION_ACCESSOR } from '@/lib/runtime/workerInvocation';
 const voiceConfig = makeStudyConfig({
   id: 'study-a',
   aiProvider: 'gemini',
-  aiModel: 'gemini-2.5-flash',
+  aiModel: 'gemini-3.8-flash',
   consentText: 'English consent.',
   interviewLanguages: ['en', 'ja'],
   consentTextTranslations: { ja: '日本語の同意文。' },

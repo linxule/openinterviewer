@@ -84,7 +84,7 @@ const CLOUDFLARE_ENV: Record<string, string> = {
 const STUDY_ID = 'study-cf-participant';
 const REVISION = 3;
 // The study's explicit model; deliberately not the provider default.
-const STUDY_MODEL = 'gemini-2.5-pro';
+const STUDY_MODEL = 'gemini-4-carbon';
 const CONSENT_TEXT = 'Synthetic consent text for the Cloudflare participant flow.';
 const LINK_CODE = `${'Q'.repeat(21)}_${'r'.repeat(21)}`;
 const HANDLE = '3f0c9a52-7c1e-4b8e-9a51-1d2e3f4a5b6c';

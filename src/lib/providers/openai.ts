@@ -71,9 +71,9 @@ export function getOpenAIReasoning(
   model?: string,
 ): OpenAI.Responses.ResponseCreateParams['reasoning'] {
   if (enableReasoning === undefined) return undefined;
-  // GPT-6.1 Sol and Astra require reasoning. The low setting honors the
+  // GPT-6.1/6.2 Sol and Astra require reasoning. The low setting honors the
   // researcher's lower-latency intent without sending an unsupported `none`.
-  const requiresReasoning = /^gpt-6(?:\.1-sol|-astra)(?:$|-)/.test(model ?? '');
+  const requiresReasoning = /^gpt-6(?:\.[12]-sol|(?:\.2)?-astra)(?:$|-)/.test(model ?? '');
   return { effort: enableReasoning ? 'medium' : requiresReasoning ? 'low' : 'none' };
 }
 

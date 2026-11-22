@@ -10,8 +10,8 @@ export const SECRETS = Object.freeze({
 });
 
 /** The study's explicit OpenAI model; the fixture reports serving this snapshot. */
-export const STUDY_MODEL = 'gpt-5.6-sol';
-export const SERVED_MODEL = 'gpt-5.6-sol-2026-09-01';
+export const STUDY_MODEL = 'gpt-6.2-sol';
+export const SERVED_MODEL = 'gpt-6.2-sol-2026-09-01';
 
 /** Lines the runner prints on stdout; everything else it prints is diagnostic. */
 export const READY_PREFIX = 'RESTART-RUNNER-READY ';

@@ -53,9 +53,9 @@ const KEYS = {
 
 const MODELS = {
   claude: 'claude-sonnet-5',
-  openai: 'gpt-5.6-terra',
-  gemini: 'gemini-3.7-flash',
-  openrouter: 'openai/gpt-5.6-terra',
+  openai: 'gpt-6.1-sol',
+  gemini: 'gemini-3.8-flash',
+  openrouter: 'openai/gpt-6.1-sol',
 } satisfies Record<AIProviderType, string>;
 
 const DIRECT_REQUEST_URL = {

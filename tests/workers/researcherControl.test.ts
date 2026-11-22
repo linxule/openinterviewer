@@ -28,7 +28,7 @@ async function notebook() {
 const RESULT = {
   answer: 'A synthetic overlooked concern.', findings: [], limitations: ['Synthetic fixture only.'],
 };
-const EXECUTION = { provider: 'openai' as const, requestedModel: 'gpt-5.6-terra', model: 'gpt-fixture' };
+const EXECUTION = { provider: 'openai' as const, requestedModel: 'gpt-6.1-sol', model: 'gpt-fixture' };
 
 /** Invoke the real RPC, then lose exactly its first committed reply. */
 function loseCommittedReply(method: string) {

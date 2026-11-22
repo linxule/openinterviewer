@@ -46,7 +46,7 @@ const provider = {
   synthesizeAggregate: vi.fn(),
   generateFollowupStudy: vi.fn(async () => ({
     value: { name: 'Synthetic follow-up', researchQuestion: 'What else is synthetic?', coreQuestions: ['Why synthetic?'] },
-    execution: { provider: 'openai', requestedModel: 'gpt-5.6-terra', model: 'gpt-5.6-terra-2031-01-01' },
+    execution: { provider: 'openai', requestedModel: 'gpt-6.1-sol', model: 'gpt-6.1-sol-2031-01-01' },
   })),
 };
 
@@ -143,8 +143,8 @@ async function saveStoredAggregate(study: StoredStudy, interviewIds: string[]): 
       interviewIds,
       interviewCount: interviewIds.length,
       aiProvider: 'openai',
-      aiModel: 'gpt-5.6-terra-2031-01-01',
-      requestedAiModel: 'gpt-5.6-terra',
+      aiModel: 'gpt-6.1-sol-2031-01-01',
+      requestedAiModel: 'gpt-6.1-sol',
       commonThemes: [{ theme: 'Synthetic theme', frequency: 2, representativeQuotes: ['Synthetic'] }],
       divergentViews: [],
       keyFindings: ['Synthetic finding'],

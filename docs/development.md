@@ -83,10 +83,10 @@ OpenRouter is a routing service. Interview content is sent to the selected upstr
 
 ### Default models
 
-Claude and OpenAI defaults were updated against the official [Claude Sonnet 5.5](https://platform.claude.com/docs/en/models/sonnet-5-5/overview) and [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol) documentation on September 29, 2026. Without an environment or per-study override, new studies default to `gemini-3.8-flash`, `claude-sonnet-5-5`, `gpt-6.1-sol` and `openai/gpt-5.6-terra`, respectively. Gemini and OpenRouter defaults are unchanged from the August 14, 2026 catalog review. Existing saved studies keep their configured models, and legacy catalog IDs remain accepted.
+Provider catalogs were refreshed on November 22, 2026 to retire deprecated Gemini 2.5/3.1/3.7, Claude 4.5 (`claude-sonnet-4-5`, `claude-opus-4-5`), and GPT-5.6 picker options and add Gemini 4 (`gemini-4-hydrogen`, `gemini-4-neon`, `gemini-4-carbon`, `gemini-4-argon`) and `gpt-6.2-sol`. Without an environment or per-study override, new studies default to `gemini-3.8-flash`, `claude-sonnet-5-5`, `gpt-6.1-sol`, and `openai/gpt-6.1-sol`, respectively. Historical transcripts and saved studies that recorded an older model ID remain readable in the dashboard and study setup, where researchers can select a supported active model before saving or running new interviews.
 
 - GPT-6 Luna is available as a lower-cost OpenAI choice.
-- GPT-6.1 Sol requires reasoning: turning extra reasoning off selects `low`, not the unsupported `none`.
+- GPT-6.1 Sol and GPT-6.2 Sol require reasoning: turning extra reasoning off selects `low`, not the unsupported `none`.
 - Sonnet 5.5 uses `between_tools` when extra reasoning is off.
 - The native Sonnet ID maps to `anthropic/claude-sonnet-5.5` on Vercel Gateway.
 - OpenRouter offers curated entries plus a bounded `provider/model` slug. It does not support `openrouter/auto` or promise that every catalog model satisfies this application's strict-schema and zero-data-retention requirements.

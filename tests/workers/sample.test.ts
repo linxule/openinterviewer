@@ -133,7 +133,7 @@ describe('clearSampleWorkspace (ST-07, JOB-10)', () => {
     expect(await workspaceStub().saveAggregate({
       aggregate: {
         studyId: STUDY_ID, studyRevision: 1, interviewIds: ['interview-demo-one', 'interview-demo-two'], interviewCount: 2,
-        aiProvider: 'openai', aiModel: 'gpt-5.6-terra', commonThemes: [], divergentViews: [], keyFindings: [],
+        aiProvider: 'openai', aiModel: 'gpt-6.1-sol', commonThemes: [], divergentViews: [], keyFindings: [],
         researchImplications: [], bottomLine: 'Synthetic.', generatedAt: T0, savedAt: T0,
       },
       now: T0,
@@ -142,7 +142,7 @@ describe('clearSampleWorkspace (ST-07, JOB-10)', () => {
     await sql(
       `INSERT INTO analysis_jobs (job_id, interview_id, generation, recovery_epoch, state, input_json,
          requested_provider, requested_model, allocated_at, updated_at, dispatch_state, next_due_at)
-       VALUES (?, 'interview-demo-one', 1, ?, 'pending', '{}', 'openai', 'gpt-5.6-terra', ?, ?, 'unsent', ?)`,
+       VALUES (?, 'interview-demo-one', 1, ?, 'pending', '{}', 'openai', 'gpt-6.1-sol', ?, ?, 'unsent', ?)`,
       jobId,
       testEnv.ANALYSIS_RECOVERY_EPOCH,
       T0,

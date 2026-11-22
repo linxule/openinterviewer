@@ -59,11 +59,11 @@ describe('OpenAIProvider', () => {
   });
 
   it('prefers the constructor model, then OPENAI_MODEL, then the default', () => {
-    vi.stubEnv('OPENAI_MODEL', 'gpt-5.6-luna');
+    vi.stubEnv('OPENAI_MODEL', 'gpt-6-luna');
     const provider = new OpenAIProvider(undefined, 'sk-test');
-    createMock.mockResolvedValue(response('Welcome!', 'gpt-5.6-luna'));
+    createMock.mockResolvedValue(response('Welcome!', 'gpt-6-luna'));
     return provider.getInterviewGreeting(studyConfig()).then(() => {
-      expect(createMock.mock.calls[0][0].model).toBe('gpt-5.6-luna');
+      expect(createMock.mock.calls[0][0].model).toBe('gpt-6-luna');
     });
   });
 
@@ -138,10 +138,10 @@ describe('OpenAIProvider', () => {
   });
 
   it.each([
+    ['gpt-6.2-sol', 'low'],
     ['gpt-6.1-sol', 'low'],
     ['gpt-6-sol', 'none'],
     ['gpt-6-luna', 'none'],
-    ['gpt-5.6-terra', 'none'],
   ])('%s keeps lower-latency reasoning compatible without sampling overrides', async (model, effort) => {
     createMock.mockResolvedValue(response(JSON.stringify(interviewJson()), model));
     const provider = new OpenAIProvider(model, 'sk-test');

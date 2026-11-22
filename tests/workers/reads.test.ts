@@ -45,7 +45,7 @@ const SYNTHESIS = {
   keyInsights: [],
   bottomLine: 'Synthetic bottom line.',
 };
-const PROVENANCE = { aiProvider: 'openai', aiModel: 'gpt-5.6-terra-2031-01-01', requestedAiModel: 'gpt-5.6-terra' };
+const PROVENANCE = { aiProvider: 'openai', aiModel: 'gpt-6.1-sol-2031-01-01', requestedAiModel: 'gpt-6.1-sol' };
 
 type Seeded = { record: StoredInterview };
 
@@ -103,8 +103,8 @@ function aggregate(studyId: string, overrides: Record<string, unknown> = {}) {
     interviewIds: ['session-synthetic-a', 'session-synthetic-b'],
     interviewCount: 2,
     aiProvider: 'openai' as const,
-    aiModel: 'gpt-5.6-terra',
-    requestedAiModel: 'gpt-5.6-terra',
+    aiModel: 'gpt-6.1-sol',
+    requestedAiModel: 'gpt-6.1-sol',
     commonThemes: [{ theme: 'Synthetic — 主题', frequency: 2, quoteRefs: [] }],
     divergentViews: [],
     keyFindings: ['Synthetic finding'],
@@ -135,8 +135,8 @@ describe('interview reads (ST-05, ST-08)', () => {
         ...record,
         synthesis: SYNTHESIS,
         aiProvider: 'openai',
-        aiModel: 'gpt-5.6-terra-2031-01-01',
-        requestedAiModel: 'gpt-5.6-terra',
+        aiModel: 'gpt-6.1-sol-2031-01-01',
+        requestedAiModel: 'gpt-6.1-sol',
         analysis: { status: 'complete', attempts: 1, lastAttemptAt: T0, generation: 1, studyRevision: 1 },
       },
     });

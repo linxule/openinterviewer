@@ -110,7 +110,7 @@ describe('GeminiProvider Interactions API', () => {
   it('sends the study\'s own configured model and returns requested/resolved provenance', async () => {
     geminiCreateMock.mockResolvedValue({
       output_text: JSON.stringify(synthesis),
-      model: 'gemini-3.1-pro-preview-2026-07-15',
+      model: 'gemini-4-argon-2026-07-15',
     });
     const provider = new GeminiProvider(undefined, 'gemini-test');
     const studyModel = 'gemini-3.8-flash-researcher-choice';
@@ -126,7 +126,7 @@ describe('GeminiProvider Interactions API', () => {
     expect(result.execution).toEqual({
       provider: 'gemini',
       requestedModel: studyModel,
-      model: 'gemini-3.1-pro-preview-2026-07-15',
+      model: 'gemini-4-argon-2026-07-15',
     });
     expect(geminiCreateMock.mock.calls[0][0].store).toBe(false);
 
@@ -169,7 +169,7 @@ describe('ClaudeProvider native structured output', () => {
   it.each([
     ['claude-sonnet-5-5', 'between_tools'],
     ['claude-sonnet-5', 'disabled'],
-    ['claude-sonnet-4-5', 'disabled'],
+    ['claude-haiku-4-5', 'disabled'],
   ])('%s uses compatible reasoning-off semantics without forced tools or sampling', async (model, thinkingType) => {
     claudeCreateMock.mockResolvedValue({
       content: [

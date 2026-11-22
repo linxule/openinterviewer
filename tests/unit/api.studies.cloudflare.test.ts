@@ -35,8 +35,8 @@ vi.mock('@/lib/providers', async (importOriginal) => ({
 const provenanceMock = vi.hoisted(() => ({
   aggregateProvenance: vi.fn(() => ({
     aiProvider: 'openai',
-    aiModel: 'gpt-5.6-terra-served',
-    requestedAiModel: 'gpt-5.6-terra',
+    aiModel: 'gpt-6.1-sol-served',
+    requestedAiModel: 'gpt-6.1-sol',
   })),
 }));
 vi.mock('@/lib/synthesisProvenance', () => provenanceMock);
@@ -183,7 +183,7 @@ function studyAt(revision: number, overrides: Partial<StoredStudy> = {}): Stored
   return makeStoredStudy({
     id,
     revision,
-    config: makeStudyConfig({ id, aiProvider: 'openai', aiModel: 'gpt-5.6-terra' }),
+    config: makeStudyConfig({ id, aiProvider: 'openai', aiModel: 'gpt-6.1-sol' }),
     ...overrides,
   });
 }
@@ -202,11 +202,11 @@ beforeEach(async () => {
   getInterviewProvider.mockReturnValue({ synthesizeAggregate, generateFollowupStudy });
   synthesizeAggregate.mockResolvedValue({
     value: aggregateOutput,
-    execution: { provider: 'openai', requestedModel: 'gpt-5.6-terra', model: 'gpt-5.6-terra-served' },
+    execution: { provider: 'openai', requestedModel: 'gpt-6.1-sol', model: 'gpt-6.1-sol-served' },
   });
   generateFollowupStudy.mockResolvedValue({
     value: { name: 'Follow-up', researchQuestion: 'What creates trust?', coreQuestions: ['Why?'] },
-    execution: { provider: 'openai', requestedModel: 'gpt-5.6-terra', model: 'gpt-5.6-terra-served' },
+    execution: { provider: 'openai', requestedModel: 'gpt-6.1-sol', model: 'gpt-6.1-sol-served' },
   });
 });
 
@@ -323,7 +323,7 @@ describe('GET /api/studies on Cloudflare (ST-01)', () => {
 
 describe('POST /api/studies on Cloudflare (ST-01 create idempotency)', () => {
   const KEY = '22222222-2222-4222-8222-222222222222';
-  const createRequest = (config = makeStudyConfig({ aiProvider: 'openai', aiModel: 'gpt-5.6-terra' })) =>
+  const createRequest = (config = makeStudyConfig({ aiProvider: 'openai', aiModel: 'gpt-6.1-sol' })) =>
     jsonRequest('http://localhost/api/studies', 'POST', { config }, { 'Idempotency-Key': KEY });
 
   it('ST-01: mints outside the store and passes the standalone-scoped key digest and config fingerprint', async () => {
@@ -396,7 +396,7 @@ describe('POST /api/studies on Cloudflare (ST-01 create idempotency)', () => {
     const missingIdempotencyKey = await createStudy(jsonRequest(
       'http://localhost/api/studies',
       'POST',
-      { config: makeStudyConfig({ aiProvider: 'openai', aiModel: 'gpt-5.6-terra' }) },
+      { config: makeStudyConfig({ aiProvider: 'openai', aiModel: 'gpt-6.1-sol' }) },
     ));
     expect(missingIdempotencyKey.status).toBe(400);
     expect(store.createStudy).not.toHaveBeenCalled();
@@ -737,8 +737,8 @@ describe('POST /api/studies/[id]/generate-followup on Cloudflare (RT-09, F26)', 
     interviewIds: ['a', 'b'],
     interviewCount: 2,
     aiProvider: 'openai',
-    aiModel: 'gpt-5.6-terra-served',
-    requestedAiModel: 'gpt-5.6-terra',
+    aiModel: 'gpt-6.1-sol-served',
+    requestedAiModel: 'gpt-6.1-sol',
     commonThemes: [{ theme: 'Trust', frequency: 2, representativeQuotes: ['A'] }],
     divergentViews: [],
     keyFindings: ['Trust matters'],
@@ -985,14 +985,14 @@ describe('aggregate and follow-up consent coverage on Cloudflare AI Gateway (D9,
     store.saveAggregate.mockResolvedValue('saved');
     synthesizeAggregate.mockResolvedValueOnce({
       value: aggregateOutput,
-      execution: { provider: 'openai', requestedModel: 'gpt-5.6-terra', model: 'gpt-5.6-terra-served', aiTransport: 'cloudflare-gateway' },
+      execution: { provider: 'openai', requestedModel: 'gpt-6.1-sol', model: 'gpt-6.1-sol-served', aiTransport: 'cloudflare-gateway' },
     });
 
     const response = await synthesizeAggregateRoute(aggregateRequest(study.id));
 
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body.synthesis).toMatchObject({ aiTransport: 'cloudflare-gateway', aiModel: 'gpt-5.6-terra-served' });
+    expect(body.synthesis).toMatchObject({ aiTransport: 'cloudflare-gateway', aiModel: 'gpt-6.1-sol-served' });
     expect(store.saveAggregate).toHaveBeenCalledWith(expect.objectContaining({ aiTransport: 'cloudflare-gateway' }));
   });
 
@@ -1092,7 +1092,7 @@ describe('aggregate and follow-up consent coverage on Cloudflare AI Gateway (D9,
         status: 'found',
         aggregate: {
           studyId: sample.id, studyRevision: 2, interviewIds: ['interview-demo-sarah', 'interview-demo-marcus'], interviewCount: 2,
-          aiProvider: 'openai', aiModel: 'gpt-5.6-terra-served', requestedAiModel: 'gpt-5.6-terra',
+          aiProvider: 'openai', aiModel: 'gpt-6.1-sol-served', requestedAiModel: 'gpt-6.1-sol',
           commonThemes: [{ theme: 'Trust', frequency: 2, representativeQuotes: ['A'] }], divergentViews: [],
           keyFindings: ['Trust matters'], researchImplications: ['Study ownership'], bottomLine: 'Ownership shapes trust.',
           generatedAt: 1, savedAt: 2,
@@ -1121,7 +1121,7 @@ describe('aggregate and follow-up consent coverage on Cloudflare AI Gateway (D9,
     const followupRequest = () => new Request('http://localhost', { method: 'POST', headers: { Cookie: researcherCookie } });
     const storedAggregate = {
       studyId: study.id, studyRevision: 3, interviewIds: ['a', 'b'], interviewCount: 2,
-      aiProvider: 'openai', aiModel: 'gpt-5.6-terra-served', requestedAiModel: 'gpt-5.6-terra',
+      aiProvider: 'openai', aiModel: 'gpt-6.1-sol-served', requestedAiModel: 'gpt-6.1-sol',
       commonThemes: [{ theme: 'Trust', frequency: 2, representativeQuotes: ['A'] }], divergentViews: [],
       keyFindings: ['Trust matters'], researchImplications: ['Study ownership'], bottomLine: 'Ownership shapes trust.',
       generatedAt: 1, savedAt: 2,
@@ -1176,7 +1176,7 @@ describe('researcher AI budget on aggregate synthesis and follow-up on Cloudflar
   const followupRequest = () => new Request('http://localhost', { method: 'POST', headers: { Cookie: researcherCookie } });
   const storedAggregate = {
     studyId: study.id, studyRevision: 3, interviewIds: ['a', 'b'], interviewCount: 2,
-    aiProvider: 'openai', aiModel: 'gpt-5.6-terra-served', requestedAiModel: 'gpt-5.6-terra',
+    aiProvider: 'openai', aiModel: 'gpt-6.1-sol-served', requestedAiModel: 'gpt-6.1-sol',
     commonThemes: [{ theme: 'Trust', frequency: 2, representativeQuotes: ['A'] }], divergentViews: [],
     keyFindings: ['Trust matters'], researchImplications: ['Study ownership'], bottomLine: 'Ownership shapes trust.',
     generatedAt: 1, savedAt: 2,

@@ -86,7 +86,7 @@ export function studyConfig(id: string, overrides: Partial<StudyConfig> = {}): S
     profileSchema: [],
     aiBehavior: 'standard',
     aiProvider: 'openai',
-    aiModel: 'gpt-5.6-terra',
+    aiModel: 'gpt-6.1-sol',
     consentText: 'Synthetic consent text for tests.',
     createdAt: T0 - DAY,
     ...overrides,
@@ -213,7 +213,7 @@ export function frozenInput(study: StoredStudy, disclosedTransport?: 'cloudflare
     studyConfig: study.config,
     studyRevision: study.revision,
     requestedProvider: study.config.aiProvider ?? 'openai',
-    requestedModel: study.config.aiModel ?? 'gpt-5.6-terra',
+    requestedModel: study.config.aiModel ?? 'gpt-6.1-sol',
     ...(disclosedTransport ? { disclosedTransport } : {}),
   };
 }

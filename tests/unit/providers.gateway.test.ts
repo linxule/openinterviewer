@@ -81,9 +81,9 @@ describe('GatewayProvider', () => {
         shouldConclude: false,
       },
       text: '',
-      response: { modelId: 'google/gemini-3.7-flash' },
+      response: { modelId: 'google/gemini-3.8-flash' },
     });
-    const config = makeStudyConfig({ aiProvider: 'gemini', aiModel: 'gemini-3.7-flash' });
+    const config = makeStudyConfig({ aiProvider: 'gemini', aiModel: 'gemini-3.8-flash' });
     const provider = new GatewayProvider('gemini', config.aiModel!);
 
     await provider.generateInterviewResponse(
@@ -94,7 +94,7 @@ describe('GatewayProvider', () => {
       '',
     );
 
-    expect(gatewayMock).toHaveBeenCalledWith('google/gemini-3.7-flash');
+    expect(gatewayMock).toHaveBeenCalledWith('google/gemini-3.8-flash');
     expect(generateTextMock).toHaveBeenCalledWith(expect.objectContaining({
       maxRetries: 0,
       output: expect.objectContaining({ kind: 'object' }),
@@ -115,9 +115,9 @@ describe('GatewayProvider', () => {
     generateTextMock.mockResolvedValue({
       output: synthesisOutput(),
       text: '',
-      response: { modelId: 'openai/gpt-5.6-sol-2026-08-01' },
+      response: { modelId: 'openai/gpt-6.2-sol-2026-08-01' },
     });
-    const config = makeStudyConfig({ aiProvider: 'openai', aiModel: 'gpt-5.6-terra' });
+    const config = makeStudyConfig({ aiProvider: 'openai', aiModel: 'gpt-6.1-sol' });
     const provider = new GatewayProvider('openai', config.aiModel!);
 
     const result = await provider.synthesizeInterview(
@@ -127,17 +127,17 @@ describe('GatewayProvider', () => {
       null,
     );
 
-    expect(gatewayMock).toHaveBeenCalledWith('openai/gpt-5.6-terra');
+    expect(gatewayMock).toHaveBeenCalledWith('openai/gpt-6.1-sol');
     expect(result.execution).toEqual({
       provider: 'openai',
-      requestedModel: 'openai/gpt-5.6-terra',
-      model: 'openai/gpt-5.6-sol-2026-08-01',
+      requestedModel: 'openai/gpt-6.1-sol',
+      model: 'openai/gpt-6.2-sol-2026-08-01',
       routedProvider: 'openai',
     });
   });
 
   it('fails closed instead of falling back to a default when the study has no explicit model', async () => {
-    const config = makeStudyConfig({ aiProvider: 'openai', aiModel: 'gpt-5.6-terra' });
+    const config = makeStudyConfig({ aiProvider: 'openai', aiModel: 'gpt-6.1-sol' });
     const provider = new GatewayProvider('openai', config.aiModel!);
     delete config.aiModel;
 
@@ -154,13 +154,13 @@ describe('GatewayProvider', () => {
     generateTextMock.mockResolvedValue({
       output: undefined,
       text: 'Welcome!',
-      response: { modelId: 'anthropic/claude-sonnet-4.5' },
+      response: { modelId: 'anthropic/claude-sonnet-5.5' },
     });
-    const config = makeStudyConfig({ aiProvider: 'claude', aiModel: 'claude-sonnet-4-5' });
+    const config = makeStudyConfig({ aiProvider: 'claude', aiModel: 'claude-sonnet-5-5' });
     const provider = new GatewayProvider('claude', config.aiModel!);
 
     await expect(provider.getInterviewGreeting(config)).resolves.toBe('Welcome!');
-    expect(gatewayMock).toHaveBeenCalledWith('anthropic/claude-sonnet-4.5');
+    expect(gatewayMock).toHaveBeenCalledWith('anthropic/claude-sonnet-5.5');
     expect(generateTextMock.mock.calls[0][0]).not.toHaveProperty('output');
     expect(generateTextMock.mock.calls[0][0].providerOptions.gateway.only).toEqual(['anthropic']);
   });
@@ -170,9 +170,9 @@ describe('GatewayProvider', () => {
     generateTextMock.mockResolvedValue({
       output: { message: 'missing required fields' },
       text: '',
-      response: { modelId: 'google/gemini-3.7-flash' },
+      response: { modelId: 'google/gemini-3.8-flash' },
     });
-    const config = makeStudyConfig({ aiProvider: 'gemini', aiModel: 'gemini-3.7-flash' });
+    const config = makeStudyConfig({ aiProvider: 'gemini', aiModel: 'gemini-3.8-flash' });
     const provider = new GatewayProvider('gemini', config.aiModel!);
 
     await expect(provider.generateInterviewResponse(
@@ -188,13 +188,13 @@ describe('GatewayProvider', () => {
   it('selects Gateway only for supported providers in standalone mode', () => {
     const gemini = getInterviewProvider(makeStudyConfig({
       aiProvider: 'gemini',
-      aiModel: 'gemini-3.7-flash',
+      aiModel: 'gemini-3.8-flash',
     }));
     expect(gemini).toBeInstanceOf(GatewayProvider);
 
     expect(() => getInterviewProvider(makeStudyConfig({
       aiProvider: 'openrouter',
-      aiModel: 'openai/gpt-5.6-terra',
+      aiModel: 'openai/gpt-6.1-sol',
     }))).toThrow('OpenRouter is available only with the direct AI transport');
   });
 });

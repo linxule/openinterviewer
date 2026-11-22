@@ -30,7 +30,7 @@ vi.mock('@/lib/requestLog', async (importOriginal) => ({
 
 import { runInterviewAnalysis } from '@/lib/interviewAnalysis';
 
-const study = { ...makeStudyConfig(), aiProvider: 'gemini' as const, aiModel: 'gemini-3.7-flash' };
+const study = { ...makeStudyConfig(), aiProvider: 'gemini' as const, aiModel: 'gemini-3.8-flash' };
 const storedStudy = {
   id: study.id, config: study, createdAt: 1, updatedAt: 1,
   interviewCount: 1, isLocked: true, revision: 2,
@@ -43,7 +43,7 @@ function providerResult(overrides: Record<string, unknown> = {}) {
       contradictions: [], keyInsights: [], bottomLine: 'Bottom line',
     },
     execution: {
-      provider: 'gemini', requestedModel: 'gemini-3.7-flash', model: 'gemini-3.7-flash',
+      provider: 'gemini', requestedModel: 'gemini-3.8-flash', model: 'gemini-3.8-flash',
     },
     ...overrides,
   };
@@ -70,7 +70,7 @@ describe('runInterviewAnalysis: concurrency', () => {
     synthesizeInterview.mockResolvedValue(providerResult());
     kvMock.attachInterviewAnalysis.mockResolvedValue({ status: 'written' });
     await runInterviewAnalysis(baseInput());
-    expect(synthesizeInterview.mock.calls[0][1]).toMatchObject({ researchQuestion: 'Original research question', profileSchema: original.profileSchema, aiProvider: 'gemini', aiModel: 'gemini-3.7-flash' });
+    expect(synthesizeInterview.mock.calls[0][1]).toMatchObject({ researchQuestion: 'Original research question', profileSchema: original.profileSchema, aiProvider: 'gemini', aiModel: 'gemini-3.8-flash' });
   });
 
   it('does not relabel legacy profiles or research questions with the latest collection definitions', async () => {

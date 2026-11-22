@@ -550,7 +550,7 @@ describe('standalone create/delete W1/W2/S1–S4/D1–D4', () => {
       interviewIds: [`interview-${studyId}`],
       interviewCount: 1,
       aiProvider: 'gemini' as const,
-      aiModel: 'gemini-2.5-flash',
+      aiModel: 'gemini-3.8-flash',
       commonThemes: [],
       divergentViews: [],
       keyFindings: ['A finding'],
@@ -1044,7 +1044,7 @@ describe('slice P: interview analysis attach preserves untouched JSON types', ()
         statedPreferences: [], revealedPreferences: [], themes: [],
         contradictions: [], keyInsights: [], bottomLine: 'Saved analysis',
       },
-      provenance: { aiProvider: 'gemini', aiModel: 'gemini-3.7-flash', requestedAiModel: 'gemini-3.7-flash' },
+      provenance: { aiProvider: 'gemini', aiModel: 'gemini-3.8-flash', requestedAiModel: 'gemini-3.8-flash' },
       studyRevision: 2,
     }, redis)).toEqual({ status: 'written' });
     const completed = await getInterviewChecked(interview.id, redis);
@@ -1073,7 +1073,7 @@ describe('slice P: interview analysis attach preserves untouched JSON types', ()
         statedPreferences: [], revealedPreferences: [], themes: [],
         contradictions: [], keyInsights: [], bottomLine: 'Stale analysis',
       },
-      provenance: { aiProvider: 'gemini', aiModel: 'gemini-3.7-flash', requestedAiModel: 'gemini-3.7-flash' },
+      provenance: { aiProvider: 'gemini', aiModel: 'gemini-3.8-flash', requestedAiModel: 'gemini-3.8-flash' },
       studyRevision: 1,
     }, redis)).toEqual({ status: 'stale' });
     expect(await recordInterviewAnalysisFailure(interview.id, first.claimId, 'provider', redis))
@@ -1133,7 +1133,7 @@ describe('slice P: interview analysis attach preserves untouched JSON types', ()
         statedPreferences: [], revealedPreferences: [], themes: [],
         contradictions: [], keyInsights: [], bottomLine: 'Refused analysis',
       },
-      provenance: { aiProvider: 'gemini', aiModel: 'gemini-3.7-flash', requestedAiModel: 'gemini-3.7-flash' },
+      provenance: { aiProvider: 'gemini', aiModel: 'gemini-3.8-flash', requestedAiModel: 'gemini-3.8-flash' },
       studyRevision: 1,
     }, redis)).toEqual({ status: 'corrupt' });
     expect(await redis.get(`interview:${interview.id}`)).toBe(encoded);
@@ -1166,7 +1166,7 @@ describe('slice P: interview analysis attach preserves untouched JSON types', ()
 
   it('claim then attach on a record with an empty array and an empty string round-trips both byte-identically', async () => {
     const studyId = uuid();
-    const config = makeStudyConfig({ id: studyId, aiProvider: 'gemini', aiModel: 'gemini-3.7-flash' });
+    const config = makeStudyConfig({ id: studyId, aiProvider: 'gemini', aiModel: 'gemini-3.8-flash' });
     const study = makeStoredStudy({ id: studyId, config });
     expect(await createStudyAtomic(study, redis)).toBe('created');
 
@@ -1202,7 +1202,7 @@ describe('slice P: interview analysis attach preserves untouched JSON types', ()
       interviewId: interview.id,
       claimId: claimed.claimId,
       synthesis,
-      provenance: { aiProvider: 'gemini', aiModel: 'gemini-3.7-flash', requestedAiModel: 'gemini-3.7-flash' },
+      provenance: { aiProvider: 'gemini', aiModel: 'gemini-3.8-flash', requestedAiModel: 'gemini-3.8-flash' },
       studyRevision: 1,
     }, redis);
     expect(attached.status).toBe('written');
@@ -1220,7 +1220,7 @@ describe('slice P: interview analysis attach preserves untouched JSON types', ()
     expect(stored.synthesis).toEqual(synthesis);
     expect(stored.analysis).toMatchObject({ status: 'complete', studyRevision: 1 });
     expect(stored.aiProvider).toBe('gemini');
-    expect(stored.aiModel).toBe('gemini-3.7-flash');
+    expect(stored.aiModel).toBe('gemini-3.8-flash');
   });
 });
 

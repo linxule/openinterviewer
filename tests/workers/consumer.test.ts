@@ -118,7 +118,7 @@ describe('end-to-end durable analysis (JOB-01/02/05)', () => {
     const provider = installProviderFixture({ kind: 'hang' });
     const delivery = deliver([job.message]);
     await vi.waitFor(() => expect(provider.requests).toHaveLength(1), { timeout: 5_000, interval: 10 });
-    await editStudy(job.studyId, { aiModel: 'gemini-2.5-pro' });
+    await editStudy(job.studyId, { aiModel: 'gemini-4-carbon' });
     provider.release();
     const result = await delivery;
     expect(result.explicitAcks).toHaveLength(1);
@@ -435,7 +435,7 @@ describe('response loss and crashes (JOB-08)', () => {
     expect(provider.requests).toHaveLength(0);
     expect(await stub.finishAnalysisJob({
       ...fenceOf(job), claimNonce: nonce, now: Date.now(),
-      outcome: { kind: 'complete', synthesis: SYNTHESIS, provenance: { aiProvider: 'openai', aiModel: 'gpt-5.6-terra', requestedAiModel: 'gpt-5.6-terra' } },
+      outcome: { kind: 'complete', synthesis: SYNTHESIS, provenance: { aiProvider: 'openai', aiModel: 'gpt-6.1-sol', requestedAiModel: 'gpt-6.1-sol' } },
     })).toEqual({ status: 'stale' });
   });
 });

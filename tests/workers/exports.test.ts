@@ -110,7 +110,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const PROVENANCE = { aiProvider: 'openai' as const, aiModel: 'gpt-5.6-terra-2026-09-01', requestedAiModel: 'gpt-5.6-terra' };
+const PROVENANCE = { aiProvider: 'openai' as const, aiModel: 'gpt-6.1-sol-2026-09-01', requestedAiModel: 'gpt-6.1-sol' };
 
 type Saved = { study: StoredStudy; interviewId: string; jobId: string };
 

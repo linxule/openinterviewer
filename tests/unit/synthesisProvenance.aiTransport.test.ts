@@ -36,14 +36,14 @@ describe('synthesis provenance aiTransport (D11)', () => {
   it('refuses a Vercel AI Gateway route combined with Cloudflare AI Gateway', () => {
     expect(validateProvenance({
       aiProvider: 'claude',
-      aiModel: 'claude-sonnet-4.5',
-      requestedAiModel: 'anthropic/claude-sonnet-4.5',
+      aiModel: 'claude-sonnet-5.5',
+      requestedAiModel: 'anthropic/claude-sonnet-5.5',
       routedProvider: 'anthropic',
     })).not.toBeNull();
     expect(validateProvenance({
       aiProvider: 'claude',
-      aiModel: 'claude-sonnet-4.5',
-      requestedAiModel: 'anthropic/claude-sonnet-4.5',
+      aiModel: 'claude-sonnet-5.5',
+      requestedAiModel: 'anthropic/claude-sonnet-5.5',
       routedProvider: 'anthropic',
       aiTransport: 'cloudflare-gateway',
     })).toBeNull();

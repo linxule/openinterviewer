@@ -21,7 +21,7 @@ export function makeStudyConfig(overrides: Partial<StudyConfig> = {}): StudyConf
     ],
     aiBehavior: 'standard',
     aiProvider: 'gemini',
-    aiModel: 'gemini-2.5-flash',
+    aiModel: 'gemini-3.8-flash',
     consentText: 'Fixture consent text.',
     createdAt: Date.now(),
     ...overrides,

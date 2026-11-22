@@ -8,9 +8,9 @@ import { gatewayRouteForProvider, toGatewayModelId, type GatewayProviderType } f
 // Per-provider fixture models the researcher chose for the study — synthesis
 // must use exactly this model, not a fixed override (AGENTS.md invariant).
 const STUDY_MODEL_BY_PROVIDER: Record<GatewayProviderType, string> = {
-  gemini: 'gemini-3.7-flash',
+  gemini: 'gemini-3.8-flash',
   claude: 'claude-sonnet-5',
-  openai: 'gpt-5.6-terra',
+  openai: 'gpt-6.1-sol',
 };
 
 /**

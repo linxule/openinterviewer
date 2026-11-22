@@ -202,7 +202,7 @@ describe('durable client against the real object (ST-01, ST-03, ST-06)', () => {
     await store.createStudy(studyInput);
     const aggregate = {
       studyId: studyInput.candidate.id, studyRevision: 1, interviewIds: ['session-a'], interviewCount: 1,
-      aiProvider: 'openai' as const, aiModel: 'gpt-5.6-terra', commonThemes: [], divergentViews: [], keyFindings: [],
+      aiProvider: 'openai' as const, aiModel: 'gpt-6.1-sol', commonThemes: [], divergentViews: [], keyFindings: [],
       researchImplications: [], bottomLine: 'Synthetic.', generatedAt: T0, savedAt: T0,
     };
     expect(await store.saveAggregate(aggregate)).toBe('saved');

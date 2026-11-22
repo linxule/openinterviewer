@@ -273,6 +273,11 @@ export function ProviderSection({
           }}
           className="w-full"
         >
+          {!selectedModelValid && draft.aiProvider !== 'openrouter' && draft.aiModel ? (
+            <option value={draft.aiModel} disabled>
+              {draft.aiModel} (retired — choose a supported model)
+            </option>
+          ) : null}
           {selectedProviderModels.map((model) => (
             <option key={model.id} value={model.id}>
               {model.label}

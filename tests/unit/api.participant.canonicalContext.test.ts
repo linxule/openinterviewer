@@ -44,7 +44,7 @@ const providersMock = vi.hoisted(() => ({
     config?.aiProvider === 'claude' ? 'claude' : 'gemini'
   )),
   resolveSynthesisModel: vi.fn((config: { aiProvider?: string; aiModel?: string }) => (
-    config?.aiModel ?? (config?.aiProvider === 'claude' ? 'claude-opus-4-5' : 'gemini-3.1-pro-preview')
+    config?.aiModel ?? (config?.aiProvider === 'claude' ? 'claude-opus-5' : 'gemini-4-argon')
   )),
 }));
 
@@ -91,7 +91,7 @@ const canonicalConfig = makeStudyConfig({
   id: 'study-a',
   name: 'Canonical Study',
   aiProvider: 'gemini',
-  aiModel: 'gemini-2.5-flash',
+  aiModel: 'gemini-3.8-flash',
 });
 
 // Client-supplied config tries to force a different provider/model
@@ -157,8 +157,8 @@ beforeEach(() => {
       },
       execution: {
         provider: 'gemini',
-        requestedModel: 'gemini-3.1-pro-preview',
-        model: 'gemini-3.1-pro-preview-001',
+        requestedModel: 'gemini-4-argon',
+        model: 'gemini-4-argon-001',
       },
     }),
   });
@@ -184,7 +184,7 @@ describe('POST /api/interview canonical provider context', () => {
     };
     // Canonical wins: Gemini, never the body's Claude selection.
     expect(providerConfig.aiProvider).toBe('gemini');
-    expect(providerConfig.aiModel).toBe('gemini-2.5-flash');
+    expect(providerConfig.aiModel).toBe('gemini-3.8-flash');
     expect(providerConfig.aiProvider).not.toBe(bodyConfig.aiProvider);
     expect(providerConfig.aiModel).not.toBe(bodyConfig.aiModel);
 
@@ -200,7 +200,7 @@ describe('POST /api/interview canonical provider context', () => {
     expect(provider.generateInterviewResponse.mock.calls[0][1]).toMatchObject({
       id: 'study-a',
       aiProvider: 'gemini',
-      aiModel: 'gemini-2.5-flash',
+      aiModel: 'gemini-3.8-flash',
     });
     expect(platformRateLimitMock.hostedAiRateLimitResponse).toHaveBeenCalledWith(
       expect.any(Request),
@@ -302,12 +302,12 @@ describe('POST /api/greeting canonical provider context', () => {
       aiModel: string;
     };
     expect(providerConfig.aiProvider).toBe('gemini');
-    expect(providerConfig.aiModel).toBe('gemini-2.5-flash');
+    expect(providerConfig.aiModel).toBe('gemini-3.8-flash');
 
     const provider = providersMock.getInterviewProvider.mock.results[0].value;
     expect(provider.getInterviewGreeting.mock.calls[0][0]).toMatchObject({
       id: 'study-a',
-      aiModel: 'gemini-2.5-flash',
+      aiModel: 'gemini-3.8-flash',
     });
     expect(platformRateLimitMock.hostedAiRateLimitResponse).toHaveBeenCalledWith(
       expect.any(Request),

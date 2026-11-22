@@ -38,9 +38,9 @@ const KEYS = {
 
 const MODELS = {
   claude: { requested: 'claude-sonnet-5', served: 'claude-sonnet-5-20260901' },
-  openai: { requested: 'gpt-5.6-terra', served: 'gpt-5.6-terra-2026-09-01' },
-  gemini: { requested: 'gemini-3.7-flash', served: 'gemini-3.7-flash-001' },
-  openrouter: { requested: 'openai/gpt-5.6-terra', served: 'openai/gpt-5.6-terra-2026-09-01' },
+  openai: { requested: 'gpt-6.1-sol', served: 'gpt-6.1-sol-2026-09-01' },
+  gemini: { requested: 'gemini-3.8-flash', served: 'gemini-3.8-flash-001' },
+  openrouter: { requested: 'openai/gpt-6.1-sol', served: 'openai/gpt-6.1-sol-2026-09-01' },
 } satisfies Record<AIProviderType, { requested: string; served: string }>;
 
 const PROVIDERS = Object.keys(MODELS) as AIProviderType[];

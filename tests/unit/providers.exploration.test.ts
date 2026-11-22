@@ -40,9 +40,9 @@ const payload = {
 type Case = { provider: AIProviderType; model: string; make: () => AIProvider };
 const cases: Case[] = [
   { provider: 'claude', model: 'claude-sonnet-5', make: () => new ClaudeProvider('claude-sonnet-5', 'synthetic-test-key') },
-  { provider: 'gemini', model: 'gemini-3.7-flash', make: () => new GeminiProvider('gemini-3.7-flash', 'synthetic-test-key') },
-  { provider: 'openai', model: 'gpt-5.6-terra', make: () => new OpenAIProvider('gpt-5.6-terra', 'synthetic-test-key') },
-  { provider: 'openrouter', model: 'openai/gpt-5.6-terra', make: () => new OpenRouterProvider('openai/gpt-5.6-terra', 'synthetic-test-key') },
+  { provider: 'gemini', model: 'gemini-3.8-flash', make: () => new GeminiProvider('gemini-3.8-flash', 'synthetic-test-key') },
+  { provider: 'openai', model: 'gpt-6.1-sol', make: () => new OpenAIProvider('gpt-6.1-sol', 'synthetic-test-key') },
+  { provider: 'openrouter', model: 'openai/gpt-6.1-sol', make: () => new OpenRouterProvider('openai/gpt-6.1-sol', 'synthetic-test-key') },
 ];
 function input(testCase: Case) {
   return {
@@ -143,22 +143,22 @@ describe.each(cases)('$provider exploration', (testCase) => {
 describe('Vercel Gateway exploration', () => {
   it('pins the study creator endpoint, uses one attempt and records the actual response model', async () => {
     vi.stubEnv('VERCEL', '1');
-    generateText.mockResolvedValue({ output: payload, response: { modelId: 'openai/gpt-5.6-terra-snapshot' } });
+    generateText.mockResolvedValue({ output: payload, response: { modelId: 'openai/gpt-6.1-sol-snapshot' } });
     const testCase = cases[2];
     const adapter = new GatewayProvider('openai', testCase.model);
     const result = await adapter.exploreStudy(input(testCase), { kind: 'exploration', deadlineMs: 5_000 });
     expect(generateText).toHaveBeenCalledTimes(1);
     expect(generateText.mock.calls[0][0]).toMatchObject({
-      model: { modelId: 'openai/gpt-5.6-terra' }, maxRetries: 0,
+      model: { modelId: 'openai/gpt-6.1-sol' }, maxRetries: 0,
       providerOptions: { gateway: { only: ['openai'], disallowPromptTraining: true } },
       output: { schema: { schema: explorationResponseSchema } },
     });
-    expect(result.execution).toEqual({ provider: 'openai', requestedModel: 'openai/gpt-5.6-terra', model: 'openai/gpt-5.6-terra-snapshot', routedProvider: 'openai' });
+    expect(result.execution).toEqual({ provider: 'openai', requestedModel: 'openai/gpt-6.1-sol', model: 'openai/gpt-6.1-sol-snapshot', routedProvider: 'openai' });
   });
 
   it('refuses malformed answers without repairing or falling back', async () => {
     vi.stubEnv('VERCEL', '1');
-    generateText.mockResolvedValue({ output: {}, response: { modelId: 'openai/gpt-5.6-terra' } });
+    generateText.mockResolvedValue({ output: {}, response: { modelId: 'openai/gpt-6.1-sol' } });
     vi.spyOn(console, 'error').mockImplementation(() => {});
     await expect(new GatewayProvider('openai', cases[2].model).exploreStudy(input(cases[2]))).rejects.toMatchObject({ kind: 'invalid-response' });
     expect(generateText).toHaveBeenCalledTimes(1);

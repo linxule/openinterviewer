@@ -50,7 +50,7 @@ export type WorkspaceStoreContractHarness = {
   capabilities: WorkspaceStoreContractCapabilities;
 };
 
-const MODEL = 'gemini-3.7-flash';
+const MODEL = 'gemini-3.8-flash';
 const DAY_SECONDS = 86_400;
 
 type StatusOf<T> = T extends { status: infer S } ? S : never;

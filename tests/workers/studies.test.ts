@@ -30,7 +30,7 @@ function aggregateFor(studyId: string) {
     interviewIds: ['session-synthetic-a', 'session-synthetic-b'],
     interviewCount: 2,
     aiProvider: 'openai' as const,
-    aiModel: 'gpt-5.6-terra',
+    aiModel: 'gpt-6.1-sol',
     commonThemes: [],
     divergentViews: [],
     keyFindings: [],

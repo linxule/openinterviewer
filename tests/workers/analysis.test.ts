@@ -528,7 +528,7 @@ describe('claim, start and finish fences (JOB-03/08)', () => {
     const wrong = await startedJob();
     expect(await wrong.stub.finishAnalysisJob({
       ...fenceOf(wrong.job), claimNonce: wrong.nonce, now: Date.now(),
-      outcome: { kind: 'complete', synthesis: SYNTHESIS, provenance: { ...provenance, requestedAiModel: 'gpt-5.6-sol' } },
+      outcome: { kind: 'complete', synthesis: SYNTHESIS, provenance: { ...provenance, requestedAiModel: 'gpt-6.2-sol' } },
     })).toEqual({ status: 'written', replayed: false });
     expect(await analysisRow(wrong.job.interviewId)).toMatchObject({ status: 'failed', failure_kind: 'invalid-output', synthesis_json: null });
 
